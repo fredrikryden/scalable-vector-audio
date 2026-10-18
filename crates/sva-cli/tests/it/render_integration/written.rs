@@ -96,6 +96,30 @@ fn the_ping_pong_fixture_bounces_side_to_side_in_the_stereo_representation() {
     }
 }
 
+/// A third component is no pair: reading the first two and naming three would answer for a
+/// pair the node does not hold.
+#[test]
+fn a_three_component_render_refuses_a_stereo_image_naming_the_pair_it_needs() {
+    let dir = scratch("stereo-three");
+    put(&dir, "master", "join(sin(t), sin(2*t), sin(3*t))\n");
+    let rendered = probe(&dir, "@master([0, 0.1s])").unwrap();
+    let err = rendered
+        .answer(PROBE, Representation::Stereo { frame_secs: 0.05 })
+        .expect_err("three components hold no one stereo image");
+    let [d] = &err.diagnostics()[..] else {
+        panic!("one refusal, one diagnostic");
+    };
+    assert_eq!(d.code, "type.width_mismatch");
+    assert_eq!(
+        d.message,
+        "this reading needs exactly 2 components and the node holds 3"
+    );
+    assert_eq!(
+        d.help.as_deref(),
+        Some("read a node of exactly 2 components, as `join(@a, @b)` writes one")
+    );
+}
+
 /// The destination is the one place a reading leaves the object it would have printed in.
 #[test]
 fn a_json_destination_carries_every_sample_where_stdout_caps_them() {

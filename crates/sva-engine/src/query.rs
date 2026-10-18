@@ -271,7 +271,8 @@ static STEREO: Reading = Reading {
     name: "stereo",
     takes: &[Arg::Frame],
     reads: Reads::Samples,
-    help: "correlation, width and balance between two channels, per frame",
+    help: "correlation, width and balance between exactly two channels, per frame; any other \
+           count refuses",
     build: |g| Representation::Stereo {
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
     },

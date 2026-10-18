@@ -807,7 +807,7 @@ fn measured(
         other => {
             return off_buffer(buffer, other).map_err(|fault| match fault {
                 NoReading::NeedsAGraph => not_a_reading(render, node, other),
-                NoReading::TooNarrow { need, held } => too_narrow(render, node, need, held),
+                NoReading::WidthMismatch { need, held } => width_mismatch(render, node, need, held),
                 NoReading::Crowded(held) => crowded(render.tys.name(node), other, held),
                 NoReading::Unread(why) => unread(
                     render.tys.name(node),
@@ -836,11 +836,11 @@ fn measured(
 }
 
 /// Why a buffer answered nothing: the reading needs the tree the node was built from, or
-/// the buffer is narrower than the reading needs.
+/// the buffer holds other than the components the reading needs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NoReading {
     NeedsAGraph,
-    TooNarrow { need: usize, held: usize },
+    WidthMismatch { need: usize, held: usize },
     Crowded(Crowded),
     Unread(sliding::Unread),
     Unfit(self_similarity::Unfit),
@@ -883,8 +883,8 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
             max_formants,
         )),
         Representation::Stereo { frame_secs } => {
-            if buffer.width() < 2 {
-                return Err(NoReading::TooNarrow {
+            if buffer.width() != 2 {
+                return Err(NoReading::WidthMismatch {
                     need: 2,
                     held: buffer.width(),
                 });
@@ -1148,13 +1148,23 @@ fn not_a_reading(render: &Render, node: sva_formula::NodeId, r: Representation) 
     )
 }
 
-fn too_narrow(render: &Render, node: sva_formula::NodeId, need: usize, held: usize) -> EngineError {
-    refused(
-        render,
-        node,
-        "type.width_mismatch",
-        format!("this reading needs {need} components and the node holds {held}"),
-    )
+fn width_mismatch(
+    render: &Render,
+    node: sva_formula::NodeId,
+    need: usize,
+    held: usize,
+) -> EngineError {
+    EngineError::refused(Diagnostic {
+        code: "type.width_mismatch".to_string(),
+        message: width_message(need, held, "node"),
+        location: Located::at(render.tys.name(node), None),
+        help: format!("read a node of exactly {need} components, as `join(@a, @b)` writes one"),
+    })
+}
+
+/// More components than a reading reads refuse too, so none goes unread under its answer.
+fn width_message(need: usize, held: usize, holder: &str) -> String {
+    format!("this reading needs exactly {need} components and the {holder} holds {held}")
 }
 
 pub(super) fn unheld(render: &Render, node: sva_formula::NodeId) -> EngineError {
@@ -1203,10 +1213,12 @@ pub fn answer_buffer(
                 representation.name()
             ),
         ),
-        NoReading::TooNarrow { need, held } => refused(
-            "type.width_mismatch",
-            format!("this reading needs {need} components and the file holds {held}"),
-        ),
+        NoReading::WidthMismatch { need, held } => EngineError::refused(Diagnostic {
+            code: "type.width_mismatch".to_string(),
+            message: width_message(need, held, "file"),
+            location: Located::at(name, None),
+            help: format!("analyze a file of exactly {need} channels"),
+        }),
         NoReading::Crowded(held) => crowded(name, representation, held),
         NoReading::Unread(why) => unread(
             name,

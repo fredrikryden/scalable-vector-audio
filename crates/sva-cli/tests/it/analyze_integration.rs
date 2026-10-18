@@ -167,7 +167,7 @@ fn analyze_takes_only_the_readings_a_buffer_answers_and_needs_a_wav() {
 /// Two components in, two components read: an interleaved file decodes back to the planes
 /// it was written from.
 #[test]
-fn a_two_channel_file_answers_a_stereo_image_a_mono_one_cannot() {
+fn a_two_channel_file_answers_a_stereo_image_a_mono_or_three_channel_one_cannot() {
     let rate = 16_000u32;
     let left = tone(rate, 300.0, 0.4);
     let right: Vec<f32> = left.iter().map(|s| s * 0.25).collect();
@@ -198,6 +198,21 @@ fn a_two_channel_file_answers_a_stereo_image_a_mono_one_cannot() {
     )
     .expect_err("one component is no image");
     assert_eq!(err.code(), "type.width_mismatch");
+
+    let three = written("analyze-three", rate, &[&left, &right, &left]);
+    let err = answer_buffer(
+        "in.wav",
+        &decoded(&three),
+        Representation::Stereo { frame_secs: 0.05 },
+        PSYCHOACOUSTIC_V1.name,
+    )
+    .expect_err("three channels are no one pair");
+    assert_eq!(err.code(), "type.width_mismatch");
+    assert!(
+        err.to_string()
+            .contains("needs exactly 2 components and the file holds 3"),
+        "{err}"
+    );
 }
 
 /// A frame the transform cannot hold refuses on both paths rather than shrinking silently
