@@ -1,4 +1,4 @@
-// Concern: how a target's stretches resemble one another: chroma and band-level matrices, stripes, novelty | Non-concern: picking partials, band filters, verdicts | IO: (&[f64], Asked) -> SelfSimilarity
+// Concern: how a target's stretches resemble one another: chroma and band-level matrices, stripes, novelty | Non-concern: picking partials, band filters, verdicts | IO: (planes, Asked) -> SelfSimilarity
 
 use super::bands;
 use super::harmony::{above, measured};
@@ -17,8 +17,9 @@ pub const MODEL: &str = "self-similarity matrix of Foote, J. (1999), Visualizing
                          Automatic audio segmentation using a measure of audio novelty, Proc. \
                          IEEE ICME 452-455, each step as Mueller, M. (2015), Fundamentals of \
                          Music Processing, Springer, ch. 4 (FMP) writes it. Frames: a Hann \
-                         frame of `frame_window_secs` of the first component centred every \
-                         `hop_secs` from the target's start, its partials picked and refined \
+                         frame of `frame_window_secs` of each channel centred every \
+                         `hop_secs` from the target's start, their power per bin averaged over \
+                         the channels, its partials picked and refined \
                          as the harmonic readings pick them (see their method), \
                          `resolution_hz` apart before refinement, so two partials within about \
                          that of each other, as two notes a semitone apart under some 17 \
@@ -28,7 +29,8 @@ pub const MODEL: &str = "self-similarity matrix of Foote, J. (1999), Visualizing
                          of its nearest equal-tempered note (A4 = 440 Hz), C first; \
                          harmonics are not removed, so a tone's third harmonic adds to its \
                          fifth's class, as Bartsch and Wakefield's chroma does. Timbre view: \
-                         the RMS of each ERB band of `bands` (`centres_hz`), each band's level \
+                         the RMS of each ERB band of `bands` (`centres_hz`), every channel's \
+                         band energy averaged, each band's level \
                          in dB above `floor_db`, zero under it. Cells: `frames_per_cell` \
                          frames, `cell_secs`, centred every `cell_secs` from the start as \
                          every framed reading steps, `from`/`to` the first frame centre in it \
@@ -186,29 +188,30 @@ pub struct SelfSimilarity {
 }
 
 pub fn measure(
-    samples: &[f64],
+    planes: &[&[f64]],
     sample_rate: f64,
     start_secs: f64,
     asked: Asked,
 ) -> Result<SelfSimilarity, TooManyCells> {
+    let held = crate::measure::held(planes);
     let frame_hop = ((asked.hop_secs * sample_rate).round() as usize).max(1);
     let per_cell = ((asked.cell_secs * sample_rate / frame_hop as f64).round() as usize).max(1);
     let cell_hop = per_cell * frame_hop;
     let cell_secs = cell_hop as f64 / sample_rate;
-    let count = samples.len().div_ceil(cell_hop);
+    let count = held.div_ceil(cell_hop);
     if count > MAX_CELLS {
-        let least = samples.len().div_ceil(MAX_CELLS * frame_hop) * frame_hop;
+        let least = held.div_ceil(MAX_CELLS * frame_hop) * frame_hop;
         return Err(TooManyCells {
             cells: count,
             cap: MAX_CELLS,
             cell_secs,
-            held_secs: samples.len() as f64 / sample_rate,
+            held_secs: held as f64 / sample_rate,
             least_cell_secs: least as f64 / sample_rate,
             most_secs: (MAX_CELLS * cell_hop) as f64 / sample_rate,
         });
     }
     let (moments, framing) = measured::moments(
-        samples,
+        planes,
         sample_rate,
         start_secs,
         frame_hop as f64 / sample_rate,
@@ -227,10 +230,10 @@ pub fn measure(
             held
         })
         .collect();
-    let split = bands::analyze(samples, sample_rate, start_secs);
+    let split = bands::analyze(planes, sample_rate, start_secs);
     let grid = |rate: f64, len: usize| {
         sliding::spans(
-            samples.len(),
+            held,
             sample_rate,
             start_secs,
             cell_secs,

@@ -14,7 +14,7 @@ fn tone(hz: f64, secs: f64, amp: f64) -> Vec<f64> {
 /// A sine's RMS is `amp/sqrt(2)` and every other figure names the one partial it holds.
 #[test]
 fn one_sine_reads_as_its_own_frequency_level_and_centroid() {
-    let s = analyze(&tone(1000.0, 1.0, 0.5), RATE, 4, None);
+    let s = analyze(&[&tone(1000.0, 1.0, 0.5)[..]], RATE, 4, None);
     assert!(s.frames >= 1 && s.frame_size.is_power_of_two());
     assert!(
         (s.rms - 0.5 / 2f64.sqrt()).abs() < 0.01,
@@ -44,7 +44,7 @@ fn two_partials_are_both_found_and_ordered_by_level() {
     let low = tone(500.0, 1.0, 0.5);
     let high = tone(1000.0, 1.0, 0.25);
     let mixed: Vec<f64> = low.iter().zip(&high).map(|(a, b)| a + b).collect();
-    let s = analyze(&mixed, RATE, 4, None);
+    let s = analyze(&[&mixed[..]], RATE, 4, None);
 
     let [first, second, ..] = s.peaks.as_slice() else {
         panic!("two partials, two peaks: {:?}", s.peaks);
@@ -62,7 +62,7 @@ fn two_partials_are_both_found_and_ordered_by_level() {
 /// Silence has no peak to name and no level to state, and says so rather than guessing.
 #[test]
 fn silence_reads_as_the_floor_with_no_peaks() {
-    let s = analyze(&vec![0.0; 4096], RATE, 4, None);
+    let s = analyze(&[&vec![0.0; 4096][..]], RATE, 4, None);
     assert_eq!(s.rms, 0.0);
     assert!(s.peaks.is_empty(), "{:?}", s.peaks);
     assert_eq!(db(0.0), db(0.0), "the floor is one value, not a NaN");
@@ -87,7 +87,7 @@ fn third_octave_edges_step_by_a_third_of_an_octave_up_to_nyquist() {
 /// A lone tone puts its energy in the band that holds it, and leaves the others far below.
 #[test]
 fn a_bands_level_is_the_energy_of_the_partials_inside_it() {
-    let s = analyze(&tone(1000.0, 1.0, 0.5), RATE, 4, None);
+    let s = analyze(&[&tone(1000.0, 1.0, 0.5)[..]], RATE, 4, None);
     let holding = s
         .bands
         .iter()

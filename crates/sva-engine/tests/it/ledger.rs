@@ -430,3 +430,133 @@ fn a_mono_addend_beside_a_stereo_one_is_shared_in_every_channel() {
         );
     }
 }
+
+fn rendered(g: &sva_ast::Graph, secs: f64, asks: &[(&str, Representation)]) -> sva_engine::Render {
+    let asks = asks
+        .iter()
+        .map(|(node, representation)| Ask {
+            node: node.to_string(),
+            representation: *representation,
+        })
+        .collect();
+    let config = RenderConfig::seconds(8_000, secs).asking(asks);
+    render(g, "master", config, &Tier::default()).expect("a render")
+}
+
+/// Tallied block by block, a ledger states bit for bit the sums over whole buffers: a stateful
+/// row's contribution, run beside it, is the samples that row's own run computes.
+#[test]
+fn a_tallied_ledger_states_the_sums_over_whole_buffers() {
+    let g = graph_of(
+        "tallied-is-whole",
+        &[
+            ("a", "sample(0.4*sin(2*pi*220*t))\n"),
+            ("b", "sample(0.3*sin(2*pi*330*t) + 0.1*sin(2*pi*1250*t))\n"),
+            ("f", "lowpass(@b, cutoff=900, q=0.707)\n"),
+            ("master", "@a + @f\n"),
+        ],
+    );
+    let secs = 3.0;
+    let tallied = rendered(&g, secs, &[("master", Representation::Ledger { depth: 2 })]);
+    let master = tallied.id("master").expect("the root");
+    let Output::Ledger(entries) = answer(&tallied, master, Representation::Ledger { depth: 2 })
+        .expect("a ledger")
+        .value
+    else {
+        panic!("expected a ledger");
+    };
+    let whole = rendered(
+        &g,
+        secs,
+        &[
+            ("master", Representation::Samples),
+            ("a", Representation::Samples),
+            ("f", Representation::Samples),
+        ],
+    );
+    let samples = |node: &str| {
+        let held = whole.output(whole.id(node).expect(node)).expect(node);
+        held.plane(0).to_vec()
+    };
+    let (master, a, f) = (samples("master"), samples("a"), samples("f"));
+    let row = |x: &[f64], reader: &[f64]| {
+        let energy: f64 = reader.iter().map(|v| v * v).sum();
+        let product: f64 = x.iter().zip(reader).map(|(p, q)| p * q).sum();
+        let rms = (x.iter().map(|v| v * v).sum::<f64>() / x.len() as f64).sqrt();
+        let peak = x.iter().fold(0f64, |m, v| m.max(v.abs()));
+        let min = x.iter().fold(f64::INFINITY, |m, v| m.min(*v));
+        let max = x.iter().fold(f64::NEG_INFINITY, |m, v| m.max(*v));
+        (rms, peak, min, max, product / energy)
+    };
+    let expected = vec![
+        ("master", 0, row(&master, &master)),
+        ("a", 1, row(&a, &master)),
+        ("f", 1, row(&f, &master)),
+        ("b", 2, row(&f, &f)),
+    ];
+    let found: Vec<_> = entries
+        .iter()
+        .map(|e| {
+            let share = e.share.expect("an addend");
+            (
+                e.node.as_str(),
+                e.depth,
+                (e.rms, e.peak, e.min, e.max, share),
+            )
+        })
+        .collect();
+    assert_eq!(found, expected);
+}
+
+/// A ledger holds each row a block at a time, never over the whole range: a longer range of
+/// sixteen rows, chirps so no period folds them, grows what it holds by what it grows the
+/// render of their sum alone.
+#[test]
+fn a_ledger_holds_its_rows_a_block_at_a_time() {
+    let mut files: Vec<(String, String)> = (0..16)
+        .map(|i| {
+            let hz = 100 + 37 * i;
+            (
+                format!("v{i}"),
+                format!("sample(0.05*sin(2*pi*{hz}*t + 3*t*t))\n"),
+            )
+        })
+        .collect();
+    let sum: Vec<String> = (0..16).map(|i| format!("@v{i}")).collect();
+    files.push(("master".to_string(), format!("{}\n", sum.join(" + "))));
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let g = graph_of("ledger-memory", &files);
+    let held = |secs: f64, representation: Representation| {
+        let mut config = RenderConfig::seconds(8_000, secs).asking(vec![Ask {
+            node: "master".to_string(),
+            representation,
+        }]);
+        config.threads = std::num::NonZeroUsize::MIN;
+        render(&g, "master", config, &Tier::default()).expect("a render")
+    };
+    let ledger = Representation::Ledger { depth: 1 };
+    let grown = |representation| {
+        held(120.0, representation).held_bytes - held(30.0, representation).held_bytes
+    };
+    let (plain, tallied) = (grown(Representation::Samples), grown(ledger));
+    let row = 90 * 8_000 * std::mem::size_of::<f64>();
+    assert!(
+        tallied <= plain + row / 8,
+        "ninety more seconds grew a ledger of 16 rows by {tallied} bytes, the plain render by \
+         {plain}; one row over them is {row}"
+    );
+    let long = held(120.0, ledger);
+    let id = long.id("master").expect("the root");
+    let Output::Ledger(entries) = answer(&long, id, ledger).expect("a ledger").value else {
+        panic!("expected a ledger");
+    };
+    assert_eq!(entries.len(), 17, "{:?}", names(&entries));
+    let shares: f64 = entries.iter().skip(1).filter_map(|e| e.share).sum();
+    assert!(
+        (shares - 1.0).abs() < 1e-9,
+        "the parts are the whole: {shares}"
+    );
+}

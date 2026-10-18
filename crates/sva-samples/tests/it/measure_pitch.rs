@@ -126,7 +126,7 @@ fn max_notes_bounds_what_one_frame_names() {
 #[test]
 fn a_tone_is_tracked_frame_by_frame_from_the_instant_it_was_read_at() {
     let rate = 44100.0;
-    let frames = track(&sine(440.0, rate, 0.4), rate, 2.0, 0.1, 4);
+    let frames = track(&[&sine(440.0, rate, 0.4)[..]], rate, 2.0, 0.1, 4);
     assert_eq!(frames.len(), 4, "0.4 s in 0.1 s frames: {}", frames.len());
     for (n, frame) in frames.iter().enumerate() {
         assert!(
@@ -159,7 +159,7 @@ fn a_tone_with_a_weak_fundamental_is_tracked_as_its_fundamental() {
                 .sum()
         })
         .collect();
-    for frame in track(&tone, rate, 0.0, 0.1, 4) {
+    for frame in track(&[&tone[..]], rate, 0.0, 0.1, 4) {
         let heads: Vec<&str> = frame
             .notes
             .iter()
@@ -173,7 +173,7 @@ fn a_tone_with_a_weak_fundamental_is_tracked_as_its_fundamental() {
 
 #[test]
 fn silence_names_nothing() {
-    let frames = track(&vec![0.0; 4410], 44100.0, 0.0, 0.1, 4);
+    let frames = track(&[&vec![0.0; 4410][..]], 44100.0, 0.0, 0.1, 4);
     assert_eq!(frames.len(), 1);
     assert!(frames[0].notes.is_empty(), "{:?}", frames[0].notes);
 }

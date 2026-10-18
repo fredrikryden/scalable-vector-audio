@@ -1,4 +1,4 @@
-// Concern: how strongly onset strength repeats per sliding window: broadband, low, rest | Non-concern: the band filters (bands.rs), any verdict | IO: (&[f64], rate, start, hop, window) -> Periodicity
+// Concern: how strongly onset strength repeats per sliding window: broadband, low, rest | Non-concern: the band filters (bands.rs), any verdict | IO: (planes, rate, start, hop, window) -> Periodicity
 
 use super::bands::{self, Bands, Smoothing};
 use super::onsets::spectral_flux;
@@ -28,7 +28,8 @@ pub const MODEL: &str = "onset strength: the spectral flux `onsets` takes, sum o
                          `smoothing.poles` one-pole lowpasses at `smoothing.hz` in place of the \
                          one at the band's own width `bands` reads through, so an onset is \
                          spread over some 30 ms; linear amplitude so a loud band outweighs a quiet one, \
-                         from the filters' silent start; the first component alone. A band is \
+                         from the filters' silent start; every channel's band energy \
+                         averaged. A band is \
                          `low` where its centre is under `split_hz` and `rest` otherwise; \
                          `broadband` sums every band. The filters' skirts overlap, so a kick \
                          leaks into `rest` and a hat's attack into `low`, attenuated. That \
@@ -160,15 +161,16 @@ pub struct Periodicity {
 }
 
 pub fn measure(
-    samples: &[f64],
+    planes: &[&[f64]],
     sample_rate: f64,
     start_secs: f64,
     hop_secs: f64,
     window_secs: f64,
     curve: bool,
 ) -> Result<Periodicity, Unread> {
-    sliding::fits(samples.len(), sample_rate, window_secs, MAX_PERIOD_SECS)?;
-    let split = bands::smoothed(samples, sample_rate, start_secs, SMOOTHING);
+    let held = crate::measure::held(planes);
+    sliding::fits(held, sample_rate, window_secs, MAX_PERIOD_SECS)?;
+    let split = bands::smoothed(planes, sample_rate, start_secs, SMOOTHING);
     let rate = split.rate_hz;
     let lags = Lags {
         min: (MIN_PERIOD_SECS * rate).ceil() as usize,
@@ -177,7 +179,7 @@ pub fn measure(
     };
     let len = split.bands.first().map_or(0, |b| b.rms.len());
     let grid = sliding::spans(
-        samples.len(),
+        held,
         sample_rate,
         start_secs,
         hop_secs,

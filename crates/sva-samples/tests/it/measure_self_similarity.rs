@@ -49,7 +49,7 @@ fn asked(cell_secs: f64) -> Asked {
 }
 
 fn read(samples: &[f64]) -> SelfSimilarity {
-    measure(samples, RATE, 0.0, asked(0.5)).expect("under the cap")
+    measure(&[samples], RATE, 0.0, asked(0.5)).expect("under the cap")
 }
 
 fn view(s: &SelfSimilarity, which: View) -> &Reading {
@@ -144,7 +144,7 @@ fn a_transposed_repeat_reads_at_its_shift_and_an_exact_one_at_none() {
 fn the_matrix_is_the_lower_triangle_in_time_lag_form() {
     let samples = chords(&[(&A, 0), (&A, 0)]);
     let s = measure(
-        &samples,
+        &[&samples[..]],
         RATE,
         0.0,
         Asked {
@@ -164,7 +164,7 @@ fn the_matrix_is_the_lower_triangle_in_time_lag_form() {
 #[test]
 fn a_matrix_past_the_cap_refuses() {
     let held = vec![0.0; (60.0 * RATE) as usize];
-    let refused = measure(&held, RATE, 0.0, asked(0.05)).expect_err("1200 > 1024");
+    let refused = measure(&[&held[..]], RATE, 0.0, asked(0.05)).expect_err("1200 > 1024");
     assert_eq!(
         refused,
         TooManyCells {

@@ -70,7 +70,7 @@ fn within(bounds: Option<(f64, f64)>, x: f64) -> bool {
 }
 
 fn read(samples: &[f64]) -> Periodicity {
-    measure(samples, RATE, 0.0, 0.5, 4.0, false).expect("a 4 s window over a longer target")
+    measure(&[samples], RATE, 0.0, 0.5, 4.0, false).expect("a 4 s window over a longer target")
 }
 
 fn track(p: &Periodicity, group: Group) -> &Track {
@@ -218,8 +218,15 @@ fn a_kick_leads_the_low_band_and_hats_the_rest_at_double_rate() {
 /// Silence repeats at no period: no peak, a null curve, no summary.
 #[test]
 fn silence_reads_no_period() {
-    let p = measure(&vec![0.0; (5.0 * RATE) as usize], RATE, 0.0, 0.5, 4.0, true)
-        .expect("a 4 s window over 5 s");
+    let p = measure(
+        &[&vec![0.0; (5.0 * RATE) as usize][..]],
+        RATE,
+        0.0,
+        0.5,
+        4.0,
+        true,
+    )
+    .expect("a 4 s window over 5 s");
     for t in &p.tracks {
         assert_eq!(t.summary.windows_with_peak, 0);
         for w in &t.windows {
@@ -233,14 +240,14 @@ fn silence_reads_no_period() {
 fn a_window_under_two_periods_and_a_target_under_the_window_refuse() {
     let samples = vec![0.0; (3.0 * RATE) as usize];
     assert_eq!(
-        measure(&samples, RATE, 0.0, 0.5, 3.0, false),
+        measure(&[&samples[..]], RATE, 0.0, 0.5, 3.0, false),
         Err(Unread::WindowUnderTwoPeriods {
             window_secs: 3.0,
             least_secs: 4.0
         })
     );
     assert_eq!(
-        measure(&samples, RATE, 0.0, 0.5, 4.0, false),
+        measure(&[&samples[..]], RATE, 0.0, 0.5, 4.0, false),
         Err(Unread::TargetShorterThanWindow {
             held_secs: 3.0,
             window_secs: 4.0,

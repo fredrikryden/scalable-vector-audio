@@ -1,9 +1,8 @@
-// Concern: attributes a target's energy down its ref tree, one entry per node | Non-concern: rendering the buffers it reads | IO: (buffers, deps, kinds, target) -> entries
+// Concern: attributes a target's energy down its ref tree, one entry per node, a stretch at a time | Non-concern: rendering the buffers it reads | IO: (sources, deps, target) -> Tally -> entries
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::buffer::Buffer;
-use crate::measure::envelope::rms;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unit {
@@ -67,80 +66,156 @@ pub struct LedgerEntry {
     pub clipped: Option<bool>,
 }
 
-/// One entry per component, off what each node gave the node reading it.
-pub fn attribute(
-    buffers: &BTreeMap<String, Buffer>,
-    contributed: &BTreeMap<String, Buffer>,
-    deps: &BTreeMap<String, Vec<String>>,
-    kinds: &BTreeMap<String, SignalKind>,
-    target: &str,
-    range: std::ops::Range<usize>,
-    depth_limit: usize,
-) -> Vec<LedgerEntry> {
-    let held = |path: &str| contributed.get(path).or_else(|| buffers.get(path));
-    let slice = |path: &str, c: usize| -> std::borrow::Cow<'_, [f64]> {
-        held(path).map_or(std::borrow::Cow::Borrowed(&[][..]), |b| {
-            b.plane_slice(c, range.clone())
-        })
-    };
-    let width = |path: &str| held(path).map_or(1, |b| b.width());
-    // Over a sum the parts are the whole: one reader's refs add to exactly one.
-    let share_of = |reader: &str, x: &[f64], c: usize| -> f64 {
-        let Some(buffer) = buffers.get(reader).filter(|b| b.width() > 0) else {
-            return 0.0;
-        };
-        let y = buffer.plane_slice(c % buffer.width(), range.clone());
-        let energy: f64 = y.iter().map(|&v| v * v).sum();
-        match energy > 0.0 {
-            true => x.iter().zip(y.iter()).map(|(a, b)| a * b).sum::<f64>() / energy,
-            false => 0.0,
+/// `read`: what a row gave its reader; `own`: a reader's own samples, which shares are of.
+pub struct Sources<'a> {
+    pub read: &'a BTreeMap<String, usize>,
+    pub own: &'a BTreeMap<String, usize>,
+    pub attributed: &'a BTreeSet<String>,
+    pub widths: &'a [usize],
+}
+
+/// Each sum one running fold in sample order: the bits a sum over the whole buffer gives.
+pub struct Tally {
+    rows: Vec<Row>,
+}
+
+struct Row {
+    node: String,
+    depth: usize,
+    kind: SignalKind,
+    attributed: bool,
+    read: Option<usize>,
+    reader: Option<usize>,
+    channels: Vec<Sums>,
+}
+
+#[derive(Clone, Copy)]
+struct Sums {
+    squares: f64,
+    count: usize,
+    peak: f64,
+    min: f64,
+    max: f64,
+    product: f64,
+    energy: f64,
+}
+
+impl Sums {
+    fn new() -> Sums {
+        // What an empty `sum` folds from, so a running fold is that sum's bits.
+        let zero: f64 = std::iter::empty::<f64>().sum();
+        Sums {
+            squares: zero,
+            count: 0,
+            peak: 0.0,
+            min: f64::INFINITY,
+            max: f64::NEG_INFINITY,
+            product: zero,
+            energy: zero,
         }
-    };
+    }
+}
 
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
-    let mut queue: VecDeque<(&str, usize, &str)> = VecDeque::new();
-    let mut out = Vec::new();
-    queue.push_back((target, 0, target));
-    seen.insert(target);
-
-    while let Some((path, depth, reader)) = queue.pop_front() {
-        // `kinds` names what holds a buffer; a node composed into another holds none.
-        let kind = kinds.get(path).copied().unwrap_or(SignalKind::Audio);
-        let components = width(path);
-        let gated = kind.is_audio();
-        let attributed = path == target || contributed.contains_key(path);
-        for c in 0..components {
-            let buf = slice(path, c);
-            let node_rms = rms(&buf);
-            let peak = buf.iter().fold(0f64, |a, &x| a.max(x.abs()));
-            let min = buf.iter().fold(f64::INFINITY, |a, &x| a.min(x));
-            let max = buf.iter().fold(f64::NEG_INFINITY, |a, &x| a.max(x));
-            out.push(LedgerEntry {
+impl Tally {
+    pub fn new(
+        sources: &Sources,
+        deps: &BTreeMap<String, Vec<String>>,
+        kinds: &BTreeMap<String, SignalKind>,
+        target: &str,
+        depth_limit: usize,
+    ) -> Tally {
+        let width = |path: &str| sources.read.get(path).map_or(1, |s| sources.widths[*s]);
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut queue: VecDeque<(&str, usize, &str)> = VecDeque::new();
+        let mut rows = Vec::new();
+        queue.push_back((target, 0, target));
+        seen.insert(target);
+        while let Some((path, depth, reader)) = queue.pop_front() {
+            // `kinds` names what holds a buffer; a node composed into another holds none.
+            rows.push(Row {
                 node: path.to_string(),
-                channel: (components > 1).then_some(c),
                 depth,
-                kind,
-                rms: node_rms,
-                peak,
-                min,
-                max,
-                share: (gated && attributed).then(|| share_of(reader, &buf, c)),
-                clipped: gated.then_some(peak > 1.0),
+                kind: kinds.get(path).copied().unwrap_or(SignalKind::Audio),
+                attributed: path == target || sources.attributed.contains(path),
+                read: sources.read.get(path).copied(),
+                reader: sources
+                    .own
+                    .get(reader)
+                    .copied()
+                    .filter(|s| sources.widths[*s] > 0),
+                channels: vec![Sums::new(); width(path)],
             });
+            if depth >= depth_limit {
+                continue;
+            }
+            for child in deps.get(path).map(Vec::as_slice).unwrap_or(&[]) {
+                if seen.insert(child.as_str()) {
+                    let key = deps
+                        .get_key_value(child.as_str())
+                        .map(|(k, _)| k.as_str())
+                        .unwrap_or(child.as_str());
+                    queue.push_back((key, depth + 1, path));
+                }
+            }
         }
+        Tally { rows }
+    }
 
-        if depth >= depth_limit {
-            continue;
-        }
-        for child in deps.get(path).map(Vec::as_slice).unwrap_or(&[]) {
-            if seen.insert(child.as_str()) {
-                let key = deps
-                    .get_key_value(child.as_str())
-                    .map(|(k, _)| k.as_str())
-                    .unwrap_or(child.as_str());
-                queue.push_back((key, depth + 1, path));
+    pub fn add(&mut self, held: &[Option<&Buffer>], range: std::ops::Range<usize>) {
+        let empty: &[f64] = &[];
+        let slice = |source: Option<usize>, c: usize| -> Option<std::borrow::Cow<'_, [f64]>> {
+            let buffer = held[source?]?;
+            Some(buffer.plane_slice(c % buffer.width(), range.clone()))
+        };
+        for row in &mut self.rows {
+            for (c, sums) in row.channels.iter_mut().enumerate() {
+                let x = match row.read {
+                    Some(source) => slice(Some(source), c).expect("a row's own source"),
+                    None => std::borrow::Cow::Borrowed(empty),
+                };
+                sums.count += x.len();
+                sums.squares = x.iter().map(|&v| v * v).fold(sums.squares, |a, b| a + b);
+                sums.peak = x.iter().fold(sums.peak, |a, &v| a.max(v.abs()));
+                sums.min = x.iter().fold(sums.min, |a, &v| a.min(v));
+                sums.max = x.iter().fold(sums.max, |a, &v| a.max(v));
+                if let Some(y) = slice(row.reader, c) {
+                    sums.energy = y.iter().map(|&v| v * v).fold(sums.energy, |a, b| a + b);
+                    let products = x.iter().zip(y.iter()).map(|(a, b)| a * b);
+                    sums.product = products.fold(sums.product, |a, b| a + b);
+                }
             }
         }
     }
-    out
+
+    pub fn entries(&self) -> Vec<LedgerEntry> {
+        let mut out = Vec::new();
+        for row in &self.rows {
+            let components = row.channels.len();
+            let gated = row.kind.is_audio();
+            for (c, sums) in row.channels.iter().enumerate() {
+                let rms = match sums.count {
+                    0 => 0.0,
+                    count => (sums.squares / count as f64).sqrt(),
+                };
+                // Over a sum the parts are the whole: one reader's refs add to exactly one.
+                let share = || match (row.reader, sums.energy > 0.0) {
+                    (Some(_), true) => sums.product / sums.energy,
+                    _ => 0.0,
+                };
+                out.push(LedgerEntry {
+                    node: row.node.clone(),
+                    channel: (components > 1).then_some(c),
+                    depth: row.depth,
+                    kind: row.kind,
+                    rms,
+                    peak: sums.peak,
+                    min: sums.min,
+                    max: sums.max,
+                    share: (gated && row.attributed).then(share),
+                    clipped: gated.then_some(sums.peak > 1.0),
+                });
+            }
+        }
+        out
+    }
 }

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::helpers::{buffer, fixture, json_of, ledger, put, scratch};
+use crate::helpers::{buffer, fixture, json_of, ledger, ledgered, put, scratch};
 use sva_cli::{SampleEncoding, write_channels, write_wav};
 use sva_core::{PROBE, probe};
 use sva_engine::{Output, Representation};
@@ -27,7 +27,7 @@ fn a_samples_destination_writes_float_audio_matching_the_rendered_samples() {
 /// components at all.
 #[test]
 fn a_stereo_composition_reports_a_channel_per_component_and_a_mono_one_reports_none() {
-    let rendered = probe(&fixture("stereo"), "@master([0, 1s])").unwrap();
+    let rendered = ledgered(&fixture("stereo"), "@master([0, 1s])").unwrap();
     let entries = ledger(&rendered, PROBE);
     let master: Vec<_> = entries.iter().filter(|e| e.node == PROBE).collect();
     assert_eq!(master.len(), 2, "one entry per component");

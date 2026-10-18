@@ -46,6 +46,8 @@ pub(crate) struct ValueGraph {
     pub(crate) root: usize,
     /// Each node a reading holds over the range, in its own time.
     pub(crate) wanted: Vec<usize>,
+    /// Asked over the range as a wanted value is, never held whole.
+    tallied: Vec<usize>,
     profile: Profile,
     pub(crate) built: usize,
     pub(crate) supports: Memo,
@@ -74,6 +76,7 @@ impl ValueGraph {
             nodes: BTreeMap::new(),
             root: 0,
             wanted: Vec::new(),
+            tallied: Vec::new(),
             profile: *profile,
             built: 0,
             supports: Memo::default(),
@@ -84,20 +87,9 @@ impl ValueGraph {
         }
     }
 
-    /// Every value `root` and `wanted` read, each once per identity and step, readers after
-    /// the values they read.
-    pub(crate) fn build(
-        tys: &Typing,
-        root: NodeId,
-        wanted: &[NodeId],
-        profile: &Profile,
-    ) -> Result<ValueGraph, EngineError> {
-        let none = (1, false, &BTreeMap::new());
-        ValueGraph::new(profile).built(tys, (root, wanted), none, false)
-    }
-
-    /// The same, each node a reader may take as its samples alone a value of its own wherever
-    /// it is read, never inlined, over the supports `found` for its range.
+    /// Every value `root` and `wanted` read, readers after them, each node a reader may take as
+    /// its samples alone a value of its own wherever it is read, never inlined, over the
+    /// supports `found` for its range.
     pub(crate) fn bounded(
         tys: &Typing,
         (root, wanted): (NodeId, &[NodeId]),
@@ -243,6 +235,90 @@ impl ValueGraph {
         built
     }
 
+    /// Each of `only` among `built`, the build's wanted nodes in order, asked but never held
+    /// whole; a value another wanted node stands for stays wanted.
+    pub(crate) fn tallying(&mut self, built: &[NodeId], only: &BTreeSet<NodeId>) {
+        let whole: BTreeSet<usize> = (built.iter().zip(&self.wanted))
+            .filter(|(id, _)| !only.contains(id))
+            .map(|(_, at)| *at)
+            .collect();
+        let (wanted, tallied): (Vec<usize>, Vec<usize>) =
+            self.wanted.iter().partition(|at| whole.contains(at));
+        self.wanted = wanted;
+        self.tallied = tallied;
+    }
+
+    /// `at`'s machine run with `renderer` in its place, tallied beside it; impure, so memory
+    /// neither answers nor keeps it.
+    pub(crate) fn beside(
+        &mut self,
+        at: usize,
+        renderer: NodeRenderer,
+    ) -> Result<usize, EngineError> {
+        let value = &self.values[at];
+        let Kind::MachineRun(machine_run) = &value.kind else {
+            unreachable!("a ledger isolates a slot of a machine run");
+        };
+        let live: Vec<Extent> = value
+            .reads
+            .iter()
+            .map(|read| self.values[*read].support())
+            .collect();
+        let support = value.support();
+        let from = machine_run
+            .start
+            .map_or(support.start, |s| s.min(support.start));
+        let spanned = Spanned::new(&renderer, &machine_run.layout, (from, support.end), &live)
+            .map_err(|e| eval::sample_refused(&value.name, &e))?;
+        let mut identity = sva_formula::ContentHasher::new(sva_formula::HashDomain::NodeIdentity);
+        identity.text("ledger contribution");
+        identity.hash(value.key.identity);
+        identity.word(self.tallied.len() as u64);
+        let holding = match machine_run.start {
+            Some(_) => Holding::Run {
+                samples: Buffer::empty(value.grid.rate, value.width, 0, from),
+                origin: from,
+            },
+            None => Holding::Segments(Vec::new()),
+        };
+        let made = Value {
+            key: Key {
+                identity: identity.finish(),
+                step: value.key.step,
+            },
+            node: None,
+            name: value.name.clone(),
+            grid: value.grid,
+            width: value.width,
+            whole: value.whole,
+            silent: value.silent,
+            period: None,
+            kind: Kind::MachineRun(Box::new(MachineRun {
+                renderer: Arc::new(renderer),
+                spanned: Arc::new(spanned),
+                layout: Arc::clone(&machine_run.layout),
+                start: machine_run.start,
+                own: machine_run.own,
+                alias: None,
+                sources: Arc::clone(&machine_run.sources),
+                machine: None,
+                marks: Default::default(),
+            })),
+            reads: value.reads.clone(),
+            holding,
+            evaluated: Vec::new(),
+            label: None,
+            switches: Vec::new(),
+            moved: 0.0,
+            pure: false,
+        };
+        let made = self.make(made);
+        self.draft.made.retain(|m| *m != made);
+        self.values.hold(made);
+        self.tallied.push(made);
+        Ok(made)
+    }
+
     /// `root` and `wanted` held in place of what was.
     fn held_as(&mut self, root: usize, wanted: Vec<usize>) {
         let (old, before) = (self.root, std::mem::take(&mut self.wanted));
@@ -308,6 +384,7 @@ impl ValueGraph {
     fn asked(&self, asked_range: Extent) -> Vec<(usize, Extent)> {
         std::iter::once(self.root)
             .chain(self.wanted.iter().copied())
+            .chain(self.tallied.iter().copied())
             .map(|v| (v, asked_range))
             .collect()
     }
@@ -653,16 +730,6 @@ impl ValueGraph {
     /// A value's samples over `over`, zero wherever none is held.
     pub(crate) fn samples(&self, at: usize, over: Extent) -> Buffer {
         eval::samples_of(&self.values, at, over)
-    }
-
-    /// `at`'s machine run with another renderer, over `over`.
-    pub(crate) fn rerun(
-        &self,
-        at: usize,
-        renderer: &NodeRenderer,
-        over: Extent,
-    ) -> Result<Buffer, EngineError> {
-        eval::rerun(&self.values, at, renderer, over)
     }
 
     /// A machine run that only reads another value at a whole sample holds that value's label.

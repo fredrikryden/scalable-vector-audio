@@ -653,14 +653,14 @@ pub enum NoReading {
 pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Output, NoReading> {
     let sr = f64::from(buffer.rate);
     let start = buffer.origin_secs();
-    let plane = buffer.plane(0);
+    let planes = buffer.slices();
     Ok(match representation {
         Representation::Samples => Output::Samples(Box::new(buffer.clone())),
         Representation::Spectrum {
             max_peaks,
             frame_secs,
         } => Output::Spectrum(Box::new(spectrum::analyze(
-            plane, sr, max_peaks, frame_secs,
+            &planes, sr, max_peaks, frame_secs,
         ))),
         Representation::Envelope { frame_secs } => Output::Envelope(envelope::trace(
             &buffer.slices(),
@@ -672,12 +672,12 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
         Representation::Pitch {
             max_notes,
             frame_secs,
-        } => Output::Pitch(pitch::track(plane, sr, start, frame_secs, max_notes)),
+        } => Output::Pitch(pitch::track(&planes, sr, start, frame_secs, max_notes)),
         Representation::Formants {
             max_formants,
             frame_secs,
         } => Output::Formants(formants::track(
-            plane,
+            &planes,
             sr,
             start,
             frame_secs,
@@ -691,7 +691,6 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
                     held: buffer.width(),
                 });
             }
-            let planes: Vec<&[f64]> = (0..buffer.width()).map(|c| buffer.plane(c)).collect();
             Output::Stereo(Box::new(stereo::analyze(
                 &planes,
                 buffer.width(),
@@ -700,14 +699,10 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
                 frame_secs,
             )))
         }
-        Representation::Bands => Output::Bands(Box::new(bands::analyze(plane, sr, start))),
-        Representation::Crest => Output::Crest(Box::new(crest::analyze(plane, sr))),
-        Representation::Onsets => {
-            let planes: Vec<&[f64]> = (0..buffer.width()).map(|c| buffer.plane(c)).collect();
-            Output::Onsets(Box::new(onsets::detect(&planes, sr, start)))
-        }
+        Representation::Bands => Output::Bands(Box::new(bands::analyze(&planes, sr, start))),
+        Representation::Crest => Output::Crest(Box::new(crest::analyze(&planes, sr))),
+        Representation::Onsets => Output::Onsets(Box::new(onsets::detect(&planes, sr, start))),
         Representation::Loudness => {
-            let planes: Vec<&[f64]> = (0..buffer.width()).map(|c| buffer.plane(c)).collect();
             Output::Loudness(Box::new(loudness::analyze(&planes, sr, start)))
         }
         Representation::Harmony {
@@ -715,7 +710,7 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
             frame_secs,
             floor_db,
         } => {
-            let (moments, framing) = framed::moments(plane, sr, start, frame_secs);
+            let (moments, framing) = framed::moments(&planes, sr, start, frame_secs);
             harmonic(reading, &moments, framing, floor_db).map_err(NoReading::Crowded)?
         }
         Representation::Periodicity {
@@ -723,7 +718,7 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
             window_secs,
             curve,
         } => Output::Periodicity(Box::new(
-            periodicity::measure(plane, sr, start, frame_secs, window_secs, curve)
+            periodicity::measure(&planes, sr, start, frame_secs, window_secs, curve)
                 .map_err(NoReading::Unread)?,
         )),
         Representation::Modulation {
@@ -731,7 +726,7 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
             window_secs,
             bpm,
         } => Output::Modulation(Box::new(
-            modulation::measure(plane, sr, start, frame_secs, window_secs, bpm)
+            modulation::measure(&planes, sr, start, frame_secs, window_secs, bpm)
                 .map_err(NoReading::Unread)?,
         )),
         Representation::SelfSimilarity {
@@ -753,7 +748,7 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
                 curve,
             };
             Output::SelfSimilarity(Box::new(
-                self_similarity::measure(plane, sr, start, asked)
+                self_similarity::measure(&planes, sr, start, asked)
                     .map_err(NoReading::TooManyCells)?,
             ))
         }
@@ -761,72 +756,25 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
     })
 }
 
-/// Every held buffer under the target over the root's range, its own refs beside it, so the
-/// reading can share the target's energy down the tree it was built from. A ref the closed form
-/// adds stands there as what it contributed to the node reading it; one no addend isolates is
-/// left unattributed.
+/// The ledger the pull tallied of `node`, refused where none was.
 fn attributed(
     render: &Render,
     node: sva_formula::NodeId,
     depth: usize,
 ) -> Result<Vec<sva_samples::LedgerEntry>, EngineError> {
-    let holds = |id: sva_formula::NodeId| render.buffers.contains_key(&id);
-    let edges = edges_under(render, node, depth, &holds)?;
-    let under: std::collections::BTreeSet<sva_formula::NodeId> = std::iter::once(node)
-        .chain(edges.iter().map(|(_, child)| *child))
-        .collect();
-    let mut deps = std::collections::BTreeMap::new();
-    let mut kinds = std::collections::BTreeMap::new();
-    for id in render.buffers.keys().filter(|id| under.contains(id)) {
-        let name = render.tys.name(*id).to_string();
-        let read = refs_read(render, *id, &holds)?
-            .into_iter()
-            .map(|op| render.tys.name(op).to_string())
-            .collect();
-        deps.insert(name.clone(), read);
-        kinds.insert(name, sva_samples::SignalKind::Audio);
-    }
-    let mut contributed_by = std::collections::BTreeMap::new();
-    for (parent, child) in &edges {
-        if !crate::render::slots::reads_held(render, *parent)? {
-            return Err(unmaterialized(
-                render,
-                node,
-                Representation::Ledger { depth },
-            ));
-        }
-        if let Some(held) = contributed(render, *parent, *child)? {
-            contributed_by.insert(render.tys.name(*child).to_string(), held);
-        }
-    }
-    // A row's own samples are read where it reads rows itself or no addend isolates it.
-    let readers: std::collections::BTreeSet<_> = edges.iter().map(|(parent, _)| *parent).collect();
-    let mut buffers = std::collections::BTreeMap::new();
-    for id in render.buffers.keys().filter(|id| under.contains(id)) {
-        let name = render.tys.name(*id);
-        if *id == node || readers.contains(id) || !contributed_by.contains_key(name) {
-            buffers.insert(name.to_string(), own_samples(render, *id)?);
-        }
-    }
-    let len = render.range.map_or(0, |range| range.len());
-    Ok(sva_samples::measure::ledger::attribute(
-        &buffers,
-        &contributed_by,
-        &deps,
-        &kinds,
-        render.tys.name(node),
-        0..len,
-        depth,
-    ))
-}
-
-/// A row's own samples over the range, held or pulled.
-fn own_samples(render: &Render, id: sva_formula::NodeId) -> Result<Buffer, EngineError> {
-    let range = render.range.expect("a ledger reads a decided range");
-    match render.buffer(id) {
-        Some(_) => render.output(id),
-        None => super::sampled(render, id, range),
-    }
+    super::ledger::entries(render, node, depth).unwrap_or_else(|| {
+        Err(EngineError::refused(Diagnostic {
+            code: "engine.not_materialized".to_string(),
+            message: format!(
+                "a ledger is tallied block by block as the render pulls, and this render was \
+                 not asked for `ledger` of `{}` to depth {depth}",
+                render.tys.name(node)
+            ),
+            location: Located::at(render.tys.name(node), None),
+            help: "ask for the ledger with the render it reads, as `--representation ledger`"
+                .to_string(),
+        }))
+    })
 }
 
 /// What every instance under `node` was lowered with, `node` first, then breadth first. The
@@ -862,52 +810,6 @@ fn arguments_under(render: &Render, node: sva_formula::NodeId) -> Vec<crate::Arg
         .into_iter()
         .filter_map(|name| render.tys.arguments(name).cloned())
         .collect()
-}
-
-/// The tree a ledger walks; a node several read is attributed to the first to reach it.
-fn edges_under(
-    render: &Render,
-    node: sva_formula::NodeId,
-    depth: usize,
-    holds: &dyn Fn(sva_formula::NodeId) -> bool,
-) -> Result<Vec<(sva_formula::NodeId, sva_formula::NodeId)>, EngineError> {
-    let mut seen = std::collections::BTreeSet::from([node]);
-    let (mut level, mut out) = (vec![node], Vec::new());
-    for _ in 0..depth {
-        let mut next = Vec::new();
-        for parent in level {
-            for child in refs_read(render, parent, holds)? {
-                if seen.insert(child) {
-                    out.push((parent, child));
-                    next.push(child);
-                }
-            }
-        }
-        level = next;
-    }
-    Ok(out)
-}
-
-/// Every ref one node's renderer reads, one row per name.
-fn refs_read(
-    render: &Render,
-    node: sva_formula::NodeId,
-    holds: &dyn Fn(sva_formula::NodeId) -> bool,
-) -> Result<Vec<sva_formula::NodeId>, EngineError> {
-    crate::render::slots::refs_read(render, node, holds)
-}
-
-/// What one ref contributed to the node reading it, at that node's own offset and window: its
-/// renderer with every other slot silenced. Two under one product have no addend apiece and no
-/// share either, so that edge is left unattributed.
-fn contributed(
-    render: &Render,
-    parent: sva_formula::NodeId,
-    child: sva_formula::NodeId,
-) -> Result<Option<Buffer>, EngineError> {
-    let range = render.range.expect("a ledger reads a decided range");
-    Ok(crate::render::slots::contributed(render, parent, child)?
-        .map(|held| held.over(range, held.extent())))
 }
 
 /// The closed form an alias score oversamples: the node itself where it is one, and the operand of
@@ -1053,7 +955,11 @@ pub(super) fn unheld(render: &Render, node: sva_formula::NodeId) -> EngineError 
     )
 }
 
-fn unmaterialized(render: &Render, node: sva_formula::NodeId, r: Representation) -> EngineError {
+pub(super) fn unmaterialized(
+    render: &Render,
+    node: sva_formula::NodeId,
+    r: Representation,
+) -> EngineError {
     refused(
         render,
         node,

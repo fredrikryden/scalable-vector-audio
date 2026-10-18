@@ -188,7 +188,8 @@ static SPECTRUM: Reading = Reading {
     name: "spectrum",
     takes: &[Arg::Peaks, Arg::Frame],
     reads: Reads::Either,
-    help: "its lines, or its spectrum averaged over every frame",
+    help: "its lines, or its spectrum averaged over every frame and, power per bin, every \
+           channel",
     build: |g| Representation::Spectrum {
         max_peaks: g.peaks,
         frame_secs: g.frame,
@@ -199,7 +200,8 @@ static ENVELOPE: Reading = Reading {
     name: "envelope",
     takes: &[Arg::Frame],
     reads: Reads::Either,
-    help: "rms and peak, per frame off samples",
+    help: "rms and peak, per frame off samples: the rms of every channel's samples together, \
+           the peak of any channel",
     build: |g| Representation::Envelope {
         frame_secs: g.frame,
     },
@@ -234,7 +236,7 @@ static PITCH: Reading = Reading {
     name: "pitch",
     takes: &[Arg::Peaks, Arg::Frame],
     reads: Reads::Either,
-    help: "the notes it holds, per frame off samples",
+    help: "the notes it holds, per frame off samples, every channel's power per bin averaged",
     build: |g| Representation::Pitch {
         max_notes: g.peaks,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
@@ -245,7 +247,8 @@ static FORMANTS: Reading = Reading {
     name: "formants",
     takes: &[Arg::Peaks, Arg::Frame],
     reads: Reads::Samples,
-    help: "formant frequencies, bandwidths and levels per frame",
+    help: "formant frequencies, bandwidths and levels per frame, off every channel's \
+           autocorrelation averaged",
     build: |g| Representation::Formants {
         max_formants: g.peaks,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
@@ -266,7 +269,7 @@ static BANDS: Reading = Reading {
     name: "bands",
     takes: &[],
     reads: Reads::Samples,
-    help: "each auditory band's level over time",
+    help: "each auditory band's level over time, every channel's band energy averaged",
     build: |_| Representation::Bands,
 };
 
@@ -274,7 +277,8 @@ static CREST: Reading = Reading {
     name: "crest",
     takes: &[],
     reads: Reads::Samples,
-    help: "peak against rms, broadband and per band",
+    help: "peak against rms, broadband and per band: any channel's peak against the rms of \
+           every channel's samples together",
     build: |_| Representation::Crest,
 };
 
@@ -290,7 +294,8 @@ static ONSETS: Reading = Reading {
     name: "onsets",
     takes: &[],
     reads: Reads::Samples,
-    help: "onset times, their strength and the spacing between them",
+    help: "onset times, their strength and the spacing between them, each channel's spectral \
+           flux summed",
     build: |_| Representation::Onsets,
 };
 
@@ -309,7 +314,7 @@ static DISSONANCE: Reading = Reading {
     takes: &[Arg::Frame, Arg::Floor, Arg::Pairs],
     reads: Reads::Either,
     help: "Sethares' sensory roughness per frame of its partials over a floor, with its mean, \
-           max and min",
+           max and min; measured partials off every channel's power per bin averaged",
     build: |g| Representation::Harmony {
         reading: Harmonic::Dissonance {
             max_pairs: g.max_pairs,
@@ -324,7 +329,7 @@ static VOICE_LEADING: Reading = Reading {
     takes: &[Arg::Frame, Arg::Floor, Arg::Norm],
     reads: Reads::Either,
     help: "its chords over time, and the smallest voice leading between each two, l1 or l2 \
-           in semitones",
+           in semitones; measured partials off every channel's power per bin averaged",
     build: |g| Representation::Harmony {
         reading: Harmonic::VoiceLeading { norm: g.norm },
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
@@ -337,7 +342,7 @@ static TONAL_DISTANCE: Reading = Reading {
     takes: &[Arg::Frame, Arg::Floor],
     reads: Reads::Either,
     help: "its chords over time, the Tonnetz steps between each two triads and each one's \
-           from the first",
+           from the first; measured partials off every channel's power per bin averaged",
     build: |g| Representation::Harmony {
         reading: Harmonic::TonalDistance,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
@@ -350,7 +355,8 @@ static INHARMONICITY: Reading = Reading {
     takes: &[Arg::Frame, Arg::Floor],
     reads: Reads::Either,
     help: "its harmonic series per frame: each member's cents off n f1, the stiff-string B each \
-           fits, and the energy in no series",
+           fits, and the energy in no series; measured partials off every channel's power per \
+           bin averaged",
     build: |g| Representation::Harmony {
         reading: Harmonic::Inharmonicity,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
@@ -364,7 +370,8 @@ static PERIODICITY: Reading = Reading {
     reads: Reads::Samples,
     help: "how strongly its onset strength repeats per sliding window, broadband, under 150 Hz \
            and over: the leading periods in seconds and bpm with their bounds, their \
-           autocorrelation heights, the drift between windows",
+           autocorrelation heights, the drift between windows; every channel's band energy \
+           averaged",
     build: |g| Representation::Periodicity {
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
         window_secs: g.window.unwrap_or(DEFAULT_PERIODICITY_WINDOW_SECS),
@@ -379,7 +386,8 @@ static MODULATION: Reading = Reading {
     help: "how its band envelopes move per sliding window, under 150 Hz, to 2 kHz and over: \
            the leading modulation rates from 0.5 to 20 Hz, in beats where `bpm` is given, \
            their depth as a modulation index, each with its bounds, the level, and the \
-           spectral centroid's mean and its own swing in Hz",
+           spectral centroid's mean and its own swing in Hz; every channel's band energy \
+           averaged",
     build: |g| Representation::Modulation {
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
         window_secs: g.window.unwrap_or(DEFAULT_MODULATION_WINDOW_SECS),
@@ -402,7 +410,8 @@ static SELF_SIMILARITY: Reading = Reading {
     help: "how its stretches resemble one another, by chroma and by band levels, over cells \
            of `cell`: the repeated stretches as stripes, each pair of spans with its \
            similarity and, by chroma, its transposition in semitones; Foote's novelty at every \
-           cell boundary and its peaks; `curve=1` adds the cells and the matrix",
+           cell boundary and its peaks; `curve=1` adds the cells and the matrix; every \
+           channel's power per bin and band energy averaged",
     build: |g| Representation::SelfSimilarity {
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
         cell_secs: g.cell_secs,

@@ -248,7 +248,7 @@ fn render(partials: &[(f64, f64)], rate: f64, secs: f64) -> Vec<f64> {
 fn measured_partials_find_a_triads_tones_and_its_exact_roughness() {
     let tones: Vec<(f64, f64)> = [60, 64, 67].iter().map(|m| (hz(*m), 0.3)).collect();
     let samples = render(&tones, 44_100.0, 0.5);
-    let (moments, framing) = measured::moments(&samples, 44_100.0, 0.0, 0.05);
+    let (moments, framing) = measured::moments(&[&samples[..]], 44_100.0, 0.0, 0.05);
     let window = framing.window.expect("measured frames name their window");
     assert_eq!((window.size, moments.len()), (4096, 10));
     let exact = Moment {
@@ -277,7 +277,7 @@ fn measured_partials_find_a_triads_tones_and_its_exact_roughness() {
 #[test]
 fn a_lone_tones_measured_bounds_are_a_point() {
     let samples = render(&[(440.0, 0.5)], 44_100.0, 0.3);
-    let (moments, _) = measured::moments(&samples, 44_100.0, 0.0, 0.05);
+    let (moments, _) = measured::moments(&[&samples[..]], 44_100.0, 0.0, 0.05);
     let [p] = moments[3].partials[..] else {
         panic!("one partial: {:?}", moments[3])
     };

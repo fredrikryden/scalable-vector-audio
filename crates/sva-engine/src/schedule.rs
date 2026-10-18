@@ -170,11 +170,15 @@ pub struct Schedule {
     pub wanted: Vec<NodeId>,
     /// The nodes a reading asked a closed form of, none already held.
     pub compose: Vec<NodeId>,
+    /// A ledger's rows no reading holds: each a value of its own, tallied a block at a time and
+    /// never held whole.
+    pub tallied: Vec<NodeId>,
 }
 
 /// A closed form is held as samples only under a buffer reading, a ledger, or the root.
 pub fn plan(typing: &Typing, root: NodeId, asks: &[Ask]) -> Schedule {
     let mut wanted: BTreeSet<NodeId> = BTreeSet::new();
+    let mut rows: BTreeSet<NodeId> = BTreeSet::new();
     let mut compose: Vec<NodeId> = Vec::new();
     let audio = asks.is_empty();
     for ask in asks {
@@ -192,21 +196,22 @@ pub fn plan(typing: &Typing, root: NodeId, asks: &[Ask]) -> Schedule {
             }
         }
         if let crate::query::Representation::Ledger { depth } = ask.representation {
-            attributed(typing, id, depth, &mut wanted);
+            attributed(typing, id, depth, &mut rows);
         }
     }
-    if audio || !wanted.is_empty() {
+    if audio || !wanted.is_empty() || !rows.is_empty() {
         wanted.insert(root);
     }
-    compose.retain(|id| !wanted.contains(id));
+    compose.retain(|id| !wanted.contains(id) && !rows.contains(id));
     Schedule {
+        tallied: rows.difference(&wanted).copied().collect(),
         wanted: wanted.into_iter().collect(),
         compose,
     }
 }
 
-/// A ledger names every ref under its target, so each is a buffer of its own.
-fn attributed(typing: &Typing, id: NodeId, depth: usize, wanted: &mut BTreeSet<NodeId>) {
+/// A ledger names every ref under its target, so each is a value of its own.
+fn attributed(typing: &Typing, id: NodeId, depth: usize, rows: &mut BTreeSet<NodeId>) {
     // Level by level, as the reading walks: a node is held at its shortest chain's depth.
     let mut seen = BTreeSet::from([id]);
     let mut level = vec![id];
@@ -217,7 +222,7 @@ fn attributed(typing: &Typing, id: NodeId, depth: usize, wanted: &mut BTreeSet<N
                 if !seen.insert(operand) {
                     continue;
                 }
-                wanted.insert(operand);
+                rows.insert(operand);
                 match typing.name(operand) == typing.name(held) {
                     true => level.push(operand),
                     false => next.push(operand),

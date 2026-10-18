@@ -113,7 +113,7 @@ fn a_reading_off_a_buffer_no_render_held_refuses() {
 }
 
 /// A node's parameters are what its own call site bound, and a ledger shares the target's
-/// energy out over the buffers this render actually held.
+/// energy out over what the render that ran tallied: one it was not asked for refuses.
 #[test]
 fn bindings_and_the_ledger_read_off_the_render_that_ran() {
     let g = graph_of(
@@ -124,12 +124,19 @@ fn bindings_and_the_ledger_read_off_the_render_that_ran() {
             ("node", "@gain(t, x=@src, k=0.5)\n"),
         ],
     );
-    let config = RenderConfig::seconds(8_192, 0.25).asking(vec![Ask {
+    let ask = |representation| Ask {
         node: "node".to_string(),
-        representation: Representation::Samples,
-    }]);
+        representation,
+    };
+    let config = RenderConfig::seconds(8_192, 0.25).asking(vec![
+        ask(Representation::Samples),
+        ask(Representation::Ledger { depth: 3 }),
+    ]);
     let held = render(&g, "node", config, &Tier::default()).expect("a sampled node");
     let id = held.id("node").expect("the root");
+    let unasked = answer(&held, id, Representation::Ledger { depth: 2 })
+        .expect_err("a ledger the render never tallied");
+    assert_eq!(unasked.code(), "engine.not_materialized");
 
     let instance = held
         .tys

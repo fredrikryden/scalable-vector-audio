@@ -14,7 +14,7 @@ fn tone(secs: f64, at: impl Fn(f64) -> f64) -> Vec<f64> {
 }
 
 fn read(samples: &[f64], bpm: Option<f64>) -> Modulation {
-    measure(samples, RATE, 0.0, 0.5, 4.0, bpm).expect("a 4 s window over a longer target")
+    measure(&[samples], RATE, 0.0, 0.5, 4.0, bpm).expect("a 4 s window over a longer target")
 }
 
 fn track(m: &Modulation, group: Group) -> &Track {
@@ -168,14 +168,14 @@ fn silence_reads_no_peak_and_no_centroid() {
 fn a_window_under_two_periods_and_a_target_under_the_window_refuse() {
     let samples = vec![0.0; (3.0 * RATE) as usize];
     assert_eq!(
-        measure(&samples, RATE, 0.0, 0.5, 3.0, None),
+        measure(&[&samples[..]], RATE, 0.0, 0.5, 3.0, None),
         Err(Unread::WindowUnderTwoPeriods {
             window_secs: 3.0,
             least_secs: 4.0
         })
     );
     assert_eq!(
-        measure(&samples, RATE, 0.0, 0.5, 4.0, None),
+        measure(&[&samples[..]], RATE, 0.0, 0.5, 4.0, None),
         Err(Unread::TargetShorterThanWindow {
             held_secs: 3.0,
             window_secs: 4.0,

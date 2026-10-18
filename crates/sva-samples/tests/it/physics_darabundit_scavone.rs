@@ -167,7 +167,7 @@ fn opening_a_tonehole_raises_the_fundamental_relative_to_it_closed() {
         });
         let buffer = fd::render(&params, 11_025, 0.5);
         fd::sounds(&buffer);
-        let s = sva_samples::measure::spectrum::analyze(buffer.plane(0), 11_025.0, 24, None);
+        let s = sva_samples::measure::spectrum::analyze(&[buffer.plane(0)], 11_025.0, 24, None);
         let loudest = s.peaks.iter().fold(f64::NEG_INFINITY, |m, p| m.max(p.db));
         s.peaks
             .iter()

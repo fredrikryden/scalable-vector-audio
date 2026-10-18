@@ -1,9 +1,9 @@
-// Concern: peak minus RMS in each third-octave band, and the spread across them | Non-concern: the discrete spectrum (spectrum.rs), the ERB envelope bank (bands.rs) | IO: (&[f64], sample rate) -> Crest
+// Concern: peak minus RMS in each third-octave band, and the spread across them | Non-concern: the discrete spectrum (spectrum.rs), the ERB envelope bank (bands.rs) | IO: (planes, sample rate) -> Crest
 
 use sva_formula::filter::Shape;
 
 use crate::biquad::{State, design};
-use crate::measure::envelope::rms;
+use crate::measure::envelope::level;
 use crate::measure::spectrum::{db, third_octave_edges};
 
 /// Below this a band holds leakage, which would set the spread.
@@ -36,10 +36,11 @@ pub struct Crest {
     pub bands: Vec<BandCrest>,
 }
 
-pub fn analyze(samples: &[f64], sample_rate: f64) -> Crest {
+pub fn analyze(planes: &[&[f64]], sample_rate: f64) -> Crest {
+    crate::measure::held(planes);
     let mut bands: Vec<BandCrest> = third_octave_edges(sample_rate)
         .into_iter()
-        .map(|(lo, hi)| band(samples, sample_rate, lo, hi))
+        .map(|(lo, hi)| band(planes, sample_rate, lo, hi))
         .collect();
 
     let loudest = bands.iter().map(|b| b.rms).fold(0.0, f64::max);
@@ -58,8 +59,11 @@ pub fn analyze(samples: &[f64], sample_rate: f64) -> Crest {
 
     Crest {
         broadband_crest_db: crest_db(
-            samples.iter().fold(0.0, |a, x| a.max(x.abs())),
-            rms(samples),
+            planes
+                .iter()
+                .flat_map(|p| p.iter())
+                .fold(0.0, |a, x| a.max(x.abs())),
+            level(planes),
         ),
         spread_db: widest.zip(tightest).map(|(w, t)| w.crest_db - t.crest_db),
         widest_band_hz: widest.map(|b| b.centre_hz),
@@ -70,25 +74,32 @@ pub fn analyze(samples: &[f64], sample_rate: f64) -> Crest {
 }
 
 /// A crest is a RATIO within one band, so the cascade's gain closed form cancels out of it.
-fn band(samples: &[f64], sample_rate: f64, lo: f64, hi: f64) -> BandCrest {
+fn band(planes: &[&[f64]], sample_rate: f64, lo: f64, hi: f64) -> BandCrest {
     let centre = (lo * hi).sqrt();
     let q = centre / (hi - lo);
     let coeffs = design(Shape::Bandpass, centre, q, 0.0, sample_rate);
     let settle = settle_secs(centre, q) * sample_rate;
-    let skip = (settle.round() as usize).min(samples.len());
-    let (mut first, mut second) = (State::default(), State::default());
+    let len = planes[0].len();
+    let skip = (settle.round() as usize).min(len);
     let mut peak = 0.0f64;
-    let mut power = 0.0f64;
-    for (i, x) in samples.iter().enumerate() {
-        let y = second.step(&coeffs, first.step(&coeffs, *x));
-        if i < skip {
-            continue;
-        }
-        peak = peak.max(y.abs());
-        power += y * y;
-    }
-    let measured = samples.len() - skip;
-    let rms = match measured {
+    let powers: Vec<f64> = planes
+        .iter()
+        .map(|samples| {
+            let (mut first, mut second) = (State::default(), State::default());
+            let mut power = 0.0f64;
+            for (i, x) in samples.iter().enumerate() {
+                let y = second.step(&coeffs, first.step(&coeffs, *x));
+                if i < skip {
+                    continue;
+                }
+                peak = peak.max(y.abs());
+                power += y * y;
+            }
+            power
+        })
+        .collect();
+    let power = powers[1..].iter().fold(powers[0], |sum, p| sum + p);
+    let rms = match (len - skip) * planes.len() {
         0 => 0.0,
         n => (power / n as f64).sqrt(),
     };

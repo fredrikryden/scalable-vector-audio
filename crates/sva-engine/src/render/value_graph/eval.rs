@@ -249,47 +249,6 @@ fn istft(
     Ok(())
 }
 
-/// `at`'s machine run with another renderer, over `over` from where its state starts: what a
-/// ledger reads of one slot, the others silenced.
-pub(crate) fn rerun(
-    values: &Values,
-    at: usize,
-    renderer: &sva_samples::NodeRenderer,
-    over: Extent,
-) -> Result<Buffer, EngineError> {
-    let value = &values[at];
-    let Kind::MachineRun(machine_run) = &value.kind else {
-        unreachable!("a machine run");
-    };
-    let from = machine_run
-        .start
-        .map_or(over.start, |start| start.min(over.start));
-    let live: Vec<Extent> = value.reads.iter().map(|r| values[*r].support()).collect();
-    let spanned = sva_samples::Spanned::new(renderer, &machine_run.layout, (from, over.end), &live)
-        .map_err(|e| sample_refused(&value.name, &e))?;
-    let rerun = MachineRun {
-        renderer: std::sync::Arc::new(renderer.clone()),
-        spanned: std::sync::Arc::new(spanned),
-        layout: std::sync::Arc::clone(&machine_run.layout),
-        start: machine_run.start,
-        own: machine_run.own,
-        alias: None,
-        sources: std::sync::Arc::clone(&machine_run.sources),
-        machine: None,
-        marks: Default::default(),
-    };
-    let span = Extent::new(from, over.end);
-    let held = views(value, &rerun, span, values);
-    let views: Vec<SampleView> = held.iter().map(View::sample_view).collect();
-    let mut machine =
-        Machine::over(&rerun.spanned, from).map_err(|e| sample_refused(&value.name, &e))?;
-    let mut own = Buffer::empty(value.grid.rate, value.width, span.len(), from);
-    machine
-        .run_to(over.end, &views, (&mut own, from))
-        .map_err(|e| sample_refused(&value.name, &e))?;
-    Ok(own.over(over, own.extent()))
-}
-
 /// A value's samples over `over`, through every alias between.
 pub(crate) fn samples_of(values: &Values, at: usize, over: Extent) -> Buffer {
     match values[at].alias() {

@@ -128,7 +128,7 @@ fn a_measured_stiff_string_agrees_with_its_exact_partials_inside_its_bounds() {
     let b = 2e-4;
     let truth = frame_of(stiff(b).iter().map(|(f, a)| exact(*f, *a)).collect());
     let cents = truth.cents.expect("members").value;
-    let (moments, framing) = measured::moments(&render(&stiff(b), 0.5), RATE, 0.0, 0.05);
+    let (moments, framing) = measured::moments(&[&render(&stiff(b), 0.5)[..]], RATE, 0.0, 0.05);
     let read = measure(&moments, framing, -40.0);
     assert_eq!(read.frames.len(), 10);
     for frame in &read.frames[1..9] {
@@ -154,7 +154,7 @@ fn a_measured_stiff_string_agrees_with_its_exact_partials_inside_its_bounds() {
 /// a saw read one series and none.
 #[test]
 fn noise_reads_many_series_and_some_energy_in_none_and_a_saw_one_and_none() {
-    let (moments, framing) = measured::moments(&noise(22_050), RATE, 0.0, 0.05);
+    let (moments, framing) = measured::moments(&[&noise(22_050)[..]], RATE, 0.0, 0.05);
     let read = measure(&moments, framing, -40.0);
     for frame in &read.frames[1..] {
         assert!(frame.series.len() > 20, "{}", frame.series.len());
@@ -166,7 +166,7 @@ fn noise_reads_many_series_and_some_energy_in_none_and_a_saw_one_and_none() {
     let saw: Vec<(f64, f64)> = (1..=8)
         .map(|n| (220.0 * f64::from(n), 0.5 / f64::from(n)))
         .collect();
-    let (moments, framing) = measured::moments(&render(&saw, 0.5), RATE, 0.0, 0.05);
+    let (moments, framing) = measured::moments(&[&render(&saw, 0.5)[..]], RATE, 0.0, 0.05);
     let read = measure(&moments, framing, -40.0);
     for frame in &read.frames[1..9] {
         assert_eq!(frame.series.len(), 1, "{frame:?}");

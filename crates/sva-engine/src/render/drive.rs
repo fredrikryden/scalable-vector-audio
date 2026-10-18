@@ -42,6 +42,8 @@ pub(super) struct Driver {
     gauge: Gauge,
     pub(super) memory: Memory,
     pub(super) recording: Recording,
+    /// Each ledger asked, tallied off every block before the block is let go.
+    pub(super) ledgers: Option<super::ledger::Ledgers>,
 }
 
 /// The `envelope` reading's own frame at the render's rate, where one is asked.
@@ -86,6 +88,7 @@ impl Driver {
             gauge: Gauge::default(),
             memory,
             recording,
+            ledgers: None,
         }
     }
 
@@ -232,6 +235,10 @@ impl Driver {
         self.samples += (to - from) as u64;
         self.at = to;
         self.settle(from, to);
+        if let Some(ledgers) = &mut self.ledgers {
+            let end = self.end.map_or(to, |end| end.clamp(from, to));
+            ledgers.add(&self.value_graph, Extent::new(from, end));
+        }
         let future = (to < self.last).then(|| Extent::new(to, self.last));
         let keep = Extent::new(from.min(to.saturating_sub(self.keep)), to);
         self.value_graph.release(future, keep, self.since());

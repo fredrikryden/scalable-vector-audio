@@ -1,4 +1,4 @@
-// Concern: traces one envelope per ERB band, beside that band's own impulse floor | Non-concern: the discrete spectrum (spectrum.rs), what a band means to a listener | IO: (&[f64], sample rate) -> bands
+// Concern: traces one envelope per ERB band, beside that band's own impulse floor | Non-concern: the discrete spectrum (spectrum.rs), what a band means to a listener | IO: (planes, sample rate) -> bands
 
 use sva_formula::filter::Shape;
 
@@ -102,14 +102,20 @@ fn trace(
     centre_hz: f64,
     sr: f64,
     smoothing: Smoothing,
-    hop: usize,
-    n: usize,
-    at: impl Fn(usize) -> f64,
+    (hop, n, width): (usize, usize, usize),
+    at: impl Fn(usize, usize) -> f64,
 ) -> Vec<f64> {
-    let mut chain = Chain::new(centre_hz, sr, smoothing);
+    let mut chains: Vec<Chain> = (0..width)
+        .map(|_| Chain::new(centre_hz, sr, smoothing))
+        .collect();
     let mut out = Vec::with_capacity(n / hop + 1);
     for i in 0..n {
-        let energy = chain.step(at(i));
+        let mut each = chains
+            .iter_mut()
+            .enumerate()
+            .map(|(c, chain)| chain.step(at(c, i)));
+        let first = each.next().expect("a channel");
+        let energy = each.fold(first, |sum, e| sum + e) / width as f64;
         if i % hop == 0 {
             out.push(energy.max(0.0).sqrt());
         }
@@ -148,7 +154,7 @@ fn stats(track: &[f64], rate: f64) -> (f64, Option<f64>, Option<f64>) {
 
 fn floor_of(centre_hz: f64, sr: f64, smoothing: Smoothing, hop: usize, rate: f64) -> BandFloor {
     let n = (floor_secs(erb_hz(centre_hz)) * sr).round().max(4.0) as usize;
-    let track = trace(centre_hz, sr, smoothing, hop, n, |i| {
+    let track = trace(centre_hz, sr, smoothing, (hop, n, 1), |_, i| {
         f64::from(u8::from(i == 0))
     });
     let (peak, at, rise) = stats(&track, rate);
@@ -167,11 +173,12 @@ fn centres(sr: f64) -> Vec<f64> {
         .collect()
 }
 
-pub fn analyze(samples: &[f64], sr: f64, start_secs: f64) -> Bands {
-    smoothed(samples, sr, start_secs, OWN_WIDTH)
+pub fn analyze(planes: &[&[f64]], sr: f64, start_secs: f64) -> Bands {
+    smoothed(planes, sr, start_secs, OWN_WIDTH)
 }
 
-pub fn smoothed(samples: &[f64], sr: f64, start_secs: f64, smoothing: Smoothing) -> Bands {
+pub fn smoothed(planes: &[&[f64]], sr: f64, start_secs: f64, smoothing: Smoothing) -> Bands {
+    let shape = (crate::measure::held(planes), planes.len());
     let hop = (sr / DECIMATED_HZ).round().max(1.0) as usize;
     let rate = sr / hop as f64;
     Bands {
@@ -180,7 +187,10 @@ pub fn smoothed(samples: &[f64], sr: f64, start_secs: f64, smoothing: Smoothing)
         bands: centres(sr)
             .into_iter()
             .map(|centre_hz| {
-                let track = trace(centre_hz, sr, smoothing, hop, samples.len(), |i| samples[i]);
+                let (n, width) = shape;
+                let track = trace(centre_hz, sr, smoothing, (hop, n, width), |c, i| {
+                    planes[c][i]
+                });
                 let (peak, at, rise) = stats(&track, rate);
                 let erb = erb_hz(centre_hz);
                 BandTrack {

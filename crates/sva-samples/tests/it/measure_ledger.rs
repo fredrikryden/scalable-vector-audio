@@ -2,8 +2,34 @@
 
 use std::collections::BTreeMap;
 
-use sva_samples::measure::ledger::attribute;
+use sva_samples::measure::ledger::{Sources, Tally};
 use sva_samples::{Buffer, SignalKind};
+
+/// A tally handed all of `range` as one stretch.
+fn attribute(
+    buffers: &BTreeMap<String, Buffer>,
+    contributed: &BTreeMap<String, Buffer>,
+    deps: &BTreeMap<String, Vec<String>>,
+    kinds: &BTreeMap<String, SignalKind>,
+    target: &str,
+    range: std::ops::Range<usize>,
+    depth_limit: usize,
+) -> Vec<sva_samples::LedgerEntry> {
+    let held: Vec<&Buffer> = buffers.values().chain(contributed.values()).collect();
+    let own: BTreeMap<String, usize> = buffers.keys().cloned().zip(0..).collect();
+    let mut read = own.clone();
+    read.extend(contributed.keys().cloned().zip(buffers.len()..));
+    let sources = Sources {
+        read: &read,
+        own: &own,
+        attributed: &contributed.keys().cloned().collect(),
+        widths: &held.iter().map(|b| b.width()).collect::<Vec<_>>(),
+    };
+    let mut tally = Tally::new(&sources, deps, kinds, target, depth_limit);
+    let held: Vec<Option<&Buffer>> = held.into_iter().map(Some).collect();
+    tally.add(&held, range);
+    tally.entries()
+}
 
 fn entry(samples: Vec<f64>) -> sva_samples::LedgerEntry {
     let len = samples.len();
@@ -121,4 +147,57 @@ fn a_node_with_no_buffer_of_its_own_is_read_as_audio() {
         .find(|e| e.node == "composed")
         .expect("a node with no kind is still walked");
     assert_eq!(composed.kind, SignalKind::Audio);
+}
+
+/// Handed in uneven stretches, a tally answers the bits one whole stretch does: every sum is
+/// one running fold in sample order.
+#[test]
+fn a_tally_in_stretches_is_the_tally_whole() {
+    let len = 10_007;
+    let wave = |hz: f64, amp: f64| -> Vec<f64> {
+        (0..len)
+            .map(|i| amp * (std::f64::consts::TAU * hz * i as f64 / 48_000.0).sin())
+            .collect()
+    };
+    let (a, b) = (wave(200.0, 0.3), wave(310.0, 0.5));
+    let root: Vec<f64> = (0..len).map(|i| a[i] + b[i]).collect();
+    let held: Vec<Buffer> = [root, a, b]
+        .into_iter()
+        .map(|plane| Buffer::of_planes(48_000, vec![plane]))
+        .collect();
+    let named = |pairs: &[(&str, usize)]| -> BTreeMap<String, usize> {
+        pairs.iter().map(|(n, s)| (n.to_string(), *s)).collect()
+    };
+    let (own, read) = (
+        named(&[("root", 0)]),
+        named(&[("root", 0), ("a", 1), ("b", 2)]),
+    );
+    let attributed = ["a", "b"].iter().map(|n| n.to_string()).collect();
+    let sources = Sources {
+        read: &read,
+        own: &own,
+        attributed: &attributed,
+        widths: &[1, 1, 1],
+    };
+    let deps = BTreeMap::from([("root".to_string(), vec!["a".to_string(), "b".to_string()])]);
+    let kinds = BTreeMap::new();
+    let mut whole = Tally::new(&sources, &deps, &kinds, "root", 1);
+    let all: Vec<Option<&Buffer>> = held.iter().map(Some).collect();
+    whole.add(&all, 0..len);
+    let mut stretched = Tally::new(&sources, &deps, &kinds, "root", 1);
+    let mut from = 0;
+    for step in [1, 4095, 17, 4096, 3000].into_iter().cycle() {
+        let to = (from + step).min(len);
+        let cut: Vec<Buffer> = held
+            .iter()
+            .map(|b| Buffer::of_planes(48_000, vec![b.plane(0)[from..to].to_vec()]))
+            .collect();
+        let cut: Vec<Option<&Buffer>> = cut.iter().map(Some).collect();
+        stretched.add(&cut, 0..to - from);
+        from = to;
+        if from == len {
+            break;
+        }
+    }
+    assert_eq!(stretched.entries(), whole.entries());
 }

@@ -43,7 +43,7 @@ fn a_two_pole_resonator_reports_the_centre_and_bandwidth_it_was_built_with() {
     let sr = 16000.0;
     for (hz, bandwidth) in [(700.0, 90.0), (1220.0, 110.0), (2600.0, 170.0)] {
         let x = resonator(hz, bandwidth, sr, 32768);
-        let frame = analyze(&x, sr, 2, 4);
+        let frame = analyze(&[&x[..]], sr, 2, 4);
         assert_eq!(frame.formants.len(), 1, "one pole pair, one formant");
         let found = frame.formants[0];
         assert!(
@@ -68,7 +68,7 @@ fn a_three_resonance_cascade_reports_all_three_at_a_higher_order() {
     for (hz, bandwidth) in targets {
         x = resonated(&x, hz, bandwidth, sr);
     }
-    let frame = analyze(&x, sr, 10, 8);
+    let frame = analyze(&[&x[..]], sr, 10, 8);
     for (hz, bandwidth) in targets {
         let found = nearest(&frame, hz);
         assert!(
@@ -96,9 +96,13 @@ fn the_order_is_the_rule_of_thumb_unless_a_caller_says_otherwise() {
     assert_eq!(default_order(192_000.0), MAX_ORDER, "clamped, not guessed");
 
     let x = resonator(700.0, 90.0, 16000.0, 512);
-    assert_eq!(analyze(&x, 16000.0, 12, 8).order, 12);
-    assert_eq!(analyze(&x, 16000.0, 400, 8).order, MAX_ORDER);
-    assert_eq!(analyze(&x[..9], 16000.0, 12, 8).order, 8, "a short frame");
+    assert_eq!(analyze(&[&x[..]], 16000.0, 12, 8).order, 12);
+    assert_eq!(analyze(&[&x[..]], 16000.0, 400, 8).order, MAX_ORDER);
+    assert_eq!(
+        analyze(&[&x[..9][..]], 16000.0, 12, 8).order,
+        8,
+        "a short frame"
+    );
 }
 
 /// The whole reason this exists: a voiced signal's peaks are the glottal source's harmonics,
@@ -112,7 +116,7 @@ fn a_voiced_source_through_a_tract_reports_the_tract_and_not_its_harmonics() {
         for (hz, bandwidth) in targets {
             x = resonated(&x, hz, bandwidth, sr);
         }
-        let frame = analyze(&x, sr, 14, 8);
+        let frame = analyze(&[&x[..]], sr, 14, 8);
         for (hz, _) in targets {
             let found = nearest(&frame, hz);
             assert!(
@@ -137,8 +141,8 @@ fn glottis(f0: f64, sample_rate: f64, samples: usize) -> Vec<f64> {
 #[test]
 fn silence_and_an_empty_frame_report_no_resonance_rather_than_a_guess() {
     for frame in [
-        analyze(&[], 16000.0, 12, 8),
-        analyze(&[0.0; 512], 16000.0, 12, 8),
+        analyze(&[&[][..]], 16000.0, 12, 8),
+        analyze(&[&[0.0; 512][..]], 16000.0, 12, 8),
     ] {
         assert!(frame.formants.is_empty());
         assert_eq!(frame.energy, 0.0);
@@ -151,7 +155,7 @@ fn a_track_places_each_frame_in_time_and_follows_a_moving_resonance() {
     let sr = 16000.0;
     let mut x = resonator(500.0, 80.0, sr, 8000);
     x.extend(resonated(&noise(3.0, 8000), 1800.0, 80.0, sr));
-    let frames = track(&x, sr, 0.25, 0.5, 4, 4);
+    let frames = track(&[&x[..]], sr, 0.25, 0.5, 4, 4);
     assert_eq!(frames.len(), 2);
     assert_eq!(frames[0].t_secs, 0.25);
     assert_eq!(frames[1].t_secs, 0.75);

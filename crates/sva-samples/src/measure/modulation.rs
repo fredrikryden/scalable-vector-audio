@@ -1,4 +1,4 @@
-// Concern: how each band group's envelopes and centroid move per sliding window: rate, depth | Non-concern: the band filters, any verdict | IO: (&[f64], rate, start, hop, window, bpm) -> Modulation
+// Concern: how each band group's envelopes and centroid move per sliding window: rate, depth | Non-concern: the band filters, any verdict | IO: (planes, rate, start, hop, window, bpm) -> Modulation
 
 use std::f64::consts::{PI, TAU};
 use std::ops::Range;
@@ -218,21 +218,22 @@ pub struct Modulation {
 }
 
 pub fn measure(
-    samples: &[f64],
+    planes: &[&[f64]],
     sample_rate: f64,
     start_secs: f64,
     hop_secs: f64,
     window_secs: f64,
     bpm: Option<f64>,
 ) -> Result<Modulation, Unread> {
-    sliding::fits(samples.len(), sample_rate, window_secs, 1.0 / MIN_HZ)?;
-    let split = bands::smoothed(samples, sample_rate, start_secs, SMOOTHING);
+    let held = crate::measure::held(planes);
+    sliding::fits(held, sample_rate, window_secs, 1.0 / MIN_HZ)?;
+    let split = bands::smoothed(planes, sample_rate, start_secs, SMOOTHING);
     let lowpass = Lowpass::new(split.rate_hz);
     let groups = grouped(&split, &lowpass);
     let rate = split.rate_hz / lowpass.step as f64;
     let len = groups.first().map_or(0, |g| g.centroid.len());
     let grid = sliding::spans(
-        samples.len(),
+        held,
         sample_rate,
         start_secs,
         hop_secs,

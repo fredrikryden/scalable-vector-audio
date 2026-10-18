@@ -35,9 +35,20 @@ pub fn put(dir: &Path, rel: &str, body: &str) {
     std::fs::write(full, body).expect("a node file");
 }
 
-/// `master` over its first second, as a render names it.
+/// `master` over its first second, as a render names it, its ledger tallied.
 pub fn master(dir: &Path) -> Result<Rendered, CliError> {
-    sva_core::probe(dir, "@master([0, 1s])")
+    ledgered(dir, "@master([0, 1s])")
+}
+
+/// `expression` rendered as `probe` renders it, asked for the ledger [`ledger`] reads: a ledger
+/// is tallied as the render pulls, never off a render that was not asked for one.
+pub fn ledgered(dir: &Path, expression: &str) -> Result<Rendered, CliError> {
+    let (asked, source) = (asked("ledger(depth=8)"), sva_ast::Dir::at(dir));
+    let job = sva_core::Job {
+        asked: &asked,
+        ..sva_core::Job::over(&source, expression)
+    };
+    sva_core::execute(job, &sva_engine::Tier::default())
 }
 
 /// Where the render's range ends, in seconds.

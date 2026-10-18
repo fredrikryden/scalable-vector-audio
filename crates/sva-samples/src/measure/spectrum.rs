@@ -1,4 +1,4 @@
-// Concern: resolves samples into magnitudes, third-octave bands and peaks | Non-concern: naming a peak as a note (pitch.rs), choosing the window | IO: (&[f64], sample rate) -> Spectrum
+// Concern: resolves every channel's samples into magnitudes, third-octave bands and peaks | Non-concern: naming a peak as a note (pitch.rs), choosing the window | IO: (planes, sample rate) -> Spectrum
 
 use crate::fft::fft;
 
@@ -44,12 +44,12 @@ pub struct Spectrum {
 }
 
 pub fn analyze(
-    samples: &[f64],
+    planes: &[&[f64]],
     sample_rate: f64,
     max_peaks: usize,
     frame_secs: Option<f64>,
 ) -> Spectrum {
-    let (mags, bin_hz, frame_size, frames) = magnitudes(samples, sample_rate, frame_secs);
+    let (mags, bin_hz, frame_size, frames) = magnitudes_of(planes, sample_rate, frame_secs);
     let power: Vec<f64> = mags.iter().map(|m| m * m).collect();
     let total: f64 = power.iter().sum();
 
@@ -74,11 +74,7 @@ pub fn analyze(
         }
     }
 
-    let rms = if samples.is_empty() {
-        0.0
-    } else {
-        (samples.iter().map(|&x| x * x).sum::<f64>() / samples.len() as f64).sqrt()
-    };
+    let rms = crate::measure::envelope::level(planes);
 
     Spectrum {
         frame_size,
@@ -100,12 +96,18 @@ pub fn magnitudes(
     sample_rate: f64,
     frame_secs: Option<f64>,
 ) -> (Vec<f64>, f64, usize, usize) {
+    magnitudes_of(&[samples], sample_rate, frame_secs)
+}
+
+pub fn magnitudes_of(
+    planes: &[&[f64]],
+    sample_rate: f64,
+    frame_secs: Option<f64>,
+) -> (Vec<f64>, f64, usize, usize) {
+    let len = crate::measure::held(planes);
     let frame_size = match frame_secs {
         Some(secs) => pinned_frame(secs, sample_rate).min(MAX_PINNED_FRAME),
-        None => samples
-            .len()
-            .next_power_of_two()
-            .clamp(MIN_FRAME, MAX_FRAME),
+        None => len.next_power_of_two().clamp(MIN_FRAME, MAX_FRAME),
     };
     let hop = frame_size / 2;
     let bins = frame_size / 2 + 1;
@@ -115,28 +117,28 @@ pub fn magnitudes(
     let mut frames = 0usize;
     let mut start = 0usize;
     loop {
-        let mut re = vec![0f64; frame_size];
-        let mut im = vec![0f64; frame_size];
-        for n in 0..frame_size {
-            let s = samples.get(start + n).copied().unwrap_or(0.0);
-            re[n] = s * window[n];
-        }
-        fft(&mut re, &mut im);
-        for (k, a) in acc.iter_mut().enumerate() {
-            *a += re[k] * re[k] + im[k] * im[k];
+        for samples in planes {
+            let mut re = vec![0f64; frame_size];
+            let mut im = vec![0f64; frame_size];
+            for n in 0..frame_size {
+                let s = samples.get(start + n).copied().unwrap_or(0.0);
+                re[n] = s * window[n];
+            }
+            fft(&mut re, &mut im);
+            for (k, a) in acc.iter_mut().enumerate() {
+                *a += re[k] * re[k] + im[k] * im[k];
+            }
         }
         frames += 1;
         start += hop;
-        if start + frame_size > samples.len() {
+        if start + frame_size > len {
             break;
         }
     }
 
     let scale = 4.0 / frame_size as f64;
-    let mags = acc
-        .iter()
-        .map(|p| (p / frames as f64).sqrt() * scale)
-        .collect();
+    let averaged = (frames * planes.len()) as f64;
+    let mags = acc.iter().map(|p| (p / averaged).sqrt() * scale).collect();
     (mags, sample_rate / frame_size as f64, frame_size, frames)
 }
 

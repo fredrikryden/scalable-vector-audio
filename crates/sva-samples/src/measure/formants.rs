@@ -1,4 +1,4 @@
-// Concern: resolves each frame into the resonances an all-pole model puts under it | Non-concern: the discrete spectrum (spectrum.rs), naming a peak (pitch.rs) | IO: (&[f64], sample rate) -> frames
+// Concern: resolves each frame into the resonances an all-pole model puts under it | Non-concern: the discrete spectrum (spectrum.rs), naming a peak (pitch.rs) | IO: (planes, sample rate) -> frames
 
 use crate::measure::spectrum::db;
 
@@ -31,7 +31,7 @@ pub fn default_order(sample_rate: f64) -> usize {
 }
 
 pub fn track(
-    samples: &[f64],
+    planes: &[&[f64]],
     sample_rate: f64,
     start_secs: f64,
     frame_secs: f64,
@@ -39,32 +39,55 @@ pub fn track(
     max_formants: usize,
 ) -> Vec<FormantFrame> {
     let stride = ((frame_secs * sample_rate).round() as usize).max(1);
-    samples
-        .chunks(stride)
+    let len = crate::measure::held(planes);
+    (0..len)
+        .step_by(stride)
         .enumerate()
-        .map(|(n, chunk)| FormantFrame {
-            t_secs: start_secs + (n * stride) as f64 / sample_rate,
-            ..analyze(chunk, sample_rate, order, max_formants)
+        .map(|(n, from)| {
+            let chunk: Vec<&[f64]> = planes
+                .iter()
+                .map(|p| &p[from..len.min(from + stride)])
+                .collect();
+            FormantFrame {
+                t_secs: start_secs + (n * stride) as f64 / sample_rate,
+                ..analyze(&chunk, sample_rate, order, max_formants)
+            }
         })
         .collect()
 }
 
 /// Hamming, not Hann: a taper reaching zero throws the frame's edges away. Never
 /// pre-emphasised; `x - 0.97*x(t - 1sp)` is a composition's own to write.
-pub fn analyze(frame: &[f64], sample_rate: f64, order: usize, max_formants: usize) -> FormantFrame {
-    let order = order.clamp(2, MAX_ORDER).min(frame.len().saturating_sub(1));
-    let windowed: Vec<f64> = frame
+pub fn analyze(
+    planes: &[&[f64]],
+    sample_rate: f64,
+    order: usize,
+    max_formants: usize,
+) -> FormantFrame {
+    let len = crate::measure::held(planes);
+    let order = order.clamp(2, MAX_ORDER).min(len.saturating_sub(1));
+    let windowed: Vec<Vec<f64>> = planes
         .iter()
-        .enumerate()
-        .map(|(n, &x)| {
-            let turn = 2.0 * std::f64::consts::PI * n as f64 / frame.len() as f64;
-            let w = 0.54 - 0.46 * turn.cos();
-            x * w
+        .map(|frame| {
+            frame
+                .iter()
+                .enumerate()
+                .map(|(n, &x)| {
+                    let turn = 2.0 * std::f64::consts::PI * n as f64 / len as f64;
+                    let w = 0.54 - 0.46 * turn.cos();
+                    x * w
+                })
+                .collect()
         })
         .collect();
-    let energy = match frame.is_empty() {
-        true => 0.0,
-        false => windowed.iter().map(|x| x * x).sum::<f64>() / frame.len() as f64,
+    let energy = match len {
+        0 => 0.0,
+        _ => {
+            let each = windowed
+                .iter()
+                .map(|w| w.iter().map(|x| x * x).sum::<f64>());
+            each.sum::<f64>() / (len * planes.len()) as f64
+        }
     };
     if order < 2 || energy <= 0.0 {
         return FormantFrame {
@@ -76,9 +99,9 @@ pub fn analyze(frame: &[f64], sample_rate: f64, order: usize, max_formants: usiz
         };
     }
 
-    let r = autocorrelation(&windowed, order);
+    let r = crate::measure::averaged(windowed.iter().map(|w| autocorrelation(w, order)).collect());
     let (a, error) = levinson(&r, order);
-    let residual = error / frame.len() as f64;
+    let residual = error / len as f64;
     let gain = residual.max(0.0).sqrt();
 
     let mut formants: Vec<Formant> = roots(&a)

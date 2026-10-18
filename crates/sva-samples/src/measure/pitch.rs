@@ -1,6 +1,6 @@
-// Concern: names each frame's spectral peaks as notes and flags likely harmonics | Non-concern: computing the spectrum (spectrum.rs), chord or key identity | IO: (&[f64], sample rate) -> frames
+// Concern: names each frame's spectral peaks as notes and flags likely harmonics | Non-concern: computing the spectrum (spectrum.rs), chord or key identity | IO: (planes, sample rate) -> frames
 
-use crate::measure::spectrum::{Peak, magnitudes, peaks};
+use crate::measure::spectrum::{Peak, magnitudes_of, peaks};
 
 const NAMES: [&str; 12] = [
     "C", "Cs", "D", "Ds", "E", "F", "Fs", "G", "Gs", "A", "As", "B",
@@ -27,18 +27,23 @@ pub struct PitchFrame {
 }
 
 pub fn track(
-    samples: &[f64],
+    planes: &[&[f64]],
     sample_rate: f64,
     start_secs: f64,
     frame_secs: f64,
     max_notes: usize,
 ) -> Vec<PitchFrame> {
     let stride = ((frame_secs * sample_rate).round() as usize).max(1);
-    samples
-        .chunks(stride)
+    let len = crate::measure::held(planes);
+    (0..len)
+        .step_by(stride)
         .enumerate()
-        .map(|(n, chunk)| {
-            let (mags, bin_hz, ..) = magnitudes(chunk, sample_rate, None);
+        .map(|(n, from)| {
+            let chunk: Vec<&[f64]> = planes
+                .iter()
+                .map(|p| &p[from..len.min(from + stride)])
+                .collect();
+            let (mags, bin_hz, ..) = magnitudes_of(&chunk, sample_rate, None);
             let found = peaks(&mags, bin_hz, max_notes * 4);
             PitchFrame {
                 t_secs: start_secs + (n * stride) as f64 / sample_rate,

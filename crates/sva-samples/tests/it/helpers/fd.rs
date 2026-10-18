@@ -19,7 +19,7 @@ pub fn render(params: &Params, rate: u32, secs: f64) -> Buffer {
 
 pub fn peaks(buffer: &Buffer, max_peaks: usize, frame_secs: Option<f64>) -> Vec<f64> {
     let s = spectrum::analyze(
-        buffer.plane(0),
+        &[buffer.plane(0)],
         f64::from(buffer.rate),
         max_peaks,
         frame_secs,

@@ -1,7 +1,7 @@
 // Concern: what each value a node's renderer reads contributed to it | Non-concern: building the renderer, sharing a target's energy out (sva-samples) | IO: (NodeId) -> a ref and its addend
 
 use sva_formula::NodeId;
-use sva_samples::{BufId, Buffer, NodeRenderer, Slot};
+use sva_samples::{BufId, NodeRenderer, Slot};
 
 use crate::error::EngineError;
 use crate::render::Render;
@@ -80,22 +80,24 @@ fn behind(
     }
 }
 
-/// What one ref put into the node reading it: that node's renderer run with every other slot
-/// silenced, so the refs of a sum add back to it. `None` is an edge no slot isolates, never a
-/// run that refused.
-pub(super) fn contributed(
+/// Where what one ref put into the node reading it comes from: that node's own samples where
+/// it only passes the ref on, else its renderer run with every other slot silenced, so the
+/// refs of a sum add back to it. `None` is an edge no slot isolates.
+pub(super) enum Contribution {
+    Passed,
+    Silenced(Box<NodeRenderer>),
+}
+
+pub(super) fn contribution(
     render: &Render,
     parent: NodeId,
     child: NodeId,
-) -> Result<Option<Buffer>, EngineError> {
-    let holds = |id: NodeId| render.buffers.contains_key(&id);
+    holds: &dyn Fn(NodeId) -> bool,
+) -> Result<Option<Contribution>, EngineError> {
     if crate::refs::passes(&render.tys, parent) == Some(child) {
-        let range = render.range.expect("a ledger reads a decided range");
-        return Ok(render
-            .buffer(parent)
-            .map(|held| held.over(range, held.extent())));
+        return Ok(holds(parent).then_some(Contribution::Passed));
     }
-    let Some((renderer, kept)) = isolated(render, parent, child, &holds)? else {
+    let Some((renderer, kept)) = isolated(render, parent, child, holds)? else {
         return Ok(None);
     };
     let (value_graph, at) =
@@ -103,14 +105,11 @@ pub(super) fn contributed(
     let Kind::MachineRun(machine_run) = &value_graph.values[at].kind else {
         unreachable!("machine_run_of answers a machine run");
     };
-    let range = render.range.expect("a ledger reads a decided range");
     let others = Silenced {
         kept: &|id: BufId| kept.contains(&id),
         widths: &machine_run.layout.read_widths,
     };
-    value_graph
-        .rerun(at, &others.of(&renderer), range)
-        .map(Some)
+    Ok(Some(Contribution::Silenced(Box::new(others.of(&renderer)))))
 }
 
 pub(super) fn isolated(

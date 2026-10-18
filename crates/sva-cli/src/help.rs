@@ -209,6 +209,15 @@ RENDER:
   `peak` the largest magnitude in any channel. `onsets` reads every channel
   as well: a frame's flux is the sum of each channel's, and a strike's energy
   that of all channels' samples together, so opposite phases cancel nothing.
+  Every other measured reading but `stereo` reads every channel in power, as
+  `envelope` reads a level: a spectrum's power per bin (`spectrum`, `pitch`,
+  the partials `dissonance`, `voice_leading`, `tonal_distance`,
+  `inharmonicity` and `self_similarity` pick), a formant frame's
+  autocorrelation and each auditory band's energy (`bands`, `periodicity`,
+  `modulation`, `self_similarity`) are each channel's averaged, so a channel
+  copied to two reads as itself; `crest` sets any channel's peak against the
+  RMS of all of them together. A closed form's exact partials are its first
+  component's.
 
   `--bits <n>` is the precision every sample is written to, from 2 to 52: the
   point where a series is truncated, and the encoding of a `.wav`, integer PCM

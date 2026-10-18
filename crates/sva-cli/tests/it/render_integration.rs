@@ -3,7 +3,7 @@
 mod tempo;
 mod written;
 
-use crate::helpers::{asked, entry, fixture, json_of, master, plane, put, scratch, secs};
+use crate::helpers::{asked, entry, fixture, json_of, ledgered, master, plane, put, scratch, secs};
 use sva_ast::Dir;
 use sva_cli::{CliError, error_envelope};
 use sva_core::{Job, PROBE, ROOT, execute, probe};
@@ -163,7 +163,7 @@ fn atoms_print_each_window_in_seconds_and_null_where_unbounded() {
 fn probe_evaluates_an_argv_expression_in_the_compositions_namespace() {
     let dir = fixture("basic");
     let before = master(&dir).unwrap();
-    let probed = probe(&dir, "crop(@drums*0.5, 0s, 1s)").expect("probe should render");
+    let probed = ledgered(&dir, "crop(@drums*0.5, 0s, 1s)").expect("probe should render");
 
     assert_eq!(secs(&probed), secs(&before));
     let dry = entry(&before, PROBE).rms;

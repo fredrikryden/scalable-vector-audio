@@ -3,6 +3,7 @@
 mod answer;
 mod drive;
 mod end;
+mod ledger;
 mod run;
 mod slots;
 mod stream;
@@ -12,7 +13,7 @@ pub(crate) mod value_graph;
 mod volatile;
 mod world;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -136,6 +137,7 @@ pub struct Render {
     pub(crate) treated_as_silent_from_sample: Option<i64>,
     /// What its readings ask past the samples it holds.
     pub(crate) memory: Memory,
+    pub(crate) ledgers: Vec<ledger::Tallied>,
 }
 
 impl Render {
@@ -166,6 +168,7 @@ impl Render {
             stand_in_typed: Vec::new(),
             treated_as_silent_from_sample: None,
             memory,
+            ledgers: Vec::new(),
         }
     }
 
@@ -449,16 +452,21 @@ fn ranged(
     held.range = Some(range?);
     let more = supports.into_memo();
     found.extend(more);
-    let wanted: Vec<NodeId> = held.schedule.wanted.clone();
-    let root = (held.root, wanted.as_slice());
-    let value_graph = ValueGraph::bounded(&held.tys, root, &held.config.profile, (found, hits))?;
+    let schedule = &held.schedule;
+    let tallied: BTreeSet<NodeId> = schedule.tallied.iter().copied().collect();
+    let built: BTreeSet<NodeId> = schedule.wanted.iter().chain(&tallied).copied().collect();
+    let built: Vec<NodeId> = built.into_iter().collect();
+    let root = (held.root, built.as_slice());
+    let mut value_graph =
+        ValueGraph::bounded(&held.tys, root, &held.config.profile, (found, hits))?;
+    value_graph.tallying(&built, &tallied);
     value_graph.refuse_endless(held.range.expect("a range was decided"))?;
     held.value_graph = Some(value_graph);
     Ok(())
 }
 
 fn materializes(held: &Render) -> bool {
-    !held.schedule.wanted.is_empty()
+    !held.schedule.wanted.is_empty() || !held.schedule.tallied.is_empty()
 }
 
 pub(crate) enum Ends {
@@ -525,27 +533,29 @@ fn driving(
     held: &mut Render,
     (memory, recording): (&Memory, Recording),
 ) -> Result<Option<drive::Driver>, EngineError> {
-    let (Some(value_graph), Some(range)) = (held.value_graph.take(), held.range) else {
-        return Ok(None);
-    };
-    if !materializes(held) {
-        held.value_graph = Some(value_graph);
+    if held.range.is_none() || held.value_graph.is_none() || !materializes(held) {
         return Ok(None);
     }
-    Ok(Some(drive::Driver::new(
+    let ledgers = ledger::Ledgers::laid(held);
+    let (Some(value_graph), Some(range)) = (held.value_graph.take(), held.range) else {
+        unreachable!("a value graph and a range, checked above");
+    };
+    let mut driver = drive::Driver::new(
         value_graph,
         range,
         (sva_samples::BLOCK as usize).saturating_mul(held.config.threads.get()),
         &held.config,
         (memory.clone(), recording),
-    )))
+    );
+    driver.ledgers = ledgers;
+    Ok(Some(driver))
 }
 
 pub(crate) fn dropped(config: &RenderConfig) -> bool {
     config.out == Out::Dropped && config.asks.is_empty()
 }
 
-fn drove(held: &mut Render, driver: drive::Driver) {
+fn drove(held: &mut Render, mut driver: drive::Driver) {
     let keep = !dropped(&held.config);
     let range = held.range.expect("a pulled render has a range");
     held.held_bytes = driver.most_bytes();
@@ -555,6 +565,10 @@ fn drove(held: &mut Render, driver: drive::Driver) {
         held.range = Some(Extent::new(range.start, stop));
     }
     let range = held.range.expect("a pulled render has a range");
+    held.ledgers = driver
+        .ledgers
+        .take()
+        .map_or(Vec::new(), ledger::Ledgers::tallied);
     let value_graph = driver.value_graph;
     let wanted = held.schedule.wanted.iter().filter(|_| keep);
     for (id, at) in wanted.map(|id| (*id, value_graph.of(*id))) {
@@ -647,19 +661,6 @@ pub(crate) fn render_apart(
     let memory = held.memory.clone();
     pulled(&mut held, (&memory, Recording::over(&memory)))?;
     Ok(held)
-}
-
-pub(crate) fn sampled(render: &Render, node: NodeId, over: Extent) -> Result<Buffer, EngineError> {
-    let mut value_graph = ValueGraph::build(&render.tys, node, &[node], &render.config.profile)?;
-    let at = value_graph.root;
-    let memory = &render.memory;
-    let threads = render.config.threads;
-    value_graph.pull(
-        over,
-        (memory, &mut Recording::over(memory)),
-        (threads, None),
-    )?;
-    Ok(value_graph.samples(at, over))
 }
 
 /// The render's own label says where it cut below the silence threshold.

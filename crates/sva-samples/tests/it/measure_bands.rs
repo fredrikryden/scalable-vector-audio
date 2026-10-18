@@ -28,7 +28,7 @@ fn the_scale_is_the_published_one_and_inverts() {
 
 #[test]
 fn each_band_sits_at_the_q_its_own_bandwidth_states() {
-    let bands = analyze(&[0.0; 64], SR, 0.0);
+    let bands = analyze(&[&[0.0; 64][..]], SR, 0.0);
     assert_eq!(bands.bands.len(), BAND_COUNT);
     for (hz, want) in [(100.0, 2.8), (1000.0, 7.5), (5000.0, 8.9)] {
         let b = band_at(&bands, hz);
@@ -41,7 +41,7 @@ fn each_band_sits_at_the_q_its_own_bandwidth_states() {
 fn an_impulse_measures_as_each_bands_own_floor() {
     let mut x = vec![0.0; 44100];
     x[0] = 1.0;
-    let bands = analyze(&x, SR, 0.0);
+    let bands = analyze(&[&x[..]], SR, 0.0);
     for b in &bands.bands {
         assert!((b.peak - b.floor.peak).abs() < 1e-9, "{} Hz", b.centre_hz);
         assert!(
@@ -54,7 +54,7 @@ fn an_impulse_measures_as_each_bands_own_floor() {
 
 #[test]
 fn the_floor_lengthens_as_the_band_narrows_and_is_not_the_old_rule_of_thumb() {
-    let bands = analyze(&[0.0; 64], SR, 0.0);
+    let bands = analyze(&[&[0.0; 64][..]], SR, 0.0);
     let rise = |hz: f64| band_at(&bands, hz).floor.rise_10_90_secs.unwrap();
     assert!(rise(63.0) > rise(500.0), "a low band must ring longer");
     assert!(rise(500.0) > rise(5000.0));
@@ -73,7 +73,7 @@ fn an_exponential_decay_falls_at_the_rate_it_was_built_with() {
             (2.0 * std::f64::consts::PI * hz * t).sin() * (-t / tau).exp()
         })
         .collect();
-    let bands = analyze(&x, SR, 0.0);
+    let bands = analyze(&[&x[..]], SR, 0.0);
     let b = band_at(&bands, hz);
     let rate = bands.rate_hz;
     let at = |secs: f64| b.rms[(secs * rate) as usize];
@@ -97,7 +97,7 @@ fn a_swept_sine_peaks_in_each_band_when_it_passes_that_bands_centre() {
             phase.sin()
         })
         .collect();
-    let bands = analyze(&x, SR, 0.0);
+    let bands = analyze(&[&x[..]], SR, 0.0);
     let heard: Vec<&BandTrack> = bands
         .bands
         .iter()
@@ -119,7 +119,7 @@ fn a_swept_sine_peaks_in_each_band_when_it_passes_that_bands_centre() {
 
 #[test]
 fn a_silent_band_reports_no_time_to_peak_at_all() {
-    let bands = analyze(&[0.0; 8192], SR, 0.0);
+    let bands = analyze(&[&[0.0; 8192][..]], SR, 0.0);
     for b in &bands.bands {
         assert_eq!(b.peak, 0.0);
         assert_eq!(b.time_to_peak_secs, None);
@@ -130,7 +130,7 @@ fn a_silent_band_reports_no_time_to_peak_at_all() {
 
 #[test]
 fn a_rate_that_cannot_hold_the_top_bands_reports_the_ones_it_can() {
-    let narrow = analyze(&[0.0; 64], 8000.0, 0.0);
+    let narrow = analyze(&[&[0.0; 64][..]], 8000.0, 0.0);
     assert!(narrow.bands.len() < BAND_COUNT);
     assert!(narrow.bands.iter().all(|b| b.centre_hz < 3600.0));
 }

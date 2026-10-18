@@ -17,7 +17,7 @@ fn band_at(c: &Crest, hz: f64) -> BandCrest {
 
 #[test]
 fn a_steady_sine_reads_three_decibels_of_crest_in_its_own_band() {
-    let c = analyze(&at(1000.0, 44100.0, 2.0, 0.5), 44100.0);
+    let c = analyze(&[&at(1000.0, 44100.0, 2.0, 0.5)[..]], 44100.0);
     let own = band_at(&c, 1000.0);
     assert!(own.counted);
     assert!(
@@ -43,7 +43,7 @@ fn a_band_of_clicks_beside_a_band_of_drone_reads_as_spread() {
             *x += 0.6;
         }
     }
-    let c = analyze(&mixed, sr);
+    let c = analyze(&[&mixed[..]], sr);
     let drone = band_at(&c, 100.0);
     let clicky = band_at(&c, 6000.0);
     assert!(clicky.crest_db > drone.crest_db + 6.0, "{c:?}");
@@ -53,7 +53,7 @@ fn a_band_of_clicks_beside_a_band_of_drone_reads_as_spread() {
 
 #[test]
 fn a_band_far_under_the_loudest_is_not_counted_toward_the_spread() {
-    let c = analyze(&at(1000.0, 44100.0, 2.0, 0.5), 44100.0);
+    let c = analyze(&[&at(1000.0, 44100.0, 2.0, 0.5)[..]], 44100.0);
     assert!(!band_at(&c, 40.0).counted, "under the tone by five octaves");
     assert!(!band_at(&c, 15000.0).counted, "over it by four");
     assert!(c.bands.iter().filter(|b| b.counted).count() < c.bands.len());
@@ -62,7 +62,7 @@ fn a_band_far_under_the_loudest_is_not_counted_toward_the_spread() {
 
 #[test]
 fn silence_carries_no_spread_and_no_counted_band() {
-    let c = analyze(&vec![0.0; 4410], 44100.0);
+    let c = analyze(&[&vec![0.0; 4410][..]], 44100.0);
     assert_eq!(c.spread_db, None);
     assert!(c.bands.iter().all(|b| !b.counted));
 }

@@ -1,12 +1,13 @@
-// Concern: the partials of samples, a Hann frame centred on each instant, leakage peaks left out | Non-concern: picking peaks (spectrum.rs) | IO: (&[f64], rate, start, hop) -> moments, framing
+// Concern: the partials of samples, a Hann frame centred on each instant, leakage peaks left out | Non-concern: picking peaks (spectrum.rs) | IO: (planes, rate, start, hop) -> moments, framing
 
 use super::{Framing, Moment, Partial, Window};
-use crate::measure::spectrum::{magnitudes, peaks, pinned_frame};
+use crate::measure::spectrum::{magnitudes_of, peaks, pinned_frame};
 
 pub const WINDOW_SECS: f64 = 0.05;
 
-pub const METHOD: &str = "measured: a Hann frame of `window.size` samples of the first \
-                          component centred on each instant, zero past its ends; its local \
+pub const METHOD: &str = "measured: a Hann frame of `window.size` samples of each channel \
+                          centred on each instant, zero past its ends, their power per bin \
+                          averaged over the channels; its local \
                           maxima picked as `spectrum` picks peaks, refined by the two-bin Hann \
                           interpolation of Grandke, T. (1983), IEEE Trans. Instrum. Meas. 32(2) \
                           350-355, exact for a lone sinusoid; a peak no louder than the Hann \
@@ -107,27 +108,34 @@ fn bounded(p: &Peaked, mags: &[f64], bin_hz: f64, leaked: impl Fn(f64) -> f64) -
 }
 
 pub fn moments(
-    samples: &[f64],
+    planes: &[&[f64]],
     sample_rate: f64,
     start_secs: f64,
     hop_secs: f64,
 ) -> (Vec<Moment>, Framing) {
+    let len = crate::measure::held(planes);
     let hop = ((hop_secs * sample_rate).round() as usize).max(1);
     let size = pinned_frame(WINDOW_SECS, sample_rate);
     let half = (size / 2) as i64;
     let mut held = Vec::new();
-    for centre in (0..samples.len()).step_by(hop) {
-        let frame: Vec<f64> = (0..size as i64)
-            .map(|k| {
-                let at = centre as i64 - half + k;
-                usize::try_from(at)
-                    .ok()
-                    .and_then(|at| samples.get(at))
-                    .copied()
-                    .unwrap_or(0.0)
+    for centre in (0..len).step_by(hop) {
+        let frames: Vec<Vec<f64>> = planes
+            .iter()
+            .map(|samples| {
+                (0..size as i64)
+                    .map(|k| {
+                        let at = centre as i64 - half + k;
+                        usize::try_from(at)
+                            .ok()
+                            .and_then(|at| samples.get(at))
+                            .copied()
+                            .unwrap_or(0.0)
+                    })
+                    .collect()
             })
             .collect();
-        let (mags, bin_hz, ..) = magnitudes(&frame, sample_rate, Some(WINDOW_SECS));
+        let frames: Vec<&[f64]> = frames.iter().map(Vec::as_slice).collect();
+        let (mags, bin_hz, ..) = magnitudes_of(&frames, sample_rate, Some(WINDOW_SECS));
         let mut kept: Vec<Peaked> = Vec::new();
         for peak in peaks(&mags, bin_hz, usize::MAX) {
             let found = refined(&mags, bin_hz, peak.hz);

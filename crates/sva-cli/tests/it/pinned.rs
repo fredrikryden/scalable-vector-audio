@@ -219,10 +219,10 @@ const PINNED: &str = r#"
 7 derivative 4c8306ae0e47500b
 7 ledger 3eced3ce79e67005
 7 pitch refused "read.lines_need_unwindowed_lines"
-7 formants 92c165924f4850c5
+7 formants c0281bb4e0ac6319
 7 stereo ed61419626773d93
-7 bands b1152050da45e57d
-7 crest 046c981ae06261fc
+7 bands 63f7a635e479975b
+7 crest 11bd7455ec37430f
 7 loudness 7d6440ef7def4aca
 7 onsets 947180301b950186
 7 alias 2e6ca0047cafaf68
@@ -232,15 +232,15 @@ const PINNED: &str = r#"
 8 wav 083e3fdfa6fd2b2d
 8 store:0435c2987fec5f6fa5f7bc60ed42587e 31fc1d6de3a78d9f
 8 lines refused "type.samples_in_closed_form"
-8 spectrum 81d5aa4c53750acc
+8 spectrum 8036c3c04990beb1
 8 envelope 0c5253e952c2fa8d
 8 derivative d3faa20b9834549e
 8 ledger d7d7417544077963
-8 pitch 3736b94f2701483a
-8 formants 91826cb66b084d64
+8 pitch 2761cfa5e2157657
+8 formants 0e95b6ea73de97c9
 8 stereo 6494bdf51a307118
-8 bands a3ee3343e5d5994c
-8 crest fb94330cd10aafeb
+8 bands a77c7f445be310ef
+8 crest 5acbf9ff63a1ae21
 8 loudness 470df9d7cf11cbe3
 8 onsets 015eef63a6fac75f
 8 alias refused "engine.alias_needs_a_closed_form"
