@@ -120,3 +120,24 @@ fn a_stereo_track_is_read_in_every_channel() {
         "opposite phases sum no silence"
     );
 }
+
+/// 0.3 s is 13230 samples: every interval lands in the bucket opening there.
+#[test]
+fn intervals_on_a_bucket_edge_fall_in_the_bucket_it_opens() {
+    let sr = 44_100.0;
+    let found = detect(&[&bursts(sr, 0.3, 6)], sr, 0.0);
+    assert_eq!(found.onsets.len(), 6, "{:?}", found.onsets);
+    let filled: Vec<(f64, f64, usize)> = (found.ioi_histogram.iter())
+        .filter(|b| b.count > 0)
+        .map(|b| (b.lo_secs, b.hi_secs, b.count))
+        .collect();
+    assert_eq!(filled, vec![(0.3, 0.325, 5)]);
+}
+
+#[test]
+fn the_resolution_is_the_hop_in_whole_samples() {
+    for (sr, hop) in [(44_100.0, 127.0), (48_000.0, 138.0), (8_000.0, 23.0)] {
+        let found = detect(&[&bursts(sr, 0.25, 2)], sr, 0.0);
+        assert_eq!(found.resolution_secs, hop / sr, "{sr} Hz");
+    }
+}

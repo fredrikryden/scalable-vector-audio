@@ -12,7 +12,7 @@ const ADAPTIVE_WINDOW_SECS: f64 = 0.115;
 /// A roll's flux peaks barely over its mean; the strike tells it from a swell.
 const THRESHOLD_MULTIPLIER: f64 = 1.0;
 const THRESHOLD_DELTA: f64 = 1e-6;
-const IOI_BUCKET_SECS: f64 = 0.025;
+const IOI_BUCKETS_PER_SEC: f64 = 40.0;
 const IOI_MAX_SECS: f64 = 2.0;
 /// Under this share of the loudest frame a rise is leakage.
 const LEVEL_FRACTION: f64 = 0.03;
@@ -46,9 +46,13 @@ struct SpectralFrame {
     span_secs: f64,
 }
 
+fn hop_of(sample_rate: f64) -> usize {
+    ((HOP_SECS * sample_rate).round() as usize).max(1)
+}
+
 fn spectral_frames(planes: &[&[f64]], sample_rate: f64, start_secs: f64) -> Vec<SpectralFrame> {
     let frame_len = pinned_frame(FRAME_SECS, sample_rate).min(MAX_PINNED_FRAME);
-    let hop = ((HOP_SECS * sample_rate).round() as usize).max(1);
+    let hop = hop_of(sample_rate);
     let len = planes.iter().map(|p| p.len()).min().unwrap_or(0);
     (0..len)
         .step_by(hop)
@@ -83,9 +87,9 @@ pub fn detect(planes: &[&[f64]], sample_rate: f64, start_secs: f64) -> Onsets {
         floor,
     );
     Onsets {
-        ioi_histogram: ioi_histogram(&onsets),
+        ioi_histogram: ioi_histogram(&onsets, sample_rate),
         onsets,
-        resolution_secs: HOP_SECS,
+        resolution_secs: hop_of(sample_rate) as f64 / sample_rate,
     }
 }
 
@@ -123,8 +127,9 @@ pub(crate) fn spectral_flux(prev: &[f64], curr: &[f64]) -> f64 {
 /// a frame past the buffer's end reads silence.
 fn pick_peaks(flux: &[f64], frames: &[SpectralFrame], energy: &Energy, floor: f64) -> Vec<Onset> {
     let mut onsets: Vec<Onset> = Vec::new();
-    let window = (ADAPTIVE_WINDOW_SECS / HOP_SECS).round() as usize;
-    let reach = (MIN_ONSET_GAP_SECS / 2.0 / HOP_SECS).round().max(1.0) as usize;
+    let hop_secs = hop_of(energy.sample_rate) as f64 / energy.sample_rate;
+    let window = (ADAPTIVE_WINDOW_SECS / hop_secs).round() as usize;
+    let reach = (MIN_ONSET_GAP_SECS / 2.0 / hop_secs).round().max(1.0) as usize;
     for i in 0..flux.len() {
         let lo = i.saturating_sub(window);
         let hi = (i + window + 1).min(flux.len());
@@ -216,22 +221,24 @@ impl Energy {
     }
 }
 
-fn ioi_histogram(onsets: &[Onset]) -> Vec<IoiBucket> {
-    let n = (IOI_MAX_SECS / IOI_BUCKET_SECS).ceil() as usize + 1;
+/// Whole samples, so an interval on an edge opens its bucket.
+fn ioi_histogram(onsets: &[Onset], sample_rate: f64) -> Vec<IoiBucket> {
+    let n = (IOI_MAX_SECS * IOI_BUCKETS_PER_SEC).ceil() as usize + 1;
     let mut counts = vec![0usize; n];
     for w in onsets.windows(2) {
-        let ioi = w[1].t_secs - w[0].t_secs;
-        counts[((ioi / IOI_BUCKET_SECS) as usize).min(n - 1)] += 1;
+        let samples = ((w[1].t_secs - w[0].t_secs) * sample_rate).round();
+        let bucket = (samples * IOI_BUCKETS_PER_SEC / sample_rate).floor() as usize;
+        counts[bucket.min(n - 1)] += 1;
     }
     counts
         .into_iter()
         .enumerate()
         .map(|(i, count)| IoiBucket {
-            lo_secs: i as f64 * IOI_BUCKET_SECS,
+            lo_secs: i as f64 / IOI_BUCKETS_PER_SEC,
             hi_secs: if i + 1 == n {
                 f64::INFINITY
             } else {
-                (i + 1) as f64 * IOI_BUCKET_SECS
+                (i + 1) as f64 / IOI_BUCKETS_PER_SEC
             },
             count,
         })
