@@ -50,7 +50,7 @@ fn read(name: &str, planes: Vec<Vec<f64>>) -> Output {
         .value
 }
 
-fn alike(name: &str, a: &Output, b: &Output) {
+fn alike(name: &str, a: &dyn std::fmt::Debug, b: &dyn std::fmt::Debug) {
     let (a, b) = (format!("{a:?}"), format!("{b:?}"));
     let split = |s: &str| -> (Vec<String>, Vec<f64>) {
         let mut text = Vec::new();
@@ -103,5 +103,72 @@ fn every_reading_off_samples_averages_every_channels_power() {
             }
             _ => alike(name, &right, &read(name, vec![halved.clone()])),
         }
+    }
+}
+
+const EXACT: [&str; 6] = [
+    "spectrum",
+    "pitch",
+    "dissonance",
+    "voice_leading",
+    "tonal_distance",
+    "inharmonicity",
+];
+
+/// `x` holds steady lines, `y` a decaying partial beside a held one.
+fn exact(name: &str, node: &str) -> Box<dyn std::fmt::Debug> {
+    let held: sva_ast::Composition = [
+        (
+            "x",
+            "sin(2*pi*220*t) + 0.5*sin(2*pi*277.18*t) + 0.25*sin(2*pi*330*t)\n",
+        ),
+        ("y", "exp(0 - 3*t)*sin(2*pi*220*t) + 0.5*sin(2*pi*330*t)\n"),
+        ("twice", "join(@x, @x)\n"),
+        ("opposed", "join(@x, 0 - @x)\n"),
+        ("right", "join(0, @x)\n"),
+        ("halved", "0.7071067811865476*@x\n"),
+        ("y-twice", "join(@y, @y)\n"),
+        ("y-right", "join(0, @y)\n"),
+        ("y-halved", "0.7071067811865476*@y\n"),
+    ]
+    .into_iter()
+    .collect();
+    let asking = [sva_core::asked(&sva_core::call(name).expect("a call")).expect("a reading")];
+    let target = format!("@{node}([0, 0.2s])");
+    let job = sva_core::Job {
+        asked: &asking,
+        ..sva_core::Job::over(&held, &target)
+    };
+    let answer = sva_core::execute(job, &sva_engine::Tier::default())
+        .and_then(|done| done.answered(&asking[0]))
+        .unwrap_or_else(|e| panic!("{name} of {node}: {e:?}"));
+    assert_eq!(answer.source, sva_engine::Source::Exact, "{name} of {node}");
+    match answer.value {
+        Output::Lines(lines) => Box::new(
+            lines
+                .iter()
+                .map(|l| (l.hz, 20.0 * l.amp.abs().log10()))
+                .collect::<Vec<_>>(),
+        ),
+        other => Box::new(other),
+    }
+}
+
+/// The exact readings take the measured ones' convention: a channel copied to two reads as
+/// itself, opposite phases cancel nothing, and a closed form in the second channel beside
+/// silence reads at half its power.
+#[test]
+fn every_exact_reading_averages_every_channels_power() {
+    for name in EXACT {
+        let (x, twice, opposed, right, halved) = match name {
+            "spectrum" | "pitch" => ("x", "twice", "opposed", "right", "halved"),
+            _ => ("y", "y-twice", "opposed", "y-right", "y-halved"),
+        };
+        let mono = exact(name, x);
+        alike(name, &*exact(name, twice), &*mono);
+        if x == "x" {
+            alike(name, &*exact(name, opposed), &*mono);
+        }
+        alike(name, &*exact(name, right), &*exact(name, halved));
     }
 }

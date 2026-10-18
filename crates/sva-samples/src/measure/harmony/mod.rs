@@ -41,10 +41,12 @@ impl Framing {
     }
 }
 
-pub const EXACT_METHOD: &str = "exact: at each instant every atom of the closed form's first \
-                                component is a partial at its carrier frequency, its value \
-                                there summed with the others at that frequency, and a cosine's \
-                                two conjugate lines one partial";
+pub const EXACT_METHOD: &str = "exact: at each instant every atom of each channel of the closed \
+                                form is a partial at its carrier frequency, its value there \
+                                summed with the channel's others at that frequency, and a \
+                                cosine's two conjugate lines one partial; every channel in \
+                                power, each partial's squared amplitude summed over the \
+                                channels at its frequency, then divided by the channel count";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Window {
@@ -79,6 +81,34 @@ pub fn partials(lines: impl IntoIterator<Item = (f64, C64)>) -> Vec<Partial> {
             }
         })
         .filter(|p| p.amplitude > 0.0)
+        .collect()
+}
+
+/// Every channel in power, as a measured reading's spectrum reads them; one channel is itself.
+pub fn averaged(per_channel: Vec<Vec<Partial>>) -> Vec<Partial> {
+    if per_channel.len() == 1 {
+        return per_channel.into_iter().flatten().collect();
+    }
+    let count = per_channel.len() as f64;
+    let mut power: HashMap<u64, f64> = HashMap::new();
+    let mut order: Vec<f64> = Vec::new();
+    for p in per_channel.iter().flatten() {
+        *power.entry(p.hz.to_bits()).or_insert_with(|| {
+            order.push(p.hz);
+            0.0
+        }) += p.amplitude * p.amplitude;
+    }
+    order
+        .into_iter()
+        .map(|hz| {
+            let amplitude = (power[&hz.to_bits()] / count).sqrt();
+            Partial {
+                hz,
+                amplitude,
+                hz_bounds: (hz, hz),
+                amplitude_bounds: (amplitude, amplitude),
+            }
+        })
         .collect()
 }
 

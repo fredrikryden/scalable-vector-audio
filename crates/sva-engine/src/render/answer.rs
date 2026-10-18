@@ -2,7 +2,7 @@
 
 use sva_formula::closed_form::Edge;
 use sva_formula::spectral_sum::atom::{Singular, SpectralAtom};
-use sva_formula::{Line, SpectralSum, Var, d_dt, envelope_read, line_atoms_read};
+use sva_formula::{C64, Line, SpectralSum, Var, d_dt, envelope_read, line_atoms_read};
 use sva_samples::measure::harmony::dissonance::Crowded;
 use sva_samples::measure::harmony::{
     self, Framing, Moment, chords, dissonance, inharmonicity, measured as framed, tonnetz,
@@ -117,10 +117,17 @@ fn exact(
         Representation::Spectrum {
             frame_secs: None, ..
         } => {
-            let listed = enumerated()?;
-            let mut held = lines(render, node, sum.var, &listed.atoms)?;
+            let each = per_channel(render, node, sum)?;
+            let mut held = match each.as_slice() {
+                [one] => lines(render, node, sum.var, &one.atoms)?,
+                _ => in_power(
+                    each.iter()
+                        .map(|one| lines(render, node, sum.var, &one.atoms))
+                        .collect::<Result<_, _>>()?,
+                ),
+            };
             held.sort_by(|a, b| a.hz.total_cmp(&b.hz));
-            (Output::Lines(held), listed)
+            (Output::Lines(held), Listed::joined(each))
         }
         Representation::Atoms => {
             let listed = enumerated()?;
@@ -129,9 +136,15 @@ fn exact(
         }
         // A pair states its partials; `max_notes` is the question, not a cut answer.
         Representation::Pitch { max_notes, .. } => {
-            let listed = enumerated()?;
-            let held = lines(render, node, sum.var, &listed.atoms)?;
-            let mut found: Vec<Peak> = harmony::partials(held.iter().map(|l| (l.hz, l.amp)))
+            let each = per_channel(render, node, sum)?;
+            let partials = each
+                .iter()
+                .map(|one| {
+                    let held = lines(render, node, sum.var, &one.atoms)?;
+                    Ok(harmony::partials(held.iter().map(|l| (l.hz, l.amp))))
+                })
+                .collect::<Result<_, EngineError>>()?;
+            let mut found: Vec<Peak> = harmony::averaged(partials)
                 .into_iter()
                 .map(|p| Peak {
                     hz: p.hz,
@@ -153,7 +166,7 @@ fn exact(
                 t_secs: start as f64 / f64::from(render.config.rate),
                 notes: pitch::name_peaks(&found, max_notes),
             };
-            (Output::Pitch(vec![frame]), listed)
+            (Output::Pitch(vec![frame]), Listed::joined(each))
         }
         Representation::Derivative => {
             let slope = d_dt(sum).map_err(|left| {
@@ -191,9 +204,10 @@ fn exact(
     Ok((value, listed, source))
 }
 
-/// Each instant on the frame grid over the range, its first component's partials exactly:
-/// every atom a partial at its carrier, `omega/2pi`, its complex value there merged with the
-/// others at that carrier, so a decay, polynomial, Gaussian or window weighs it as it stands.
+/// Each instant on the frame grid over the range, each channel's partials exactly: every atom
+/// a partial at its carrier, `omega/2pi`, its complex value there merged with the channel's
+/// others at that carrier, so a decay, polynomial, Gaussian or window weighs it as it stands;
+/// then every channel in power.
 fn exact_moments(
     render: &Render,
     node: sva_formula::NodeId,
@@ -207,16 +221,21 @@ fn exact_moments(
     };
     let rate = f64::from(render.config.rate);
     let hop = ((frame_secs * rate).round() as usize).max(1);
-    let first = SpectralSum::of(sum.var, sum.lanes.iter().take(1).cloned().collect());
-    let listed = listed(render, node, &first, &render.config.profile)?;
+    let each = per_channel(render, node, sum)?;
     let instants: Vec<f64> = (range.start..range.end)
         .step_by(hop)
         .map(|n| n as f64 / rate)
         .collect();
     let moments = match sum.var {
         Var::F => {
-            let held = lines(render, node, Var::F, &listed.atoms)?;
-            let partials = harmony::partials(held.iter().map(|l| (l.hz, l.amp)));
+            let partials = harmony::averaged(
+                each.iter()
+                    .map(|one| {
+                        let held = lines(render, node, Var::F, &one.atoms)?;
+                        Ok(harmony::partials(held.iter().map(|l| (l.hz, l.amp))))
+                    })
+                    .collect::<Result<_, EngineError>>()?,
+            );
             instants
                 .iter()
                 .map(|t| Moment {
@@ -228,16 +247,19 @@ fn exact_moments(
         Var::T => instants
             .iter()
             .map(|t| {
-                let carried = listed.atoms.iter().map(|a| {
-                    let value = (!a.is_delta()).then(|| a.smooth_at(*t)).flatten();
-                    let hz = a.exp.map_or(0.0, |e| e.omega / std::f64::consts::TAU);
-                    value
-                        .map(|v| (hz, v))
-                        .ok_or_else(|| no_partial(render, node, a, *t))
-                });
+                let at = |one: &Listed| {
+                    let carried = one.atoms.iter().map(|a| {
+                        let value = (!a.is_delta()).then(|| a.smooth_at(*t)).flatten();
+                        let hz = a.exp.map_or(0.0, |e| e.omega / std::f64::consts::TAU);
+                        value
+                            .map(|v| (hz, v))
+                            .ok_or_else(|| no_partial(render, node, a, *t))
+                    });
+                    Ok(harmony::partials(carried.collect::<Result<Vec<_>, _>>()?))
+                };
                 Ok(Moment {
                     t_secs: *t,
-                    partials: harmony::partials(carried.collect::<Result<Vec<_>, _>>()?),
+                    partials: harmony::averaged(each.iter().map(at).collect::<Result<_, _>>()?),
                 })
             })
             .collect::<Result<_, EngineError>>()?,
@@ -246,7 +268,7 @@ fn exact_moments(
         hop_secs: hop as f64 / rate,
         window: None,
     };
-    Ok((moments, framing, listed))
+    Ok((moments, framing, Listed::joined(each)))
 }
 
 /// One harmonic reading off a curve of partials, whichever source took them.
@@ -452,6 +474,15 @@ impl Listed {
         dropped: Vec::new(),
     };
 
+    fn joined(each: Vec<Listed>) -> Listed {
+        let mut held = Listed::NONE;
+        for one in each {
+            held.atoms.extend(one.atoms);
+            held.dropped.extend(one.dropped);
+        }
+        held
+    }
+
     /// The tail is the loudest line left out against the loudest one kept, so
     /// it is one ratio over the whole answer, never a per-series one carried upward.
     fn tail_db(&self) -> Option<f64> {
@@ -485,6 +516,59 @@ fn listed(
         }
     }
     Ok(held)
+}
+
+/// Each channel's lane listed on its own, in channel order.
+fn per_channel(
+    render: &Render,
+    node: sva_formula::NodeId,
+    sum: &SpectralSum,
+) -> Result<Vec<Listed>, EngineError> {
+    sum.lanes
+        .iter()
+        .map(|lane| {
+            let one = SpectralSum::of(sum.var, vec![lane.clone()]);
+            listed(render, node, &one, &render.config.profile)
+        })
+        .collect()
+}
+
+/// Every channel in power, as a measured spectrum reads them: a channel's lines at one
+/// frequency summed, their squared modulus summed over the channels, divided by the count.
+/// Channels share no phase, so each line is that power's root, real.
+fn in_power(per_channel: Vec<Vec<Line>>) -> Vec<Line> {
+    let count = per_channel.len() as f64;
+    let mut power: Vec<(Line, f64)> = Vec::new();
+    for lines in per_channel {
+        let mut channel: Vec<Line> = Vec::new();
+        for line in lines {
+            match channel
+                .iter_mut()
+                .find(|l| l.hz.to_bits() == line.hz.to_bits())
+            {
+                Some(held) => held.amp = held.amp + line.amp,
+                None => channel.push(line),
+            }
+        }
+        for line in channel {
+            let squared = line.amp.abs() * line.amp.abs();
+            match power
+                .iter_mut()
+                .find(|(l, _)| l.hz.to_bits() == line.hz.to_bits())
+            {
+                Some((_, sum)) => *sum += squared,
+                None => power.push((line, squared)),
+            }
+        }
+    }
+    power
+        .into_iter()
+        .filter(|(_, sum)| *sum > 0.0)
+        .map(|(line, sum)| Line {
+            amp: C64::real((sum / count).sqrt()),
+            ..line
+        })
+        .collect()
 }
 
 /// The exact line list of a pair: in `t` a bare turning exponential, in `f` the delta it

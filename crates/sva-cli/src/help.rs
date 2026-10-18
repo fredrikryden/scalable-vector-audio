@@ -216,8 +216,12 @@ RENDER:
   autocorrelation and each auditory band's energy (`bands`, `periodicity`,
   `modulation`, `self_similarity`) are each channel's averaged, so a channel
   copied to two reads as itself; `crest` sets any channel's peak against the
-  RMS of all of them together. A closed form's exact partials are its first
-  component's.
+  RMS of all of them together. A closed form's exact readings read every
+  channel in power too: a partial's squared amplitude (`pitch`, `dissonance`,
+  `voice_leading`, `tonal_distance`, `inharmonicity`) is summed over the
+  channels at its frequency and divided by their count, and a spectrum of more
+  than one channel lists each frequency once, its amplitude the root of that
+  mean power, real, as channels share no phase.
 
   `--bits <n>` is the precision every sample is written to, from 2 to 52: the
   point where a series is truncated, and the encoding of a `.wav`, integer PCM
