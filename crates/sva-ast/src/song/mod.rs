@@ -189,7 +189,7 @@ impl Graph {
             let mut held = reach.sound(&instance.node, &bound);
             let read = instance.node.strip_prefix(&format!("{VARIABLES}/"));
             if !read.is_some_and(|name| moved.contains(&LaneId::Variable(name.to_string()))) {
-                held.extend(reach.of(&instance.node));
+                held.extend(reach.of(&instance.node, &bound));
             }
             held.retain(|l| !l.is_variable("scale"));
             held.sort();
@@ -253,7 +253,7 @@ impl Graph {
         for instance in &song.instances {
             let mut open: Vec<String> = vec![instance.node.clone()];
             while let Some(node) = open.pop() {
-                if reach.of(&node).is_empty() || !lowered.insert(node.clone()) {
+                if reach.of(&node, &BTreeSet::new()).is_empty() || !lowered.insert(node.clone()) {
                     continue;
                 }
                 let mut sites = Vec::new();

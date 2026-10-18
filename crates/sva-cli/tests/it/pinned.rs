@@ -85,7 +85,7 @@ const PINNED: &str = r#"
 0 bands 5ddbbb246c27967f
 0 crest 9da293a2a033e041
 0 loudness 8546363c7f1ff81e
-0 onsets 5d9e390a40d4416c
+0 onsets 92cf9251e506cef7
 0 alias 12566b98eb3a9c25
 0 bindings b2361ce7b3484da7
 0 arguments 2629850681a29371
@@ -103,7 +103,7 @@ const PINNED: &str = r#"
 1 bands 652286a71d7ba909
 1 crest 6589fb8644e10ca3
 1 loudness 85260bff5b79b87e
-1 onsets 2a805c518cf4c8ca
+1 onsets 6ca01aa1e441539d
 1 alias 4b29f3d8f7553303
 1 bindings b2361ce7b3484da7
 1 arguments 2629850681a29371
@@ -121,7 +121,7 @@ const PINNED: &str = r#"
 2 bands f7a5e849debf50b2
 2 crest fbd77b10d5dde3ac
 2 loudness 606a38acc7131c55
-2 onsets bbda566d6a45cbdd
+2 onsets efb1e0d9cfd3e02a
 2 alias fdf260e22e2a1011
 2 bindings b2361ce7b3484da7
 2 arguments 626f051e3a2fc700
@@ -139,7 +139,7 @@ const PINNED: &str = r#"
 3 bands 3d2781a6afdfb4c8
 3 crest e0f4c5aaa9c7c270
 3 loudness 6e1791349e7075fa
-3 onsets 7c4821e78364f0a2
+3 onsets dbcecdca3f1439a5
 3 alias 02979bbbe4119071
 3 bindings de379a53261f899f
 3 arguments 963d7e681d3a7159
@@ -157,7 +157,7 @@ const PINNED: &str = r#"
 4 bands eaa2cac9886e0d17
 4 crest 4b17dbafe5a25887
 4 loudness f43469c2b46c18fa
-4 onsets c36ba45956b46a29
+4 onsets 3173905ead827fbe
 4 alias 6d697a7dac4b06e4
 4 bindings a066a34dcc83fcfb
 4 arguments 9eaefeccb255ec5d
@@ -175,7 +175,7 @@ const PINNED: &str = r#"
 5 bands 41f346248f013bb4
 5 crest 7e413e4086bc977c
 5 loudness 8e4f1c0baecfe087
-5 onsets bed186cf1d6b199f
+5 onsets 173bff23a26c5ebc
 5 alias f133ed27246b0558
 5 bindings b2361ce7b3484da7
 5 arguments 2629850681a29371
@@ -206,7 +206,7 @@ const PINNED: &str = r#"
 6 bands 5f534aa9aa3bbcd7
 6 crest 0ee986c4ebc6919e
 6 loudness cb5e566b2cbf9109
-6 onsets 4b161b614474913d
+6 onsets 23fd16ed583e7d47
 6 alias refused "engine.alias_needs_a_closed_form"
 6 bindings 61d25ef94a8f6635
 6 arguments f96cc4a110318b3d
@@ -224,7 +224,7 @@ const PINNED: &str = r#"
 7 bands b1152050da45e57d
 7 crest 046c981ae06261fc
 7 loudness 7d6440ef7def4aca
-7 onsets 110fd55908dbed15
+7 onsets 5029bf00c546aa72
 7 alias 2e6ca0047cafaf68
 7 bindings e78c34f33117e96f
 7 arguments bcbf8809de18a142
@@ -242,7 +242,7 @@ const PINNED: &str = r#"
 8 bands a3ee3343e5d5994c
 8 crest fb94330cd10aafeb
 8 loudness 470df9d7cf11cbe3
-8 onsets e7be24fbc28749b4
+8 onsets ae516789bfea72ef
 8 alias refused "engine.alias_needs_a_closed_form"
 8 bindings 79396b2f23896766
 8 arguments a5fe2d9cfe6ecec2
@@ -260,7 +260,7 @@ const PINNED: &str = r#"
 9 bands 21d75879d5a36084
 9 crest 17fd2a6d80a8ce3a
 9 loudness b0dbfaeaf9dddfe1
-9 onsets 82baf2656854e410
+9 onsets 4ee4ba0234059d03
 9 alias 95e3d9a0d16a8cbd
 9 bindings b2361ce7b3484da7
 9 arguments 2629850681a29371
@@ -278,7 +278,7 @@ const PINNED: &str = r#"
 10 bands 198cf5dfb1458000
 10 crest bafbab9959c18d6e
 10 loudness 5357a6cb2a187221
-10 onsets 0ee70062d8db3514
+10 onsets 68c5c0cd4545e8af
 10 alias 94339908ea31be4d
 10 bindings 5d16a4e7b16c54d3
 10 arguments 13a9d91a5de370e5
@@ -298,7 +298,7 @@ const PINNED: &str = r#"
 11 bands 8f984c522da9befa
 11 crest d2139cfcaf0fd8ba
 11 loudness 66d733b1b2e46ac9
-11 onsets 9c5589dfaa333a9f
+11 onsets 37700ad603214a15
 11 alias refused "engine.alias_needs_a_closed_form"
 11 bindings 6187812054881a9c
 11 arguments 00523829ab775155
@@ -317,7 +317,7 @@ const PINNED: &str = r#"
 12 bands 8d953bbc6e7a6774
 12 crest 93883cb32f667560
 12 loudness 2fb8be9dcf204d31
-12 onsets b8daac46e3eb10c2
+12 onsets c06285a3cd4cdfc5
 12 alias refused "engine.alias_needs_a_closed_form"
 12 bindings 2246221dde6bf19e
 12 arguments 31ac7203e7c98531
@@ -336,7 +336,7 @@ const PINNED: &str = r#"
 13 bands ff24830f55ca7d97
 13 crest 9bad027881a738b0
 13 loudness 8cdcf4285fbb7827
-13 onsets ca58478c30e14e96
+13 onsets d0a46d8903eff89d
 13 alias refused "engine.alias_needs_a_closed_form"
 13 bindings 4d733f3c0aabb4f4
 13 arguments c4f0bea827f62da3
@@ -357,7 +357,7 @@ const PINNED: &str = r#"
 14 bands e59cf9c09fde48fd
 14 crest 946716d90df65745
 14 loudness 88bf6f18c551beaf
-14 onsets 0747a61d69a01713
+14 onsets 69c06a97fe46ace1
 14 alias refused "engine.alias_needs_a_closed_form"
 14 bindings 93b2bd559b5e577e
 14 arguments 7309f5cc8a34fe8a
@@ -375,7 +375,7 @@ const PINNED: &str = r#"
 15 bands 783c04ff4dc38ba4
 15 crest 25f0c999bb9f0512
 15 loudness 46d79f3bbbb5df11
-15 onsets 30148b49712da1ff
+15 onsets a7011debda02681c
 15 alias 88aa3394e42660fb
 15 bindings f758b54150146934
 15 arguments 6fe5313a42a03884
@@ -397,7 +397,7 @@ const PINNED: &str = r#"
 16 bands a3d90ca6090450f6
 16 crest 45a7abc702e4a819
 16 loudness 17d3cd1a81f00579
-16 onsets 0992a2bb7e332ca1
+16 onsets 1bd40e9bbdb7c65e
 16 alias refused "engine.alias_needs_a_closed_form"
 16 bindings 76ea2f9c67cc302d
 16 arguments ef9f32c3d73615ee

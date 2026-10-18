@@ -4,20 +4,21 @@ use crate::measure::spectrum::{MAX_PINNED_FRAME, magnitudes, pinned_frame};
 
 /// ~23ms: short enough to localize a transient, long enough for low percussion.
 const FRAME_SECS: f64 = 0.023;
-const HOP_SECS: f64 = FRAME_SECS / 2.0;
+/// Strikes 25 ms apart peak a few hops from each other.
+const HOP_SECS: f64 = FRAME_SECS / 8.0;
 /// Below this two novelty peaks are one transient's attack and decay.
-const MIN_ONSET_GAP_SECS: f64 = 0.05;
-/// Frames either side of a candidate that set its local adaptive threshold.
-const ADAPTIVE_WINDOW_FRAMES: usize = 10;
-const THRESHOLD_MULTIPLIER: f64 = 1.5;
+const MIN_ONSET_GAP_SECS: f64 = 0.02;
+const ADAPTIVE_WINDOW_SECS: f64 = 0.115;
+/// A roll's flux peaks barely over its mean; the strike tells it from a swell.
+const THRESHOLD_MULTIPLIER: f64 = 1.0;
 const THRESHOLD_DELTA: f64 = 1e-6;
 const IOI_BUCKET_SECS: f64 = 0.025;
 const IOI_MAX_SECS: f64 = 2.0;
 /// Under this share of the loudest frame a rise is leakage.
 const LEVEL_FRACTION: f64 = 0.03;
 const STRIKE_SPAN_SECS: f64 = 0.012;
-/// 6 dB over the span before: a swell or a tail rises a few dB in the same time.
-const JUMP_ENERGY_RATIO: f64 = 4.0;
+/// ~5 dB over the span before, carried on as it moved: a strike jumps off a ring's fall.
+const JUMP_ENERGY_RATIO: f64 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Onset {
@@ -108,13 +109,14 @@ pub(crate) fn spectral_flux(prev: &[f64], curr: &[f64]) -> f64 {
 /// a frame past the buffer's end reads silence.
 fn pick_peaks(flux: &[f64], frames: &[SpectralFrame], energy: &Energy, floor: f64) -> Vec<Onset> {
     let mut onsets: Vec<Onset> = Vec::new();
+    let window = (ADAPTIVE_WINDOW_SECS / HOP_SECS).round() as usize;
+    let reach = (MIN_ONSET_GAP_SECS / 2.0 / HOP_SECS).round().max(1.0) as usize;
     for i in 0..flux.len() {
-        let lo = i.saturating_sub(ADAPTIVE_WINDOW_FRAMES);
-        let hi = (i + ADAPTIVE_WINDOW_FRAMES + 1).min(flux.len());
+        let lo = i.saturating_sub(window);
+        let hi = (i + window + 1).min(flux.len());
         let local = &flux[lo..hi];
         let mean = local.iter().sum::<f64>() / local.len() as f64;
         let threshold = THRESHOLD_DELTA + THRESHOLD_MULTIPLIER * mean;
-        let reach = (MIN_ONSET_GAP_SECS / HOP_SECS).round().max(1.0) as usize;
         let near = &flux[i.saturating_sub(reach)..(i + reach + 1).min(flux.len())];
         if flux[i] <= threshold || flux[i] < floor || near.iter().any(|&v| v > flux[i]) {
             continue;
@@ -172,7 +174,7 @@ impl Energy {
     }
 
     /// The sample whose energy after most outweighs the energy before it and the floor, if
-    /// by a strike's jump.
+    /// by a strike's jump over that energy carried on as it moved.
     fn strike(&self, from_secs: f64, span_secs: f64) -> Option<f64> {
         let at = |secs: f64| {
             ((secs - self.start_secs) * self.sample_rate)
@@ -180,20 +182,22 @@ impl Energy {
                 .max(0.0) as usize
         };
         let (from, to) = (at(from_secs), at(from_secs + span_secs));
+        let before = |n: usize| self.over(n.saturating_sub(self.reach), n) + self.floor;
         let mut best: Option<(f64, usize)> = None;
         for n in from..to.min(self.running.len() - 1) {
-            let before = self.over(n.saturating_sub(self.reach), n) + self.floor;
             let after = self.over(n, n + self.reach);
-            if before == 0.0 {
+            if before(n) == 0.0 {
                 continue;
             }
-            let ratio = after / before;
+            let ratio = after / before(n);
             if best.is_none_or(|(r, _)| ratio >= r) {
                 best = Some((ratio, n));
             }
         }
         let (ratio, n) = best?;
-        (ratio >= JUMP_ENERGY_RATIO).then(|| self.start_secs + n as f64 / self.sample_rate)
+        let carried = before(n) / before(n.saturating_sub(self.reach));
+        (ratio / carried >= JUMP_ENERGY_RATIO)
+            .then(|| self.start_secs + n as f64 / self.sample_rate)
     }
 }
 

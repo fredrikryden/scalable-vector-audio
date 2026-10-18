@@ -318,6 +318,27 @@ impl<'g> Placing<'g> {
         self.refusals.push(refusal);
     }
 
+    /// `at` moved by the time written at byte `byte` of score `path`, refused there where
+    /// the exact bar it lands on holds more than a fraction of 62 bits can.
+    fn exact(&mut self, path: &str, byte: usize, at: Option<Pos>, by: Offset) -> Option<Pos> {
+        let moved = shifted(at, by, self.curve);
+        if let (Some(from), None) = (at, moved) {
+            let message = format!(
+                "this time, counted from {} where its score is placed, lands on a bar no \
+                 fraction of 62-bit integers holds; write it with a smaller denominator",
+                from.spelled(self.curve)
+            );
+            self.refuse(at_line(
+                self.graph,
+                path,
+                byte,
+                DiagCode::BadScore,
+                &message,
+            ));
+        }
+        moved
+    }
+
     pub fn place(
         &mut self,
         path: &str,
@@ -373,7 +394,9 @@ impl<'g> Placing<'g> {
         for (li, line) in score.lines.iter().enumerate() {
             for (ii, item) in line.items.iter().enumerate() {
                 let pos = match score.unit {
-                    SpanUnit::Bars => shifted(at, Offset::Bars(item.at().amount), curve),
+                    SpanUnit::Bars => {
+                        self.exact(path, item.at().at, at, Offset::Bars(item.at().amount))
+                    }
                     SpanUnit::Seconds => {
                         at.map(|p| Pos::Seconds(p.seconds(curve) + item.at().amount.to_f64()))
                     }
@@ -497,7 +520,7 @@ impl<'g> Placing<'g> {
                 SpanUnit::Bars => Offset::Bars(len.amount),
                 SpanUnit::Seconds => Offset::Seconds(len.amount.to_f64()),
             };
-            shifted(pos, by, curve)
+            self.exact(path, len.at, pos, by)
         });
         let cut = match (crop, inner) {
             (Some(a), Some(b)) => Some(match a.cmp(b, curve) {
@@ -615,7 +638,7 @@ impl<'g> Placing<'g> {
                 SpanUnit::Bars => Offset::Bars(ramp.len.amount),
                 SpanUnit::Seconds => Offset::Seconds(ramp.len.amount.to_f64()),
             };
-            shifted(pos, by, self.curve)
+            self.exact(path, ramp.len.at, pos, by)
         });
         if let (Some(end), Some(crop)) = (end, crop)
             && end.cmp(crop, self.curve) == Ordering::Greater

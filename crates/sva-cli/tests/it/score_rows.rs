@@ -894,6 +894,18 @@ fn a_lane_refuses_what_it_cannot_hold() {
 fn a_move_needs_song_time_and_bars_while_the_tempo_moves() {
     check(&[
         (
+            "past-62-bits",
+            &[
+                ("s.jsonl", "{\"at\": \"5b\", \"node\": \"@t2\"}\n"),
+                ("t2.jsonl", "{\"at\": \"1e-18b\", \"node\": \"@tone\"}\n"),
+            ],
+            S,
+            "bad-score",
+            "t2.jsonl",
+            (1, 8),
+            "counted from 5b where its score is placed, lands on a bar no fraction",
+        ),
+        (
             "seconds-while-moving",
             &[
                 (

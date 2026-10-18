@@ -177,38 +177,66 @@ pub fn ref_spans(src: &str) -> Vec<ByteSpan> {
 
 /// Longest match first, which is the whole reason `2ms` and `2m` are different numbers.
 const SUFFIXES: [(&str, Suffix); 11] = [
-    ("khz", Suffix::Scale(1000.0)),
-    ("ms", Suffix::Secs(0.001)),
+    ("khz", Suffix::Scale(1000, 1)),
+    ("ms", Suffix::Secs(1, 1000)),
     ("sp", Suffix::Samples),
-    ("hz", Suffix::Scale(1.0)),
+    ("hz", Suffix::Scale(1, 1)),
     ("db", Suffix::Log(LogUnit::Decibels)),
     ("ct", Suffix::Log(LogUnit::Cents)),
     ("st", Suffix::Log(LogUnit::Semitones)),
     ("b", Suffix::Bars),
-    ("s", Suffix::Secs(1.0)),
-    ("m", Suffix::Secs(60.0)),
-    ("h", Suffix::Secs(3600.0)),
+    ("s", Suffix::Secs(1, 1)),
+    ("m", Suffix::Secs(60, 1)),
+    ("h", Suffix::Secs(3600, 1)),
 ];
 
+/// A linear unit's factor is the exact ratio `num / den`; the double it scales by is that
+/// ratio correctly rounded, so `ms` scales by the same double as `0.001`.
 #[derive(Clone, Copy)]
 enum Suffix {
     Bars,
-    Secs(f64),
+    Secs(i64, i64),
     Samples,
-    Scale(f64),
+    Scale(i64, i64),
     Log(LogUnit),
 }
 
 impl Suffix {
     fn apply(self, n: f64) -> TokenKind {
+        let per = |num: i64, den: i64| num as f64 / den as f64;
         match self {
             Suffix::Bars => TokenKind::Time(n, SpanUnit::Bars),
-            Suffix::Secs(per) => TokenKind::Time(n * per, SpanUnit::Seconds),
+            Suffix::Secs(num, den) => TokenKind::Time(n * per(num, den), SpanUnit::Seconds),
             Suffix::Samples => TokenKind::Samples(n),
-            Suffix::Scale(per) => TokenKind::Num(n * per),
+            Suffix::Scale(num, den) => TokenKind::Num(n * per(num, den)),
             Suffix::Log(unit) => TokenKind::Log(n, unit),
         }
     }
+
+    fn factor(self) -> Option<(i64, i64)> {
+        match self {
+            Suffix::Bars => Some((1, 1)),
+            Suffix::Secs(num, den) | Suffix::Scale(num, den) => Some((num, den)),
+            Suffix::Samples | Suffix::Log(_) => None,
+        }
+    }
+}
+
+/// A plain or linear-unit number token's text as written: its decimal digits and the exact
+/// factor `(num, den)` its unit scales them by, so `"0.01b"` is `("0.01", (1, 1))` and
+/// `"10ms"` is `("10", (1, 1000))`. `None` for a logarithmic unit, samples, or no number.
+pub(crate) fn written_number(text: &str) -> Option<(&str, (i64, i64))> {
+    let end = number_end(text.as_bytes(), 0);
+    let (digits, unit) = text.split_at(end);
+    if digits.is_empty() {
+        return None;
+    }
+    if unit.is_empty() {
+        return Some((digits, (1, 1)));
+    }
+    let (suffix, after) = unit_suffix(text.as_bytes(), end)?;
+    (after == text.len()).then_some(())?;
+    Some((digits, suffix.factor()?))
 }
 
 /// Only when nothing continues the word, so `2sin(t)` and `2sr` still lex as a number beside
@@ -227,8 +255,21 @@ fn unit_suffix(b: &[u8], i: usize) -> Option<(Suffix, usize)> {
     None
 }
 
-fn lex_number(src: &str, b: &[u8], mut i: usize) -> Result<(f64, usize), Diag> {
-    let start = i;
+fn lex_number(src: &str, b: &[u8], start: usize) -> Result<(f64, usize), Diag> {
+    let i = number_end(b, start);
+    let lexeme = &src[start..i];
+    match lexeme.parse::<f64>() {
+        Ok(n) if n.is_finite() => Ok((n, i)),
+        _ => Err(Diag::new(
+            DiagCode::InvalidNumber,
+            ByteSpan::new(start, i),
+            format!("`{lexeme}` is not a finite number"),
+        )),
+    }
+}
+
+/// Where the number opening at `i` ends: digits, a fraction, an exponent.
+fn number_end(b: &[u8], mut i: usize) -> usize {
     while i < b.len() && b[i].is_ascii_digit() {
         i += 1;
     }
@@ -250,15 +291,7 @@ fn lex_number(src: &str, b: &[u8], mut i: usize) -> Result<(f64, usize), Diag> {
             i = j;
         }
     }
-    let lexeme = &src[start..i];
-    match lexeme.parse::<f64>() {
-        Ok(n) if n.is_finite() => Ok((n, i)),
-        _ => Err(Diag::new(
-            DiagCode::InvalidNumber,
-            ByteSpan::new(start, i),
-            format!("`{lexeme}` is not a finite number"),
-        )),
-    }
+    i
 }
 
 /// Whether a whole string is a ref path and nothing else, which a node's name has to be.

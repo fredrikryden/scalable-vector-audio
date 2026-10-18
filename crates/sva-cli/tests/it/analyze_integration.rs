@@ -287,7 +287,7 @@ fn onsets_of_a_grid_land_within_one_millisecond() {
         .and_then(|n| n.parse().ok())
         .expect("a resolution");
     assert!(
-        resolution == 0.0115,
+        resolution == 0.002875,
         "a detector states the hop its flux was read at, not the sample period: {json}"
     );
     assert!(

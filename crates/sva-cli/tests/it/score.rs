@@ -170,3 +170,85 @@ fn a_refusal_names_the_score_line() {
         refused[0].reason
     );
 }
+
+/// Each positive line `target` sounds, as (hertz, the second it starts).
+fn atoms(dir: &std::path::Path, target: &str) -> Vec<(f64, f64)> {
+    let rendered = probe(dir, target).unwrap_or_else(|e| panic!("{target}: {e}"));
+    let Output::Atoms(atoms) = rendered
+        .answer(PROBE, Representation::Atoms)
+        .unwrap_or_else(|e| panic!("{target}: {e}"))
+        .value
+    else {
+        panic!("{target}: expected atoms");
+    };
+    let mut lines: Vec<(f64, f64)> = atoms
+        .iter()
+        .filter(|a| a.turns > 1.0)
+        .map(|a| (a.turns, a.start.unwrap_or(f64::NEG_INFINITY)))
+        .collect();
+    lines.sort_by(|a, b| a.1.total_cmp(&b.1));
+    lines.dedup();
+    lines
+}
+
+/// A key move lifts the lines whose `deg` counts from the key, read at their onset, though
+/// the sound's own `f0` default reads the key and each line binds `f0` past it; a line
+/// binding `f0` to a number keeps it.
+#[test]
+fn a_key_move_lifts_a_line_whose_degree_binds_the_f0_its_default_reads_the_key_for() {
+    let dir = composition("key-move", ("D3", "major"), SCORE);
+    put(
+        &dir,
+        "keyed",
+        "f0 = @variables/key\nlen = 1s\ncrop(sin(2*pi*f0*t), 0s, len)\n",
+    );
+    put(
+        &dir,
+        "song.jsonl",
+        "{\"at\": \"0b\", \"node\": \"@keyed\", \"deg\": 1, \"len\": \"1b\"}\n\
+         {\"at\": \"1b\", \"lane\": \"key\", \"to\": \"key*2st\"}\n\
+         {\"at\": \"1b\", \"node\": \"@keyed\", \"deg\": 1, \"len\": \"1b\"}\n\
+         {\"at\": \"2b\", \"node\": \"@keyed\", \"f0\": 330, \"len\": \"1b\"}\n",
+    );
+    let lines = atoms(&dir, "@song");
+    let hz: Vec<f64> = lines.iter().map(|(hz, _)| *hz).collect();
+    let starts: Vec<f64> = lines.iter().map(|(_, at)| *at).collect();
+    assert_eq!(starts, [0.0, 2.0, 4.0], "{lines:?}");
+    let d3 = sva_ast::note_hz("D3").expect("a note");
+    assert!((hz[0] - d3).abs() < 1e-9, "{hz:?}");
+    let lift = 1200.0 * (hz[1] / hz[0]).log2();
+    assert!((lift - 200.0).abs() < 1e-9, "a whole tone up, {lift} cents");
+    assert!((hz[2] - 330.0).abs() < 1e-9, "{hz:?}");
+}
+
+/// A score time is the decimal it spells: `0.01b` at 150 bpm is 16 ms, 705.6 samples, and a
+/// note placed there under a lane that moves renders, read at the nearest sample.
+#[test]
+fn a_note_off_the_sample_grid_renders_under_a_moving_lane() {
+    let dir = composition("off-grid", ("D3", "major"), SCORE);
+    put(&dir, "variables/bpm", "150\n");
+    put(
+        &dir,
+        "wobbly",
+        "wob = 0\nlen = 1s\ncrop(sin(2*pi*220*t + wob*sin(2*pi*3*t)), 0s, len)\n",
+    );
+    put(
+        &dir,
+        "part.jsonl",
+        "{\"at\": \"0.01b\", \"node\": \"@wobbly\", \"len\": \"1b\"}\n",
+    );
+    put(
+        &dir,
+        "song.jsonl",
+        "{\"at\": \"48b\", \"node\": \"@part\"}\n\
+         {\"at\": \"48.5b\", \"node\": \"@wobbly\", \"lane\": \"wob\", \"to\": 2}\n",
+    );
+    let rendered = probe(&dir, "@song([76.8s, 78.5s])").unwrap_or_else(|e| panic!("{e}"));
+    let render = &rendered.render;
+    let moved = render.labels[&render.root].moved.expect("samples computed");
+    let half = 0.5 / 44_100.0;
+    assert!(
+        moved > 0.0 && moved <= half,
+        "the onset at 76.816 s is 0.6 samples off the grid, read at the nearest: {moved}"
+    );
+}

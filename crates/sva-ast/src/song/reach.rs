@@ -15,7 +15,7 @@ use crate::song::place::{constant_shift, is_node_call, parameters};
 pub(crate) struct Reach<'g> {
     graph: &'g Graph,
     moved: &'g BTreeSet<LaneId>,
-    held: BTreeMap<String, Vec<LaneId>>,
+    held: BTreeMap<(String, Vec<String>), Vec<LaneId>>,
     values: &'g Values,
 }
 
@@ -111,25 +111,35 @@ impl<'g> Reach<'g> {
             .collect()
     }
 
-    /// Every moved lane reaching what `path` computes, sorted.
-    pub fn of(&mut self, path: &str) -> Vec<LaneId> {
-        if let Some(held) = self.held.get(path) {
+    /// Every moved lane reaching what `path` computes where its invoker binds `bound`, sorted:
+    /// a default line the invoker binds is never read, so what it reads reaches nothing.
+    pub fn of(&mut self, path: &str, bound: &BTreeSet<&str>) -> Vec<LaneId> {
+        let key = (
+            path.to_string(),
+            bound.iter().map(|b| b.to_string()).collect::<Vec<_>>(),
+        );
+        if let Some(held) = self.held.get(&key) {
             return held.clone();
         }
-        self.held.insert(path.to_string(), Vec::new());
+        self.held.insert(key.clone(), Vec::new());
         let mut out: BTreeSet<LaneId> = BTreeSet::new();
         let source = match self.degrees(path) {
             Some(Ok(defined)) => Some(Arc::new(defined)),
             _ => self.graph.source(path).cloned(),
         };
-        if let Some(defined) = &source {
-            for e in std::iter::once(&defined.body).chain(defined.defaults.iter().map(|(_, v)| v)) {
-                read_degrees(e, &mut out);
-            }
-        }
         if let Some(defined) = source {
+            let read: Vec<&Expr> = std::iter::once(&defined.body)
+                .chain(
+                    defined
+                        .defaults
+                        .iter()
+                        .filter(|(name, _)| !bound.contains(name.as_str()))
+                        .map(|(_, v)| v),
+                )
+                .collect();
             let mut sites = Vec::new();
-            for e in std::iter::once(&defined.body).chain(defined.defaults.iter().map(|(_, v)| v)) {
+            for e in read {
+                read_degrees(e, &mut out);
                 crate::song::place::sites(self.graph, path, e, &mut sites);
             }
             for site in sites {
@@ -143,11 +153,11 @@ impl<'g> Reach<'g> {
                     continue;
                 }
                 out.extend(self.sound(&node, &bound));
-                out.extend(self.of(&node));
+                out.extend(self.of(&node, &bound));
             }
         }
         let out: Vec<LaneId> = out.into_iter().collect();
-        self.held.insert(path.to_string(), out.clone());
+        self.held.insert(key, out.clone());
         out
     }
 
@@ -189,7 +199,7 @@ impl<'g> Reach<'g> {
         let bound: BTreeSet<String> = bound.into_iter().map(str::to_string).collect();
         let bound_ref: BTreeSet<&str> = bound.iter().map(String::as_str).collect();
         let sound = self.sound(&node, &bound_ref);
-        let inner = self.of(&node);
+        let inner = self.of(&node, &bound_ref);
         if sound.is_empty() && inner.is_empty() {
             return Ok(rebuilt);
         }

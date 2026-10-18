@@ -2,7 +2,7 @@
 
 use crate::expr::DEGREE;
 use crate::filename::SpanUnit;
-use crate::lexer::{Token, TokenKind, tokenize};
+use crate::lexer::{Token, TokenKind, tokenize, written_number};
 use crate::score::ratio::Ratio;
 use crate::vocabulary::note_hz;
 
@@ -43,6 +43,8 @@ impl Kind {
 /// Exact for a time field's bars, a double for every other value.
 pub trait Amount: Copy {
     fn of(x: f64) -> Option<Self>;
+    /// A number token written as `text`, which the lexer read as `x`.
+    fn written(x: f64, text: &str) -> Option<Self>;
     fn add(self, o: Self) -> Option<Self>;
     fn sub(self, o: Self) -> Option<Self>;
     fn mul(self, o: Self) -> Option<Self>;
@@ -53,6 +55,11 @@ pub trait Amount: Copy {
 impl Amount for Ratio {
     fn of(x: f64) -> Option<Ratio> {
         Ratio::of_f64(x)
+    }
+    fn written(_: f64, text: &str) -> Option<Ratio> {
+        let (digits, (num, den)) = written_number(text)?;
+        let per = Ratio::int(num).over(Ratio::int(den))?;
+        Ratio::of_decimal(digits)?.times(per)
     }
     fn add(self, o: Ratio) -> Option<Ratio> {
         self.plus(o)
@@ -77,6 +84,9 @@ fn finite(x: f64) -> Option<f64> {
 
 impl Amount for f64 {
     fn of(x: f64) -> Option<f64> {
+        finite(x)
+    }
+    fn written(x: f64, _: &str) -> Option<f64> {
         finite(x)
     }
     fn add(self, o: f64) -> Option<f64> {
@@ -301,8 +311,17 @@ impl<N: Amount> Walk<'_, '_, N> {
     }
 
     fn plain(&self, at: usize, x: f64, kind: Kind) -> Result<Value<N>, Refused> {
+        self.amount(at, N::of(x), kind)
+    }
+
+    /// A number as its token spells it, exact where `N` is.
+    fn literal(&self, at: usize, x: f64, text: &str, kind: Kind) -> Result<Value<N>, Refused> {
+        self.amount(at, N::written(x, text), kind)
+    }
+
+    fn amount(&self, at: usize, x: Option<N>, kind: Kind) -> Result<Value<N>, Refused> {
         Ok(Value {
-            amount: self.number(at, N::of(x))?,
+            amount: self.number(at, x)?,
             kind,
             position: false,
         })
@@ -320,9 +339,9 @@ impl<N: Amount> Walk<'_, '_, N> {
             Some(TokenKind::LParen)
         );
         match &token.kind {
-            TokenKind::Num(n) if written.ends_with("hz") => self.plain(at, *n, Kind::Hz),
-            TokenKind::Num(n) => self.plain(at, *n, Kind::Number),
-            TokenKind::Time(n, unit) => self.plain(at, *n, Kind::of_unit(*unit)),
+            TokenKind::Num(n) if written.ends_with("hz") => self.literal(at, *n, written, Kind::Hz),
+            TokenKind::Num(n) => self.literal(at, *n, written, Kind::Number),
+            TokenKind::Time(n, unit) => self.literal(at, *n, written, Kind::of_unit(*unit)),
             TokenKind::Log(n, unit) => self.plain(at, unit.resolve(*n), Kind::Number),
             TokenKind::Samples(_) => Err(self.refused(
                 at,
@@ -486,6 +505,18 @@ mod tests {
             Ratio::int(7).over(Ratio::int(3)).expect("a third")
         );
         assert_eq!(time("40ms").unwrap().kind, Kind::Seconds);
+        let hundredth = Ratio::int(1).over(Ratio::int(100)).expect("a hundredth");
+        assert_eq!(
+            time("0.01b").unwrap().amount,
+            hundredth,
+            "the decimal written"
+        );
+        assert_eq!(time("10ms").unwrap().amount, hundredth);
+        assert_eq!(time("1e-2s").unwrap().amount, hundredth);
+        assert_eq!(
+            time("48b + 0.01b").unwrap().amount,
+            Ratio::int(4801).over(Ratio::int(100)).expect("a position")
+        );
         for (written, why) in [
             ("2b + 1", "adds a time in bars and a plain number"),
             ("1b*1b", "multiplies a time by a time"),

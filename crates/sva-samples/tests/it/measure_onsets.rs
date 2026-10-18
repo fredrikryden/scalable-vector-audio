@@ -57,3 +57,37 @@ fn a_close_double_trigger_on_one_transient_is_suppressed() {
     let found = detect(&samples, sr, 0.0);
     assert!(found.onsets.len() <= 1, "{:?}", found.onsets);
 }
+
+/// Strikes of a 440 Hz burst rising in 1.5 ms and dying in 12 ms, `gap` seconds apart, each
+/// landing on the tail of the one before.
+fn bursts(sr: f64, gap: f64, count: usize) -> Vec<f64> {
+    let mut out = vec![0.0; ((gap * count as f64 + 0.2) * sr) as usize];
+    for k in 0..count {
+        let from = (k as f64 * gap * sr).round() as usize;
+        for (n, s) in out[from..].iter_mut().enumerate() {
+            let t = n as f64 / sr;
+            let shape = (1.0 - (-t / 0.0015).exp()) * (-t / 0.012).exp();
+            *s += 0.7 * shape * (std::f64::consts::TAU * 440.0 * t).sin();
+        }
+    }
+    out
+}
+
+/// A roll's thirty-seconds at 150 bpm are 50 ms apart and at 300 bpm 25 ms: every strike is
+/// its own onset, within a millisecond of where it struck.
+#[test]
+fn strikes_down_to_25_ms_apart_are_each_their_own_onset() {
+    let sr = 44_100.0;
+    for gap in [0.05, 1.0 / 30.0, 0.025] {
+        let found = detect(&bursts(sr, gap, 32), sr, 0.0);
+        let at: Vec<f64> = found.onsets.iter().map(|o| o.t_secs).collect();
+        assert_eq!(at.len(), 32, "{gap} s apart: {at:?}");
+        for (k, heard) in at.iter().enumerate() {
+            let struck = k as f64 * gap;
+            assert!(
+                (heard - struck).abs() <= 0.001,
+                "{gap} s apart: strike {k} at {struck} heard at {heard}"
+            );
+        }
+    }
+}

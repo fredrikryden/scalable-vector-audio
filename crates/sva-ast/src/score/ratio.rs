@@ -65,6 +65,31 @@ impl Ratio {
         }
     }
 
+    /// A decimal as written, `digits[.digits][e±digits]`, exactly: `"0.01"` is 1/100, where
+    /// the double nearest it is not.
+    pub fn of_decimal(text: &str) -> Option<Ratio> {
+        let (mantissa, exponent) = match text.find(['e', 'E']) {
+            Some(at) => (&text[..at], text[at + 1..].parse::<i32>().ok()?),
+            None => (text, 0),
+        };
+        let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+        let digits = format!("{whole}{fraction}");
+        if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let digits = digits.trim_start_matches('0');
+        let num: i128 = match digits.is_empty() {
+            true => 0,
+            false => digits.parse().ok()?,
+        };
+        let shift = exponent.checked_sub(i32::try_from(fraction.len()).ok()?)?;
+        let ten = |n: i32| 10i128.checked_pow(n.unsigned_abs());
+        match shift >= 0 {
+            true => Ratio::new(num.checked_mul(ten(shift)?)?, 1),
+            false => Ratio::new(num, ten(shift)?),
+        }
+    }
+
     pub fn to_f64(self) -> f64 {
         self.num as f64 / self.den as f64
     }
@@ -141,5 +166,27 @@ mod tests {
         assert_eq!(Ratio::of_f64(-2.5).unwrap().to_f64(), -2.5);
         assert_eq!(Ratio::int(6).over(Ratio::int(2)).unwrap().whole(), Some(3));
         assert_eq!(Ratio::of_f64(1e30), None);
+    }
+
+    #[test]
+    fn a_written_decimal_is_read_as_the_decimal_it_spells() {
+        let hundredth = Ratio::of_decimal("0.01").unwrap();
+        assert_eq!(hundredth, Ratio::new(1, 100).unwrap());
+        assert_ne!(Ratio::of_f64(0.01).unwrap(), hundredth);
+        assert_eq!(
+            Ratio::of_decimal("2.5e-3").unwrap(),
+            Ratio::new(1, 400).unwrap()
+        );
+        assert_eq!(Ratio::of_decimal("1.2E3").unwrap(), Ratio::int(1200));
+        assert_eq!(Ratio::of_decimal(".5").unwrap(), Ratio::new(1, 2).unwrap());
+        assert_eq!(Ratio::of_decimal("007").unwrap(), Ratio::int(7));
+        assert_eq!(Ratio::of_decimal("0.000").unwrap(), Ratio::ZERO);
+        assert_eq!(Ratio::of_decimal("1e40"), None);
+        assert_eq!(Ratio::of_decimal(""), None);
+        let mut at = Ratio::int(48);
+        for _ in 0..1000 {
+            at = at.plus(hundredth).unwrap();
+        }
+        assert_eq!(at, Ratio::int(58));
     }
 }
