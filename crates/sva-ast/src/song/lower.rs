@@ -1,6 +1,7 @@
 // Concern: lowers a placed song to equations: each container per placement, lanes folded or passed, each lane's closed form | Non-concern: placing (place.rs) | IO: (&Song, spans) -> nodes or Refusals
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
 
 use crate::diag::{ByteSpan, DiagCode};
 use crate::expr::{Address, Arg, BinOp, Binds, DEGREE, Expr, Literal, map_children};
@@ -31,6 +32,9 @@ pub(crate) struct Lowering<'a> {
     spans: BTreeMap<usize, Span>,
     folds: Vec<Vec<(LaneId, Fold)>>,
     variants: BTreeMap<String, Vec<(Defined, String)>>,
+    /// Each placement's lowered node and lane parameters, by the placement every read of it
+    /// shares.
+    lowered: HashMap<*const Container, (String, BTreeSet<LaneId>)>,
     out: Vec<(String, Defined)>,
     values: Option<Values>,
 }
@@ -247,6 +251,7 @@ impl<'a> Lowering<'a> {
             spans,
             folds: Vec::new(),
             variants: BTreeMap::new(),
+            lowered: HashMap::new(),
             out: Vec::new(),
             values: None,
         }
@@ -403,15 +408,21 @@ impl<'a> Lowering<'a> {
         out
     }
 
-    /// A container's lowered node, and the lanes its body reads as parameters.
-    fn container(&mut self, c: &Container) -> Result<(String, BTreeSet<LaneId>), Vec<Refusal>> {
+    /// A container's lowered node, and the lanes its body reads as parameters: lowered once
+    /// per placement, however many reads share it.
+    fn container(&mut self, c: &Rc<Container>) -> Result<(String, BTreeSet<LaneId>), Vec<Refusal>> {
+        if let Some(held) = self.lowered.get(&Rc::as_ptr(c)) {
+            return Ok(held.clone());
+        }
         let (defined, params) = match &c.body {
             Body::Score(_) => self.score(c)?,
             Body::Equation(_) => self.equation(c, false)?,
         };
         let values = self.values.as_ref().expect("read before lowering");
         let defined = self.graph.lowered(&c.path, &defined, values)?;
-        Ok((self.variant(&c.path, defined), params))
+        let held = (self.variant(&c.path, defined), params);
+        self.lowered.insert(Rc::as_ptr(c), held.clone());
+        Ok(held)
     }
 
     fn variant(&mut self, path: &str, defined: Defined) -> String {

@@ -1,7 +1,7 @@
 // Concern: walks every path from a song's root, placing each score line and invocation in song time | Non-concern: what a lane holds (lanes.rs) | IO: (&Graph, root, &Curve) -> placements
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
 use crate::diag::{ByteSpan, DiagCode};
@@ -114,17 +114,6 @@ impl Chain {
         })))
     }
 
-    /// Seconds the views above it delay its sound past its song time.
-    pub fn delay(&self) -> f64 {
-        let mut sum = 0.0;
-        let mut at = &self.0;
-        while let Some(link) = at {
-            sum += link.delay;
-            at = &link.up.0;
-        }
-        sum
-    }
-
     /// `placed by score/drop.jsonl:3 at 40b, placed by score/song.jsonl:25 at 40b`.
     pub fn text(&self, curve: &Curve) -> String {
         self.links(curve, true)
@@ -192,7 +181,8 @@ pub(crate) struct Term {
 }
 
 pub(crate) enum Target {
-    Container(Box<Container>),
+    /// Shared by every read of one placement.
+    Container(Rc<Container>),
     Instance(usize),
 }
 
@@ -208,16 +198,21 @@ pub struct Instance {
     /// Its song time, where it reads the lanes, key and scale.
     pub at: Option<Pos>,
     pub bound: BTreeSet<String>,
+    /// The first read path reaching it.
     pub chain: Chain,
     /// The score line placing it, as (score, line index, item index).
     pub line: Option<(String, usize, usize)>,
     pub lanes: Vec<LaneId>,
+    /// Seconds past its song time it first sounds: the least, over the read paths reaching it,
+    /// of the delays of the views on the path.
+    delay: f64,
 }
 
 impl Instance {
-    /// When it sounds: its song time plus the delays of the views above it.
+    /// When it first sounds: a stem reading only `@x(t - 1s)` hears it 1 s after its song
+    /// time, and a dry read beside echoes hears it at its song time.
     pub fn sounds(&self, curve: &Curve) -> Option<Pos> {
-        shifted(self.at, Offset::Seconds(self.chain.delay()), curve)
+        shifted(self.at, Offset::Seconds(self.delay), curve)
     }
 }
 
@@ -253,7 +248,7 @@ pub struct PlacedMark {
 }
 
 /// What an equation lost its song time to, for the refusal that needs one.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Lost {
     pub path: String,
     pub span: ByteSpan,
@@ -273,6 +268,47 @@ pub(crate) struct Placing<'g> {
     /// Each container placed, as a lane on its own parameter reaches it.
     pub placed: BTreeSet<String>,
     lost: Option<Lost>,
+    /// Each placement once, however many read paths reach it.
+    held: HashMap<Placement, (Rc<Container>, usize)>,
+    /// Per placement, in the order placing began.
+    reads: Vec<Reads>,
+    /// Placements in the order each finished: every reader after what it reads.
+    finished: Vec<usize>,
+    /// The placements being placed, innermost last.
+    open: Vec<usize>,
+}
+
+/// The instances a placement's body holds, and the placements it reads, each with the seconds
+/// that read delays it.
+#[derive(Default)]
+struct Reads {
+    instances: Vec<usize>,
+    placements: Vec<(usize, f64)>,
+}
+
+/// What decides everything a container places: the container, where, its crop, the score
+/// lines placing it, and what any position lost under it would name.
+#[derive(PartialEq, Eq, Hash)]
+struct Placement {
+    path: String,
+    at: Option<Exact>,
+    crop: Option<Exact>,
+    lines: Vec<(String, usize, usize, Option<Exact>)>,
+    lost: Option<Lost>,
+}
+
+/// A position compared exactly: bars as a fraction, seconds by their bits.
+#[derive(PartialEq, Eq, Hash)]
+enum Exact {
+    Bars(Ratio),
+    Seconds(u64),
+}
+
+fn exact(p: Option<Pos>) -> Option<Exact> {
+    p.map(|p| match p {
+        Pos::Bars(b) => Exact::Bars(b),
+        Pos::Seconds(s) => Exact::Seconds(s.to_bits()),
+    })
 }
 
 /// A refusal at a byte of score `path`'s file, led by its line and column.
@@ -350,6 +386,10 @@ impl<'g> Placing<'g> {
             instances_lost: Vec::new(),
             placed: BTreeSet::new(),
             lost: None,
+            held: HashMap::new(),
+            reads: Vec::new(),
+            finished: Vec::new(),
+            open: Vec::new(),
         }
     }
 
@@ -407,22 +447,84 @@ impl<'g> Placing<'g> {
         moved
     }
 
-    pub fn place(
+    /// The song from `root`, each instance told the earliest it sounds.
+    pub fn song(&mut self, root: &str) -> Rc<Container> {
+        let zero = Some(Pos::Bars(Ratio::ZERO));
+        let tree = self.place(root, zero, None, Chain::default(), 0.0);
+        self.sound();
+        tree
+    }
+
+    /// `path` placed at `at` under `chain`, read with a view's `delay`: placed once however
+    /// many read paths reach it, the later ones sharing the first's placement.
+    fn place(
         &mut self,
         path: &str,
         at: Option<Pos>,
         crop: Option<Pos>,
         chain: Chain,
-    ) -> Container {
+        delay: f64,
+    ) -> Rc<Container> {
+        let key = Placement {
+            path: path.to_string(),
+            at: exact(at),
+            crop: exact(crop),
+            lines: chain
+                .placement()
+                .into_iter()
+                .map(|(file, line, item, at)| (file.to_string(), line, item, exact(at)))
+                .collect(),
+            lost: self.lost.clone(),
+        };
+        if let Some((container, id)) = self.held.get(&key) {
+            let (container, id) = (container.clone(), *id);
+            self.read_by(id, delay);
+            return container;
+        }
+        let id = self.reads.len();
+        self.reads.push(Reads::default());
+        self.read_by(id, delay);
+        self.open.push(id);
         self.placed.insert(path.to_string());
         let body = match self.graph.score(path) {
             Some(score) => Body::Score(self.score(path, score, at, crop, &chain)),
             None => Body::Equation(self.equation(path, at, &chain)),
         };
-        Container {
+        self.open.pop();
+        self.finished.push(id);
+        let container = Rc::new(Container {
             path: path.to_string(),
             at,
             body,
+        });
+        self.held.insert(key, (container.clone(), id));
+        container
+    }
+
+    fn read_by(&mut self, id: usize, delay: f64) {
+        if let Some(&reader) = self.open.last() {
+            self.reads[reader].placements.push((id, delay));
+        }
+    }
+
+    /// Each instance's delay, the least over the paths reaching it: the placements visited
+    /// readers first, each passing on its own least delay plus its read's.
+    fn sound(&mut self) {
+        let mut least = vec![f64::INFINITY; self.reads.len()];
+        if let Some(&root) = self.finished.last() {
+            least[root] = 0.0;
+        }
+        for &id in self.finished.iter().rev() {
+            let Reads {
+                instances,
+                placements,
+            } = &self.reads[id];
+            for &(to, delay) in placements {
+                least[to] = least[to].min(least[id] + delay);
+            }
+            for &k in instances {
+                self.instances[k].delay = least[id];
+            }
         }
     }
 
@@ -559,6 +661,7 @@ impl<'g> Placing<'g> {
                 chain: here,
                 line: Some((path.to_string(), li, ii)),
                 lanes: Vec::new(),
+                delay: 0.0,
             })));
         }
         let bad = event
@@ -600,9 +703,7 @@ impl<'g> Placing<'g> {
             }),
             (a, b) => a.or(b),
         };
-        Some(Target::Container(Box::new(
-            self.place(&target, pos, cut, here),
-        )))
+        Some(Target::Container(self.place(&target, pos, cut, here, 0.0)))
     }
 
     fn instance(&mut self, instance: Instance) -> usize {
@@ -610,8 +711,12 @@ impl<'g> Placing<'g> {
             let lost = self.lost.clone().map(|l| (l.path, l.span));
             self.instances_lost.push((self.instances.len(), lost));
         }
+        let k = self.instances.len();
+        if let Some(&open) = self.open.last() {
+            self.reads[open].instances.push(k);
+        }
         self.instances.push(instance);
-        self.instances.len() - 1
+        k
     }
 
     fn moved(
@@ -840,6 +945,7 @@ impl<'g> Placing<'g> {
                 chain: chain.clone(),
                 line: None,
                 lanes: Vec::new(),
+                delay: 0.0,
             }));
         };
         let here = chain.read(from.to_string(), at, delay);
@@ -854,7 +960,7 @@ impl<'g> Placing<'g> {
                 )
             }) {
                 let _ = graph;
-                return Target::Container(Box::new(self.place(&node, at, None, here)));
+                return Target::Container(self.place(&node, at, None, here, delay));
             }
         }
         Target::Instance(self.instance(Instance {
@@ -864,6 +970,7 @@ impl<'g> Placing<'g> {
             chain: here,
             line: None,
             lanes: Vec::new(),
+            delay: 0.0,
         }))
     }
 

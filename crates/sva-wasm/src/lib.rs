@@ -515,6 +515,15 @@ impl Composition {
         Ok(Rendering { inner, asked })
     }
 
+    /// `target`'s placed notes as `sva-cli outline @score/song` lists them, under
+    /// `options.set` as `render` takes it: `{ song, events }`, each with `at`, `sounds`,
+    /// `len` (or null), `node`, `hz`, `file`, `line`, `params`. Nothing renders.
+    pub fn song(&self, target: &str, options: JsValue) -> Result<JsValue, JsValue> {
+        let options = options_of(&options, &["set"])?;
+        let source = sva_core::overlaid(&self.inner, &options.set).map_err(|e| thrown(&e))?;
+        parse(&sva_core::events_data(&source, target).map_err(|e| thrown(&e))?)
+    }
+
     /// `target` block by block. `options`: `rate`, `bits`, `until`, `live`, `channels`,
     /// `threads` (as `open` takes it).
     pub async fn stream(

@@ -382,11 +382,13 @@ OUTLINE:
   Run in a composition, outlines that score as the song a render of it is:
   `marks` in bars and seconds, the `tempo` curve's pieces, each lane with its
   home and every move resolved with its placement chain, how many instances it
-  reaches and how many see it move, each placed event's song time `at` (where
-  it reads lanes, key and scale), when it `sounds` (later by the delay of each
-  `t - d` read of a score above it), node, pitch in hertz and where each
-  parameter comes from (`line`, `lane` or `default`), and the `size`: placed
-  events and the engine's instances beside its limit.
+  reaches and how many see it move, and each placed event once, however many
+  reads reach it: its song time `at` (where it reads lanes, key and scale), when
+  it first `sounds` (later by the least, over the reads reaching it, of the
+  delays of the `t - d` reads of a score above it), its `len` in song time where
+  its line writes one, node, pitch in hertz and where each parameter comes from
+  (`line`, `lane` or `default`), and the `size`: placed events and the engine's
+  instances beside its limit.
 
 NEW:
   sva-cli new <name> [--idempotency-key <key>]

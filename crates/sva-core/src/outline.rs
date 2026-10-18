@@ -115,7 +115,6 @@ pub fn song_data(source: &dyn sva_ast::Source, target: &str) -> Result<String, C
         )
     });
     let instances = song.instances();
-    let source = graph.sourced();
     let lanes = list(song.lanes(), |lane| {
         let reaching = instances
             .iter()
@@ -154,7 +153,24 @@ pub fn song_data(source: &dyn sva_ast::Source, target: &str) -> Result<String, C
             reaching
         )
     });
-    let events: Vec<String> = instances
+    let events = events(&graph, &song);
+    let typed = sva_engine::types(&graph, crate::PROBE).map_err(CliError::Engine)?;
+    Ok(format!(
+        "{{ \"song\": \"{}\", \"marks\": {marks}, \"tempo\": {tempo}, \"lanes\": {lanes}, \"events\": {}, \"size\": {{ \"events\": {}, \"instances\": {}, \"limit\": {} }} }}",
+        escape(target),
+        list(&events, String::clone),
+        events.len(),
+        typed.paths().count(),
+        sva_engine::instantiate::MAX_INSTANCES
+    ))
+}
+
+/// Each note `song` places, once however many reads reach it: its song time, when it first
+/// sounds, how long its line holds it, its node, pitch, line and where each parameter comes from.
+fn events(graph: &sva_ast::Graph, song: &sva_ast::song::Song) -> Vec<String> {
+    let curve = song.curve();
+    let source = graph.sourced();
+    song.instances()
         .iter()
         .filter_map(|i| Some((i, i.line.as_ref()?, i.at?, i.sounds(curve)?)))
         .map(|(i, (score, li, ii), at, sounds)| {
@@ -183,8 +199,18 @@ pub fn song_data(source: &dyn sva_ast::Source, target: &str) -> Result<String, C
                     "default"
                 }
             };
+            let len = song.ends(graph, i).map_or_else(
+                || NONE.to_string(),
+                |end| {
+                    format!(
+                        "{{ \"bars\": {}, \"seconds\": {} }}",
+                        num(end.bars(curve) - at.bars(curve)),
+                        num(end.seconds(curve) - at.seconds(curve))
+                    )
+                },
+            );
             format!(
-                "{{ \"at\": {}, \"sounds\": {}, \"node\": \"{}\", \"hz\": {}, \"file\": \"{}{EXTENSION}\", \"line\": {}, \"params\": {} }}",
+                "{{ \"at\": {}, \"sounds\": {}, \"len\": {len}, \"node\": \"{}\", \"hz\": {}, \"file\": \"{}{EXTENSION}\", \"line\": {}, \"params\": {} }}",
                 placed(at, curve),
                 placed(sounds, curve),
                 escape(&i.node),
@@ -198,15 +224,17 @@ pub fn song_data(source: &dyn sva_ast::Source, target: &str) -> Result<String, C
                 ))
             )
         })
-        .collect();
-    let typed = sva_engine::types(&graph, crate::PROBE).map_err(CliError::Engine)?;
+        .collect()
+}
+
+/// `{ "song", "events" }`: the events `song_data` lists, without its marks, tempo, lanes and
+/// size, whose count types the whole graph on the engine; what a page draws a roll from.
+pub fn events_data(source: &dyn sva_ast::Source, target: &str) -> Result<String, CliError> {
+    let (graph, song) = crate::song_of(source, target)?;
     Ok(format!(
-        "{{ \"song\": \"{}\", \"marks\": {marks}, \"tempo\": {tempo}, \"lanes\": {lanes}, \"events\": {}, \"size\": {{ \"events\": {}, \"instances\": {}, \"limit\": {} }} }}",
+        "{{ \"song\": \"{}\", \"events\": {} }}",
         escape(target),
-        list(&events, String::clone),
-        events.len(),
-        typed.paths().count(),
-        sva_engine::instantiate::MAX_INSTANCES
+        list(&events(&graph, &song), String::clone)
     ))
 }
 

@@ -224,6 +224,89 @@ fn a_render_sets_a_reserved_variable_without_inserting_it() {
     );
 }
 
+/// A stem playing a riff a bar late, read once dry beside an echo in `master`.
+fn riffed() -> Composition {
+    let mut held = Composition::new(None);
+    for (path, text) in [
+        ("variables/bpm", "60\n"),
+        ("variables/meter", "4/4\n"),
+        ("variables/key", "A3\n"),
+        ("variables/scale", "major\n"),
+        (
+            "tone",
+            "f0 = 220\nlen = 0.25s\nsin(2*pi*f0*t)*crop(1, 0s, len)\n",
+        ),
+        (
+            "riff.jsonl",
+            "{\"at\": \"0b\", \"node\": \"@tone\", \"deg\": 3, \"len\": \"0.5b\"}\n\
+             {\"at\": \"1b\", \"node\": \"@tone\", \"f0\": \"A2\"}\n",
+        ),
+        ("stem", "0.5*@riff(t - 1b)\n"),
+        ("master", "@riff(t) + @stem(t)\n"),
+    ] {
+        held.insert(path, text);
+    }
+    held
+}
+
+/// Each event `song` answers as (at, sounds, len) in seconds, hz and node.
+fn notes(song: &JsValue) -> Vec<(f64, f64, Option<f64>, Option<f64>, String)> {
+    let seconds = |v: JsValue| match v.is_null() {
+        true => None,
+        false => field(&v, "seconds").as_f64(),
+    };
+    items(song, "events")
+        .iter()
+        .map(|e| {
+            (
+                seconds(field(&e, "at")).unwrap_or(f64::NAN),
+                seconds(field(&e, "sounds")).unwrap_or(f64::NAN),
+                seconds(field(&e, "len")),
+                field(&e, "hz").as_f64(),
+                field(&e, "node").as_string().unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+/// `song` derives the events `sva-cli outline` lists, over the `set` a render takes, and
+/// renders nothing: a note read dry and a bar late is one event, sounding at its song time.
+#[wasm_bindgen_test]
+fn a_song_answers_its_placed_notes_without_rendering() {
+    let held = riffed();
+    let object = |key: &str, value: JsValue| {
+        let held = js_sys::Object::new();
+        js_sys::Reflect::set(&held, &key.into(), &value)
+            .unwrap_or_else(|_| unreachable!("an object takes a key"));
+        JsValue::from(held)
+    };
+    let set = Some(object("set", object("bpm", "120".into())));
+    let derive = |target: &str, with: Option<JsValue>| {
+        held.song(target, with.unwrap_or(JsValue::UNDEFINED))
+            .unwrap_or_else(|e| {
+                unreachable!("{target} derives: {}", as_text(&field(&e, "refusal")))
+            })
+    };
+    let third = 220.0 * 2f64.powf(4.0 / 12.0);
+    let rounded = |mut held: Vec<(f64, f64, Option<f64>, Option<f64>, String)>| {
+        for n in &mut held {
+            n.3 = n.3.map(|hz| (hz * 1e6).round() / 1e6);
+        }
+        held
+    };
+    let want = |late: f64, bar: f64| {
+        rounded(vec![
+            (0.0, late, Some(0.5 * bar), Some(third), "tone".to_string()),
+            (bar, bar + late, None, Some(110.0), "tone".to_string()),
+        ])
+    };
+    assert_eq!(rounded(notes(&derive("@master", None))), want(0.0, 4.0));
+    assert_eq!(rounded(notes(&derive("@stem", None))), want(4.0, 4.0));
+    assert_eq!(rounded(notes(&derive("@stem", set))), want(2.0, 2.0));
+    let refused = held.song("@stem", options(&[]));
+    assert!(refused.is_err(), "`song` takes `set` alone");
+}
+
 /// Every name the CLI answers is a name this surface recognizes. Some of them
 /// refuse on a mono closed form — a stereo image needs two components — but none is unknown here.
 #[wasm_bindgen_test]

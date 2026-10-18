@@ -7,6 +7,7 @@ mod reach;
 mod tempo;
 
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 pub use lanes::{Held, Hold, Home, Lane, LaneId, Swept};
 pub use place::parameters;
@@ -21,7 +22,7 @@ use crate::scale::Scale;
 use crate::score::{EXTENSION, Item, Ratio, Shape, located};
 
 use lanes::Sweeping;
-use place::{Container, Placing, at_line};
+use place::{Container, Offset, Placing, at_line, shifted};
 use reach::Reach;
 use tempo::TempoMove;
 
@@ -46,7 +47,7 @@ pub struct Warning {
 pub struct Song {
     root: String,
     curve: Curve,
-    tree: Container,
+    tree: Rc<Container>,
     instances: Vec<Instance>,
     lanes: Vec<Lane>,
     marks: Vec<PlacedMark>,
@@ -81,10 +82,9 @@ impl Graph {
             None => (60.0, 1.0),
         };
         let steady = Curve::new(bpm, beats, &[]);
-        let zero = Some(Pos::Bars(Ratio::ZERO));
         let tempo = {
             let mut first = Placing::new(self, &steady);
-            first.place(root, zero, None, Chain::default());
+            first.song(root);
             refused(std::mem::take(&mut first.refusals))?;
             let reached: Vec<Reached> = first
                 .moves
@@ -133,7 +133,7 @@ impl Graph {
         };
         let curve = Curve::new(bpm, beats, &tempo);
         let mut placing = Placing::new(self, &curve);
-        let tree = placing.place(root, zero, None, Chain::default());
+        let tree = placing.song(root);
         let mut refusals = std::mem::take(&mut placing.refusals);
         if curve.moves() {
             for m in placing
@@ -363,6 +363,21 @@ impl Song {
             .map(|p| LaneId::Sound(node.to_string(), p))
             .filter(|l| self.lane(l).is_some())
             .collect()
+    }
+
+    /// Where instance `i`'s line's `len` ends in song time; `None` where it writes none.
+    pub fn ends(&self, graph: &Graph, i: &Instance) -> Option<Pos> {
+        let (score, li, ii) = i.line.as_ref()?;
+        let file = graph.score(score)?;
+        let Item::Event(event) = &file.lines[*li].items[*ii] else {
+            return None;
+        };
+        let len = event.len?.amount;
+        let by = match file.unit {
+            crate::filename::SpanUnit::Bars => Offset::Bars(len),
+            crate::filename::SpanUnit::Seconds => Offset::Seconds(len.to_f64()),
+        };
+        shifted(i.at, by, &self.curve)
     }
 
     /// The key at second `at`, in hertz.

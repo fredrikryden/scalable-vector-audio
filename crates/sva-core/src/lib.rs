@@ -21,7 +21,7 @@ pub use answer::{
 pub use builtins::{Builtins, Callable, Crossing, builtins, builtins_data};
 pub use cli_error::{CliError, LintViolation, lint_diagnostic, warning_diagnostic};
 pub use lint_code::LintCode;
-pub use outline::{outline_data, song_data};
+pub use outline::{events_data, outline_data, song_data};
 pub use output::{Diagnostic, Severity, diagnostics_json, error_envelope, success_envelope};
 pub use query::{
     Asked, Call, Destination, RETIRED, asked, asked_all, call, calls, is_wav, retired, seconds,

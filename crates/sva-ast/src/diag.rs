@@ -3,7 +3,7 @@
 use std::fmt;
 
 /// A half-open byte range into one file's content; always lands on char boundaries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ByteSpan {
     pub start: usize,
     pub end: usize,

@@ -143,9 +143,19 @@ fn heard(dir: &Path, target: &str) -> Vec<(f64, f64)> {
     out
 }
 
-/// A read of a score at `t - d` sounds d later, nested reads adding up, and keeps its song time.
+/// The dry song's notes, each sounding `late` seconds after its song time.
+fn dry_at(dir: &Path, late: f64) -> Vec<(f64, f64)> {
+    let dry: Vec<(f64, f64)> = heard(dir, "@song")
+        .iter()
+        .map(|(at, _)| (*at, late))
+        .collect();
+    assert_eq!(dry.len(), 5, "a note a bar");
+    dry
+}
+
+/// A note read dry and delayed is one event, sounding at its song time.
 #[test]
-fn a_delayed_read_sounds_d_later_at_its_song_time() {
+fn a_note_read_dry_and_delayed_is_one_event_at_its_song_time() {
     let dir = song("sounds");
     put(&dir, "echo", "@song(t - 1s)\n");
     put(
@@ -153,13 +163,33 @@ fn a_delayed_read_sounds_d_later_at_its_song_time() {
         "master",
         "@song(t) + 0.5*@song(t - 1b) + 0.25*@echo(t - 0.5s)\n",
     );
-    let dry: Vec<f64> = heard(&dir, "@song").iter().map(|(at, _)| *at).collect();
-    assert_eq!(dry.len(), 5, "a note a bar");
-    let want: Vec<(f64, f64)> = dry
-        .iter()
-        .flat_map(|at| [(*at, 0.0), (*at, 1.5), (*at, 2.0)])
-        .collect();
-    assert_eq!(heard(&dir, "@master"), want);
+    assert_eq!(heard(&dir, "@master"), dry_at(&dir, 0.0));
+}
+
+/// A note only delayed reads reach sounds after the least delay: 1b (2 s) or 1 s + 0.5 s.
+#[test]
+fn a_note_read_only_delayed_sounds_after_the_least_delay() {
+    let dir = song("late");
+    put(&dir, "echo", "@song(t - 1s)\n");
+    put(&dir, "master", "0.5*@song(t - 1b) + 0.25*@echo(t - 0.5s)\n");
+    assert_eq!(heard(&dir, "@master"), dry_at(&dir, 1.5));
+    put(&dir, "master", "0.5*@song(t - 1b)\n");
+    assert_eq!(heard(&dir, "@master"), dry_at(&dir, 2.0));
+}
+
+/// 2^20 read paths to one placement derive one event per note.
+#[test]
+fn a_song_read_by_a_million_paths_places_each_note_once() {
+    let dir = song("paths");
+    put(&dir, "bus0", "@song(t)\n");
+    for k in 1..=20 {
+        put(
+            &dir,
+            &format!("bus{k}"),
+            &format!("@bus{}(t) + 0.5*@bus{}(t - 3ms)\n", k - 1, k - 1),
+        );
+    }
+    assert_eq!(heard(&dir, "@bus20"), dry_at(&dir, 0.0));
 }
 
 /// A note no view delays sounds at its song time, exactly, still in bars.
@@ -181,7 +211,7 @@ fn an_undelayed_note_sounds_at_its_song_time_exactly() {
     }
 }
 
-/// `outline` prints a delayed note's song time and, beside it, when it sounds.
+/// `outline` prints a delayed note's song time, when it sounds and its length.
 #[test]
 fn outline_prints_when_a_delayed_note_sounds() {
     let dir = song("outline");
@@ -191,7 +221,8 @@ fn outline_prints_when_a_delayed_note_sounds() {
         sva_core::song_data(&sva_ast::Dir::at(dir), "@top").unwrap_or_else(|e| panic!("{e}"));
     assert!(
         printed.contains(
-            "\"at\": { \"bars\": 0, \"seconds\": 0 }, \"sounds\": { \"bars\": 1, \"seconds\": 2 }"
+            "\"at\": { \"bars\": 0, \"seconds\": 0 }, \"sounds\": { \"bars\": 1, \"seconds\": 2 }, \
+             \"len\": { \"bars\": 0.25, \"seconds\": 0.5 }"
         ),
         "{printed}"
     );
