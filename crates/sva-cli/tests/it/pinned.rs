@@ -77,7 +77,7 @@ const PINNED: &str = r#"
 0 lines refused "read.lines_need_unwindowed_lines"
 0 spectrum refused "read.lines_need_unwindowed_lines"
 0 envelope refused "cast.left_algebra"
-0 derivative 3c4b7a53de255642
+0 derivative 35f9147e138d1ec8
 0 ledger 301ba8530bb8a641
 0 pitch refused "read.lines_need_unwindowed_lines"
 0 formants 69ac51091d002826
@@ -95,7 +95,7 @@ const PINNED: &str = r#"
 1 lines refused "read.lines_need_unwindowed_lines"
 1 spectrum refused "read.lines_need_unwindowed_lines"
 1 envelope refused "cast.left_algebra"
-1 derivative acfd9df607f9e976
+1 derivative 8423ad0fc11dacf4
 1 ledger 40b6413cf9c33fc0
 1 pitch refused "read.lines_need_unwindowed_lines"
 1 formants 4558f476fdf28802
@@ -130,8 +130,8 @@ const PINNED: &str = r#"
 3 store:273d32d1fbc24d73b322a79899449566 d655ced2289ed136
 3 lines 1b91625484873716
 3 spectrum 72763f1617db3c1e
-3 envelope 340b0cda41fcac70
-3 derivative 7543c4c4781ded5c
+3 envelope 5ff2738827a015bc
+3 derivative 2d6f0bddc0248089
 3 ledger 5c22057f215775d1
 3 pitch 31eb906bd2504ddd
 3 formants 82cfccabbf2a95e5
@@ -148,7 +148,7 @@ const PINNED: &str = r#"
 4 store:7d17584ff33a1d5714e10c35ba698e01 487a1b3fda336215
 4 lines 856b8c259fc6ee26
 4 spectrum 5875cbec9753bd9a
-4 envelope 2c3741c76dd8c27d
+4 envelope cdefdc3ad777a6cc
 4 derivative 1335b1af4f591c60
 4 ledger c053925e93af266d
 4 pitch 12415b8ef26ea22e
@@ -166,8 +166,8 @@ const PINNED: &str = r#"
 5 store:52690610e792cbd9ec87410effce6ac0 c5488abce5d848a7
 5 lines 4745742b132f215a
 5 spectrum cfc00a7586fe2dc2
-5 envelope 310ce19eaa76ea44
-5 derivative 71802c56289d0318
+5 envelope 3cab08eac882effb
+5 derivative fc27dc342d808d4a
 5 ledger e4349ebf63d76218
 5 pitch 6c4088af788a0ba4
 5 formants 7a25e231d6e83128
@@ -216,7 +216,7 @@ const PINNED: &str = r#"
 7 lines refused "read.lines_need_unwindowed_lines"
 7 spectrum refused "read.lines_need_unwindowed_lines"
 7 envelope refused "cast.left_algebra"
-7 derivative 4c8306ae0e47500b
+7 derivative 17cd66f01d871437
 7 ledger 3eced3ce79e67005
 7 pitch refused "read.lines_need_unwindowed_lines"
 7 formants c0281bb4e0ac6319
@@ -252,7 +252,7 @@ const PINNED: &str = r#"
 9 lines refused "read.lines_need_unwindowed_lines"
 9 spectrum refused "read.lines_need_unwindowed_lines"
 9 envelope refused "cast.left_algebra"
-9 derivative 832b940b443c04d9
+9 derivative d50dd96bf045c44e
 9 ledger 01194d6093d32b20
 9 pitch refused "read.lines_need_unwindowed_lines"
 9 formants 4a1893055be9d546
@@ -270,7 +270,7 @@ const PINNED: &str = r#"
 10 lines refused "read.lines_need_unwindowed_lines"
 10 spectrum refused "read.lines_need_unwindowed_lines"
 10 envelope refused "cast.left_algebra"
-10 derivative 3b93523aba257d86
+10 derivative b672d107adb53ae4
 10 ledger d85440a165c53e75
 10 pitch refused "read.lines_need_unwindowed_lines"
 10 formants a89662a64fb8a4dd
@@ -367,7 +367,7 @@ const PINNED: &str = r#"
 15 lines refused "read.lines_need_unwindowed_lines"
 15 spectrum refused "read.lines_need_unwindowed_lines"
 15 envelope refused "cast.left_algebra"
-15 derivative 85fd74bc6d856544
+15 derivative 9e12de6ee9602f21
 15 ledger f3afb30b0c4c2fb5
 15 pitch refused "read.lines_need_unwindowed_lines"
 15 formants 53fe55520cbb1aba

@@ -207,8 +207,9 @@ static ENVELOPE: Reading = Reading {
     name: "envelope",
     takes: &[Arg::Frame],
     reads: Reads::Either,
-    help: "rms and peak, per frame off samples: the rms of every channel's samples together, \
-           the peak of any channel",
+    help: "off a closed form the squared modulus of its analytic signal, x^2 + H{x}^2, as \
+           atoms per channel; off samples rms and peak per frame: the rms of every channel's \
+           samples together, the peak of any channel",
     build: |g| Representation::Envelope {
         frame_secs: g.frame,
     },
@@ -218,8 +219,8 @@ static DERIVATIVE: Reading = Reading {
     name: "derivative",
     takes: &[],
     reads: Reads::Either,
-    help: "the derivative, each series listed as `atoms` lists it, or off samples the first \
-           difference, (x[n] - x[n-1]) * rate at every sample but the first",
+    help: "the derivative's atoms per channel, each series listed as `atoms` lists it; off \
+           samples the first difference, (x[n] - x[n-1]) * rate at every sample but the first",
     build: |_| Representation::Derivative,
 };
 

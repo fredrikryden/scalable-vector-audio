@@ -788,7 +788,6 @@ fn samples_json(b: &Buffer, limit: Option<usize>) -> String {
 }
 
 fn symbolic_json(n: &SpectralSum) -> String {
-    let terms: Vec<String> = n.atoms().map(sva_engine::sketch_atom).collect();
     format!(
         "{{ \"var\": \"{}\", \"lanes\": {}, \"terms\": {} }}",
         match n.var {
@@ -796,7 +795,7 @@ fn symbolic_json(n: &SpectralSum) -> String {
             sva_engine::Var::F => "f",
         },
         n.lanes.len(),
-        crate::json::strings(&terms)
+        list(&sva_engine::atoms_of(n), atom_json)
     )
 }
 

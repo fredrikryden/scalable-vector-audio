@@ -125,6 +125,42 @@ fn every_answer_names_its_source_profile_and_rate() {
     assert!(json.contains("\"rate\": null"));
 }
 
+/// A derivative and an exact envelope print each term as `atoms` prints one, its frequency and
+/// channel with it, so the answer states the function and not only its sizes.
+#[test]
+fn a_derivative_prints_each_term_with_its_frequency_and_channel() {
+    let dir = scratch("derivative-terms");
+    put(&dir, "x", "join(sin(2*pi*100*t), 0.5*sin(2*pi*200*t))\n");
+    let rendered = probe(&dir, "@x([0, 1s])").expect("a closed form");
+    let json = json_of(&rendered, "derivative", Representation::Derivative);
+    let slope = |channel: usize, hz: &str, re: f64| {
+        format!(
+            "\"channel\": {channel}, \"sketch\": \"{re} x an exponential\", \"hz\": {hz}, \"re\": {re}"
+        )
+    };
+    let tau = std::f64::consts::TAU;
+    for wanted in [
+        slope(0, "100", tau * 100.0 * 0.5),
+        slope(1, "200", tau * 200.0 * 0.25),
+    ] {
+        assert!(json.contains(&wanted), "{wanted}: {json}");
+    }
+    let json = json_of(
+        &rendered,
+        "envelope",
+        Representation::Envelope { frame_secs: None },
+    );
+    for (channel, squared) in [(0, "1"), (1, "0.25")] {
+        let wanted = format!(
+            "\"channel\": {channel}, \"sketch\": \"{squared} x an amplitude\", \"hz\": 0, \"re\": {squared}"
+        );
+        assert!(
+            json.contains(&wanted),
+            "a sine's squared envelope is A^2: {wanted}: {json}"
+        );
+    }
+}
+
 /// An atom's window is two keys in seconds, each side `null` where nothing bounds it, and a
 /// placed note's is its own window moved by its placement.
 #[test]

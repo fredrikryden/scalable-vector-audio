@@ -97,7 +97,7 @@ impl RenderConfig {
     }
 }
 
-pub use answer::{answer, answer_buffer, sketch_atom};
+pub use answer::{answer, answer_buffer, atoms_of};
 pub use drive::Work;
 pub use run::{Abandon, Hear, Never, Session, render_called, render_in, render_over};
 pub use stream::{

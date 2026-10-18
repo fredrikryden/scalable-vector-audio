@@ -683,9 +683,18 @@ fn not_a_line(
 }
 
 /// One atom as the six factors it is present in, which is what `atoms` answers with.
-pub fn sketch_atom(a: &SpectralAtom) -> String {
+fn sketch_atom(a: &SpectralAtom) -> String {
     let factors: Vec<&'static str> = a.present().iter().map(|f| f.as_str()).collect();
     format!("{} x {}", a.c.abs(), factors.join(" times "))
+}
+
+/// Each atom of every lane as `atoms` answers it, the lane its channel.
+pub fn atoms_of(sum: &SpectralSum) -> Vec<Atom> {
+    sum.lanes
+        .iter()
+        .enumerate()
+        .flat_map(|(c, lane)| lane.atoms.iter().map(move |a| atom_of(sum.var, a, c)))
+        .collect()
 }
 
 /// The atom's own fields, read off as it holds them; a constant turns at zero and decays at
