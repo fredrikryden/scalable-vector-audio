@@ -65,7 +65,14 @@ pub const NOTE_GRAMMAR: &str = "a bare identifier: a letter A-G, an optional acc
     twelve-tone equal temperament, up to G9 where MIDI's 128 notes end";
 
 /// `(name, its call shape)`.
-pub const SPECIAL_FORMS: [(&str, &str); 7] = [
+pub const SPECIAL_FORMS: [(&str, &str); 8] = [
+    (
+        "deg",
+        "deg(n) -- the tonic in variables/key times the ratio of scale degree n, a whole \
+         number folded from literals, counted from 1 through the scale its `scale = \
+         @../scales/<name>` line names; deg(7)*1st is a raised seventh, deg(5)/2 the fifth an \
+         octave down, and each follows every edit of the key or its scale",
+    ),
     (
         "sum",
         "sum(index, lo, hi, expr) -- index is a name the series binds, not a value; a finite \

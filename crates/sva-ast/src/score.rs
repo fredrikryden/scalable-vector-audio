@@ -3,18 +3,22 @@
 use std::fmt;
 
 use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
+use serde_json::value::RawValue;
 
 use crate::diag::{ByteSpan, Diag, DiagCode};
-use crate::expr::{Address, BinOp, Expr, Literal};
+use crate::expr::{Address, Arg, BinOp, DEGREE, Expr, Literal};
 use crate::filename::SpanUnit;
-use crate::lexer::{TokenKind, tokenize};
+use crate::lexer::{Token, TokenKind, tokenize};
+use crate::series::folded;
+use crate::vocabulary::is_language_value;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Score {
     pub events: Vec<Event>,
 }
 
-/// One line: at `at`, `sound` plays with `args` bound, `len` among them where written.
+/// One sound placed by a line: at `at`, `sound` plays with `args` bound, `len` among them
+/// where written. A line listing a chord in `deg` places one event per degree.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Event {
     pub line: usize,
@@ -22,6 +26,8 @@ pub struct Event {
     pub at: Time,
     pub sound: String,
     pub deg: Option<i64>,
+    /// Where this event's degree is written, which a refusal about it names.
+    pub deg_at: ByteSpan,
     pub args: Vec<(String, Expr)>,
 }
 
@@ -48,11 +54,17 @@ impl Time {
     }
 }
 
-/// No equation opens with `{`, so the first line a score writes says what the file is.
+/// A `;` line in a score is a comment, as in every other file.
+fn is_comment(line: &str) -> bool {
+    line.trim_start().starts_with(crate::lexer::COMMENT as char)
+}
+
+/// No equation opens with `{`, so the first line a score writes past its comments says what
+/// the file is.
 pub fn is_score(content: &str) -> bool {
     content
         .lines()
-        .find(|line| !line.trim().is_empty())
+        .find(|line| !line.trim().is_empty() && !is_comment(line))
         .is_some_and(|line| line.trim_start().starts_with('{'))
 }
 
@@ -62,11 +74,11 @@ pub fn parse_score(content: &str) -> Result<Score, Diag> {
     for (index, line) in content.split('\n').enumerate() {
         let span = ByteSpan::new(start, start + line.len());
         start += line.len() + 1;
-        if line.trim().is_empty() {
+        if line.trim().is_empty() || is_comment(line) {
             continue;
         }
         let number = index + 1;
-        let written: Line = serde_json::from_str(line).map_err(|e| {
+        let Fields(fields) = serde_json::from_str(line).map_err(|e| {
             let column = e.column().max(1);
             let message = e.to_string();
             let message = message
@@ -74,17 +86,27 @@ pub fn parse_score(content: &str) -> Result<Score, Diag> {
                 .map_or(&*message, |(m, _)| m);
             refused(span.start + column - 1, (number, column), message)
         })?;
+        let refuse =
+            |at: usize, message: String| refused(span.start + at, (number, at + 1), &message);
+        let written = Line::read(line, span.start, fields, &refuse)?;
         if let Some(before) = events.last() {
-            sorted(before, &written, (number, span.start))?;
+            sorted(before, written.at, (number, span.start))?;
         }
-        events.push(Event {
-            line: number,
-            span,
-            at: written.at,
-            sound: written.sound,
-            deg: written.deg,
-            args: written.args,
-        });
+        let degrees: Vec<(Option<i64>, ByteSpan)> = match written.deg.is_empty() {
+            true => vec![(None, span)],
+            false => written.deg.iter().map(|&(d, at)| (Some(d), at)).collect(),
+        };
+        for (deg, deg_at) in degrees {
+            events.push(Event {
+                line: number,
+                span,
+                at: written.at,
+                sound: written.sound.clone(),
+                deg,
+                deg_at,
+                args: written.args.clone(),
+            });
+        }
     }
     Ok(Score { events })
 }
@@ -98,27 +120,27 @@ pub fn refused(at: usize, (line, column): (usize, usize), message: &str) -> Diag
     )
 }
 
-fn sorted(before: &Event, next: &Line, (line, at): (usize, usize)) -> Result<(), Diag> {
-    if before.at.unit != next.at.unit {
+fn sorted(before: &Event, next: Time, (line, at): (usize, usize)) -> Result<(), Diag> {
+    if before.at.unit != next.unit {
         return Err(refused(
             at,
             (line, 1),
             &format!(
                 "`at` is {} here and {} on line {}; one score counts its time in bars or in \
                  seconds, not both",
-                next.at.spelled(),
+                next.spelled(),
                 before.at.spelled(),
                 before.line
             ),
         ));
     }
-    if next.at.amount < before.at.amount {
+    if next.amount < before.at.amount {
         return Err(refused(
             at,
             (line, 1),
             &format!(
                 "`at` is {} here, before line {}'s {}; a score's lines are sorted by `at`",
-                next.at.spelled(),
+                next.spelled(),
                 before.line,
                 before.at.spelled()
             ),
@@ -128,18 +150,23 @@ fn sorted(before: &Event, next: &Line, (line, at): (usize, usize)) -> Result<(),
 }
 
 impl Score {
-    /// Σ soundᵢ(t − atᵢ; argsᵢ), summed as a balanced tree so its depth is log₂ of its lines.
-    pub fn lowered(&self, pitch: &dyn Fn(&Event, i64) -> Expr) -> Expr {
-        let terms: Vec<Expr> = self.events.iter().map(|e| e.lowered(pitch)).collect();
-        balanced(terms)
+    /// Σ soundᵢ(t − atᵢ; argsᵢ), summed as a balanced tree so its depth is log₂ of its events.
+    /// A degree stays a `deg` call, which the tuning pass reads off the key's scale.
+    pub fn lowered(&self) -> Expr {
+        balanced(self.events.iter().map(Event::lowered).collect())
     }
 }
 
 impl Event {
-    fn lowered(&self, pitch: &dyn Fn(&Event, i64) -> Expr) -> Expr {
+    fn lowered(&self) -> Expr {
         let mut binds = self.args.clone();
         if let Some(deg) = self.deg {
-            binds.push(("f0".to_string(), pitch(self, deg)));
+            let degree = Expr::Call {
+                name: DEGREE.to_string(),
+                args: vec![Arg::Pos(Expr::Lit(Literal::Num(deg as f64)))],
+                span: self.deg_at,
+            };
+            binds.push(("f0".to_string(), degree));
         }
         Expr::Ref {
             path: self.sound.clone(),
@@ -176,61 +203,98 @@ fn balanced(mut terms: Vec<Expr>) -> Expr {
     }
 }
 
-/// The fields a line names, read in written order so a key written twice is refused.
-struct Line {
-    at: Time,
-    sound: String,
-    deg: Option<i64>,
-    args: Vec<(String, Expr)>,
-}
+/// A line's keys in written order, each beside its value's own bytes in the line, so a refusal
+/// inside a value names the column it is written at.
+struct Fields<'a>(Vec<(String, &'a RawValue)>);
 
-impl<'de> Deserialize<'de> for Line {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Line, D::Error> {
-        d.deserialize_map(LineVisitor)
+impl<'de> Deserialize<'de> for Fields<'de> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Fields<'de>, D::Error> {
+        d.deserialize_map(FieldsVisitor)
     }
 }
 
-struct LineVisitor;
+struct FieldsVisitor;
 
-impl<'de> Visitor<'de> for LineVisitor {
-    type Value = Line;
+impl<'de> Visitor<'de> for FieldsVisitor {
+    type Value = Fields<'de>;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("one event, an object such as {\"at\": \"0b\", \"sound\": \"@../voice/note\"}")
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Line, A::Error> {
-        let (mut at, mut sound, mut deg) = (None, None, None);
-        let mut args: Vec<(String, Expr)> = Vec::new();
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Fields<'de>, A::Error> {
+        let mut fields: Vec<(String, &'de RawValue)> = Vec::new();
         while let Some(key) = map.next_key::<String>()? {
-            let twice = match key.as_str() {
-                "at" => at.is_some(),
-                "sound" => sound.is_some(),
-                "deg" => deg.is_some(),
-                other => args.iter().any(|(held, _)| held == other),
-            };
-            if twice {
+            if fields.iter().any(|(held, _)| *held == key) {
                 return Err(de::Error::custom(format!("`{key}` is written twice")));
             }
+            let value = map.next_value::<&'de RawValue>()?;
+            fields.push((key, value));
+        }
+        Ok(Fields(fields))
+    }
+}
+
+/// What a refusal inside one value says, at a byte of that value as the line writes it.
+type Inside = (usize, String);
+
+/// A score binds constants; what moves over time is an equation's job.
+const MOVING: &str = "a score binds constants, and a moving argument belongs in an equation that \
+                      reads an automation score (see SCORES in --help)";
+
+/// The fields a line names, each value read where it is written.
+struct Line {
+    at: Time,
+    sound: String,
+    deg: Vec<(i64, ByteSpan)>,
+    args: Vec<(String, Expr)>,
+}
+
+impl Line {
+    fn read(
+        line: &str,
+        start: usize,
+        fields: Vec<(String, &RawValue)>,
+        refuse: &dyn Fn(usize, String) -> Diag,
+    ) -> Result<Line, Diag> {
+        let (mut at, mut sound) = (None, None);
+        let mut deg: Vec<(i64, ByteSpan)> = Vec::new();
+        let mut args: Vec<(String, Expr)> = Vec::new();
+        for (key, raw) in &fields {
+            let from = raw.get().as_ptr() as usize - line.as_ptr() as usize;
+            let located = |(by, message): Inside| refuse(from + by, message);
             match key.as_str() {
-                "at" => at = Some(map.next_value::<When<true>>()?.0),
-                "sound" => sound = Some(map.next_value::<Sound>()?.0),
-                "deg" => deg = Some(map.next_value::<i64>()?),
+                "at" => at = Some(time(raw.get(), true).map_err(located)?),
+                "sound" => sound = Some(self::sound(raw.get()).map_err(located)?),
+                "deg" => {
+                    let found = degrees(raw.get()).map_err(located)?;
+                    let spans = found.into_iter().map(|(d, by, len)| {
+                        (d, ByteSpan::new(start + from + by, start + from + by + len))
+                    });
+                    deg = spans.collect();
+                }
                 "len" => {
-                    let len = map.next_value::<When<false>>()?.0;
-                    args.push((key, len.literal()));
+                    let len = time(raw.get(), false).map_err(located)?;
+                    args.push((key.clone(), len.literal()));
                 }
                 _ => {
-                    let value = map.next_value::<Argument>()?.0;
-                    args.push((key, value));
+                    let value = value(raw.get()).map_err(located)?;
+                    args.push((
+                        key.clone(),
+                        crate::ingest::relocate(&value, start + from + 1),
+                    ));
                 }
             }
         }
-        let at = at.ok_or_else(|| de::Error::missing_field("at"))?;
-        let sound = sound.ok_or_else(|| de::Error::missing_field("sound"))?;
-        if deg.is_some() && args.iter().any(|(key, _)| key == "f0") {
-            return Err(de::Error::custom(
-                "`f0` and `deg` both set the pitch; write one of them",
+        let end = line.trim_end().len().saturating_sub(1);
+        let at = at.ok_or_else(|| refuse(end, "missing field `at`".to_string()))?;
+        let sound = sound.ok_or_else(|| refuse(end, "missing field `sound`".to_string()))?;
+        if let Some((_, written)) = deg.first()
+            && args.iter().any(|(key, _)| key == "f0")
+        {
+            return Err(refuse(
+                written.start - start,
+                "`f0` and `deg` both set the pitch; write one of them".to_string(),
             ));
         }
         Ok(Line {
@@ -242,138 +306,278 @@ impl<'de> Visitor<'de> for LineVisitor {
     }
 }
 
-/// A time in a string with its unit, `"0.25b"` or `"0.5s"`; `SIGNED` admits a leading `-`.
-struct When<const SIGNED: bool>(Time);
-
-impl<'de, const SIGNED: bool> Deserialize<'de> for When<SIGNED> {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_str(WhenVisitor::<SIGNED>)
-    }
+/// A JSON string's contents, which an SVA value never needs to escape.
+fn string(raw: &str) -> Option<Result<&str, Inside>> {
+    raw.starts_with('"').then(|| {
+        serde_json::from_str::<&str>(raw).map_err(|_| {
+            (
+                0,
+                format!("{raw} holds a `\\` escape, and no score value needs one"),
+            )
+        })
+    })
 }
 
-struct WhenVisitor<const SIGNED: bool>;
-
-impl<'de, const SIGNED: bool> Visitor<'de> for WhenVisitor<SIGNED> {
-    type Value = When<SIGNED>;
-
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(
-            "a time literal string such as \"0.25b\" or \"0.5s\"; a bare number has no unit",
+/// A time in a string, `"0.25b"`, or constant arithmetic over times, `"2b + 1b/3"`, folded
+/// here in its one unit; `signed` admits one before 0.
+fn time(raw: &str, signed: bool) -> Result<Time, Inside> {
+    let no_unit = || {
+        format!(
+            "{raw} is no time: write a number with a unit, as \"0.25b\" or \"0.5s\", or \
+             arithmetic over them, as \"2b + 1b/3\"; a bare number has no unit"
         )
-    }
-
-    fn visit_str<E: de::Error>(self, s: &str) -> Result<When<SIGNED>, E> {
-        let tokens = tokenize(s).map_err(|d| E::custom(d.message))?;
-        let (sign, rest) = match tokens.as_slice() {
-            [first, rest @ ..] if SIGNED && first.kind == TokenKind::Minus => (-1.0, rest),
-            all => (1.0, all),
-        };
-        match rest {
-            [only] => match only.kind {
-                TokenKind::Time(amount, unit) => Ok(When(Time {
-                    amount: sign * amount,
-                    unit,
-                })),
-                _ => Err(E::custom(format!(
-                    "`{s}` is no time literal: write a number with a unit, as \"0.25b\" or \
-                     \"0.5s\""
-                ))),
-            },
-            _ => Err(E::custom(format!(
-                "`{s}` is no time literal: write one number with a unit, as \"0.25b\" or \
-                 \"0.5s\""
-            ))),
-        }
-    }
-}
-
-struct Sound(String);
-
-impl<'de> Deserialize<'de> for Sound {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_str(SoundVisitor)
-    }
-}
-
-struct SoundVisitor;
-
-impl<'de> Visitor<'de> for SoundVisitor {
-    type Value = Sound;
-
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("an `@ref` string such as \"@../voice/note\"")
-    }
-
-    fn visit_str<E: de::Error>(self, s: &str) -> Result<Sound, E> {
-        match s.strip_prefix('@') {
-            Some(path) if !path.is_empty() && crate::lexer::whole_ref_path(path) => {
-                Ok(Sound(path.to_string()))
+    };
+    let s = string(raw).unwrap_or_else(|| Err((0, no_unit())))?;
+    let inside = |(by, message): Inside| (by + 1, message);
+    let tokens = tokenize(s).map_err(|d| inside((d.span.start, d.message)))?;
+    constant(s, &tokens, false).map_err(inside)?;
+    let mut unit: Option<SpanUnit> = None;
+    for token in &tokens {
+        let this = match token.kind {
+            TokenKind::Time(_, this) => this,
+            TokenKind::Samples(_) => {
+                return Err(inside((
+                    token.span.start,
+                    format!(
+                        "`{s}` counts a render's own samples; a score's time is bars or seconds"
+                    ),
+                )));
             }
-            _ => Err(E::custom(format!(
-                "`sound` is an `@ref` string such as \"@../voice/note\", not `{s}`"
-            ))),
+            _ => continue,
+        };
+        match unit {
+            Some(held) if held != this => {
+                return Err(inside((
+                    token.span.start,
+                    format!("`{s}` counts in bars and in seconds; one time is written in one"),
+                )));
+            }
+            _ => unit = Some(this),
         }
     }
+    let unit = unit.ok_or_else(|| (0, no_unit()))?;
+    let mut folding = Folding {
+        s,
+        tokens: &tokens,
+        next: 0,
+    };
+    let (amount, is_time) = folding.sum().map_err(inside)?;
+    if let Some(left) = tokens.get(folding.next) {
+        return Err(inside((
+            left.span.start,
+            format!("`{s}` is no time: an operator or the end was expected here"),
+        )));
+    }
+    if !is_time {
+        return Err((0, no_unit()));
+    }
+    if !amount.is_finite() {
+        return Err((1, format!("`{s}` folds to no number")));
+    }
+    if !signed && amount < 0.0 {
+        return Err((1, format!("`{s}` is a window, so it is no shorter than 0")));
+    }
+    Ok(Time { amount, unit })
 }
 
-/// A number, or one literal in a string: `"0.03s"`, `"900hz"`, `"-6db"`, `"A1"`.
-struct Argument(Expr);
-
-impl<'de> Deserialize<'de> for Argument {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(ArgumentVisitor)
-    }
+/// A time's tokens folded with their dimension: a sum of times, a time scaled by a number or
+/// divided by one, so a bare number never takes a unit it was not written with.
+struct Folding<'a> {
+    s: &'a str,
+    tokens: &'a [Token],
+    next: usize,
 }
 
-struct ArgumentVisitor;
+/// A value, and whether it is a time rather than a number.
+type Folded = (f64, bool);
 
-impl<'de> Visitor<'de> for ArgumentVisitor {
-    type Value = Argument;
-
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("a number, or a literal string such as \"0.03s\", \"-6db\" or \"A1\"")
+impl Folding<'_> {
+    fn op(&self, ops: [TokenKind; 2]) -> Option<(bool, usize)> {
+        let token = self.tokens.get(self.next)?;
+        ops.contains(&token.kind)
+            .then_some((token.kind == ops[0], token.span.start))
     }
 
-    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Argument, E> {
-        Ok(Argument(Expr::Lit(Literal::Num(v as f64))))
+    fn refused(&self, at: usize, why: &str) -> Inside {
+        (at, format!("`{}` {why}; a bare number has no unit", self.s))
     }
 
-    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Argument, E> {
-        Ok(Argument(Expr::Lit(Literal::Num(v as f64))))
+    fn sum(&mut self) -> Result<Folded, Inside> {
+        let mut left = self.product()?;
+        while let Some((plus, at)) = self.op([TokenKind::Plus, TokenKind::Minus]) {
+            self.next += 1;
+            let right = self.product()?;
+            if left.1 != right.1 {
+                return Err(self.refused(at, "adds a number to a time"));
+            }
+            left.0 = if plus {
+                left.0 + right.0
+            } else {
+                left.0 - right.0
+            };
+        }
+        Ok(left)
     }
 
-    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Argument, E> {
-        Ok(Argument(Expr::Lit(Literal::Num(v))))
+    fn product(&mut self) -> Result<Folded, Inside> {
+        let mut left = self.unary()?;
+        while let Some((times, at)) = self.op([TokenKind::Star, TokenKind::Slash]) {
+            self.next += 1;
+            let right = self.unary()?;
+            left = match (times, left.1, right.1) {
+                (true, true, true) => return Err(self.refused(at, "multiplies a time by a time")),
+                (false, _, true) => return Err(self.refused(at, "divides by a time")),
+                (true, l, r) => (left.0 * right.0, l || r),
+                (false, l, _) => (left.0 / right.0, l),
+            };
+        }
+        Ok(left)
     }
 
-    fn visit_str<E: de::Error>(self, s: &str) -> Result<Argument, E> {
-        let tokens = tokenize(s).map_err(|d| E::custom(d.message))?;
-        let unsigned = match tokens.as_slice() {
-            [first, rest @ ..] if first.kind == TokenKind::Minus => rest,
-            all => all,
-        };
-        let literal = match unsigned {
-            [only] => match &only.kind {
-                TokenKind::Num(_)
-                | TokenKind::Time(..)
-                | TokenKind::Samples(_)
-                | TokenKind::Log(..) => true,
-                TokenKind::Ident(name) => {
-                    unsigned.len() == tokens.len() && crate::vocabulary::note_midi(name).is_some()
+    fn unary(&mut self) -> Result<Folded, Inside> {
+        match self.op([TokenKind::Minus, TokenKind::Plus]) {
+            Some((minus, _)) => {
+                self.next += 1;
+                let (v, is_time) = self.unary()?;
+                Ok((if minus { -v } else { v }, is_time))
+            }
+            None => self.primary(),
+        }
+    }
+
+    fn primary(&mut self) -> Result<Folded, Inside> {
+        let token = self.tokens.get(self.next);
+        let at = token.map_or(self.s.len(), |t| t.span.start);
+        self.next += 1;
+        match token.map(|t| &t.kind) {
+            Some(TokenKind::Num(n)) => Ok((*n, false)),
+            Some(TokenKind::Time(n, _)) => Ok((*n, true)),
+            Some(TokenKind::LParen) => {
+                let inner = self.sum()?;
+                match self.tokens.get(self.next).map(|t| &t.kind) {
+                    Some(TokenKind::RParen) => {
+                        self.next += 1;
+                        Ok(inner)
+                    }
+                    _ => Err((at, format!("`{}` opens a ( it never closes", self.s))),
                 }
-                _ => false,
-            },
-            _ => false,
-        };
-        if !literal {
-            return Err(E::custom(format!(
-                "`{s}` is not one literal; a score binds a number, a number with a unit such \
-                 as \"0.03s\" or \"-6db\", or a note name such as \"A1\""
-            )));
+            }
+            _ => Err((
+                at,
+                format!(
+                    "`{}` is no time: a time is arithmetic over numbers and times in bars or \
+                     seconds",
+                    self.s
+                ),
+            )),
         }
-        crate::parser::parse(s)
-            .map(Argument)
-            .map_err(|d| E::custom(d.message))
+    }
+}
+
+/// Refuses whatever a constant cannot hold: `t`, a ref, a name, or a call other than `deg`
+/// where `degrees` admits it.
+fn constant(s: &str, tokens: &[Token], degrees: bool) -> Result<(), Inside> {
+    for (k, token) in tokens.iter().enumerate() {
+        let at = token.span.start;
+        let called = matches!(tokens.get(k + 1).map(|t| &t.kind), Some(TokenKind::LParen));
+        let why = match &token.kind {
+            TokenKind::Ref(path) => format!("`{s}` reads `@{path}`; {MOVING}"),
+            TokenKind::Ident(name) if called && degrees && name == DEGREE => continue,
+            TokenKind::Ident(name) if called => format!(
+                "`{s}` calls `{name}`; a score value is arithmetic over literals{}, and a \
+                 sound's own math belongs in its equation",
+                if degrees { " and `deg(n)`" } else { "" }
+            ),
+            TokenKind::Ident(name) if name == "t" || name == "f" => {
+                format!("`{s}` reads `{name}`; {MOVING}")
+            }
+            TokenKind::Ident(name) if is_language_value(name) && name != "i" => continue,
+            TokenKind::Ident(name) => format!(
+                "`{s}` names `{name}`, which a score cannot read: it binds constants, numbers, \
+                 literals with units such as \"0.03s\" or \"-6db\", and note names such as \"A1\""
+            ),
+            TokenKind::LBracket
+            | TokenKind::RBracket
+            | TokenKind::Lt
+            | TokenKind::Le
+            | TokenKind::Gt
+            | TokenKind::Ge
+            | TokenKind::Dot => format!("`{s}` is no constant: a score value is arithmetic"),
+            _ => continue,
+        };
+        return Err((at, why));
+    }
+    Ok(())
+}
+
+fn sound(raw: &str) -> Result<String, Inside> {
+    let refuse = || {
+        (
+            0,
+            format!("`sound` is an `@ref` string such as \"@../voice/note\", not {raw}"),
+        )
+    };
+    let s = string(raw).unwrap_or_else(|| Err(refuse()))?;
+    match s.strip_prefix('@') {
+        Some(path) if !path.is_empty() && crate::lexer::whole_ref_path(path) => {
+            Ok(path.to_string())
+        }
+        _ => Err(refuse()),
+    }
+}
+
+/// One whole degree, or a chord of them, each with its byte and length in `raw`.
+fn degrees(raw: &str) -> Result<Vec<(i64, usize, usize)>, Inside> {
+    let whole = |written: &str, by: usize| {
+        serde_json::from_str::<i64>(written)
+            .map(|d| (d, by, written.len()))
+            .map_err(|_| {
+                (
+                    by,
+                    format!(
+                        "`deg` is a whole scale degree or a chord of them, as 5 or [1, 3, 5], \
+                         not {written}; a chromatic note binds `f0`, as \"f0\": \"deg(7)*1st\""
+                    ),
+                )
+            })
+    };
+    if !raw.starts_with('[') {
+        return Ok(vec![whole(raw, 0)?]);
+    }
+    let chord: Vec<&RawValue> = serde_json::from_str(raw).map_err(|e| (0, format!("`deg` {e}")))?;
+    if chord.is_empty() {
+        return Err((0, "`deg` lists no degree; a chord is [1, 3, 5]".to_string()));
+    }
+    chord
+        .iter()
+        .map(|d| whole(d.get(), d.get().as_ptr() as usize - raw.as_ptr() as usize))
+        .collect()
+}
+
+/// A number, or a constant in a string: one literal (`"0.03s"`, `"-6db"`, `"A1"`), or
+/// arithmetic over literals and `deg(n)`, as `"0.8*0.9"` or `"deg(7)*1st"`. Arithmetic over
+/// numbers alone folds here, so `"0.8*0.9"` binds the number `0.72` does.
+fn value(raw: &str) -> Result<Expr, Inside> {
+    if let Ok(n) = serde_json::from_str::<f64>(raw) {
+        return Ok(Expr::Lit(Literal::Num(n)));
+    }
+    let s = string(raw).unwrap_or_else(|| {
+        Err((
+            0,
+            format!(
+                "{raw} is no value: a score binds a number, or a string such as \"0.03s\", \
+                 \"-6db\", \"A1\", \"0.8*0.9\" or \"deg(7)*1st\""
+            ),
+        ))
+    })?;
+    let inside = |(by, message): Inside| (by + 1, message);
+    let tokens = tokenize(s).map_err(|d| inside((d.span.start, d.message)))?;
+    constant(s, &tokens, true).map_err(inside)?;
+    let expr = crate::parser::parse(s).map_err(|d| inside((d.span.start, d.message)))?;
+    match folded(&expr, &|_| None) {
+        Some(n) if n.is_finite() => Ok(Expr::Lit(Literal::Num(n))),
+        Some(_) => Err((1, format!("`{s}` folds to no number"))),
+        None => Ok(expr),
     }
 }
 
@@ -383,6 +587,13 @@ mod tests {
 
     fn refusal(text: &str) -> String {
         parse_score(text).unwrap_err().message
+    }
+
+    fn line(fields: &str) -> Score {
+        parse_score(&format!(
+            "{{\"at\": \"0b\", \"sound\": \"@b\", {fields}}}\n"
+        ))
+        .unwrap()
     }
 
     #[test]
@@ -402,7 +613,7 @@ mod tests {
     fn a_refusal_names_the_line_and_column() {
         let text = "{\"at\": \"0b\", \"sound\": \"@bass\"}\n{\"at\": 0.5, \"sound\": \"@bass\"}\n";
         let refused = refusal(text);
-        assert!(refused.starts_with("line 2, column "), "{refused}");
+        assert!(refused.starts_with("line 2, column 8:"), "{refused}");
         assert!(refused.contains("bare number"), "{refused}");
         assert!(refusal("{\"at\": \"0b\"}").contains("missing field `sound`"));
         assert!(refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"at\": \"1b\"}").contains("twice"));
@@ -413,6 +624,78 @@ mod tests {
         assert!(
             refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"vel\": \"x+1\"}").contains("literal")
         );
+    }
+
+    #[test]
+    fn a_refusal_inside_a_value_names_its_own_column() {
+        let refused = refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"vel\": \"0.5*sin(t)\"}");
+        assert!(refused.starts_with("line 1, column 41: "), "{refused}");
+        assert!(refused.contains("calls `sin`"), "{refused}");
+        let moving = refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"vel\": \"0.5 + t\"}");
+        assert!(moving.starts_with("line 1, column 43: "), "{moving}");
+        assert!(moving.contains("automation score"), "{moving}");
+        let reads = refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"vel\": \"@../lfo\"}");
+        assert!(reads.contains("reads `@../lfo`"), "{reads}");
+        let mixed = refusal("{\"at\": \"1b + 0.5s\", \"sound\": \"@b\"}");
+        assert!(mixed.starts_with("line 1, column 14: "), "{mixed}");
+    }
+
+    #[test]
+    fn a_value_is_constant_arithmetic_and_numbers_alone_fold() {
+        let score = line("\"len\": \"1b/3\", \"vel\": \"0.8*0.9\", \"f0\": \"deg(7)*1st\"");
+        let args = &score.events[0].args;
+        assert_eq!(args[0].1, Expr::Lit(Literal::Bars(1.0 / 3.0)));
+        assert_eq!(args[1].1, Expr::Lit(Literal::Num(0.8 * 0.9)));
+        assert!(matches!(&args[2].1, Expr::Bin(BinOp::Mul, l, _)
+            if matches!(&**l, Expr::Call { name, .. } if name == DEGREE)));
+    }
+
+    #[test]
+    fn a_time_folds_in_bars_before_any_tempo() {
+        let score = parse_score("{\"at\": \"2b + 1b/3\", \"sound\": \"@b\"}\n").unwrap();
+        assert_eq!(score.events[0].at.amount, 2.0 + 1.0 / 3.0);
+        assert_eq!(score.events[0].at.unit, SpanUnit::Bars);
+        assert!(refusal("{\"at\": \"1/3\", \"sound\": \"@b\"}").contains("no time"));
+        let at =
+            |written: &str| parse_score(&format!("{{\"at\": \"{written}\", \"sound\": \"@b\"}}"));
+        assert_eq!(at("(2b + 1b)/3").unwrap().events[0].at.amount, 1.0);
+        assert_eq!(at("-0.5s").unwrap().events[0].at.amount, -0.5);
+        for (written, why) in [
+            ("2b + 1", "adds a number to a time"),
+            ("1b*1b", "multiplies a time by a time"),
+            ("1b/1b", "divides by a time"),
+            ("(1b", "never closes"),
+            ("1b 2b", "no time"),
+        ] {
+            let refused = at(written).unwrap_err().message;
+            assert!(refused.contains(why), "{written}: {refused}");
+        }
+        assert!(
+            refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"len\": \"1b - 2b\"}").contains("window")
+        );
+    }
+
+    #[test]
+    fn a_chord_is_one_event_per_degree_each_located() {
+        let score = line("\"deg\": [1, 3, 5]");
+        let degrees: Vec<_> = score.events.iter().map(|e| e.deg).collect();
+        assert_eq!(degrees, [Some(1), Some(3), Some(5)]);
+        assert_eq!(score.events[2].deg_at, ByteSpan::new(42, 43));
+        assert!(refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"deg\": []}").contains("no degree"));
+        let chromatic = refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"deg\": [1, 6.5]}");
+        assert!(chromatic.starts_with("line 1, column 40: "), "{chromatic}");
+        assert!(chromatic.contains("deg(7)*1st"), "{chromatic}");
+    }
+
+    #[test]
+    fn comment_lines_are_skipped_and_a_comment_may_lead_a_score() {
+        let text = "; Models: a bar | Neglects: the rest | IO: (t) -> amplitude | Tags: score\n\
+                    {\"at\": \"0b\", \"sound\": \"@b\"}\n  ; bar 2\n{\"at\": \"1b\", \"sound\": \"@b\"}\n";
+        assert!(is_score(text));
+        let score = parse_score(text).unwrap();
+        assert_eq!(score.events.len(), 2);
+        assert_eq!(score.events[1].line, 4);
+        assert!(!is_score("; a comment\nsin(t)\n"));
     }
 
     #[test]
@@ -433,9 +716,6 @@ mod tests {
                 _ => 0,
             }
         }
-        assert_eq!(
-            depth(&score.lowered(&|_, _| Expr::Lit(Literal::Num(1.0)))),
-            10
-        );
+        assert_eq!(depth(&score.lowered()), 10);
     }
 }

@@ -193,9 +193,28 @@ impl Graph {
         }
     }
 
-    pub(crate) fn rewrite(&mut self, path: &str, body: Expr) {
+    pub(crate) fn rewrite(&mut self, path: &str, body: Expr, defaults: Vec<(String, Expr)>) {
         let defined = self.nodes.get_mut(path).expect("a node this graph holds");
-        Arc::make_mut(defined).body = body;
+        *Arc::make_mut(defined) = Defined { body, defaults };
+    }
+
+    /// Whether `path`'s body, a default or its data reads `target` itself.
+    pub(crate) fn reads_directly(&self, path: &str, target: &str) -> bool {
+        self.reaching_from(path).iter().any(|read| read == target)
+    }
+
+    /// `from`'s node at `path`, parsed again from its own text, before any pass rewrote it.
+    pub(crate) fn reread(&mut self, path: &str, from: &Graph) -> Result<(), Refusal> {
+        let mut held = from.held(path).expect("a node `from` holds");
+        let parsed = parse_file(path, &held.text)
+            .map_err(|d| Refusal::new(path, d.span, d.code, d.message))?;
+        held.defined = Arc::new(Defined {
+            body: parsed.expr,
+            defaults: parsed.defaults,
+        });
+        held.data = parsed.data;
+        self.set(path, Some(held));
+        Ok(())
     }
 
     pub fn resolve_bar_spans(&mut self, per_bar: PerBar) {
@@ -408,7 +427,12 @@ impl Graph {
 
     pub fn define_arranged(&mut self, path: &str, expr: Expr) -> Result<bool, Refusal> {
         let arranged = self.rewrite_arrangement(path, &written(path, &expr)?, None)?;
-        Ok(self.define(path, arranged))
+        let defined = self.define(path, arranged);
+        if defined && let Err(refused) = self.tune_defined(path, None) {
+            self.set(path, None);
+            return Err(refused);
+        }
+        Ok(defined)
     }
 
     /// The same, a span this graph lacks read in `beside`.
@@ -419,7 +443,12 @@ impl Graph {
         expr: Expr,
     ) -> Result<bool, Refusal> {
         let arranged = self.rewrite_arrangement(path, &written(path, &expr)?, Some(beside))?;
-        Ok(self.define(path, arranged))
+        let defined = self.define(path, arranged);
+        if defined && let Err(refused) = self.tune_defined(path, Some(beside)) {
+            self.set(path, None);
+            return Err(refused);
+        }
+        Ok(defined)
     }
 
     fn rewrite_arrangement(
@@ -851,9 +880,11 @@ pub fn resolve_ref_path(referencing: &str, ref_path: &str) -> Option<String> {
     Some(segments.join("/"))
 }
 
-/// A probe is parsed whole rather than as a file, so its sums are written out here.
+/// A probe is parsed whole rather than as a file, so its sums are written out and its degrees
+/// keyed here.
 fn written(path: &str, expr: &Expr) -> Result<Expr, Refusal> {
-    crate::series::written_out(expr).map_err(|d| Refusal::new(path, d.span, d.code, d.message))
+    let keyed = crate::tuning::keyed(expr, &crate::tuning::key_ref(path));
+    crate::series::written_out(&keyed).map_err(|d| Refusal::new(path, d.span, d.code, d.message))
 }
 
 fn above_root(referencing: &str, span: ByteSpan, ref_path: &str, root: &str) -> Refusal {

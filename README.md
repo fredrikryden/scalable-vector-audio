@@ -72,20 +72,20 @@ rate-free, below it there is a rate, and a feedback term reading what it wrote s
 
 ## Notes in time: a score
 
-A file whose first line opens with `{` is a score: JSON Lines, one note per line, sorted by
-`at`. Each line plays the sound it names shifted to its time, so this `bass` is
-`@voice(t, f0=…) + @voice(t - 0.5b, f0=…)`, still one closed form:
+A file whose first line past its `;` comments opens with `{` is a score: JSON Lines, one event
+per line, sorted by `at`. Each line plays the sound it names shifted to its time, so this score
+is `@voice(t, f0=deg(1)) + …`, still one closed form. `b` is a bar, so `2b + 1b/3` is a triplet:
 
 ```
-{"at": "0b", "sound": "@voice", "deg": 1}
-{"at": "0.5b", "sound": "@voice", "deg": 5}
+{"at": "0b", "sound": "@voice", "deg": [1, 3, 5]}
+{"at": "2b + 1b/3", "sound": "@voice", "f0": "deg(7)*1st", "vel": "0.8*0.9"}
 ```
 
-`deg` counts from 1, the tonic in `variables/key`, through the scale that file names on its
-`scale = @../scales/minor` line, a file of one row of cents per degree, the octave last. Editing
-the key's note transposes every score; editing its `scale` line changes mode. Every other field
-binds the sound's own parameter, and a field it does not read is refused, naming the line. Keep a
-score to a phrase and place it from an equation, as `@bass(t - 8b)`.
+`deg(n)`, in a score or any equation, is the tonic in `variables/key` times degree `n`'s ratio in
+the scale its `scale = @../scales/minor` line names; `"deg": 5` is `"f0": "deg(5)"`, a list a
+chord. Editing the key's note transposes every score, chromatic notes too; its `scale` line
+changes mode. A value is constant: what moves is an automation lane, a score of curves an
+equation reads, as `cutoff=20khz*pow(0.02, @auto/riser(t))`. Place a phrase as `@bass(t - 8b)`.
 
 ## Literals and waveforms
 

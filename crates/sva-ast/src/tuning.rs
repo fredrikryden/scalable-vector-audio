@@ -1,75 +1,119 @@
-// Concern: settles each score against its sounds and the key's scale, then lowers it | Non-concern: reading scores or scales (score.rs, scale.rs) | IO: (&mut Graph[, beside]) -> Refusals
+// Concern: reads each `deg` call off the key's scale, and checks each score line against its sound | Non-concern: reading scores or scales (score.rs, scale.rs) | IO: (&mut Graph[, beside]) -> Refusals
 
-use crate::diag::DiagCode;
-use crate::expr::{Address, Arg, BinOp, Expr, Literal};
+use crate::diag::{ByteSpan, DiagCode};
+use crate::expr::{Address, Arg, BinOp, Binds, DEGREE, Expr, Literal, map_children_ok};
 use crate::graph::{Graph, resolve_ref_path};
-use crate::ingest::{Data, KEY};
+use crate::ingest::{Data, KEY, body_at};
 use crate::parameters::free_parameters;
 use crate::refusal::Refusal;
 use crate::scale::Scale;
 use crate::score::{Event, Score, refused};
 
-/// `variables/key` as a score at `path` spells a ref to it.
+/// `variables/key` as a node at `path` spells a ref to it.
 pub(crate) fn key_ref(path: &str) -> String {
     format!("{}{KEY}", "../".repeat(path.matches('/').count()))
 }
 
-/// The tonic times the degree's ratio. With no scale known yet the ratio is a `deg` call,
-/// which no builtin answers, so a score no tuning pass lowered refuses rather than plays.
-pub(crate) fn pitch(key: &str, event: &Event, deg: i64, ratio: Option<f64>) -> Expr {
-    let tonic = Expr::Ref {
-        path: key.to_string(),
-        arg: Box::new(Expr::Var("t".to_string())),
-        binds: Vec::new(),
-        address: Address::Time,
-        span: event.span,
+/// Each `deg(n)` as the tonic times `deg(n)`, written at parse so a load follows the key. The
+/// tuning pass turns the call into its ratio; no builtin answers it, so a degree no tuning
+/// pass read refuses rather than plays.
+pub(crate) fn keyed(e: &Expr, key: &str) -> Expr {
+    match e {
+        Expr::Call { name, span, .. } if name == DEGREE => {
+            let tonic = Expr::Ref {
+                path: key.to_string(),
+                arg: Box::new(Expr::Var("t".to_string())),
+                binds: Vec::new(),
+                address: Address::Time,
+                span: *span,
+            };
+            Expr::Bin(BinOp::Mul, Box::new(tonic), Box::new(e.clone()))
+        }
+        _ => map_children_ok(e, Binds::Substitute, |c| keyed(c, key)),
+    }
+}
+
+fn calls_degree(e: &Expr) -> bool {
+    match e {
+        Expr::Call { name, .. } if name == DEGREE => true,
+        _ => crate::expr::children(e, Binds::Substitute)
+            .into_iter()
+            .any(calls_degree),
+    }
+}
+
+/// The one whole degree a `deg` call names, folded from literals.
+fn degree(args: &[Arg]) -> Result<i64, String> {
+    let whole = match args {
+        [Arg::Pos(x)] => crate::series::folded(x, &|_| None)
+            .filter(|d| d.fract() == 0.0 && d.abs() < 2f64.powi(53)),
+        _ => None,
     };
-    let step = match ratio {
-        Some(ratio) => Expr::Lit(Literal::Num(ratio)),
-        None => Expr::Call {
-            name: "deg".to_string(),
-            args: vec![Arg::Pos(Expr::Lit(Literal::Num(deg as f64)))],
-            span: event.span,
-        },
-    };
-    Expr::Bin(BinOp::Mul, Box::new(tonic), Box::new(step))
+    whole.map(|d| d as i64).ok_or_else(|| {
+        "`deg` takes one whole scale degree folded from literals, as deg(5) or deg(-6); a \
+         chromatic note is a degree times a ratio, as deg(7)*1st"
+            .to_string()
+    })
 }
 
 type Tuning = Option<(String, Scale)>;
 
 impl Graph {
-    /// Every score here lowered against the sounds and scale here or in `beside`; a key or
-    /// scale this graph changes re-lowers each of `beside`'s scores that counts degrees.
+    /// Every `deg` call here, in a score or an equation, read off the scale here or in
+    /// `beside`, and every score line checked against its sound. A key or scale this graph
+    /// changes reads each of `beside`'s nodes that calls `deg` again from its text.
     pub fn lower_scores(&mut self, beside: Option<&Graph>) -> Result<(), Vec<Refusal>> {
         let tuning = self.tuning(beside).map_err(|r| vec![r])?;
         let retuned =
             self.defines(KEY) || tuning.as_ref().is_some_and(|(path, _)| self.defines(path));
+        let mut refusals = Vec::new();
         if let Some(beside) = beside.filter(|_| retuned) {
-            let counting: Vec<String> = beside
+            let degrees: Vec<String> = beside
                 .paths()
-                .filter(|path| !self.defines(path))
-                .filter(|path| beside.score(path).is_some_and(counts_degrees))
+                .filter(|path| !self.defines(path) && beside.reads_directly(path, KEY))
+                .filter(|path| beside.text(path).is_some_and(|text| text.contains(DEGREE)))
                 .map(str::to_string)
                 .collect();
-            for path in counting {
-                self.set(&path, beside.held(&path));
+            for path in degrees {
+                if let Err(refused) = self.reread(&path, beside) {
+                    refusals.push(refused);
+                }
             }
         }
-        let scores: Vec<(String, Score)> = self
-            .paths()
-            .filter_map(|path| Some((path.to_string(), self.score(path)?.clone())))
-            .collect();
-        let mut refusals = Vec::new();
-        for (path, score) in scores {
-            match self.settled(&path, &score, &tuning, beside) {
-                Ok(lowered) => self.rewrite(&path, lowered),
-                Err(found) => refusals.extend(found),
+        let scale = tuning.as_ref().map(|(_, scale)| scale);
+        let paths: Vec<String> = self.paths().map(str::to_string).collect();
+        for path in paths {
+            if let Some(score) = self.score(&path) {
+                let checked = self.checked(&path, score, beside);
+                refusals.extend(checked);
+            }
+            if let Some((body, defaults)) = self.tuned(&path, scale, &mut refusals) {
+                self.rewrite(&path, body, defaults);
             }
         }
         match refusals.is_empty() {
             true => Ok(()),
             false => Err(refusals),
         }
+    }
+
+    /// A node defined after the pass, as a probe is: its `deg` calls read off the scale.
+    pub(crate) fn tune_defined(
+        &mut self,
+        path: &str,
+        beside: Option<&Graph>,
+    ) -> Result<(), Refusal> {
+        let defined = self.defined(path).expect("a node this graph holds");
+        if !calls_degree(&defined.body) {
+            return Ok(());
+        }
+        let tuning = self.tuning(beside)?;
+        let mut refusals = Vec::new();
+        let scale = tuning.as_ref().map(|(_, scale)| scale);
+        if let Some((body, defaults)) = self.tuned(path, scale, &mut refusals) {
+            self.rewrite(path, body, defaults);
+        }
+        refusals.into_iter().next().map_or(Ok(()), Err)
     }
 
     fn tuning(&self, beside: Option<&Graph>) -> Result<Tuning, Refusal> {
@@ -105,51 +149,69 @@ impl Graph {
         }
     }
 
-    fn settled(
+    /// The node at `path` with each `deg` call its ratio, `None` where it calls none. A
+    /// refusal in a score names its line and column.
+    fn tuned(
         &self,
         path: &str,
-        score: &Score,
-        tuning: &Tuning,
-        beside: Option<&Graph>,
-    ) -> Result<Expr, Vec<Refusal>> {
+        scale: Option<&Scale>,
+        refusals: &mut Vec<Refusal>,
+    ) -> Option<(Expr, Vec<(String, Expr)>)> {
+        let defined = self.defined(path)?;
+        let calls =
+            calls_degree(&defined.body) || defined.defaults.iter().any(|(_, v)| calls_degree(v));
+        if !calls {
+            return None;
+        }
+        let text = self.text(path).expect("every node holds its text");
+        let score = self.score(path).is_some();
+        let refuse = |span: ByteSpan, message: String| match score {
+            true => {
+                let before = &text[..span.start];
+                let line = before.matches('\n').count() + 1;
+                let column = before.len() - before.rfind('\n').map_or(0, |at| at + 1) + 1;
+                let diag = refused(span.start, (line, column), &message);
+                Refusal::new(path, diag.span, diag.code, diag.message)
+            }
+            false => Refusal::new(path, span, DiagCode::BadScale, message),
+        };
+        let from = if score { 0 } else { body_at(text) };
+        let body = tune(
+            &defined.body,
+            scale,
+            &|span, message| refuse(ByteSpan::new(span.start + from, span.end + from), message),
+            refusals,
+        );
+        let defaults = defined
+            .defaults
+            .iter()
+            .map(|(name, value)| (name.clone(), tune(value, scale, &refuse, refusals)))
+            .collect();
+        Some((body, defaults))
+    }
+
+    /// Each line's first event against its sound: a chord's events bind alike.
+    fn checked(&self, path: &str, score: &Score, beside: Option<&Graph>) -> Vec<Refusal> {
         let text = self.text(path).expect("every node holds its text");
         let mut refusals = Vec::new();
+        let mut last = None;
         for event in &score.events {
-            let line = &text[event.span.start..event.span.end];
-            let at = |key: &str, message: String| {
-                let column = line.find(&format!("\"{key}\"")).map_or(1, |at| at + 1);
-                let diag = refused(
-                    event.span.start + column - 1,
-                    (event.line, column),
-                    &message,
-                );
-                Refusal::new(path, diag.span, diag.code, diag.message)
+            if last.replace(event.line) == Some(event.line) {
+                continue;
+            }
+            let Some((key, message)) = self.unread(path, event, beside) else {
+                continue;
             };
-            if let Some(found) = self.unread(path, event, beside) {
-                let (key, message) = found;
-                refusals.push(at(&key, message));
-            }
-            match (event.deg, tuning) {
-                (Some(_), None) => refusals.push(at(
-                    "deg",
-                    format!(
-                        "`deg` counts in the scale `{KEY}` names, and it names none; write \
-                         `scale = @../scales/major` above its tonic"
-                    ),
-                )),
-                (Some(deg), Some((_, scale))) if scale.ratio(deg).is_none() => refusals.push(at(
-                    "deg",
-                    format!("`deg` {deg} lies so far from the tonic its ratio is no number"),
-                )),
-                _ => {}
-            }
+            let line = &text[event.span.start..event.span.end];
+            let column = line.find(&format!("\"{key}\"")).map_or(1, |at| at + 1);
+            let diag = refused(
+                event.span.start + column - 1,
+                (event.line, column),
+                &message,
+            );
+            refusals.push(Refusal::new(path, diag.span, diag.code, diag.message));
         }
-        if !refusals.is_empty() {
-            return Err(refusals);
-        }
-        let key = key_ref(path);
-        let ratio = |deg: i64| tuning.as_ref().and_then(|(_, scale)| scale.ratio(deg));
-        Ok(score.lowered(&|event, deg| pitch(&key, event, deg, ratio(deg))))
+        refusals
     }
 
     /// The first key this line binds that its sound does not read, or the first parameter the
@@ -213,6 +275,34 @@ impl Graph {
     }
 }
 
-fn counts_degrees(score: &Score) -> bool {
-    score.events.iter().any(|e| e.deg.is_some())
+/// `e` with each `deg(n)` the ratio of degree `n` in `scale`; a call it cannot read is refused
+/// through `refuse` and left as written.
+fn tune(
+    e: &Expr,
+    scale: Option<&Scale>,
+    refuse: &dyn Fn(ByteSpan, String) -> Refusal,
+    refusals: &mut Vec<Refusal>,
+) -> Expr {
+    let Expr::Call { name, args, span } = e else {
+        return map_children_ok(e, Binds::Substitute, |c| tune(c, scale, refuse, refusals));
+    };
+    if name != DEGREE {
+        return map_children_ok(e, Binds::Substitute, |c| tune(c, scale, refuse, refusals));
+    }
+    let ratio = degree(args).and_then(|deg| match scale {
+        None => Err(format!(
+            "`deg` counts in the scale `{KEY}` names, and it names none; write `scale = \
+             @../scales/major` above its tonic"
+        )),
+        Some(scale) => scale.ratio(deg).ok_or_else(|| {
+            format!("`deg` {deg} lies so far from the tonic its ratio is no number")
+        }),
+    });
+    match ratio {
+        Ok(ratio) => Expr::Lit(Literal::Num(ratio)),
+        Err(message) => {
+            refusals.push(refuse(*span, message));
+            e.clone()
+        }
+    }
 }

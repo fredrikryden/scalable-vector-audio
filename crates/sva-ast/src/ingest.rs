@@ -5,6 +5,7 @@ use crate::expr::{Address, Arg, Binds, Expr, Literal, SERIES, children};
 use crate::parser::parse;
 use crate::scale::{Scale, is_scale, parse_scale};
 use crate::score::{Score, is_score, parse_score};
+use crate::tuning::{key_ref, keyed};
 
 /// The one node whose `scale` line names the scale every score degree is counted in.
 pub const KEY: &str = "variables/key";
@@ -36,8 +37,7 @@ pub struct Parsed {
 pub fn parse_file(path: &str, content: &str) -> Result<Parsed, Diag> {
     if is_score(content) {
         let score = parse_score(content)?;
-        let key = crate::tuning::key_ref(path);
-        let expr = score.lowered(&|event, deg| crate::tuning::pitch(&key, event, deg, None));
+        let expr = keyed(&score.lowered(), &key_ref(path));
         return Ok(Parsed {
             expr,
             data: Some(Data::Score(score)),
@@ -75,7 +75,12 @@ pub fn parse_file(path: &str, content: &str) -> Result<Parsed, Diag> {
             ));
         }
     }
-    parsed.defaults = defaults;
+    let key = key_ref(path);
+    parsed.expr = keyed(&parsed.expr, &key);
+    parsed.defaults = defaults
+        .iter()
+        .map(|(name, value)| (name.clone(), keyed(value, &key)))
+        .collect();
     parsed.data = parsed.data.or(scale_line.map(Data::Key));
     Ok(parsed)
 }
@@ -153,7 +158,7 @@ fn read_defaults(heads: &[(usize, &str)]) -> Result<Vec<(String, Expr)>, Diag> {
 
 /// A default is parsed out of its own line, so every span it carries has to be put back where
 /// the file reads — a refusal inside one is located like any other.
-fn relocate(e: &Expr, by: usize) -> Expr {
+pub(crate) fn relocate(e: &Expr, by: usize) -> Expr {
     let moved = |s: &ByteSpan| ByteSpan::new(s.start + by, s.end + by);
     match e {
         Expr::Lit(_) | Expr::Var(_) => e.clone(),

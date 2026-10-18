@@ -2,7 +2,11 @@
 use sva_ast::{BinOp, Composition, Expr, KEY, Literal, load, load_beside};
 
 fn composition(key: &str) -> Composition {
-    Composition::from_iter([
+    with(key, [])
+}
+
+fn with<const N: usize>(key: &str, more: [(&str, &str); N]) -> Composition {
+    let mut composition = Composition::from_iter([
         (KEY, key),
         ("scales/major", "200\n400\n500\n700\n900\n1100\n1200\n"),
         ("scales/minor", "200\n300\n500\n700\n800\n1000\n1200\n"),
@@ -11,7 +15,46 @@ fn composition(key: &str) -> Composition {
             "phrase",
             "{\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": 3}\n",
         ),
-    ])
+    ]);
+    for (path, text) in more {
+        composition.insert(path, text);
+    }
+    composition
+}
+
+/// Each `f0` a score's lines bind, as cents above the tonic, in written order.
+fn cents(e: &Expr) -> Vec<f64> {
+    match e {
+        Expr::Bin(BinOp::Add, l, r) => [cents(l), cents(r)].concat(),
+        Expr::Ref { binds, .. } => binds
+            .iter()
+            .filter(|(name, _)| name == "f0")
+            .map(|(_, f0)| ratio(f0))
+            .collect(),
+        other => panic!("a score is a sum of refs: {other:?}"),
+    }
+}
+
+/// The tonic times literals, as cents.
+fn ratio(e: &Expr) -> f64 {
+    let mut product = 1.0;
+    let mut stack = vec![e];
+    while let Some(e) = stack.pop() {
+        match e {
+            Expr::Bin(BinOp::Mul, l, r) => stack.extend([&**l, &**r]),
+            Expr::Bin(BinOp::Div, l, r) => {
+                stack.push(l);
+                let Expr::Lit(Literal::Num(n)) = **r else {
+                    panic!("divides by a literal: {r:?}")
+                };
+                product /= n;
+            }
+            Expr::Lit(Literal::Num(n)) => product *= n,
+            Expr::Ref { .. } => {}
+            other => panic!("the tonic times literals: {other:?}"),
+        }
+    }
+    (1200.0 * product.log2() * 1e6).round() / 1e6
 }
 
 /// The ratio the one line's `f0` multiplies the tonic by.
@@ -50,7 +93,63 @@ fn a_degree_with_no_scale_line_refuses_on_its_line() {
     let mut held = load(&composition("D3\n")).expect("a composition");
     let refused = held.lower_scores(None).unwrap_err();
     assert!(
-        refused[0].reason.starts_with("line 1, column 33: `deg`"),
+        refused[0].reason.starts_with("line 1, column 40: `deg`"),
+        "{}",
+        refused[0].reason
+    );
+}
+
+#[test]
+fn a_chromatic_note_and_an_octave_follow_a_key_or_scale_change() {
+    let phrase = "; Models: the raised seventh | Neglects: rhythm | IO: (t) -> amplitude | Tags: score\n\
+                  {\"at\": \"0b\", \"sound\": \"@voice\", \"f0\": \"deg(7)*1st\"}\n\
+                  {\"at\": \"2b + 1b/3\", \"sound\": \"@voice\", \"f0\": \"deg(5)/2\"}\n";
+    let lead = "f0 = deg(3)\nsin(2*pi*f0*t)\n";
+    let mut source = with(
+        "scale = @../scales/minor\nD3\n",
+        [("phrase", phrase), ("lead", lead)],
+    );
+    let mut held = load(&source).expect("a composition");
+    held.lower_scores(None).expect("every degree settles");
+    assert_eq!(cents(held.expr("phrase").unwrap()), [1100.0, -500.0]);
+    assert_eq!(ratio(&held.defaults("lead")[0].1), 300.0);
+
+    source.insert(KEY, "scale = @../scales/major\nD3\n");
+    let mut delta = load_beside(&source, &["phrase", "lead"], &held).expect("the edit loads");
+    delta
+        .lower_scores(Some(&held))
+        .expect("every degree settles");
+    assert_eq!(cents(delta.expr("phrase").unwrap()), [1200.0, -500.0]);
+    assert_eq!(ratio(&delta.defaults("lead")[0].1), 400.0);
+}
+
+#[test]
+fn a_chord_lowers_as_its_lines_would() {
+    let chord = "{\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": [1, 3, 5]}\n";
+    let lines = "{\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": 1}\n\
+                 {\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": 3}\n\
+                 {\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": 5}\n";
+    let source = with(
+        "scale = @../scales/major\nD3\n",
+        [("chord", chord), ("lines", lines)],
+    );
+    let mut held = load(&source).expect("a composition");
+    held.lower_scores(None).expect("every degree settles");
+    assert_eq!(held.expr("chord"), held.expr("lines"));
+}
+
+#[test]
+fn a_degree_in_an_equation_with_no_whole_number_refuses_where_written() {
+    let source = with(
+        "scale = @../scales/major\nD3\n",
+        [("lead", "sin(2*pi*deg(1.5)*t)\n")],
+    );
+    let mut held = load(&source).expect("a composition");
+    let refused = held.lower_scores(None).unwrap_err();
+    assert_eq!(refused[0].at.path, "lead");
+    assert_eq!(refused[0].at.span.start, 9);
+    assert!(
+        refused[0].reason.contains("deg(7)*1st"),
         "{}",
         refused[0].reason
     );

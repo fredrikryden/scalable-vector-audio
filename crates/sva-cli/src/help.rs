@@ -27,33 +27,56 @@ DESCRIPTION:
   and `analyze` reads a file.
 
 SCORES:
-  A score is data: JSON Lines, one note per line, sorted by `at`. A file whose
-  first non-blank line starts with `{{` is a score; its name has no extension, and
-  `@score/bass` reads it like any node. Each line plays the sound it names,
-  shifted to its time, and the score is their sum, one closed form:
+  A score is data: JSON Lines, one event per line, sorted by `at`. A file whose
+  first line that is neither blank nor a `;` comment starts with `{{` is a
+  score; its name has no extension, and `@score/bass` reads it like any node.
+  A `;` line is a comment, so a score opens with its `; Models: ...` line like
+  any file. Each line plays the sound it names, shifted to its time, and the
+  score is their sum, one closed form. `b` is a bar, so "0.25b" is a quarter of
+  a bar, against `variables/bpm` and `variables/meter`:
     {{"at": "0b", "sound": "@../sounds/bass", "deg": 1, "len": "0.25b", "vel": 0.9}}
     {{"at": "0.25b", "sound": "@../sounds/bass", "deg": 5, "cutoff": "900hz"}}
-  is @../sounds/bass(t, f0=<degree 1>, len=0.25b, vel=0.9) + @../sounds/bass(t -
-  0.25b, f0=<degree 5>, cutoff=900hz).
-    at     required: a time literal string, "0.25b" or "0.5s"; a bare number is
-           refused. One score counts in bars or in seconds, not both.
+  is @../sounds/bass(t, f0=deg(1), len=0.25b, vel=0.9) + @../sounds/bass(t -
+  0.25b, f0=deg(5), cutoff=900hz).
+    at     required: a time string, "0.25b" or "0.5s", or constant arithmetic
+           over times, "2b + 1b/3" for a triplet; a bare number has no unit and
+           is refused. One time, and one score, counts in bars or in seconds.
     sound  required: an `@ref` string, resolved from the score's own directory.
-    len    a time literal string, bound as the sound's `len`.
-    deg    a scale degree, an integer counted from 1, the tonic. In a seven-row
-           scale 8 is the tonic an octave up, 0 the seventh degree below the
-           tonic and -6 the tonic an octave down. It binds `f0` to the tonic in
-           `variables/key` times the degree's ratio in the scale its `scale =
-           @../scales/<name>` line names; a line writing `f0` and `deg` refuses.
-    other  any other field binds the sound's parameter of that name: a number, or
-           one literal in a string ("0.03s", "-6db", "900hz", "A1").
-  A field the sound does not read, a parameter it reads that nothing binds, and a
-  `deg` with no scale refuse before any audio, each naming the score's line and
-  column. A scale file holds one row per degree in cents above the tonic,
-  ascending, the last the period it repeats at: `scales/major` is 200 400 500
-  700 900 1100 1200. Editing `variables/key`'s note transposes every score and
-  editing its `scale` line changes mode. Keep a score phrase-sized and place it
-  from an equation: `@score/verse(t - 8b)`, `repeat(@score/riff-1b, 4)`. A score
-  carries no automation: a moving argument is written in the sound's equation.
+    len    a time string as `at` takes, bound as the sound's `len`.
+    deg    a scale degree, a whole number counted from 1, the tonic: sugar for
+           "f0": "deg(n)". In a seven-row scale 8 is the tonic an octave up, 0
+           the seventh degree below it and -6 the tonic an octave down. A list,
+           "deg": [1, 3, 5], is one event per degree, a chord on one line. A
+           line writing `f0` and `deg` refuses.
+    other  any other field binds the sound's parameter of that name: a number,
+           or a constant in a string: one literal ("0.03s", "-6db", "900hz",
+           "A1") or arithmetic over literals and `deg(n)`, as "0.8*0.9".
+  `deg(n)` is the tonic in `variables/key` times degree n's ratio in the scale
+  its `scale = @../scales/<name>` line names, in a score value or in any
+  equation. A chromatic note is a degree times a ratio and an octave is a
+  factor of 2: "f0": "deg(7)*1st" raises the seventh, "f0": "deg(5)/2" is the
+  fifth an octave down, and both follow every edit of the key or its scale. A
+  scale file holds one row per degree in cents above the tonic, ascending, the
+  last the period it repeats at: `scales/major` is 200 400 500 700 900 1100
+  1200. Editing `variables/key`'s note transposes every score and editing its
+  `scale` line changes mode. By convention a sound's `vel` runs 0..1 and its
+  mix level is a constant in its own equation, so a score's dynamics survive a
+  change of mix. A value reading `t` or a `@ref`, a field the sound does not
+  read, a parameter it reads that nothing binds, and a `deg` with no scale
+  refuse before any audio, each naming the score's line and column. Keep a
+  score phrase-sized and place it from an equation: `@score/verse(t - 8b)`,
+  `repeat(@score/riff-1b, 4)`.
+
+  A score binds constants; what moves is a score of control curves, an
+  automation lane, read by an equation. A riser sweeping a lowpass open over
+  bars 21-24:
+    curves/close   len = 1b
+                   crop(1 - t/len, 0s, len)
+    auto/riser     {{"at": "20b", "sound": "@../curves/close", "len": "4b"}}
+    master-fx      crop(lowpass(sample(@master),
+                     cutoff=20khz*pow(0.02, @auto/riser(t))), 0s, 32b)
+  An fx throw is the same lane gating a send: `@fx/echo(t, x=sample(@lead) *
+  @auto/throw(t))`.
 
 RENDER:
   sva-cli render '<expression>' --representation <list> [--until '<condition>']
@@ -232,9 +255,9 @@ LINT:
   the files that target reaches, and prints the interval a render of it reads.
   Either refuses a type error as `render` does.
 
-  A score holds no `;` comment and no body, so the comment and length checks
-  pass it by; a file of two or more lines that is neither a score nor a scale
-  refuses as `multiline-body` before any check runs.
+  A score's `;` lines are free comments and its events no body, so the comment
+  and length checks pass it by; a file of two or more lines that is neither a
+  score nor a scale refuses as `multiline-body` before any check runs.
 
   Every check prints one `data.diagnostics` item. `warning` exits 0, `error`
   exits non-zero, so branch on the verdict and never on whether the array is
@@ -290,8 +313,9 @@ OUTLINE:
   by how they `read`, `time` or `index`, literals by `value` and `unit`, names
   by `name`. A node the parser supplies itself, the `0` of a prefix minus or the
   `t` of a bare `@ref`, has `written: false`. A score's text prints `score`
-  instead of `outline`: one item per line, with its `line`, `span`, `at`,
-  `sound`, `deg` and `args`. Reads no composition.
+  instead of `outline`: one item per event, a chord's line one per degree,
+  with its `line`, `span`, `at`, `sound`, `deg` and `args`. Reads no
+  composition.
 
 NEW:
   sva-cli new <name> [--idempotency-key <key>]

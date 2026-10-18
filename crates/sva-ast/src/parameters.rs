@@ -1,6 +1,6 @@
 // Concern: names each parameter a node reads that neither its default lines nor its caller bind | Non-concern: the values bound, which names the language owns | IO: (body, defaults, given) -> names
 
-use crate::expr::{Arg, Expr, INDEX, SERIES};
+use crate::expr::{Arg, DEGREE, Expr, INDEX, SERIES};
 use crate::graph::{Graph, resolve_ref_path};
 use crate::vocabulary::{is_builtin, is_language_value};
 
@@ -92,7 +92,11 @@ impl<'a, F: Fn(&str) -> bool> Walk<'a, F> {
                     self.expr(value);
                 }
             }
-            Expr::Call { name, args, .. } if self.bound.contains(&name.as_str()) => self.args(args),
+            Expr::Call { name, args, .. }
+                if self.bound.contains(&name.as_str()) || name == DEGREE =>
+            {
+                self.args(args)
+            }
             Expr::Call { name, args, .. } if name == SERIES => match args.as_slice() {
                 [
                     Arg::Pos(Expr::Var(index)),

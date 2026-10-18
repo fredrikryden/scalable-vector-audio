@@ -7,6 +7,7 @@ pub const SERIES: &str = "sum";
 pub const INDEX: &str = "idx";
 pub const FLOOR: &str = "floor";
 pub const CEIL: &str = "ceil";
+pub const DEGREE: &str = "deg";
 
 #[derive(Clone, Copy, Debug)]
 pub enum BinOp {
