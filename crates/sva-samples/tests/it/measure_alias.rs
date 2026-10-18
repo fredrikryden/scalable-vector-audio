@@ -69,3 +69,36 @@ fn the_loudest_alias_is_named_on_the_renders_own_timeline() {
         "a window starting at 2s names its peak two seconds later"
     );
 }
+
+/// A DC is power once, as a sine is: 0.01 of alias over a 0.5 DC is (0.01^2 / 2) / 0.5^2.
+#[test]
+fn a_dc_counts_its_power_once_against_the_alias() {
+    let (sr, n, k) = (44_100.0, 8192, 4);
+    let hz = 100.0 * sr / 1024.0;
+    let base: Vec<f64> = sine(hz, sr, n).iter().map(|s| 0.5 + 0.01 * s).collect();
+    let m = measure_alias(&base, &vec![0.5; n * k], k, sr, 0.0);
+    let known = 10.0 * (0.01f64.powi(2) / 2.0 / 0.25).log10();
+    assert!(
+        (m.asr_db - known).abs() < 0.01,
+        "{} against {known}",
+        m.asr_db
+    );
+}
+
+/// So is an alias at Nyquist: 0.01 at Nyquist over a unit sine is 0.01^2 / (1 / 2).
+#[test]
+fn an_alias_at_nyquist_counts_its_power_once() {
+    let (sr, n, k) = (44_100.0, 8192, 4);
+    let hz = 100.0 * sr / 1024.0;
+    let nyquist = |i: usize| if i.is_multiple_of(2) { 0.01 } else { -0.01 };
+    let base: Vec<f64> = (sine(hz, sr, n).iter().enumerate())
+        .map(|(i, s)| s + nyquist(i))
+        .collect();
+    let m = measure_alias(&base, &sine(hz, sr * k as f64, n * k), k, sr, 0.0);
+    let known = 10.0 * (0.01f64.powi(2) / 0.5).log10();
+    assert!(
+        (m.asr_db - known).abs() < 0.01,
+        "{} against {known}",
+        m.asr_db
+    );
+}

@@ -86,7 +86,7 @@ const PINNED: &str = r#"
 0 crest 9da293a2a033e041
 0 loudness 6beb066a8865bf77
 0 onsets 04c47d79948cdf22
-0 alias 12566b98eb3a9c25
+0 alias 86d224a528c0f33d
 0 bindings b2361ce7b3484da7
 0 arguments 2629850681a29371
 1 stdout 247a8ad492f8b3d7
@@ -104,7 +104,7 @@ const PINNED: &str = r#"
 1 crest 6589fb8644e10ca3
 1 loudness 8b44aa2ca17316b1
 1 onsets d73ec35b4563fc20
-1 alias 4b29f3d8f7553303
+1 alias f1d56b0224506b0e
 1 bindings b2361ce7b3484da7
 1 arguments 2629850681a29371
 2 stdout 247a8ad492f8b3d7
@@ -122,7 +122,7 @@ const PINNED: &str = r#"
 2 crest fbd77b10d5dde3ac
 2 loudness b53fa58b1c3cfcf7
 2 onsets f516024a0a08d9d9
-2 alias fdf260e22e2a1011
+2 alias 70898c3ed8937af1
 2 bindings b2361ce7b3484da7
 2 arguments 626f051e3a2fc700
 3 stdout ab995f31111d716c
@@ -140,7 +140,7 @@ const PINNED: &str = r#"
 3 crest e0f4c5aaa9c7c270
 3 loudness 1efebe0b0fefa1a0
 3 onsets ebcb0cf6f04264e8
-3 alias 02979bbbe4119071
+3 alias 134c407af1f29555
 3 bindings de379a53261f899f
 3 arguments 963d7e681d3a7159
 4 stdout 53ef6500c0c74fac
@@ -158,7 +158,7 @@ const PINNED: &str = r#"
 4 crest 4b17dbafe5a25887
 4 loudness f43469c2b46c18fa
 4 onsets 541b1fa4f6b9b8cd
-4 alias 6d697a7dac4b06e4
+4 alias 93bb244fc8c11ae7
 4 bindings a066a34dcc83fcfb
 4 arguments 9eaefeccb255ec5d
 5 stdout 247a8ad492f8b3d7
@@ -176,7 +176,7 @@ const PINNED: &str = r#"
 5 crest 7e413e4086bc977c
 5 loudness 2e51b000ed8e618a
 5 onsets 92bbe62371efe02b
-5 alias f133ed27246b0558
+5 alias ec9e21a41a6256d1
 5 bindings b2361ce7b3484da7
 5 arguments 2629850681a29371
 6 stdout b7be809aeee4a986
@@ -225,7 +225,7 @@ const PINNED: &str = r#"
 7 crest 11bd7455ec37430f
 7 loudness 7d6440ef7def4aca
 7 onsets 365b79ff87273315
-7 alias 2e6ca0047cafaf68
+7 alias 1d35ea5499056f1a
 7 bindings e78c34f33117e96f
 7 arguments bcbf8809de18a142
 8 stdout ab6aa7bed370fd04
@@ -261,7 +261,7 @@ const PINNED: &str = r#"
 9 crest 17fd2a6d80a8ce3a
 9 loudness 834f5d4cfb83c638
 9 onsets 6bc6790ece226d7e
-9 alias 95e3d9a0d16a8cbd
+9 alias 9f1e996cbfd7e1b7
 9 bindings b2361ce7b3484da7
 9 arguments 2629850681a29371
 10 stdout 099b2f66421d30cb
@@ -279,7 +279,7 @@ const PINNED: &str = r#"
 10 crest bafbab9959c18d6e
 10 loudness 34aa5712017ee81c
 10 onsets a7c09136915371ba
-10 alias 94339908ea31be4d
+10 alias 1b903e73857ce4db
 10 bindings 5d16a4e7b16c54d3
 10 arguments 13a9d91a5de370e5
 11 stdout d79a956da40777a2
@@ -376,7 +376,7 @@ const PINNED: &str = r#"
 15 crest 25f0c999bb9f0512
 15 loudness 46d79f3bbbb5df11
 15 onsets 289cbea3f525c18b
-15 alias 88aa3394e42660fb
+15 alias 3664edf45ec41278
 15 bindings f758b54150146934
 15 arguments 6fe5313a42a03884
 16 stdout 81e5860d85938ad0

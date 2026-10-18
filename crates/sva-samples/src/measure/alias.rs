@@ -67,7 +67,8 @@ pub fn worst(scored: impl IntoIterator<Item = Alias>) -> Option<Alias> {
 }
 
 /// The alias is what the base band holds and the `oversample`x render does not. One bin grid
-/// for both, so no decimation filter blurs the top octave this is measuring.
+/// for both, so no decimation filter blurs the top octave this is measuring; 0 and Nyquist,
+/// with no mirror folded in, weigh half a bin.
 pub fn measure_alias(
     base: &[f64],
     high: &[f64],
@@ -107,9 +108,13 @@ pub fn measure_alias(
         let mut sig = vec![0f64; bins];
         let mut err = vec![0f64; bins];
         for k in 0..bins {
-            sig[k] = re_h[k] * re_h[k] + im_h[k] * im_h[k];
+            let weight = match k == 0 || k == bins - 1 {
+                true => 0.5,
+                false => 1.0,
+            };
+            sig[k] = weight * (re_h[k] * re_h[k] + im_h[k] * im_h[k]);
             let (dr, di) = (re_b[k] - re_h[k], im_b[k] - im_h[k]);
-            err[k] = dr * dr + di * di;
+            err[k] = weight * (dr * dr + di * di);
         }
         sig_total += sig.iter().sum::<f64>();
         err_total += err.iter().sum::<f64>();
