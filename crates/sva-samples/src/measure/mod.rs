@@ -16,6 +16,7 @@ pub mod self_similarity;
 pub mod sliding;
 pub mod spectrum;
 pub mod stereo;
+pub(crate) mod stiff;
 
 pub(crate) fn held(planes: &[&[f64]]) -> usize {
     let len = planes

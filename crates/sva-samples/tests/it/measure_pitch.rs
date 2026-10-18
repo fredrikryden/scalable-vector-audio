@@ -3,6 +3,8 @@
 use sva_samples::measure::pitch::{name_peaks, track};
 use sva_samples::measure::spectrum::Peak;
 
+use crate::helpers::partials::stiff_partial;
+
 fn peak(hz: f64, db: f64) -> Peak {
     Peak { hz, db }
 }
@@ -176,4 +178,97 @@ fn silence_names_nothing() {
     let frames = track(&[&vec![0.0; 4410][..]], 44100.0, 0.0, 0.1, 4);
     assert_eq!(frames.len(), 1);
     assert!(frames[0].notes.is_empty(), "{:?}", frames[0].notes);
+}
+
+fn string(f0: f64, b: f64, gain: f64) -> Vec<(f64, f64)> {
+    (1..=8)
+        .map(|k| (stiff_partial(f0, b, k), gain / f64::from(k).sqrt()))
+        .collect()
+}
+
+fn exact_heads(partials: &[(f64, f64)]) -> Vec<String> {
+    let mut found: Vec<Peak> = partials
+        .iter()
+        .map(|(hz, a)| peak(*hz, 20.0 * a.log10()))
+        .collect();
+    found.sort_by(|a, b| b.db.total_cmp(&a.db));
+    let mut heads: Vec<String> = name_peaks(&found, 32)
+        .into_iter()
+        .filter(|n| n.harmonic_of.is_none())
+        .map(|n| n.name)
+        .collect();
+    heads.sort();
+    heads
+}
+
+/// Each 50 ms frame's notes heading a series within 12 dB of its loudest.
+fn measured_heads(partials: &[(f64, f64)]) -> Vec<Vec<String>> {
+    let rate = 44100.0;
+    let tone: Vec<f64> = (0..(rate * 0.6) as usize)
+        .map(|n| {
+            let t = n as f64 / rate;
+            let sum: f64 = partials
+                .iter()
+                .map(|(hz, a)| a * (std::f64::consts::TAU * hz * t).sin())
+                .sum();
+            sum * (-2.0 * t).exp()
+        })
+        .collect();
+    track(&[&tone[..]], rate, 0.0, 0.05, 16)
+        .into_iter()
+        .map(|frame| {
+            let loudest = frame.notes.iter().map(|n| n.db).fold(f64::MIN, f64::max);
+            let mut heads: Vec<String> = frame
+                .notes
+                .into_iter()
+                .filter(|n| n.harmonic_of.is_none() && n.db >= loudest - 12.0)
+                .map(|n| n.name)
+                .collect();
+            heads.sort();
+            heads
+        })
+        .collect()
+}
+
+/// At B = 5e-4 the 7th partial stands 1.2% sharp of 7 f1, past the whole-multiple tolerance.
+#[test]
+fn a_stiff_string_reads_as_one_note() {
+    let c4 = string(261.6256, 5e-4, 1.0);
+    assert_eq!(exact_heads(&c4), ["C4"]);
+    for heads in measured_heads(&c4) {
+        assert_eq!(heads, ["C4"]);
+    }
+}
+
+#[test]
+fn a_stiff_string_and_a_real_fifth_above_read_as_two_notes() {
+    let chord = [string(261.6256, 5e-4, 1.0), string(391.9954, 5e-4, 0.8)].concat();
+    assert_eq!(exact_heads(&chord), ["C4", "G4"]);
+    let chord = [string(261.6256, 1.5e-4, 1.0), string(391.9954, 1.5e-4, 0.8)].concat();
+    for heads in measured_heads(&chord) {
+        assert_eq!(heads, ["C4", "G4"]);
+    }
+}
+
+/// A note at the pitch of the string's 3rd partial, 12 dB over its fundamental, is no partial.
+#[test]
+fn a_louder_note_at_a_stiff_partials_pitch_still_reads_as_a_note() {
+    let chord = [string(261.6256, 5e-4, 1.0), string(783.9909, 0.0, 4.0)].concat();
+    assert_eq!(exact_heads(&chord), ["C4", "G5"]);
+}
+
+/// A neighbour's leakage pulls a measured fundamental a few hertz, its 3rd partial past the
+/// tolerance over it: none of partials 3 to 8 may read as a note.
+#[test]
+fn a_fundamental_pulled_off_by_its_neighbour_still_heads_its_partials() {
+    let chord = [string(261.6256, 1.5e-4, 0.7), string(207.6523, 1.5e-4, 1.0)].concat();
+    for heads in measured_heads(&chord) {
+        assert!(
+            heads.contains(&"C4".to_string()) && heads.contains(&"Gs3".to_string()),
+            "{heads:?}"
+        );
+        for partial in ["G5", "C6", "E6", "G6", "As6", "C7"] {
+            assert!(!heads.contains(&partial.to_string()), "{heads:?}");
+        }
+    }
 }

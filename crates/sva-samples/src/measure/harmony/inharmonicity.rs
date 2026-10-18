@@ -3,18 +3,21 @@
 use super::chords::named;
 use super::dissonance::Extreme;
 use super::{Framing, Moment, Partial};
+use crate::measure::stiff::{Weights, dot, weights};
 
 pub const MODEL: &str = "per moment, the series `pitch` names: the partial with the greatest \
                          subharmonic sum (Hermes, D. J. (1988), Measurement of pitch by \
                          subharmonic summation, J. Acoust. Soc. Am. 83(1) 257-264, the k-th \
                          multiple's amplitude weighted 0.84^(k-1)) roots a series, a partial left \
-                         at a ratio within 0.04 of a whole number from 2 to 8 over a louder \
-                         member joins it, or over the root if the pair's sum at the root is at \
+                         at a ratio over a louder member from 0.04 under a whole number q from 2 \
+                         to 8 to 0.04 over where the stiff string the series' members so far fit \
+                         (Fletcher, below, B floored at 0) puts its partial q n over its partial \
+                         n joins it, or over the root if the pair's sum at the root is at \
                          least that partial's amplitude, and the rest go round again (Klapuri, A. (2006), Multiple \
                          fundamental frequency estimation by summing harmonic amplitudes, ISMIR); \
                          a member's harmonic number n = round(f / f1) over the root f1; only \
                          partials from 25 Hz to 5 kHz at or above the floor are read. That \
-                         tolerance bounds how stretched a member may be, and a partial stretched \
+                         window bounds how stretched a member may be, and a partial stretched \
                          past it, or a harmonic past the 8th with no member at a divisor (a saw's \
                          11th), roots a series of its own; a fundamental quieter than its 2nd \
                          harmonic roots their series if its subharmonic sum is the greater and \
@@ -173,15 +176,8 @@ fn magnitude(bounds: (f64, f64)) -> (f64, f64) {
 /// Least squares of y = (f_n / n)^2 on n^2: its intercept a = f0^2 and slope f0^2 B are each
 /// linear in y, so a's bounds over the box of y are a sum, and B's a linear-fractional program.
 fn fit(points: &[(u32, Partial)]) -> Option<Fit> {
-    let x: Vec<f64> = points.iter().map(|(n, _)| f64::from(*n).powi(2)).collect();
-    let m = x.len() as f64;
-    let mean = x.iter().sum::<f64>() / m;
-    let sxx: f64 = x.iter().map(|x| (x - mean).powi(2)).sum();
-    if sxx <= 0.0 {
-        return None;
-    }
-    let slope: Vec<f64> = x.iter().map(|x| (x - mean) / sxx).collect();
-    let intercept: Vec<f64> = slope.iter().map(|s| 1.0 / m - mean * s).collect();
+    let ns: Vec<u32> = points.iter().map(|(n, _)| *n).collect();
+    let Weights { slope, intercept } = weights(&ns)?;
     let y = |at: fn(&Partial) -> f64| -> Vec<f64> {
         points
             .iter()
@@ -189,7 +185,6 @@ fn fit(points: &[(u32, Partial)]) -> Option<Fit> {
             .collect()
     };
     let (y_lo, y_hi, y_at) = (y(|p| p.hz_bounds.0), y(|p| p.hz_bounds.1), y(|p| p.hz));
-    let dot = |w: &[f64], y: &[f64]| w.iter().zip(y).map(|(w, y)| w * y).sum::<f64>();
     let a = dot(&intercept, &y_at);
     if a <= 0.0 {
         return None;

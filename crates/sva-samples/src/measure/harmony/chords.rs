@@ -6,9 +6,9 @@ use crate::measure::spectrum::{Peak, db};
 
 pub const METHOD: &str = "per moment: the partials at or above the floor, named as `pitch` names \
                           peaks (25 Hz to 5 kHz, a peak at a near-whole multiple of another in \
-                          the series the greatest subharmonic sum heads dropped as its \
-                          harmonic), each rounded to its nearest equal-tempered \
-                          note; consecutive moments naming one set are one chord, and a moment \
+                          the series the greatest subharmonic sum heads, or as sharp of it as \
+                          the stiff string that series fits, dropped as its harmonic), each \
+                          rounded to its nearest equal-tempered note; consecutive moments naming one set are one chord, and a moment \
                           naming none ends one; a note whose partial's frequency bounds round \
                           to another note in any of its moments is listed as unresolved";
 
