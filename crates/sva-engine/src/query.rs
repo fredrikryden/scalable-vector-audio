@@ -259,8 +259,8 @@ static FORMANTS: Reading = Reading {
     name: "formants",
     takes: &[Arg::Peaks, Arg::Frame],
     reads: Reads::Samples,
-    help: "formant frequencies, bandwidths and levels per frame, off every channel's \
-           autocorrelation averaged",
+    help: "formant frequencies, bandwidths and levels per frame, the `peaks` lowest, off \
+           every channel's autocorrelation averaged",
     build: |g| Representation::Formants {
         max_formants: g.peaks,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
@@ -354,7 +354,7 @@ static TONAL_DISTANCE: Reading = Reading {
     takes: &[Arg::Frame, Arg::Floor],
     reads: Reads::Either,
     help: "its chords over time, the Tonnetz steps between each two triads and each one's \
-           from the first; measured partials off every channel's power per bin averaged",
+           from the first triad; measured partials off every channel's power per bin averaged",
     build: |g| Representation::Harmony {
         reading: Harmonic::TonalDistance,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
