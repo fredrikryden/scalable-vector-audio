@@ -297,11 +297,13 @@ RENDER:
   `ledger` prints one row per node under the target. A row's `share` is the
   part of its reader's own energy that row accounts for, so one reader's refs
   sum to 1; a ref no addend isolates, such as one factor of a product, prints
-  `null`. Each ref carrying a share is collapsed once on its own, so a ledger
-  costs one collapse per attributed ref beyond the render, and `depth` bounds
-  how many, counted in refs from one file to another. Every row is computed
-  whole over the range, however late a reader reads it. `brief=1` keeps only
-  the rows that clipped, `skim=1` drops the wider fields.
+  `null`. A ref carrying a share reads as the addend it gave its reader, its
+  `rms`, `peak` and `clipped` too: in `2*@a`, `a`'s row is `a` doubled, and in
+  `@a - @a` it is silence. Each ref carrying a share is collapsed once on its
+  own, so a ledger costs one collapse per attributed ref beyond the render,
+  and `depth` bounds how many, counted in refs from one file to another. Every
+  row is computed whole over the range, however late a reader reads it.
+  `brief=1` keeps only the rows that clipped, `skim=1` drops the wider fields.
 
   `arguments` renders nothing: for every instance under the target it prints
   each builtin call's named arguments as the numbers the call was lowered
