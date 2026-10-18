@@ -40,6 +40,10 @@ pub enum Destination {
     },
 }
 
+/// The most samples a time argument may count: past 2^53 neither an f64 nor its product
+/// with another count is exact.
+const MOST_SAMPLES: f64 = 9_007_199_254_740_992.0;
+
 /// A call resolved to the reading it names and the arguments only a front end reads. Its
 /// times stay as written until a render says what a bar lasts.
 #[derive(Clone, Debug, PartialEq)]
@@ -215,6 +219,19 @@ impl Asked {
                         self.name,
                         time.written,
                         0.5 / f64::from(rate)
+                    ),
+                ));
+            }
+            let most = MOST_SAMPLES / f64::from(rate);
+            if secs > most {
+                return Err(CliError::usage(
+                    "query.bad_value",
+                    format!(
+                        "`{}({}={})` is {secs}s, past the 2^53 samples a count holds exactly at \
+                         {rate} Hz; ask at most {most}s",
+                        self.name,
+                        arg.key(),
+                        time.written
                     ),
                 ));
             }

@@ -342,3 +342,28 @@ fn a_readings_times_count_bars_in_the_renders_tempo() {
         "a frame every eighth of a bar"
     );
 }
+
+/// A cell of 1e15 s is 4.41e19 samples at 44.1 kHz, past what a count holds: refused, where
+/// the cell's samples wrapped and the reading named a cell it was never asked.
+#[test]
+fn a_time_past_2_to_the_53_samples_refuses_at_the_rate() {
+    let reading = |text: &str| sva_core::asked(&sva_core::call(text).unwrap()).unwrap();
+    for text in [
+        "self_similarity(cell=1e15)",
+        "self_similarity(smooth=1e300)",
+        "periodicity(window=1e15)",
+        "envelope(frame=1e15)",
+    ] {
+        let Err(CliError::Usage { code, message }) = reading(text).representation(44_100, None)
+        else {
+            panic!("{text} counts past 2^53 samples");
+        };
+        assert_eq!(code, "query.bad_value", "{text}");
+        assert!(message.contains("204244881059.88644"), "{message}");
+    }
+    assert!(
+        reading("self_similarity(cell=1e11)")
+            .representation(44_100, None)
+            .is_ok()
+    );
+}
