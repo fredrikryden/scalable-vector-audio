@@ -462,6 +462,21 @@ fn unfit(name: &str, why: self_similarity::Unfit, shorter: impl Fn(f64) -> Strin
                 shorter(held.most_secs)
             ),
         ),
+        self_similarity::Unfit::CellUnderBandStep {
+            cell_secs,
+            least_cell_secs,
+            band_hz,
+        } => (
+            "read.cell_under_band_step",
+            format!(
+                "a {cell_secs}s cell holds no sample of the {band_hz} Hz band envelopes its \
+                 band levels are read off"
+            ),
+            format!(
+                "ask a cell of {least_cell_secs}s or coarser, as \
+                 `self_similarity(cell={least_cell_secs}s)`"
+            ),
+        ),
         self_similarity::Unfit::KernelPastCap {
             window_secs,
             kernel_cells,

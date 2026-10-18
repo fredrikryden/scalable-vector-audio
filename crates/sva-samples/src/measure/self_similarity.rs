@@ -109,10 +109,16 @@ pub struct TooManyCells {
 }
 
 /// Why no matrix is read. `widest_secs` is the widest novelty window the cap holds a side at
-/// `cell_secs`.
+/// `cell_secs`; `least_cell_secs` the finest cell every one of whose spans holds a sample of
+/// the band envelopes at `band_hz`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Unfit {
     TooManyCells(TooManyCells),
+    CellUnderBandStep {
+        cell_secs: f64,
+        least_cell_secs: f64,
+        band_hz: f64,
+    },
     KernelPastCap {
         window_secs: f64,
         kernel_cells: usize,
@@ -234,6 +240,28 @@ pub fn measure(
             widest_secs: (2 * MAX_CELLS * cell_hop) as f64 / sample_rate,
         });
     }
+    let split = bands::analyze(planes, sample_rate, start_secs);
+    let band_len = split.bands.first().map_or(0, |b| b.rms.len());
+    let grid = |cell_hop: usize, rate: f64, len: usize| {
+        let secs = cell_hop as f64 / sample_rate;
+        sliding::spans(held, sample_rate, start_secs, secs, rate, secs, len).spans
+    };
+    let holds = |cell_hop: usize| {
+        grid(cell_hop, split.rate_hz, band_len)
+            .iter()
+            .all(|s| s.from < s.to)
+    };
+    if band_len > 0 && !holds(cell_hop) {
+        let least = (per_cell + 1..)
+            .map(|k| k * frame_hop)
+            .find(|&hop| holds(hop))
+            .expect("a cell two band steps wide holds one");
+        return Err(Unfit::CellUnderBandStep {
+            cell_secs,
+            least_cell_secs: least as f64 / sample_rate,
+            band_hz: split.rate_hz,
+        });
+    }
     let (moments, framing) = measured::moments(
         planes,
         sample_rate,
@@ -254,24 +282,8 @@ pub fn measure(
             held
         })
         .collect();
-    let split = bands::analyze(planes, sample_rate, start_secs);
-    let grid = |rate: f64, len: usize| {
-        sliding::spans(
-            held,
-            sample_rate,
-            start_secs,
-            cell_secs,
-            rate,
-            cell_secs,
-            len,
-        )
-        .spans
-    };
-    let framed = grid(sample_rate / frame_hop as f64, chroma.len());
-    let banded = grid(
-        split.rate_hz,
-        split.bands.first().map_or(0, |b| b.rms.len()),
-    );
+    let framed = grid(cell_hop, sample_rate / frame_hop as f64, chroma.len());
+    let banded = grid(cell_hop, split.rate_hz, band_len);
     let cells: Vec<Cell> = framed
         .iter()
         .zip(&banded)

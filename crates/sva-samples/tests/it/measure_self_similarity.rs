@@ -206,3 +206,25 @@ fn a_novelty_kernel_past_the_cap_refuses() {
         Ok(MAX_CELLS)
     );
 }
+
+/// Cells of 2 samples at 16 kHz fall between the 2 kHz band envelope's samples: refused,
+/// naming the finest cell each of whose spans holds one, where none read null levels.
+#[test]
+fn a_cell_under_the_band_step_refuses() {
+    let held = vec![0.1; 800];
+    let at = |cell_secs: f64| Asked {
+        hop_secs: 2.0 / RATE,
+        window_secs: 0.01,
+        curve: true,
+        ..asked(cell_secs)
+    };
+    let Err(Unfit::CellUnderBandStep {
+        least_cell_secs, ..
+    }) = measure(&[&held[..]], RATE, 0.0, at(2.0 / RATE))
+    else {
+        panic!("a quarter band step is no cell");
+    };
+    let read = measure(&[&held[..]], RATE, 0.0, at(least_cell_secs)).expect("the least reads");
+    let cells = read.cells.expect("asked");
+    assert!(cells.iter().flat_map(|c| &c.levels_db).all(|l| !l.is_nan()));
+}

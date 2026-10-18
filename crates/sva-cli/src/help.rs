@@ -495,7 +495,8 @@ DEFAULTS:
   modulation(bpm=<n>)  a tempo, as `140`, adding each rate's period in beats.
                        Default none.
   self_similarity(cell=<t>) the side of one matrix cell, in seconds, a whole
-                       number of frames; the target may span at most
+                       number of frames holding a sample of the band
+                       envelopes; the target may span at most
                        {MAX_CELLS} cells. Default {DEFAULT_CELL_SECS}.
   self_similarity(smooth=<t>) the length each diagonal is averaged over
                        before stripes are picked, in seconds.
