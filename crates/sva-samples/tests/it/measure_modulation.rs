@@ -88,6 +88,30 @@ fn tremolo_across_rates_reads_rate_and_depth_inside_its_bounds() {
     }
 }
 
+/// Tremolo's Hann sidelobes read bins no main lobe gives, so they bound nothing.
+#[test]
+fn a_sidelobe_whose_bins_no_main_lobe_reads_is_unbounded() {
+    let m = read(
+        &tone(8.0, |t| {
+            (1.0 + 0.5 * (TAU * 4.0 * t).sin()) * (TAU * 1000.0 * t).sin()
+        }),
+        None,
+    );
+    let mut sidelobes = 0;
+    for w in &track(&m, Group::Mid).windows {
+        for p in &w.peaks {
+            if let Some((lo, hi)) = p.hz_bounds {
+                assert!(lo < hi && lo <= p.hz && p.hz <= hi, "{p:?} in {w:?}");
+            }
+            if w.to_secs - w.from_secs == m.window_secs && (p.hz - 4.0).abs() > 0.3 {
+                sidelobes += 1;
+                assert!(p.hz_bounds.is_none() && p.depth_bounds.is_none(), "{p:?}");
+            }
+        }
+    }
+    assert!(sidelobes > 0);
+}
+
 /// At 19.9 Hz the corrected depth stands within a quarter of the 2% passband loss of 0.2.
 #[test]
 fn near_20_hz_the_depth_is_corrected_for_the_passband() {

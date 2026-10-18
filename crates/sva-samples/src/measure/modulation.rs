@@ -107,8 +107,10 @@ pub const MODEL: &str = "modulation spectrum: the spectrum of each band's amplit
                          which is the bands' view and not an error the bounds cover; a second \
                          modulation, partial or component near f is outside the model. They \
                          are null where the window is clipped, where no round bounds the \
-                         peak (the perturbations swamping the main lobe), or where the \
-                         depth's floor stands over its ceiling, refuting the model. Deep, fast \
+                         peak (the perturbations swamping the main lobe), where the two \
+                         bins' ratio, widened by those, is one no main lobe reads at bins q \
+                         apart, as at a sidelobe, or where the depth's floor stands over its \
+                         ceiling, refuting the model. Deep, fast \
                          modulation bounds wide: near `max_hz` the square law's bound reaches \
                          a fifth of m. A strong peak's Hann sidelobes, some \
                          31 dB under it and 1.5 / window beside it, read as peaks of their \
@@ -596,6 +598,10 @@ impl Read<'_> {
                 break;
             }
             let wide = (1.0 + ratio) * e / floor;
+            let (least, most) = ratios(q, size);
+            if ratio + wide < least || ratio - wide > most {
+                return None;
+            }
             let (ua, ub) = (offset(ratio - wide, q, size), offset(ratio + wide, q, size));
             let near = match ua <= 0.0 && ub >= 0.0 {
                 true => 0.0,
@@ -682,6 +688,12 @@ fn kernel(x: f64, n: usize) -> f64 {
 /// `kernel` with |sin(pi x)| taken as 1: over it, and falling, for 1 < x < n / 2.
 fn reach(x: f64, n: usize) -> f64 {
     2.0 / n as f64 * dirichlet(x, n).abs()
+}
+
+/// The least and most kernel(q - u) / kernel(u) takes for u in [-q, q]: two bins `q` apart
+/// on one main lobe read no other ratio.
+fn ratios(q: f64, n: usize) -> (f64, f64) {
+    (kernel(2.0 * q, n) / kernel(q, n), 1.0 / kernel(q, n))
 }
 
 /// The u in [-q, q] where kernel(q - u) / kernel(u) is `ratio`, by bisection; that ratio rises
