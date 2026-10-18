@@ -69,8 +69,8 @@ pub const SPECIAL_FORMS: [(&str, &str); 8] = [
     (
         "deg",
         "deg(n) -- the tonic in variables/key times the ratio of scale degree n, a whole \
-         number folded from literals, counted from 1 through the scale its `scale = \
-         @../scales/<name>` line names; deg(7)*1st is a raised seventh, deg(5)/2 the fifth an \
+         number folded from literals, counted from 1 through the scale variables/scale \
+         names, a built-in as `minor` or a scale file by ref; deg(7)*1st is a raised seventh, deg(5)/2 the fifth an \
          octave down, and each follows every edit of the key or its scale",
     ),
     (
@@ -133,6 +133,7 @@ pub struct Builtins {
     pub refusals: &'static [(&'static str, &'static str)],
     pub unit_suffixes: &'static [(&'static str, &'static str)],
     pub note_names: &'static str,
+    pub scales: &'static [(&'static str, &'static [f64], &'static str)],
     pub reserved: &'static [(&'static str, &'static str)],
     pub special_forms: &'static [(&'static str, &'static str)],
     pub not_supported: &'static [&'static str],
@@ -234,6 +235,7 @@ pub fn builtins() -> Builtins {
         refusals: &REGISTRY,
         unit_suffixes: &UNIT_SUFFIXES,
         note_names: NOTE_GRAMMAR,
+        scales: &sva_ast::BUILTIN_SCALES,
         reserved: &sva_ast::RESERVED,
         special_forms: &SPECIAL_FORMS,
         not_supported: &NOT_SUPPORTED,
@@ -269,16 +271,27 @@ pub fn builtins_data(b: &Builtins) -> String {
         "{{\n  \"callables\": {callables},\n  \"casts\": {casts},\n  \
          \"rule_table\": {{ \"version\": {}, \"families\": {} }},\n  \
          \"refusals\": {},\n  \"unit_suffixes\": {},\n  \"note_names\": \"{}\",\n  \
-         \"reserved\": {},\n  \"special_forms\": {},\n  \
+         \"scales\": {},\n  \"reserved\": {},\n  \"special_forms\": {},\n  \
          \"not_supported\": {}\n}}",
         b.fourier_dual_rules_version,
         pair_list(b.families, "name", "duals"),
         pair_list(b.refusals, "code", "when"),
         pair_list(b.unit_suffixes, "suffix", "meaning"),
         escape(b.note_names),
+        list(b.scales, scale_json),
         pair_list(b.reserved, "name", "note"),
         pair_list(b.special_forms, "name", "shape"),
         strings(b.not_supported)
+    )
+}
+
+fn scale_json((name, cents, tuning): &(&str, &[f64], &str)) -> String {
+    let cents: Vec<String> = cents.iter().map(f64::to_string).collect();
+    format!(
+        "\n    {{ \"name\": \"{}\", \"cents\": [{}], \"tuning\": \"{}\" }}",
+        escape(name),
+        cents.join(", "),
+        escape(tuning)
     )
 }
 
@@ -419,6 +432,20 @@ mod tests {
             (stiffness.text, stiffness.unit, stiffness.part),
             ("string stiffness (inharmonicity)", "none", Some("string"))
         );
+    }
+
+    #[test]
+    fn every_built_in_scale_is_listed_with_its_cents() {
+        let listed = builtins_data(&builtins());
+        assert!(
+            listed.contains(
+                "{ \"name\": \"dorian\", \"cents\": [200, 300, 500, 700, 900, 1000, 1200]"
+            ),
+            "{listed}"
+        );
+        for (name, ..) in sva_ast::BUILTIN_SCALES {
+            assert!(listed.contains(&format!("\"name\": \"{name}\"")), "{name}");
+        }
     }
 
     #[test]

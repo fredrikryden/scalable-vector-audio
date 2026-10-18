@@ -8,7 +8,7 @@ use sva_core::CliError;
 /// exists before a file lands in it. Every body stays a closed form until its own layer's
 /// written `sample()`, and each equation's comment says why it is written that way rather
 /// than the way that costs orders of magnitude more; a score is JSON and carries none.
-pub const FILES: [(&str, &str); 14] = [
+pub const FILES: [(&str, &str); 12] = [
     (
         "variables/bpm",
         r"; Models: the pulse every `b` literal is measured against | Neglects: the meter, which variables/meter states | IO: () -> beats per minute | Tags: tempo
@@ -29,32 +29,8 @@ C3
     ),
     (
         "variables/scale",
-        r"; Models: the scale every `deg` counts in, a ref to one file of cents under scales/, so changing mode is editing this ref | Neglects: the tonic, which variables/key holds | IO: () -> a scale | Tags: scale
-@../scales/major
-",
-    ),
-    (
-        "scales/major",
-        r"; Models: the major scale, one row per degree above the tonic in cents, the last row the octave it repeats at | Neglects: which tonic, which variables/key holds | IO: () -> cents per degree | Tags: scale, major
-200
-400
-500
-700
-900
-1100
-1200
-",
-    ),
-    (
-        "scales/minor",
-        r"; Models: the natural minor scale, one row per degree above the tonic in cents, the last row the octave it repeats at | Neglects: which tonic, which variables/key holds | IO: () -> cents per degree | Tags: scale, minor
-200
-300
-500
-700
-800
-1000
-1200
+        r"; Models: the scale every `deg` counts in, one the language names, so changing mode is editing this name | Neglects: the tonic, which variables/key holds; any scale `sva-cli builtins` does not list is a file of cents named by a ref | IO: () -> a scale | Tags: scale
+major
 ",
     ),
     (
@@ -135,7 +111,7 @@ pub const NEXT: [(&str, &str); 9] = [
     ),
     (
         "sva-cli builtins",
-        "the whole vocabulary; nothing outside it parses",
+        "the whole vocabulary, and the scales variables/scale may name; nothing outside it parses",
     ),
     (
         "sva-cli trace master",
@@ -150,8 +126,8 @@ pub const NEXT: [(&str, &str); 9] = [
         "the three harmonics the lowpass leaves, measured off its samples",
     ),
     (
-        "sva-cli render 'sample(@score/chord)' --representation spectrum(peaks=9) --set variables/scale=@../scales/minor",
-        "the triad in minor without editing a file; `--set variables/key=D3` transposes it",
+        "sva-cli render 'sample(@score/chord)' --representation spectrum(peaks=9) --set scale=minor",
+        "the triad in minor without editing a file; `--set key=D3` transposes it",
     ),
     (
         "sva-cli render '@perc/hat' --representation atoms",

@@ -44,7 +44,7 @@ pub use parser::parse as parse_expr;
 pub use print::render as render_expr;
 pub use refusal::{Location, Refusal};
 pub use reserved::{RESERVED_VARIABLES, Tempo, Values, variable};
-pub use scale::Scale;
+pub use scale::{BUILTIN_SCALES, Scale, builtin_scale};
 pub use score::{Event, Score, Time, is_score, parse_score};
 pub use series::{
     bounds_waiting as series_bounds_waiting, folded as fold_number,

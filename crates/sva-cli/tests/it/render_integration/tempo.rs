@@ -174,12 +174,8 @@ fn a_render_sets_the_tempo_without_editing_a_file() {
         digits.parse::<f64>().expect("seconds")
     };
     assert_eq!(end(&[]), 4.0, "2 bars at 120 bpm");
-    assert_eq!(end(&["variables/bpm=60"]), 8.0, "2 bars at 60 bpm");
-    assert_eq!(
-        end(&["variables/meter=3/4"]),
-        3.0,
-        "2 bars of 3/4 at 120 bpm"
-    );
+    assert_eq!(end(&["bpm=60"]), 8.0, "2 bars at 60 bpm");
+    assert_eq!(end(&["meter=3/4"]), 3.0, "2 bars of 3/4 at 120 bpm");
     assert_eq!(
         std::fs::read_to_string(dir.join("variables/bpm")).unwrap(),
         "120\n"

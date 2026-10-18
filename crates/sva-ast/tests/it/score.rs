@@ -103,6 +103,34 @@ fn an_edit_to_the_scale_lowers_every_held_score_again() {
     assert_eq!(third(delta.expr("phrase").unwrap()), 300.0);
 }
 
+/// A built-in's name is a scale like any file's: an edit between the two lowers again only
+/// where the scale's cents differ.
+#[test]
+fn an_edit_between_a_scale_file_and_a_built_in_name_lowers_where_the_cents_change() {
+    let mut source = composition("@../scales/minor\n");
+    let mut held = load(&source).expect("a composition");
+    settle(&mut held, None).expect("every line settles");
+    assert_eq!(third(held.expr("phrase").unwrap()), 300.0);
+
+    source.insert(SCALE, "minor\n");
+    let mut same = load_beside(&source, &["phrase"], &held).expect("the edit loads");
+    settle(&mut same, Some(&held)).expect("every line settles");
+    assert!(
+        !same.defines("phrase"),
+        "the same cents leave the score as it was lowered"
+    );
+
+    source.insert(SCALE, "harmonic-minor\n");
+    let mut named = load_beside(&source, &["phrase"], &held).expect("the edit loads");
+    settle(&mut named, Some(&held)).expect("every line settles");
+    assert_eq!(third(named.expr("phrase").unwrap()), 300.0);
+
+    source.insert(SCALE, "major-pentatonic\n");
+    let mut moved = load_beside(&source, &["phrase"], &held).expect("the edit loads");
+    settle(&mut moved, Some(&held)).expect("every line settles");
+    assert_eq!(third(moved.expr("phrase").unwrap()), 400.0);
+}
+
 #[test]
 fn a_degree_with_no_scale_refuses_on_its_line() {
     let mut held = load(&composition("")).expect("a composition");

@@ -250,12 +250,12 @@ fn names(key: &str, value: &JsValue) -> Result<Vec<String>, JsValue> {
         .collect()
 }
 
-/// `{ "variables/key": "G3" }`: each path a reserved variable, each value its text.
+/// `{ "key": "G3" }`: each key a reserved variable's name, each value its text.
 fn texts(key: &str, value: &JsValue) -> Result<Vec<(String, String)>, JsValue> {
     let object = value.dyn_ref::<js_sys::Object>().ok_or_else(|| {
         refuse(
             format!("`{key}` is not an object"),
-            "pass an object of texts, as { \"variables/key\": \"G3\" }",
+            "pass an object of texts, as { \"key\": \"G3\" }",
         )
     })?;
     js_sys::Object::entries(object)
@@ -457,7 +457,7 @@ impl Composition {
 
     /// `target` and `representations` as `sva-cli render` takes them. `options`: `rate`,
     /// `bits`, `until`, `volatile`, `out: null` (no samples), `threads` (as `open` takes it),
-    /// `set` (`--set`, as `{ "variables/key": "G3" }`), and `signal`: aborted, it throws an
+    /// `set` (`--set`, as `{ "key": "G3" }`), and `signal`: aborted, it throws an
     /// `AbortError` before its next block.
     pub async fn render(
         &self,

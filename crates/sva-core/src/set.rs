@@ -2,44 +2,55 @@
 
 use std::collections::BTreeMap;
 
-use sva_ast::{Overlay, RESERVED_VARIABLES, Source, variable};
+use sva_ast::{Overlay, RESERVED_VARIABLES, Source, VARIABLES, variable};
 
 use crate::cli_error::CliError;
 
 pub fn set(written: &str) -> Result<(String, String), CliError> {
     match written.split_once('=') {
-        Some((path, text)) => Ok((path.trim().to_string(), text.to_string())),
+        Some((name, text)) => Ok((name.trim().to_string(), text.to_string())),
         None => Err(CliError::usage(
             "cli.bad_value",
             format!(
-                "`--set {written}` has no `=`; it takes a reserved variable and its text, as \
-                 `--set variables/key=G3`"
+                "`--set {written}` has no `=`; it takes a reserved variable's name and its \
+                 text, as `--set key=G3`"
             ),
         )),
     }
 }
 
-/// `source` with each reserved variable `sets` names holding its text instead of its file's.
+/// `source` with each reserved variable `sets` names, bare as `key`, holding its text instead
+/// of its file's.
 pub fn overlaid<'a>(
     source: &'a dyn Source,
     sets: &[(String, String)],
 ) -> Result<Overlay<'a>, CliError> {
-    let reserved = RESERVED_VARIABLES.map(variable);
     let mut over = BTreeMap::new();
-    for (path, text) in sets {
-        if !reserved.contains(path) {
+    for (name, text) in sets {
+        if let Some(bare) = name.strip_prefix(&format!("{VARIABLES}/"))
+            && RESERVED_VARIABLES.contains(&bare)
+        {
             return Err(CliError::usage(
-                "render.set_unreserved",
+                "render.set_path",
                 format!(
-                    "`{path}` is no reserved variable; a render sets only {}",
-                    reserved.join(", ")
+                    "`{name}` is the variable's file; a set names the variable alone, as \
+                     `{bare}={text}`"
                 ),
             ));
         }
-        if over.insert(path.clone(), format!("{text}\n")).is_some() {
+        if !RESERVED_VARIABLES.contains(&name.as_str()) {
+            return Err(CliError::usage(
+                "render.set_unreserved",
+                format!(
+                    "`{name}` is no reserved variable; a render sets only {}",
+                    RESERVED_VARIABLES.join(", ")
+                ),
+            ));
+        }
+        if over.insert(variable(name), format!("{text}\n")).is_some() {
             return Err(CliError::usage(
                 "render.set_twice",
-                format!("`{path}` is set twice; set each variable once"),
+                format!("`{name}` is set twice; set each variable once"),
             ));
         }
     }

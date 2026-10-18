@@ -105,24 +105,52 @@ fn the_key_transposes_a_score_and_the_scale_changes_mode() {
 fn a_set_variable_renders_as_a_file_holding_its_text_would() {
     let dir = composition("d3-major-set", ("D3", "major"), SCORE);
     assert_eq!(
-        set_lines(&dir, &[("variables/key", "A3")]),
+        set_lines(&dir, &[("key", "A3")]),
         lines("a3-held", ("A3", "major"))
     );
     assert_eq!(
-        set_lines(&dir, &[("variables/scale", "@../scales/minor")]),
+        set_lines(&dir, &[("scale", "@../scales/minor")]),
         lines("d3-minor-held", ("D3", "minor"))
+    );
+    assert_eq!(
+        set_lines(&dir, &[("scale", "minor")]),
+        lines("d3-minor-named", ("D3", "minor")),
+        "a built-in sounds as the file holding its cents"
     );
     let files = sva_ast::Dir::at(&dir);
     for sets in [
         vec![("voice".to_string(), "1".to_string())],
         vec![
-            ("variables/key".to_string(), "A3".to_string()),
-            ("variables/key".to_string(), "B3".to_string()),
+            ("key".to_string(), "A3".to_string()),
+            ("key".to_string(), "B3".to_string()),
         ],
     ] {
         assert!(
             matches!(overlaid(&files, &sets), Err(CliError::Usage { .. })),
             "{sets:?}"
+        );
+    }
+    let path = [("variables/key".to_string(), "A3".to_string())];
+    let Err(CliError::Usage { code, message }) = overlaid(&files, &path) else {
+        panic!("a set names the variable, not its file");
+    };
+    assert_eq!(code, "render.set_path");
+    assert!(message.contains("`key=A3`"), "{message}");
+}
+
+/// A scale the language names is the scale its file of the same cents would be, line for line.
+#[test]
+fn a_built_in_scale_sounds_as_its_file_would() {
+    for (name, ..) in sva_ast::BUILTIN_SCALES {
+        let dir = composition(&format!("named-{name}"), ("D3", "major"), SCORE);
+        put(&dir, "variables/scale", &format!("{name}\n"));
+        let cents = sva_ast::builtin_scale(name).expect("a built-in").cents;
+        let rows: Vec<String> = cents.iter().map(f64::to_string).collect();
+        put(&dir, "scales/held", &format!("{}\n", rows.join("\n")));
+        assert_eq!(
+            set_lines(&dir, &[]),
+            set_lines(&dir, &[("scale", "@../scales/held")]),
+            "{name}"
         );
     }
 }

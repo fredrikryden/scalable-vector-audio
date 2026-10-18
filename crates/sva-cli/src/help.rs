@@ -62,11 +62,13 @@ SCORES:
   `variables/scale` names, in a score value or in any equation. A chromatic
   note is a degree times a ratio and an octave is a factor of 2: "f0":
   "deg(7)*1st" raises the seventh, "f0": "deg(5)/2" is the fifth an octave
-  down, and both follow every edit of the key or its scale. A scale file holds
-  one row per degree in cents above the tonic, ascending, the last the period
-  it repeats at: `scales/major` is 200 400 500 700 900 1100 1200. Editing
-  `variables/key`'s note transposes every score and editing `variables/scale`
-  changes mode. By convention a sound's `vel` runs 0..1 and its
+  down, and both follow every edit of the key or its scale. A scale is one
+  the language names, as `minor` or `dorian` (`sva-cli builtins` lists each
+  with its cents), or a scale file of one row per degree in cents above the
+  tonic, ascending, the last the period it repeats at, named by a ref: a file
+  `scales/custom` holding 200 400 500 700 900 1100 1200 is the major scale.
+  Editing `variables/key`'s note transposes every score and editing
+  `variables/scale` changes mode. By convention a sound's `vel` runs 0..1 and its
   mix level is a constant in its own equation, so a score's dynamics survive a
   change of mix. A value reading `t` or a `@ref`, a field the node does not
   read, a parameter it reads that nothing binds, and a `deg` with no scale
@@ -91,20 +93,22 @@ RESERVED VARIABLES:
     variables/bpm     a number, the beats per minute: 120
     variables/meter   beats per bar over the note: 4/4
     variables/key     the tonic `deg` counts from, a note or hertz: C3
-    variables/scale   a ref to the scale file `deg` counts in: @../scales/major
+    variables/scale   the scale `deg` counts in, a built-in's name: major, or a
+                      ref to a scale file: @../scales/custom
   A `b` literal or a file's `-2b` span reads bpm and meter; a `deg(n)` reads key
   and scale. Before anything renders, each read is replaced by its value, by one
   pass for all four: a bar becomes `n*(beats*60/bpm)` seconds and `deg(n)`
   becomes `@variables/key` times degree n's ratio, the tonic still a ref. A
   read with no value to replace it refuses as `bad-tempo` or `bad-scale`, as
-  does a variable holding no such value, such as bpm without meter. A stream's
+  does a variable holding no such value, such as bpm without meter, or a
+  scale name no built-in has, which refuses listing every built-in. A stream's
   edit to a variable, or to the scale file it names, replaces every read of it
   again. A node elsewhere named `bpm` is an ordinary node.
 
 RENDER:
   sva-cli render '<expression>' --representation <list> [--until '<condition>']
                  [--bits <n>] [--rate <hz>] [--threads <n>] [--cache <path|none>]
-                 [--set <variables/name>=<text>]... [--confirm]
+                 [--set <name>=<text>]... [--confirm]
 
   Renders one expression, in the grammar a node file's body uses, and prints one
   reading per representation under `data.representations`. `@path` reads a node
@@ -194,13 +198,14 @@ RENDER:
   `rand` draws once per step, keyed by that step's index; a key between steps
   reads the step nearest it, ties to even.
 
-  `--set variables/<name>=<text>` renders as if that reserved variable's file
-  held `<text>`, and writes no file: `--set variables/key=G3` transposes every
-  degree to G3, `--set variables/scale=@../scales/minor` changes mode (the ref
-  is written from `variables/`, as the file holds it), `--set
-  variables/bpm=140` moves every bar. It may repeat, once per variable: a
-  variable set twice refuses as `render.set_twice`, and a path that is no
-  reserved variable as `render.set_unreserved`.
+  `--set <name>=<text>` renders as if the reserved variable `variables/<name>`
+  held `<text>`, and writes no file: `--set key=G3` transposes every degree to
+  G3, `--set scale=dorian` changes mode (a scale file is a ref written from
+  `variables/`, as the file holds it: `--set scale=@../scales/custom`), `--set
+  bpm=140` moves every bar and `--set meter=3/4` regroups them. It may repeat,
+  once per variable: a variable set twice refuses as `render.set_twice`, a
+  name that is no reserved variable as `render.set_unreserved`, and the file's
+  path, `variables/key=G3`, as `render.set_path`, naming the short form.
 
   `--threads <n>` (default: every core the machine reports) is the most
   threads a render computes on; `1` computes every value in turn on one.
@@ -332,8 +337,8 @@ BUILTINS:
   `part` it sets and whether it `moves` with `t` (a filter's cutoff, q and gain;
   every other named argument is one number, refused when it names none), each
   positional's meaning where the model states one, unit suffixes, the note-name
-  grammar, reserved identifiers, special call shapes, and what has no operator
-  at all.
+  grammar, the scales `variables/scale` may name with their cents, reserved
+  identifiers, special call shapes, and what has no operator at all.
 
 OUTLINE:
   sva-cli outline <expression>
@@ -364,7 +369,7 @@ EXAMPLES:
     --until 'envelope(t) < -60db and t > 1s' --representation samples=/tmp/note.wav
   sva-cli render 'sample(@chord/home)' --representation 'spectrum(peaks=8)' --rate 48000
   sva-cli render 'sample(@voice/note([0, 2s], f0=C4))' --representation pitch
-  sva-cli render '@master' --set variables/key=G3 --set variables/bpm=140 \
+  sva-cli render '@master' --set key=G3 --set bpm=140 --set scale=dorian \
     --representation samples=/tmp/song1-g.wav
   sva-cli render '@master' \
     --representation 'samples(buffer=100ms)=alsa:default,loudness'
@@ -448,7 +453,7 @@ DEFAULTS:
                        `~/.cache/sva`, holding at most {store_gb} GB; `none` keeps
                        no store. A store that fails fails no render: it answers
                        as without one, warned why in `diagnostics`.
-  --set <path>=<text>  a reserved variable read as `<text>` for this render.
+  --set <name>=<text>  a reserved variable read as `<text>` for this render.
                        Default none: each is read off its file.
   --confirm            replaces a destination that already holds a file. Without
                        it a path already taken refuses as `conflict` and nothing

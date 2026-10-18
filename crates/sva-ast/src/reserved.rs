@@ -6,11 +6,12 @@ use crate::filename::{FileSpan, SpanUnit, parse_filename};
 use crate::graph::{Defined, Graph, VARIABLES, resolve_ref_path};
 use crate::ingest::{base_name, body_at};
 use crate::refusal::Refusal;
-use crate::scale::Scale;
+use crate::scale::{BUILTIN_SCALES, Scale, builtin_scale};
 use crate::score::refused;
 
 /// Each one the node `variables/<name>`: a `b` literal or span reads `bpm` and `meter`, and a
-/// `deg` call reads `key`, its tonic, and `scale`, a ref to the scale file it counts in.
+/// `deg` call reads `key`, its tonic, and `scale`, a built-in scale's name or a ref to the
+/// scale file it counts in.
 pub const RESERVED_VARIABLES: [&str; 4] = ["bpm", "meter", "key", "scale"];
 
 const BARS: [&str; 2] = ["bpm", "meter"];
@@ -187,6 +188,22 @@ fn key_ref(path: &str) -> String {
     )
 }
 
+/// A built-in scale's name as written: one word, or words joined by `-`, which an expression
+/// reads as subtraction, so `harmonic-minor` is the name it spells.
+fn scale_name(written: &Expr) -> Option<String> {
+    match written {
+        Expr::Var(word) => Some(word.clone()),
+        Expr::Bin(BinOp::Sub, left, right) => {
+            Some(format!("{}-{}", scale_name(left)?, scale_name(right)?))
+        }
+        _ => None,
+    }
+}
+
+fn builtin_names() -> String {
+    BUILTIN_SCALES.map(|(name, ..)| name).join(", ")
+}
+
 impl Graph {
     /// Each reserved variable's value, read off the node this graph holds, else `beside`'s.
     pub fn values(&self, beside: Option<&Graph>) -> Result<Values, Vec<Refusal>> {
@@ -210,9 +227,13 @@ impl Graph {
         }
     }
 
-    /// The scale `variables/scale` names by a bare ref.
+    /// The scale `variables/scale` names: a built-in by its name, any other by a bare ref to
+    /// its file.
     fn scale_named(&self, written: &Expr, beside: Option<&Graph>) -> Result<Scale, Refusal> {
         let path = variable("scale");
+        let refused = |reason: String| {
+            Refusal::new(path.clone(), ByteSpan::at(0), DiagCode::BadScale, reason)
+        };
         let target = match written {
             Expr::Ref {
                 path: to,
@@ -224,16 +245,22 @@ impl Graph {
                 resolve_ref_path(&path, to)
             }
             _ => {
-                return Err(Refusal::new(
-                    path,
-                    ByteSpan::at(0),
-                    DiagCode::BadScale,
-                    format!(
-                        "`variables/scale` holds `{}`; it names the scale every `deg` counts in \
-                         by a ref, as `@../scales/major`",
+                return match scale_name(written) {
+                    Some(name) => builtin_scale(&name).ok_or_else(|| {
+                        refused(format!(
+                            "`variables/scale` names `{name}`, which is no built-in scale; the \
+                             built-ins are {}, and any other scale is a file of cents named by \
+                             a ref, as `@../scales/custom`",
+                            builtin_names()
+                        ))
+                    }),
+                    None => Err(refused(format!(
+                        "`variables/scale` holds `{}`; it names the scale every `deg` counts in, \
+                         a built-in by its name, as `minor`, or a scale file by a ref, as \
+                         `@../scales/custom`",
                         crate::print::render(written)
-                    ),
-                ));
+                    ))),
+                };
             }
         };
         let found = target
@@ -241,22 +268,19 @@ impl Graph {
             .and_then(|target| self.scale(target).or_else(|| beside?.scale(target)));
         match (target, found) {
             (Some(_), Some(scale)) => Ok(scale.clone()),
-            (target, _) => Err(Refusal::new(
-                path,
-                ByteSpan::at(0),
-                DiagCode::BadScale,
-                format!(
-                    "`variables/scale` names {}, and a scale is a file of rows of cents above the \
-                     tonic, the last the period, as `scales/major` holds them",
-                    match target {
-                        Some(t) if self.defines(&t) || beside.is_some_and(|b| b.defines(&t)) => {
-                            format!("`{t}`, no scale")
-                        }
-                        Some(t) => format!("`{t}`, which no file holds"),
-                        None => "a path above the composition root".to_string(),
+            (target, _) => Err(refused(format!(
+                "`variables/scale` names {}, and a scale is a file of rows of cents above the \
+                 tonic, the last the period, as `scales/custom` would hold them, or a built-in \
+                 named bare: {}",
+                match target {
+                    Some(t) if self.defines(&t) || beside.is_some_and(|b| b.defines(&t)) => {
+                        format!("`{t}`, no scale")
                     }
-                ),
-            )),
+                    Some(t) => format!("`{t}`, which no file holds"),
+                    None => "a path above the composition root".to_string(),
+                },
+                builtin_names()
+            ))),
         }
     }
 
@@ -409,7 +433,8 @@ impl Lowering<'_> {
                 let ratio = degree(args).and_then(|n| match &self.values.scale {
                     None => Err(
                         "`deg` counts in the scale `variables/scale` names, and this \
-                         composition has none; write `@../scales/major` in `variables/scale`"
+                         composition has none; write a built-in's name in `variables/scale`, \
+                         as `major`, or a ref to a scale file"
                             .to_string(),
                     ),
                     Some(scale) => scale.ratio(n).ok_or_else(|| {

@@ -190,13 +190,12 @@ fn a_render_sets_a_reserved_variable_without_inserting_it() {
     let keyed = |tonic: &str| {
         let mut held = Composition::new(None);
         held.insert("variables/key", &format!("{tonic}\n"));
-        held.insert("variables/scale", "@../scales/major\n");
-        held.insert("scales/major", "200\n400\n500\n700\n900\n1100\n1200\n");
+        held.insert("variables/scale", "major\n");
         held.insert("voice", "sin(2*pi*deg(3)*t)\n");
         held
     };
     let set = js_sys::Object::new();
-    js_sys::Reflect::set(&set, &"variables/key".into(), &"A4".into())
+    js_sys::Reflect::set(&set, &"key".into(), &"A4".into())
         .unwrap_or_else(|_| unreachable!("an object takes a key"));
     let target = "@voice([0, 0.1s])";
     let samples = Some(vec!["samples".to_string()]);
@@ -212,6 +211,17 @@ fn a_render_sets_a_reserved_variable_without_inserting_it() {
         .unwrap_or_else(|_| unreachable!("an object takes a key"));
     let refused = keyed("A3").rendered(target, None, options(&[("set", unreserved.into())]));
     assert!(refused.is_err(), "only a reserved variable is set");
+    let path = js_sys::Object::new();
+    js_sys::Reflect::set(&path, &"variables/key".into(), &"A4".into())
+        .unwrap_or_else(|_| unreachable!("an object takes a key"));
+    let refused = keyed("A3")
+        .rendered(target, None, options(&[("set", path.into())]))
+        .err()
+        .map(|e| as_text(&field(&e, "refusal")));
+    assert!(
+        refused.as_deref().is_some_and(|r| r.contains("`key=A4`")),
+        "a set names the variable, not its file, and says so: {refused:?}"
+    );
 }
 
 /// Every name the CLI answers is a name this surface recognizes. Some of them

@@ -83,9 +83,9 @@ listing N items is N events, event i taking item i of each list and a single val
 ```
 
 `deg(n)`, in a score or any equation, is the tonic in `variables/key` times degree `n`'s ratio in
-the scale `variables/scale` names, as `@../scales/minor`; `"deg": 5` is `"f0": "deg(5)"`. Editing
-the key transposes every score and editing the scale changes mode, live too. A value is constant:
-what moves is an automation lane, as `cutoff=20khz*pow(0.02, @auto/riser(t))`. Place one as `@bass(t - 8b)`.
+the scale `variables/scale` names, `minor`, `dorian` or any `sva-cli builtins` lists, or a file of
+cents as `@../scales/custom`; `"deg": 5` is `"f0": "deg(5)"`. Editing the key transposes every
+score and editing the scale changes mode, live too. A value is constant: what moves is an automation lane, as `cutoff=20khz*pow(0.02, @auto/riser(t))`. Place one as `@bass(t - 8b)`.
 
 ## Literals and waveforms
 
@@ -126,7 +126,7 @@ float over the two seconds `master`'s crop holds. `'@master([0, 1s])'` names an 
 rendered whole; with none, a render ends where `master`'s support does, or earlier where
 `master` is proven under -120 dBFS for good, as the label's `pruned` states. `--until
 'envelope(t) < -60db'` stops at the first frame under -60 dB. `ledger` prints rms, peak and
-clipped per node. `--set variables/key=G3 --set variables/bpm=140` renders in G3 at 140 bpm.
+clipped per node. `--set key=G3 --set bpm=140 --set scale=dorian` renders in G3 dorian at 140 bpm without editing a file.
 
 Every reading says whether it is `exact` or `measured`, under which profile and at which
 rate. `--rate` is the one rate a render samples at: the target is read at its instants, and

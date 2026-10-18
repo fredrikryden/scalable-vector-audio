@@ -98,7 +98,7 @@ fn a_tempo_that_is_no_tempo_refuses_at_its_variable() {
 }
 
 #[test]
-fn a_scale_names_a_scale_file_by_a_bare_ref_or_refuses_at_its_variable() {
+fn a_scale_is_a_name_or_a_bare_ref_to_a_scale_file_or_refuses_at_its_variable() {
     for scale in ["3\n", "@../voice\n", "@../voice(t - 1s)\n"] {
         let mut g = load(&Composition::from_iter([
             ("variables/scale", scale),
@@ -108,6 +108,42 @@ fn a_scale_names_a_scale_file_by_a_bare_ref_or_refuses_at_its_variable() {
         let refused = g.lower_reserved(None).unwrap_err();
         assert_eq!(refused[0].code, DiagCode::BadScale, "{scale}");
         assert_eq!(refused[0].at.path, "variables/scale");
+    }
+}
+
+/// A name the language owns reads its scale; any other name refuses listing every one.
+#[test]
+fn a_scale_named_bare_is_the_built_in_of_that_name_or_refuses_listing_them() {
+    let ratio = |scale: &str| {
+        let mut g = load(&Composition::from_iter([
+            ("variables/key", "A3\n"),
+            ("variables/scale", scale),
+            ("lead/one", "sin(2*pi*deg(7)*t)\n"),
+        ]))
+        .unwrap_or_else(|r| panic!("{scale}: {r:?}"));
+        g.lower_reserved(None).map(|()| g.expr("lead/one").cloned())
+    };
+    assert_eq!(
+        ratio("dorian\n").unwrap(),
+        Some(expr(&format!(
+            "sin(2*pi*(@../variables/key*{})*t)",
+            2f64.powf(1000.0 / 1200.0)
+        )))
+    );
+    assert_eq!(
+        ratio("harmonic-minor\n").unwrap(),
+        Some(expr(&format!(
+            "sin(2*pi*(@../variables/key*{})*t)",
+            2f64.powf(1100.0 / 1200.0)
+        )))
+    );
+    for unknown in ["dorain\n", "harmonic-dorian\n", "Major\n"] {
+        let refused = ratio(unknown).unwrap_err();
+        assert_eq!(refused[0].code, DiagCode::BadScale, "{unknown}");
+        assert_eq!(refused[0].at.path, "variables/scale");
+        for (name, ..) in sva_ast::BUILTIN_SCALES {
+            assert!(refused[0].reason.contains(name), "{unknown} lists `{name}`");
+        }
     }
 }
 
