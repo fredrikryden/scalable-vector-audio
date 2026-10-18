@@ -35,6 +35,17 @@ fn an_inverted_component_cancels_completely_on_fold_down() {
     );
 }
 
+/// All side over no mid is as wide as the rail `balance_db` and `mono_db` stop at, never an
+/// infinity a JSON number cannot hold.
+#[test]
+fn pure_antiphase_reads_its_width_at_the_rail() {
+    let n = noise(7.0, 400);
+    let f = image(n.clone(), n.iter().map(|x| -x).collect());
+    assert_eq!(f.mid_rms, 0.0, "nothing in the middle");
+    assert_eq!(f.width, 10f64.powf(RAIL_DB / 20.0));
+    assert_eq!(f.mono_db, -RAIL_DB);
+}
+
 #[test]
 fn decorrelated_components_sit_near_zero_and_lose_3_db_to_fold_down() {
     let f = image(noise(3.0, 20000), noise(4.0, 20000));
