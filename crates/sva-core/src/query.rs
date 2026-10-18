@@ -206,6 +206,18 @@ impl Asked {
                     )));
                 }
             };
+            if *arg == Arg::Frame && (secs * f64::from(rate)).round() < 1.0 {
+                return Err(CliError::usage(
+                    "query.bad_value",
+                    format!(
+                        "`{}(frame={})` is {secs}s, under half a sample at {rate} Hz, and a \
+                         frame steps by whole samples, rounded; ask at least {}s, half a sample",
+                        self.name,
+                        time.written,
+                        0.5 / f64::from(rate)
+                    ),
+                ));
+            }
             match arg {
                 Arg::Frame => given.frame = Some(secs),
                 Arg::Window => given.window = Some(secs),

@@ -270,6 +270,26 @@ fn a_level_reads_every_channel() {
     }
 }
 
+/// A frame steps by whole samples, so one under half a sample at the rate refuses rather than
+/// stepping by a sample it was not asked for.
+#[test]
+fn a_frame_under_half_a_sample_refuses_at_the_rate() {
+    let reading = |text: &str| sva_core::asked(&sva_core::call(text).unwrap()).unwrap();
+    let Err(CliError::Usage { code, .. }) =
+        reading("envelope(frame=0.00001s)").representation(44_100, None)
+    else {
+        panic!("0.44 samples at 44.1 kHz is no frame");
+    };
+    assert_eq!(code, "query.bad_value");
+    let Ok(Representation::Envelope {
+        frame_secs: Some(secs),
+    }) = reading("envelope(frame=0.00001s)").representation(96_000, None)
+    else {
+        panic!("0.96 samples at 96 kHz rounds to one");
+    };
+    assert_eq!(secs, 0.00001);
+}
+
 /// A reading's time arguments are times as a score writes them: a bar is what the render's
 /// tempo says, the same at any argument, and with no tempo to count it in a bar refuses.
 #[test]
