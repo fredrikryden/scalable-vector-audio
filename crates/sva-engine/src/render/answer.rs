@@ -959,24 +959,18 @@ fn oversampled(
     super::finer(render, node, oversample, extent)
 }
 
-/// A first difference on the grid, which is what a derivative is once the closed form is gone.
+/// A first difference on the grid, which is what a derivative is once the closed form is gone:
+/// `(x[n] - x[n-1]) * rate` at each sample from the second, as the first has no sample before it.
 fn difference(buffer: &Buffer) -> Buffer {
     let step = f64::from(buffer.rate);
     let planes = (0..buffer.width())
         .map(|c| {
             let plane = buffer.plane(c);
-            plane
-                .iter()
-                .enumerate()
-                .map(|(i, x)| match i {
-                    0 => 0.0,
-                    _ => (x - plane[i - 1]) * step,
-                })
-                .collect()
+            plane.windows(2).map(|x| (x[1] - x[0]) * step).collect()
         })
         .collect();
     let mut out = Buffer::of_planes(buffer.rate, planes);
-    out.start = buffer.start;
+    out.start = buffer.start + buffer.plane(0).len().min(1) as i64;
     out
 }
 

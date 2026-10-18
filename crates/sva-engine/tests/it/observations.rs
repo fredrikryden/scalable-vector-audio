@@ -926,3 +926,21 @@ fn self_similarity_past_the_cap_names_both_remedies() {
     assert!(said.contains("self_similarity(cell=0.02"), "{said}");
     assert!(said.contains("@x([0, 10.25s])"), "{said}");
 }
+
+/// A first difference has no value at the first sample, which has none before it.
+#[test]
+fn a_first_difference_starts_at_the_second_sample() {
+    let sampled = rendered("ramp-difference", "sample(t)\n", vec!["derivative"]);
+    let id = sampled.id("node").expect("the root");
+    let Output::Samples(slope) = answer(&sampled, id, Representation::Derivative)
+        .expect("a measured slope")
+        .value
+    else {
+        panic!("a first difference is samples");
+    };
+    assert_eq!((slope.start, slope.plane(0).len()), (1, 8_191));
+    assert!(
+        slope.plane(0).iter().all(|x| (x - 1.0).abs() < 1e-9),
+        "a ramp's slope is one at every sample"
+    );
+}

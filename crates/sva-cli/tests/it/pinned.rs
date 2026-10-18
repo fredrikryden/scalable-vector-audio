@@ -198,7 +198,7 @@ const PINNED: &str = r#"
 6 lines refused "type.samples_in_closed_form"
 6 spectrum c143451080b1b42f
 6 envelope 510b9276d5e7c870
-6 derivative 2ada75b05fe73a68
+6 derivative 4e77b328e32c4c32
 6 ledger e296c7b26fd92e2f
 6 pitch d8acbfd122ead830
 6 formants 4a5877c3e5e367d9
@@ -234,7 +234,7 @@ const PINNED: &str = r#"
 8 lines refused "type.samples_in_closed_form"
 8 spectrum 1df6ea56e09c379f
 8 envelope 0c5253e952c2fa8d
-8 derivative d3faa20b9834549e
+8 derivative 2ca6691cd11a21e4
 8 ledger d7d7417544077963
 8 pitch 6f9dd96865b68639
 8 formants 0e95b6ea73de97c9
@@ -290,7 +290,7 @@ const PINNED: &str = r#"
 11 lines refused "type.samples_in_closed_form"
 11 spectrum f25da52885882adf
 11 envelope 7c67a5d377431f4e
-11 derivative 0234ccb44aa74534
+11 derivative 63a11563fea7dad7
 11 ledger 85f91208b93bf675
 11 pitch e2518db792f886da
 11 formants ab893e9880a0ad66
@@ -309,7 +309,7 @@ const PINNED: &str = r#"
 12 lines refused "type.samples_in_closed_form"
 12 spectrum 8ca9ad07eee19d5b
 12 envelope 1b9d192b3e91dcb6
-12 derivative 52556069c8911ad2
+12 derivative 680aa7a6c864fac2
 12 ledger 9521693f05bf90e3
 12 pitch 9993abf09efb1ccd
 12 formants f63e3f59fb8ff19a
@@ -328,7 +328,7 @@ const PINNED: &str = r#"
 13 lines refused "type.samples_in_closed_form"
 13 spectrum 3abc3201aa4a2410
 13 envelope c7477734fba002a5
-13 derivative e43d66b13cd27645
+13 derivative ffa59bb931676ae3
 13 ledger 1a738c8d556a802e
 13 pitch 186e31c478850407
 13 formants e82d2ddad859d9c3
@@ -349,7 +349,7 @@ const PINNED: &str = r#"
 14 lines refused "type.samples_in_closed_form"
 14 spectrum 5efa6c48ce11d24c
 14 envelope 88f602a703affc7c
-14 derivative 2f09043a08b9ee72
+14 derivative 2b9e8c981a270e7f
 14 ledger 3ce3405aef9719b3
 14 pitch 8322f2f2f4852b5a
 14 formants 07b076a9b2773249
@@ -389,7 +389,7 @@ const PINNED: &str = r#"
 16 lines refused "type.samples_in_closed_form"
 16 spectrum 1d4445163666b88a
 16 envelope eedb58d4e0ba84e8
-16 derivative 70b92325601c8608
+16 derivative 6ea3e8568de26a88
 16 ledger e9282e1791e85be2
 16 pitch b22880e861c79361
 16 formants 6f05c52bc183f345
