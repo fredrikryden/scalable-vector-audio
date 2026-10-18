@@ -218,7 +218,7 @@ impl std::error::Error for EngineError {}
 
 /// Every code a judgment in this engine can refuse under, with what trips it. The prefix
 /// says which judgment refused, per FORMAT 16.
-pub static REGISTRY: [(&str, &str); 94] = [
+pub static REGISTRY: [(&str, &str); 95] = [
     (
         "type.no_overload",
         "a builtin applied to operand types no row names",
@@ -465,6 +465,10 @@ pub static REGISTRY: [(&str, &str); 94] = [
     (
         "read.too_many_cells",
         "a self-similarity matrix whose cells over the target pass the cap",
+    ),
+    (
+        "read.rate_under_weighting",
+        "a loudness of samples at a rate whose Nyquist the K-weighting shelf stands at or past",
     ),
     (
         "engine.bad_crop_shoulder",

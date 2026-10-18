@@ -11,6 +11,9 @@ const SHELF_MID: f64 = 0.499_666_774_154_541_6;
 const HIGHPASS_HZ: f64 = 38.1355;
 const HIGHPASS_Q: f64 = 0.50033;
 
+/// At or under it the shelf stands at or past Nyquist.
+pub const LEAST_RATE_HZ: f64 = 2.0 * SHELF_HZ;
+
 fn shelf(sr: f64) -> Coeffs {
     let k = (std::f64::consts::PI * SHELF_HZ / sr).tan();
     let high = 10f64.powf(SHELF_GAIN_DB / 20.0);
@@ -71,9 +74,26 @@ pub struct Loudness {
     pub short_term: Vec<LoudnessFrame>,
 }
 
+/// A rate with no K-weighting.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RateUnderWeighting {
+    pub rate_hz: f64,
+    pub least_hz: f64,
+}
+
 /// Every component weighs 1.0: BS.1770's 1.41 surround lift needs a channel identity an
 /// indexed component does not carry.
-pub fn analyze(planes: &[&[f64]], sr: f64, start_secs: f64) -> Loudness {
+pub fn analyze(
+    planes: &[&[f64]],
+    sr: f64,
+    start_secs: f64,
+) -> Result<Loudness, RateUnderWeighting> {
+    if sr <= LEAST_RATE_HZ {
+        return Err(RateUnderWeighting {
+            rate_hz: sr,
+            least_hz: LEAST_RATE_HZ,
+        });
+    }
     let sample_peak = planes
         .iter()
         .flat_map(|p| p.iter())
@@ -89,7 +109,7 @@ pub fn analyze(planes: &[&[f64]], sr: f64, start_secs: f64) -> Loudness {
     let momentary = blocks(&squares, &at, MOMENTARY_SECS);
     let short_term = blocks(&squares, &at, SHORT_TERM_SECS);
 
-    Loudness {
+    Ok(Loudness {
         integrated_lufs: gated_mean(&momentary, INTEGRATED_GATE_LU),
         range_lu: range(&short_term),
         momentary_max_lufs: peak_of(&momentary),
@@ -99,7 +119,7 @@ pub fn analyze(planes: &[&[f64]], sr: f64, start_secs: f64) -> Loudness {
         peak_note: PEAK_NOTE,
         momentary,
         short_term,
-    }
+    })
 }
 
 /// A power of two at the peak: dividing is exact; only 3000 dB under it does a square underflow.

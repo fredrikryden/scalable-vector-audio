@@ -1,6 +1,6 @@
 // Concern: states the BS.1770 readings a K-weighted measure owes its own conformance tones | Non-concern: per-component level (src/measure/envelope.rs) | IO: (planes) -> asserted LUFS
 
-use sva_samples::measure::loudness::{Loudness, analyze};
+use sva_samples::measure::loudness::{LEAST_RATE_HZ, Loudness, analyze};
 
 fn sine(hz: f64, sr: f64, secs: f64, amp: f64) -> Vec<f64> {
     (0..(secs * sr) as usize)
@@ -9,7 +9,7 @@ fn sine(hz: f64, sr: f64, secs: f64, amp: f64) -> Vec<f64> {
 }
 
 fn of(planes: &[&[f64]], sr: f64) -> Loudness {
-    analyze(planes, sr, 0.0)
+    analyze(planes, sr, 0.0).expect("a rate the K-weighting is designed at")
 }
 
 /// BS.1770-2 conformance, which pins offset, shelf and highpass at once.
@@ -138,4 +138,21 @@ fn a_finite_buffer_too_quiet_to_square_still_reads_its_loudness() {
         (level - at_scale - -4000.0).abs() < 1e-6,
         "{level} against {at_scale}"
     );
+}
+
+/// The shelf stands at 1681.97 Hz: a rate whose Nyquist it reaches has no K-weighting, and
+/// refuses rather than read an unstable filter's output as a level.
+#[test]
+fn a_rate_whose_nyquist_the_shelf_reaches_refuses() {
+    assert!((LEAST_RATE_HZ - 3363.94).abs() < 1e-9);
+    for sr in [1_000.0, 3_000.0, LEAST_RATE_HZ] {
+        let s = sine(100.0, sr, 2.0, 1.0);
+        let refused = analyze(&[&s], sr, 0.0).expect_err("no K-weighting at this rate");
+        assert_eq!((refused.rate_hz, refused.least_hz), (sr, LEAST_RATE_HZ));
+    }
+    let sr = 3_400.0;
+    let level = of(&[&sine(100.0, sr, 2.0, 1.0)], sr)
+        .integrated_lufs
+        .unwrap();
+    assert!((-5.0..-3.0).contains(&level), "{level} LUFS at {sr} Hz");
 }

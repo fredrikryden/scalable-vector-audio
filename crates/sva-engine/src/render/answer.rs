@@ -409,6 +409,25 @@ fn unread(
     })
 }
 
+/// Names the least rate and, through `faster`, how to hand it samples at one.
+fn rate_under(
+    name: &str,
+    held: sva_samples::RateUnderWeighting,
+    faster: impl Fn(f64) -> String,
+) -> EngineError {
+    EngineError::refused(Diagnostic {
+        code: "read.rate_under_weighting".to_string(),
+        message: format!(
+            "BS.1770's K-weighting shelf stands at {} Hz, at or past the Nyquist of {} Hz \
+             samples, where its bilinear design has no filter",
+            held.least_hz / 2.0,
+            held.rate_hz
+        ),
+        location: Located::at(name, None),
+        help: faster(held.least_hz),
+    })
+}
+
 /// Names the cell that fits and, through `shorter`, how to hand it a target that short.
 fn too_many_cells(
     name: &str,
@@ -739,6 +758,9 @@ fn measured(
                         "render an interval of at least {secs}s, as `@x([0, {secs}s])` writes one"
                     )
                 }),
+                NoReading::RateUnder(held) => rate_under(render.tys.name(node), held, |hz| {
+                    format!("render at a rate over {hz} Hz, as `--rate 48000` asks")
+                }),
                 NoReading::TooManyCells(held) => {
                     too_many_cells(render.tys.name(node), held, |secs| {
                         format!(
@@ -761,6 +783,7 @@ pub enum NoReading {
     Crowded(Crowded),
     Unread(sliding::Unread),
     TooManyCells(self_similarity::TooManyCells),
+    RateUnder(sva_samples::RateUnderWeighting),
 }
 
 /// Every reading a buffer answers on its own, with no graph behind it.
@@ -816,9 +839,9 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
         Representation::Bands => Output::Bands(Box::new(bands::analyze(&planes, sr, start))),
         Representation::Crest => Output::Crest(Box::new(crest::analyze(&planes, sr))),
         Representation::Onsets => Output::Onsets(Box::new(onsets::detect(&planes, sr, start))),
-        Representation::Loudness => {
-            Output::Loudness(Box::new(loudness::analyze(&planes, sr, start)))
-        }
+        Representation::Loudness => Output::Loudness(Box::new(
+            loudness::analyze(&planes, sr, start).map_err(NoReading::RateUnder)?,
+        )),
         Representation::Harmony {
             reading,
             frame_secs,
@@ -1110,6 +1133,9 @@ pub fn answer_buffer(
         }),
         NoReading::TooManyCells(held) => too_many_cells(name, held, |secs| {
             format!("analyze a file holding at most {secs}s")
+        }),
+        NoReading::RateUnder(held) => rate_under(name, held, |hz| {
+            format!("analyze a file sampled over {hz} Hz")
         }),
     })?;
     Ok(Answer::whole(

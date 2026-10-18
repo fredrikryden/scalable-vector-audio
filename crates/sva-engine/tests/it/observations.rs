@@ -862,6 +862,26 @@ fn a_closed_forms_modulation_is_measured_off_its_samples() {
     }
 }
 
+/// A render whose Nyquist the K-weighting shelf reaches has no loudness, and says what rate does.
+#[test]
+fn loudness_at_a_rate_under_the_k_weighting_names_the_least_rate() {
+    let g = graph_of("loudness-slow", &[("node", "sin(2*pi*100*t)\n")]);
+    let config = RenderConfig::seconds(2_000, 1.0).asking(vec![Ask {
+        node: "node".to_string(),
+        representation: Representation::Loudness,
+    }]);
+    let held = render(&g, "node", config, &Tier::default()).unwrap_or_else(|e| panic!("{e}"));
+    let refused = answer(
+        &held,
+        held.id("node").expect("the root"),
+        Representation::Loudness,
+    )
+    .expect_err("a 1 kHz Nyquist is under the 1682 Hz shelf");
+    assert_eq!(refused.code(), "read.rate_under_weighting");
+    let said = format!("{refused}");
+    assert!(said.contains("3363.94 Hz"), "{said}");
+}
+
 /// A window under two periods of the slowest rate refuses, naming the window that would read.
 #[test]
 fn modulation_under_two_periods_names_the_least_window() {
