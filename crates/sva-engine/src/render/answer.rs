@@ -172,15 +172,31 @@ fn exact(
             };
             (Output::Pitch(vec![frame]), Listed::joined(each))
         }
+        // Each series is listed first, as `atoms` lists it, so no term is differentiated away.
         Representation::Derivative => {
-            let slope = d_dt(sum).map_err(|left| {
+            let each = per_channel(render, node, sum)?;
+            let series_free = SpectralSum::of(
+                sum.var,
+                each.iter()
+                    .map(|one| sva_formula::Lane::of(one.atoms.clone()))
+                    .collect(),
+            );
+            let slope = d_dt(&series_free).map_err(|left| {
                 EngineError::of_closed_form(
                     &left.refusal(),
                     render.tys.locate(left.origin),
                     "read the derivative of a lower order or degree",
                 )
             })?;
-            (Output::Symbolic(Box::new(slope)), Listed::NONE)
+            let dropped = Listed::joined(each).dropped.into_iter().map(|l| Line {
+                amp: l.amp * C64::new(0.0, std::f64::consts::TAU * l.hz),
+                ..l
+            });
+            let differentiated = Listed {
+                atoms: slope.atoms().copied().collect(),
+                dropped: dropped.collect(),
+            };
+            (Output::Symbolic(Box::new(slope)), differentiated)
         }
         Representation::Envelope { frame_secs: None } => {
             let held =

@@ -218,8 +218,8 @@ static DERIVATIVE: Reading = Reading {
     name: "derivative",
     takes: &[],
     reads: Reads::Either,
-    help: "the derivative, or off samples the first difference, (x[n] - x[n-1]) * rate at \
-           every sample but the first",
+    help: "the derivative, each series listed as `atoms` lists it, or off samples the first \
+           difference, (x[n] - x[n-1]) * rate at every sample but the first",
     build: |_| Representation::Derivative,
 };
 

@@ -82,3 +82,39 @@ fn a_laws_envelope_is_symbolic_and_positive() {
         );
     }
 }
+
+/// A loop's series is differentiated term by term, every term listed: at 440 Hz the slope is
+/// `i w` times the loop's own line there, `c / (1 - g e^(-i w d))`, to the series' truncation.
+#[test]
+fn a_loops_derivative_differentiates_every_term_of_its_series() {
+    let g = graph_of(
+        "loop-derivative",
+        &[("tone", "sin(2*pi*440*t) + 0.5*self(t - 17ms)\n")],
+    );
+    let config = RenderConfig::seconds(44_100, 0.05).asking(vec![Ask {
+        node: "tone".to_string(),
+        representation: Representation::Lines,
+    }]);
+    let held = render(&g, "tone", config, &Tier::default()).expect("a law");
+    let id = held.id("tone").expect("the root");
+    let Output::Symbolic(slope) = answer(&held, id, Representation::Derivative)
+        .expect("a derivative")
+        .value
+    else {
+        panic!("a law's derivative is symbolic");
+    };
+    let w = std::f64::consts::TAU * 440.0;
+    let (re, im) = slope
+        .atoms()
+        .filter(|a| a.exp.is_some_and(|e| (e.omega - w).abs() < 1e-6))
+        .fold((0.0, 0.0), |(re, im), a| (re + a.c.re, im + a.c.im));
+    let (dr, di) = (1.0 - 0.5 * (w * 0.017).cos(), 0.5 * (w * 0.017).sin());
+    let norm = dr * dr + di * di;
+    let (line_re, line_im) = (-0.5 * di / norm, -0.5 * dr / norm);
+    let (wanted_re, wanted_im) = (-w * line_im, w * line_re);
+    let off = (re - wanted_re).hypot(im - wanted_im) / wanted_re.hypot(wanted_im);
+    assert!(
+        off < 1e-7,
+        "{re} {im}i against {wanted_re} {wanted_im}i: under the series' -150 dB tail"
+    );
+}
