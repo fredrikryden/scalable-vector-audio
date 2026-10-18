@@ -745,7 +745,9 @@ fn measured(
     Ok(match representation {
         Representation::Alias { oversample } => {
             let reference = oversampled(render, behind(render, node)?, oversample)?;
-            Output::Alias(Box::new(worst_alias(buffer, &reference, oversample)))
+            Output::Alias(Box::new(worst_alias(
+                render, node, buffer, &reference, oversample,
+            )?))
         }
         Representation::Ledger { depth } => Output::Ledger(attributed(render, node, depth)?),
         other => {
@@ -976,11 +978,17 @@ pub(super) fn alias_db(
 ) -> Result<f64, EngineError> {
     let oversample = sva_samples::ALIAS_OVERSAMPLE as u32;
     let reference = oversampled(render, behind(render, node)?, oversample)?;
-    Ok(worst_alias(buffer, &reference, oversample).asr_db)
+    Ok(worst_alias(render, node, buffer, &reference, oversample)?.asr_db)
 }
 
 /// Each component scored against its own reference; the worst answers.
-fn worst_alias(buffer: &Buffer, reference: &Buffer, oversample: u32) -> sva_samples::Alias {
+fn worst_alias(
+    render: &Render,
+    node: sva_formula::NodeId,
+    buffer: &Buffer,
+    reference: &Buffer,
+    oversample: u32,
+) -> Result<sva_samples::Alias, EngineError> {
     debug_assert_eq!(
         buffer.width(),
         reference.width(),
@@ -988,7 +996,7 @@ fn worst_alias(buffer: &Buffer, reference: &Buffer, oversample: u32) -> sva_samp
     );
     let sr = f64::from(buffer.rate);
     let width = buffer.width().min(reference.width());
-    sva_samples::worst_alias((0..width).map(|c| {
+    let scored = (0..width).map(|c| {
         measure_alias(
             buffer.plane(c),
             reference.plane(c),
@@ -996,8 +1004,22 @@ fn worst_alias(buffer: &Buffer, reference: &Buffer, oversample: u32) -> sva_samp
             sr,
             buffer.origin_secs(),
         )
-    }))
-    .expect("a buffer holds at least one component")
+    });
+    let scored = scored.collect::<Result<Vec<_>, _>>().map_err(|short| {
+        let secs = (short.frame as f64 / sr * 1000.0).ceil() / 1000.0;
+        EngineError::refused(Diagnostic {
+            code: "read.target_under_frame".to_string(),
+            message: format!(
+                "the target holds {} samples, fewer than the {}-sample frame an alias score reads",
+                short.held, short.frame
+            ),
+            location: Located::at(render.tys.name(node), None),
+            help: format!(
+                "render an interval of at least {secs}s, as `@x([0, {secs}s])` writes one"
+            ),
+        })
+    })?;
+    Ok(sva_samples::worst_alias(scored).expect("a buffer holds at least one component"))
 }
 
 /// The node read at a multiple of the rate by its own route: what an alias score is against.

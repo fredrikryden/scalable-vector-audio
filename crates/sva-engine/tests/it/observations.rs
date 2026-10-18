@@ -187,6 +187,31 @@ fn alias_scores_a_collapse_and_refuses_where_no_law_is_behind_it() {
     assert_eq!(refused.code(), "engine.alias_needs_a_closed_form");
 }
 
+/// A target under one frame has no alias score, and says how long a target has one.
+#[test]
+fn an_alias_score_of_a_target_under_one_frame_refuses() {
+    let g = graph_of(
+        "alias-short",
+        &[("node", "sample(tanh(sin(2*pi*3000*t)*4))\n")],
+    );
+    let held = render(
+        &g,
+        "node",
+        RenderConfig::seconds(8_192, 0.1),
+        &Tier::default(),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let refused = answer(
+        &held,
+        held.id("node").expect("the root"),
+        Representation::Alias { oversample: 4 },
+    )
+    .expect_err("819 samples under a 1024-sample frame");
+    assert_eq!(refused.code(), "read.target_under_frame");
+    let said = format!("{refused}");
+    assert!(said.contains("0.125s"), "{said}");
+}
+
 /// A reading's reference is a value like any other, kept in the memory the render read: asked
 /// again, memory answers it, the same bits.
 #[test]

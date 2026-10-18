@@ -163,7 +163,7 @@ pub fn magnitudes_of(planes: &[&[f64]], sample_rate: f64, frame_secs: Option<f64
 }
 
 /// Whole frames, first sample to last, evenly at most half a frame apart.
-fn starts(len: usize, frame: usize) -> Vec<usize> {
+pub(crate) fn starts(len: usize, frame: usize) -> Vec<usize> {
     let Some(past) = len.checked_sub(frame).filter(|past| *past > 0) else {
         return vec![0];
     };

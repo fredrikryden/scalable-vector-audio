@@ -1,7 +1,7 @@
 // Concern: scores a render against the same one oversampled, as ASR and per-band NMR | Non-concern: producing either render, the plain spectrum (spectrum.rs) | IO: (base, high, k, sr, start) -> Alias
 
 use crate::fft::fft;
-use crate::measure::spectrum::db;
+use crate::measure::spectrum::{db, starts};
 use crate::stft::hann_periodic as hann;
 
 /// Zwicker's critical bands; the last one runs to Nyquist.
@@ -57,6 +57,12 @@ pub struct Alias {
     pub bands: Vec<AliasBand>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnderAFrame {
+    pub held: usize,
+    pub frame: usize,
+}
+
 pub fn worst(scored: impl IntoIterator<Item = Alias>) -> Option<Alias> {
     scored
         .into_iter()
@@ -75,14 +81,19 @@ pub fn measure_alias(
     oversample: usize,
     sample_rate: f64,
     start_secs: f64,
-) -> Alias {
+) -> Result<Alias, UnderAFrame> {
     assert!(
         oversample.is_power_of_two(),
         "oversample must be a power of two so both transforms are radix-2, got {oversample}"
     );
     let frame = ALIAS_FRAME;
+    if base.len() < frame {
+        return Err(UnderAFrame {
+            held: base.len(),
+            frame,
+        });
+    }
     let wide = frame * oversample;
-    let hop = frame / 2;
     let bins = frame / 2 + 1;
     let bin_hz = sample_rate / frame as f64;
     let edges = band_edges(sample_rate / 2.0);
@@ -99,8 +110,11 @@ pub fn measure_alias(
     let mut frames = 0usize;
     let mut scored = 0usize;
 
-    let mut start = 0usize;
-    while start + frame <= base.len() && (start + frame) * oversample <= high.len() {
+    let held = starts(base.len(), frame);
+    for start in held
+        .into_iter()
+        .filter(|s| (s + frame) * oversample <= high.len())
+    {
         let (re_b, im_b) = transform(base, start, &w_base, 1);
         let (re_h, im_h) = transform(high, start * oversample, &w_high, oversample);
         frames += 1;
@@ -129,7 +143,6 @@ pub fn measure_alias(
         }
 
         if db(s.iter().sum::<f64>().sqrt()) < GATE_DB {
-            start += hop;
             continue;
         }
         let ratio = nmr_of(&s, &e, &edges);
@@ -140,7 +153,6 @@ pub fn measure_alias(
             nmr_peak = frame_db;
             peak_at = start_secs + start as f64 / sample_rate;
         }
-        start += hop;
     }
 
     let mean = if scored > 0 {
@@ -149,7 +161,7 @@ pub fn measure_alias(
         0.0
     };
     let nmr_db = 10.0 * mean.max(f64::MIN_POSITIVE).log10();
-    Alias {
+    Ok(Alias {
         oversample,
         sample_rate,
         frame_size: frame,
@@ -166,7 +178,7 @@ pub fn measure_alias(
         audible: scored > 0 && nmr_db > AUDIBLE_NMR_DB,
         instances: 0,
         bands: bands(&sig_bands, &err_bands, &edges, frames.max(1)),
-    }
+    })
 }
 
 fn transform(x: &[f64], start: usize, window: &[f64], stride: usize) -> (Vec<f64>, Vec<f64>) {
