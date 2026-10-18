@@ -1,4 +1,4 @@
-// Concern: splits a bare filename into its label and optional span suffix | Non-concern: what the span means to a TSV grid (tsv.rs) | IO: (&str) -> (label, Option<FileSpan>)
+// Concern: splits a bare filename into its label and optional span suffix | Non-concern: what the span means to `repeat`/`concat` (graph.rs) | IO: (&str) -> (label, Option<FileSpan>)
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SpanUnit {

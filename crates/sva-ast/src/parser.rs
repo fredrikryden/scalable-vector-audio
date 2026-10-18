@@ -1,4 +1,4 @@
-// Concern: builds an Expr from one expression string's tokens | Non-concern: lexing, ref resolution, TSV desugaring (tsv.rs) | IO: (&str) -> Expr or a located Diag
+// Concern: builds an Expr from one expression string's tokens | Non-concern: lexing, ref resolution, a score's lines (score.rs) | IO: (&str) -> Expr or a located Diag
 
 use crate::diag::{ByteSpan, Diag, DiagCode};
 use crate::expr::{Address, Arg, BinOp, CEIL, Expr, FLOOR, INDEX, Literal};

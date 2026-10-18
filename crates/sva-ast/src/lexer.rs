@@ -58,7 +58,7 @@ pub enum TokenKind {
 pub const COMMENT: u8 = b';';
 
 /// The part of one line the lexer will read. A caller splitting content into lines strips
-/// each one with this, so a comment can never be mistaken for a cell or an extra row.
+/// each one with this, so a comment can never be mistaken for a scale row or an extra line.
 pub fn strip_line_comment(line: &str) -> &str {
     match line.find(COMMENT as char) {
         Some(at) => &line[..at],

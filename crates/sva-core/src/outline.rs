@@ -1,4 +1,4 @@
-// Concern: writes an expression's outline as the `data` object both front ends answer | Non-concern: building the outline (sva-ast) | IO: (&str) -> a JSON string or CliError
+// Concern: writes an expression's outline, or a score's lines, as the `data` object both front ends answer | Non-concern: building either (sva-ast) | IO: (&str) -> a JSON string or CliError
 
 use sva_ast::outline::{Argument, Form};
 use sva_ast::{Address, BinOp, ByteSpan, Literal, Outline, Refusal};
@@ -6,8 +6,12 @@ use sva_ast::{Address, BinOp, ByteSpan, Literal, Outline, Refusal};
 use crate::CliError;
 use crate::json::{escape, list, num};
 
-/// `{ "text", "outline" }`, or the parser's own refusal, located in the text.
+/// `{ "text", "outline" }`, or the parser's own refusal, located in the text. A score has no
+/// one tree: it answers `{ "text", "score" }`, one item per line.
 pub fn outline_data(text: &str) -> Result<String, CliError> {
+    if sva_ast::is_score(text) {
+        return score_data(text);
+    }
     let tree = sva_ast::outline(text).map_err(|d| {
         CliError::Refusals(vec![Refusal::new("expression", d.span, d.code, d.message)])
     })?;
@@ -15,6 +19,33 @@ pub fn outline_data(text: &str) -> Result<String, CliError> {
         "{{ \"text\": \"{}\", \"outline\": {} }}",
         escape(text),
         node(&tree)
+    ))
+}
+
+fn score_data(text: &str) -> Result<String, CliError> {
+    let score = sva_ast::parse_score(text)
+        .map_err(|d| CliError::Refusals(vec![Refusal::new("score", d.span, d.code, d.message)]))?;
+    let line = |e: &sva_ast::Event| {
+        format!(
+            "{{ \"line\": {}, \"span\": {}, \"at\": \"{}\", \
+             \"sound\": \"@{}\", \"deg\": {}, \"args\": {} }}",
+            e.line,
+            span(e.span),
+            e.at.spelled(),
+            escape(&e.sound),
+            e.deg
+                .map_or_else(|| crate::json::NONE.to_string(), |d| d.to_string()),
+            list(&e.args, |(name, value)| format!(
+                "{{ \"name\": \"{}\", \"value\": \"{}\" }}",
+                escape(name),
+                escape(&sva_ast::render_expr(value))
+            ))
+        )
+    };
+    Ok(format!(
+        "{{ \"text\": \"{}\", \"score\": {} }}",
+        escape(text),
+        list(&score.events, line)
     ))
 }
 

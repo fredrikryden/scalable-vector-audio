@@ -150,35 +150,17 @@ fn lint_of_a_node_with_a_default_resolves() {
     assert!(report.nodes > 0, "one node was checked, so one is reported");
 }
 
-/// A one-row body is no special case: the warning reads the same for any row count.
+/// A score is JSON lines: no `;` comment to require and no body to measure, however long.
 #[test]
-fn a_one_row_grid_gets_the_same_warning_as_a_two_row_one() {
-    let flagged = |name: &str, rows: usize| {
-        let dir = composition(name, &[("kick", "sin(2*pi*50*t)\n")]);
-        std::fs::write(
-            dir.join("pattern-8b"),
-            format!("{}{}", doc("a pattern"), "@kick\t@kick\n".repeat(rows)),
-        )
-        .expect("a grid");
-        std::fs::write(
-            dir.join("master"),
-            format!("{}@pattern-8b\n", doc("a signal")),
-        )
-        .expect("a root");
-        lint(&dir, None)
-            .unwrap_or_else(|e| panic!("{name}: {}", e.message()))
-            .findings
-            .iter()
-            .any(|f| f.code == LintCode::GridRowsPerBar)
-    };
-
-    assert!(!flagged("one-row-grid", 1), "one row is eight bars a row");
-    assert!(!flagged("two-row-grid", 2), "two rows are four bars a row");
-    assert!(!flagged("eight-row-grid", 8), "eight rows are one a bar");
-    assert!(
-        flagged("three-row-grid", 3),
-        "three rows over eight bars tile it neither way"
+fn a_long_score_lints_clean() {
+    let line = "{\"at\": \"0b\", \"sound\": \"@kick\"}\n";
+    let dir = composition(
+        "long-score",
+        &[("kick", "crop(sin(2*pi*50*t), 0s, 0.1s)\n")],
     );
+    std::fs::write(dir.join("hits"), line.repeat(400)).expect("a score");
+    let report = lint(&dir, None).unwrap_or_else(|e| panic!("{}", e.message()));
+    assert_eq!(codes(&report), "", "{}", codes(&report));
 }
 
 /// A typo'd target refuses under the code `render` answers a ref to it with.

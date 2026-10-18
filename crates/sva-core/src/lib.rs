@@ -376,6 +376,7 @@ fn streamed(
     let roots = roots_of(source, &expr)?;
     let roots: Vec<&str> = roots.iter().map(String::as_str).collect();
     let mut delta = sva_ast::load_beside(source, &roots, held).map_err(CliError::Refusals)?;
+    delta.lower_scores(Some(held)).map_err(CliError::Refusals)?;
     if let Some(per_bar) = held.per_bar() {
         delta.resolve_bar_spans(per_bar);
     }
@@ -508,6 +509,7 @@ fn define_probe(graph: &mut Graph, expr: sva_ast::Expr) -> Result<(), CliError> 
 
 pub fn settled(loaded: Result<Graph, Vec<Refusal>>) -> Result<Graph, CliError> {
     let mut graph = loaded.map_err(CliError::Refusals)?;
+    graph.lower_scores(None).map_err(CliError::Refusals)?;
     tempo::resolve(&mut graph)?;
     graph.desugar_arrangement().map_err(CliError::Refusals)?;
     Ok(graph)

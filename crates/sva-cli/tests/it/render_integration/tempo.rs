@@ -6,15 +6,25 @@ use sva_cli::CliError;
 use sva_core::{Job, PROBE, execute, probe};
 use sva_engine::Tier;
 
-/// `bpm` reaches the samples only by rewriting a grid's row shifts, so a tempo change must
+/// `bpm` reaches the samples only by resolving a score's bar times, so a tempo change must
 /// re-render exactly the bar-timed nodes and leave the rest byte-identical.
 #[test]
 fn a_bpm_change_re_renders_bar_resolved_timing_and_nothing_else() {
     let dir = scratch("bpm-cache");
     put(&dir, "meter", "4/4\n");
-    put(&dir, "kick", "sin(2*pi*55*t)*exp(0 - 30*t)\n");
+    put(
+        &dir,
+        "kick",
+        "gain = 1\ngain*sin(2*pi*55*t)*exp(0 - 30*t)\n",
+    );
     put(&dir, "tone", "sin(2*pi*440*t)*0.1\n");
-    put(&dir, "pattern-1b", "@kick*1.0\n@kick*0.5\n\n@kick*0.7\n");
+    put(
+        &dir,
+        "pattern-1b",
+        "{\"at\": \"0b\", \"sound\": \"@kick\"}\n\
+         {\"at\": \"0.25b\", \"sound\": \"@kick\", \"gain\": 0.5}\n\
+         {\"at\": \"0.75b\", \"sound\": \"@kick\", \"gain\": 0.7}\n",
+    );
     put(&dir, "master", "crop(@pattern-1b(t), 0s, 3s) + @tone*0.2\n");
 
     let cache = Tier::default();

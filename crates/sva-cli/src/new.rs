@@ -6,9 +6,9 @@ use sva_core::CliError;
 
 /// `(path under the new directory, contents)`, written in this order so a directory always
 /// exists before a file lands in it. Every body stays a closed form until its own layer's
-/// written `sample()`, and each node's comment says why it is written that way rather than
-/// the way that costs orders of magnitude more.
-pub const FILES: [(&str, &str); 11] = [
+/// written `sample()`, and each equation's comment says why it is written that way rather
+/// than the way that costs orders of magnitude more; a score is JSON and carries none.
+pub const FILES: [(&str, &str); 13] = [
     (
         "variables/bpm",
         r"; Models: the pulse every `b` literal is measured against | Neglects: the meter, which variables/meter states | IO: () -> beats per minute | Tags: tempo
@@ -23,8 +23,33 @@ pub const FILES: [(&str, &str); 11] = [
     ),
     (
         "variables/key",
-        r"; Models: the tonic every `st` offset is measured from, so transposing the piece is editing this one number | Neglects: the mode, which chord/home and grid/phrase-2b spell out in their own offsets | IO: () -> hertz | Tags: key
+        r"; Models: the tonic every score degree and `st` offset is measured from, and the scale a degree counts in, so transposing is editing the note and changing mode the `scale` line | Neglects: the notes themselves, which the scores under score/ place | IO: () -> hertz | Tags: key, scale
+scale = @../scales/major
 C3
+",
+    ),
+    (
+        "scales/major",
+        r"; Models: the major scale, one row per degree above the tonic in cents, the last row the octave it repeats at | Neglects: which tonic, which variables/key names | IO: () -> cents per degree | Tags: scale, major
+200
+400
+500
+700
+900
+1100
+1200
+",
+    ),
+    (
+        "scales/minor",
+        r"; Models: the natural minor scale, one row per degree above the tonic in cents, the last row the octave it repeats at | Neglects: which tonic, which variables/key names | IO: () -> cents per degree | Tags: scale, minor
+200
+300
+500
+700
+800
+1000
+1200
 ",
     ),
     (
@@ -48,7 +73,7 @@ crop(exp(-t/decay), 0s, len, rise=attack, fall=fade)
     ),
     (
         "voice/note",
-        r"; Models: one played note, a timbre under an envelope | Neglects: which pitch and when, which chord/home and grid/phrase-2b state | IO: (t, f0, vel, len) -> amplitude | Tags: voice, note
+        r"; Models: one played note, a timbre under an envelope | Neglects: which pitch and when, which the scores under score/ state | IO: (t, f0, vel, len) -> amplitude | Tags: voice, note
 f0 = @../variables/key
 vel = 0.2
 len = 0.5s
@@ -56,23 +81,23 @@ len = 0.5s
 ",
     ),
     (
-        "chord/home",
-        r"; Models: the tonic triad, a third and a fifth stacked on variables/key as `st` offsets and never as written frequencies, so editing the key transposes the chord | Neglects: the envelope and the rhythm, which voice/note and grid/phrase-2b own | IO: (t) -> amplitude | Tags: chord, triad
-@../voice/tone(t, f0=@../variables/key*0st) + @../voice/tone(t, f0=@../variables/key*4st) + @../voice/tone(t, f0=@../variables/key*7st)
-",
+        "score/chord",
+        r#"{"at": "0b", "sound": "@../voice/tone", "deg": 1}
+{"at": "0b", "sound": "@../voice/tone", "deg": 3}
+{"at": "0b", "sound": "@../voice/tone", "deg": 5}
+"#,
     ),
     (
-        "grid/phrase-2b",
-        r"; Models: eight steps over two bars, one note a step, each pitch an `st` offset off variables/key | Neglects: the timbre and the envelope, which voice/tone and lib/env own | IO: (t) -> amplitude | Tags: grid, phrase
-@../voice/note(t, f0=@../variables/key*12st)
-@../voice/note(t, f0=@../variables/key*7st)
-@../voice/note(t, f0=@../variables/key*4st)
-@../voice/note(t, f0=@../variables/key*7st)
-@../voice/note(t, f0=@../variables/key*9st)
-@../voice/note(t, f0=@../variables/key*7st)
-@../voice/note(t, f0=@../variables/key*4st)
-@../voice/note(t, f0=@../variables/key*0st)
-",
+        "score/phrase",
+        r#"{"at": "0b", "sound": "@../voice/note", "deg": 8, "len": "0.25b"}
+{"at": "0.25b", "sound": "@../voice/note", "deg": 5, "len": "0.25b"}
+{"at": "0.5b", "sound": "@../voice/note", "deg": 3, "len": "0.25b"}
+{"at": "0.75b", "sound": "@../voice/note", "deg": 5, "len": "0.25b"}
+{"at": "1b", "sound": "@../voice/note", "deg": 6, "len": "0.25b"}
+{"at": "1.25b", "sound": "@../voice/note", "deg": 5, "len": "0.25b"}
+{"at": "1.5b", "sound": "@../voice/note", "deg": 3, "len": "0.25b"}
+{"at": "1.75b", "sound": "@../voice/note", "deg": 1, "len": "0.25b"}
+"#,
     ),
     (
         "perc/hat",
@@ -84,12 +109,12 @@ crop(gain*noise(1, period=0.5, color=1), 0s, 0.4s, rise=0.002s, fall=0.2s)
     (
         "fx/glue",
         r"; Models: the pitched layers glued by one short feedback -- the pitched chain's one crossing into samples, and the last thing that chain does, because `self` may read only what `sample` has already written | Neglects: the hats, which master sums in beside this under a `sample` of their own; a loop rings on forever, so it is cropped to the two bars it plays | IO: (t) -> amplitude | Tags: fx, feedback
-crop(sample(0.5*@../chord/home(t) + @../grid/phrase-2b(t)) + 0.3*self[idx(t) - 1], 0s, 2b)
+crop(sample(0.5*@../score/chord(t) + @../score/phrase(t)) + 0.3*self[idx(t) - 1], 0s, 2b)
 ",
     ),
     (
         "master",
-        r"; Models: two bars of the whole piece, each layer sampled on its own | Neglects: nothing it does not name; one closed form over the noise and the grid together costs far more than this, and a mono master broadcasts to any width, so no `join` of a value with itself is written | IO: (t) -> amplitude | Tags: master, arrangement
+        r"; Models: two bars of the whole piece, each layer sampled on its own | Neglects: nothing it does not name; one closed form over the noise and the scores together costs far more than this, and a mono master broadcasts to any width, so no `join` of a value with itself is written | IO: (t) -> amplitude | Tags: master, arrangement
 crop(0.6*(@fx/glue(t) + sample(@perc/hat(t)) + sample(@perc/hat(t - 1b))), 0s, 2b)
 ",
     ),
@@ -98,10 +123,10 @@ crop(0.6*(@fx/glue(t) + sample(@perc/hat(t)) + sample(@perc/hat(t - 1b))), 0s, 2
 /// `(command, why)`, in the order a stranger should run them: what the composition IS before
 /// what it sounds like. Answered beside the
 /// tree `new` wrote, so the first thing an agent reads is the next thing it should do.
-pub const NEXT: [(&str, &str); 8] = [
+pub const NEXT: [(&str, &str); 9] = [
     (
         "sva-cli lint",
-        "structure, comments, grid rows, key, whether each node plays bare; refuses before any audio",
+        "structure, comments, scores, key, whether each node plays bare; refuses before any audio",
     ),
     (
         "sva-cli builtins",
@@ -112,12 +137,16 @@ pub const NEXT: [(&str, &str); 8] = [
         "what master reads, and why it is samples",
     ),
     (
+        "sva-cli trace score/phrase",
+        "a score: one line per note, its sound shifted to `at`, each `deg` counted in the key's scale",
+    ),
+    (
         "sva-cli render 'sample(@voice/tone)' --representation spectrum(peaks=3)",
         "the three harmonics the lowpass leaves, measured off its samples",
     ),
     (
-        "sva-cli render 'sample(@chord/home)' --representation spectrum(peaks=9)",
-        "the same triad follows variables/key",
+        "sva-cli render 'sample(@score/chord)' --representation spectrum(peaks=9)",
+        "the triad follows variables/key: its note transposes, its `scale` line changes mode",
     ),
     (
         "sva-cli render '@perc/hat' --representation atoms",

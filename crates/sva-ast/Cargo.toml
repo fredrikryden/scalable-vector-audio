@@ -1,4 +1,4 @@
-# Concern: declares the package and no runtime dependencies at all | Non-concern: the deny edges that keep it a leaf (.annotated-tree.toml) | IO: none
+# Concern: declares the package and its one parsing dependency, JSON for a score | Non-concern: the deny edges that keep it a leaf (.annotated-tree.toml) | IO: none
 [package]
 name = "sva-ast"
 description = "The document model for a composition"
@@ -8,3 +8,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+serde = "1.0.229"
+serde_json = "1.0.151"

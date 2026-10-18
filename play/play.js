@@ -115,7 +115,8 @@ function outlinesShown(example) {
     try {
       const parsed = outline(text);
       const lines = [];
-      tree(parsed.outline, parsed.text, 0, lines);
+      if (parsed.score) lines.push(...parsed.score.items.map((e) => `line ${e.line}    ${parsed.text.slice(e.span.start, e.span.end)}`));
+      else tree(parsed.outline, parsed.text, 0, lines);
       $("outlines").append(element("pre", lines.join("\n")));
     } catch (error) {
       $("outlines").append(element("pre", described(error), "bad"));

@@ -1,3 +1,2 @@
-@kick*0.5
-
-@snare	@kick.lp(cutoff=2000)
+{"at": "0b", "sound": "@kick"}
+{"at": "0.5b", "sound": "@snare"}

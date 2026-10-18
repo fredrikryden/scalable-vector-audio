@@ -13,6 +13,6 @@ mod panics;
 mod pinned;
 mod render_integration;
 mod scaffold;
+mod score;
 mod store;
-mod templates;
 mod trace;

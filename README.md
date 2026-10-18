@@ -70,6 +70,23 @@ crop(0.5*(sample(@chord(t)) + 0.3*self[idx(t) - 1]), 0s, 2s)
 `sample(...)` is the one crossing from algebra to a buffer: above it every term is exact and
 rate-free, below it there is a rate, and a feedback term reading what it wrote sits under it.
 
+## Notes in time: a score
+
+A file whose first line opens with `{` is a score: JSON Lines, one note per line, sorted by
+`at`. Each line plays the sound it names shifted to its time, so this `bass` is
+`@voice(t, f0=…) + @voice(t - 0.5b, f0=…)`, still one closed form:
+
+```
+{"at": "0b", "sound": "@voice", "deg": 1}
+{"at": "0.5b", "sound": "@voice", "deg": 5}
+```
+
+`deg` counts from 1, the tonic in `variables/key`, through the scale that file names on its
+`scale = @../scales/minor` line, a file of one row of cents per degree, the octave last. Editing
+the key's note transposes every score; editing its `scale` line changes mode. Every other field
+binds the sound's own parameter, and a field it does not read is refused, naming the line. Keep a
+score to a phrase and place it from an equation, as `@bass(t - 8b)`.
+
 ## Literals and waveforms
 
 `C4` is a note name, `440hz` a frequency, `0.25s` a duration. `4st` and `50ct` are a semitone
@@ -95,37 +112,21 @@ One Rust engine, JSON on stdout, one `--help` page listing every flag beside its
 `npm install -g @scalable-vector-audio/sva-cli` installs a prebuilt binary, `cargo install sva-cli` builds one. Put
 the three files above in a directory and run it there.
 
-```
-sva-cli lint
-```
-
-`lint` checks every file on its own without rendering a sample, and every finding carries a
+`sva-cli lint` checks every file on its own without rendering a sample, and every finding carries a
 severity. Warnings exit 0. Seven checks exit non-zero: five about a node's doc comment or its
 length, one about a rate written as a number, and `arity`, a builtin called off its signature.
 `sva-cli lint '@master'` checks what `master` reaches, and prints the interval it reads.
 
-```
-sva-cli trace master
-```
+`sva-cli trace master` prints what `master` reads one hop down, everything that reads it up to
+an entry point, and the node that made it discrete: `"discrete": "sample(chord)", "down":
+["chord", "master"]`, with `master` under `down` because `self` reads it.
 
-prints what `master` reads one hop down, everything that reads it up to an entry point, and
-the node that made it discrete:
-
-```
-"ty": "samples", "discrete": "sample(chord)", "down": ["chord", "master"]
-```
-
-`master` is under `down` because `self` reads it.
-
-```
-sva-cli render '@master' --representation samples=/tmp/song.wav --rate 48000
-```
-
-writes 48 kHz float over the two seconds `master`'s crop holds. `'@master([0, 1s])'`
-names an interval, rendered whole; with none, a render ends where `master`'s support does,
-or earlier where `master` is proven under -120 dBFS for good, as the label's `pruned` states.
-`--until 'envelope(t) < -60db'` stops the render at the first frame under -60 dB.
-`ledger` prints rms, peak and clipped per node.
+`sva-cli render '@master' --representation samples=/tmp/song.wav --rate 48000` writes 48 kHz
+float over the two seconds `master`'s crop holds. `'@master([0, 1s])'` names an interval,
+rendered whole; with none, a render ends where `master`'s support does, or earlier where
+`master` is proven under -120 dBFS for good, as the label's `pruned` states. `--until
+'envelope(t) < -60db'` stops at the first frame under -60 dB. `ledger` prints rms, peak and
+clipped per node.
 
 Every reading says whether it is `exact` or `measured`, under which profile and at which
 rate. `--rate` is the one rate a render samples at: the target is read at its instants, and
@@ -136,12 +137,11 @@ discrete loop or solver steps on the grid its reader asks for, and refuses a tim
 
 `sva-cli builtins` prints every builtin with its arity and named arguments, the unit suffixes
 and the note-name grammar; a name outside that closed vocabulary does not parse. `sva-cli new
-my-song` writes eleven files with a grid, a noise and a tempo, and nine commands to run in order.
+my-song` writes thirteen files with two scores, two scales and a noise, and nine commands to run.
 
 `sva-wasm` runs the same compositions in a browser: `npm install @scalable-vector-audio/sva-wasm`.
 It needs a cross-origin isolated page. Call `await startThreads(n)` once, in a worker, and each
-render then uses up to `n` threads, or fewer if `open` or `render` sets `threads`.
-MIT. See `LICENSE`.
+render then uses up to `n` threads, or fewer if `open` or `render` sets `threads`. MIT; see `LICENSE`.
 
 ## Credit
 

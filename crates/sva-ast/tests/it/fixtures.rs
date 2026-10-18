@@ -109,9 +109,9 @@ fn malformed_expression_fixture_refuses() {
 }
 
 #[test]
-fn tsv_without_a_span_suffix_fixture_refuses() {
-    let errs = parse_composition(&fixture("tsv-no-span")).unwrap_err();
-    assert!(errs.iter().any(|r| r.code == DiagCode::TsvMissingSpan));
+fn a_body_over_two_lines_fixture_refuses() {
+    let errs = parse_composition(&fixture("multiline-body")).unwrap_err();
+    assert!(errs.iter().any(|r| r.code == DiagCode::MultilineBody));
 }
 
 /// A default is arithmetic a caller may omit, not a second way to name a signal.
@@ -224,30 +224,6 @@ fn a_defaulted_parameter_called_with_a_shift_is_mentioned() {
         DiagCode::BadDefault,
         "a name neither written nor called stays dead: {}",
         refusals[0].reason
-    );
-}
-
-/// A cell is a closed form in its row's own local time, so the window a cell writes must land where
-/// the cell's voice lands. FORMAT 15.4's placement is the one `concat` writes: shift both.
-#[test]
-fn a_cropped_cell_moves_with_its_row() {
-    let dir = tmp("cropped-cell");
-    write(&dir, "kick", "sin(2*pi*50*t)\n");
-    write(
-        &dir,
-        "pattern-2b",
-        "crop(@kick(t), 0s, 0.5s)\ncrop(@kick(t), 0s, 0.5s)\n",
-    );
-    let mut g = parse_composition(&dir).expect("the grid should resolve");
-    g.resolve_bar_spans(sva_ast::PerBar {
-        seconds: 2.0,
-        per: 1.0,
-    });
-
-    let placed = sva_ast::render_expr(g.expr("pattern-2b").expect("a materialized grid"));
-    assert_eq!(
-        placed, "crop(@kick, 0s, 0.5s) + crop(@kick(t - 2s), 2s, 2.5s)",
-        "row 1 of 2 sits two seconds into a four-second span, window and voice together"
     );
 }
 

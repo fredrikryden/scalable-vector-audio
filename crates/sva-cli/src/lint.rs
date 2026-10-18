@@ -61,8 +61,7 @@ fn lint_files(source: &dyn Source, graph: Graph) -> Result<LintReport, CliError>
 
 /// The findings no file's neighbours change.
 fn per_file(graph: &Graph) -> Vec<Finding> {
-    let mut findings = grid_row_counts(graph);
-    findings.extend(crate::variables::key_findings(graph));
+    let mut findings = crate::variables::key_findings(graph);
     findings.extend(crate::bare::bare_findings(graph));
     findings
 }
@@ -116,37 +115,6 @@ fn lint_reaching(source: &dyn Source, target: &str) -> Result<LintReport, CliErr
         per_file(&graph),
         interval,
     )
-}
-
-/// A row count tiles a span as a subdivision of a bar or as whole bars; both count.
-fn grid_row_counts(graph: &Graph) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    for path in graph.paths() {
-        let Some(grid) = graph.grid(path) else {
-            continue;
-        };
-        let Some(bars) = grid.bar_span.filter(|b| *b > 0.0) else {
-            continue;
-        };
-        let rows_per_bar = grid.row_count as f64 / bars;
-        let bars_per_row = bars / grid.row_count as f64;
-        let whole = |v: f64| (v - v.round()).abs() <= 1e-9;
-        if !whole(rows_per_bar) && !whole(bars_per_row) {
-            findings.push(Finding {
-                code: LintCode::GridRowsPerBar,
-                severity: Severity::Warning,
-                subject: path.to_string(),
-                message: format!(
-                    "`{path}` has {} rows over {bars} bar(s), {rows_per_bar:.4} rows/bar and \
-                     {bars_per_row:.4} bars/row — neither a whole subdivision of a bar nor a \
-                     whole number of bars a row, likely a stray or missing row",
-                    grid.row_count
-                ),
-                line: None,
-            });
-        }
-    }
-    findings
 }
 
 /// Refuses with every violation found, not just the first: a tree-wide scan, unlike
@@ -218,10 +186,10 @@ fn flush_comment_run(
 }
 
 /// Exactly one doc-comment line at the top, or `lint` refuses it. Only the leading run is
-/// judged — a grid's own inline `; lane` comments stay out of scope.
+/// judged, so a scale's inline comments stay out of scope; a score is JSON and holds none.
 fn doc_comment_violations(source: &dyn Source, graph: &Graph) -> Vec<LintViolation> {
     let mut violations = Vec::new();
-    for path in graph.paths() {
+    for path in graph.paths().filter(|path| graph.score(path).is_none()) {
         let Ok(Some(text)) = source.get(path) else {
             continue;
         };
@@ -277,11 +245,11 @@ const EXPRESSION_BODY_CHARS: usize = 10_000;
 /// A verbose local `@ref` name is a naming choice, not equation complexity.
 const REF_PLACEHOLDER: &str = "@x";
 
-/// Excludes the leading `;`-comment run. A node over budget on the raw count gets one more,
-/// cheap recount with ref names collapsed, so a verbose `@ref` name alone cannot trip the cap.
+/// Excludes the leading `;`-comment run, and a score, whose lines are events and no body. A
+/// node over budget gets one recount with ref names collapsed, so a verbose `@ref` cannot trip it.
 fn long_expression_body_violations(source: &dyn Source, graph: &Graph) -> Vec<LintViolation> {
     let mut violations = Vec::new();
-    for path in graph.paths() {
+    for path in graph.paths().filter(|path| graph.score(path).is_none()) {
         let Ok(Some(text)) = source.get(path) else {
             continue;
         };
@@ -474,94 +442,6 @@ mod tests {
             );
         }
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    /// The dogfooding bug: a trailing blank row makes 33, and 33/4 is not a whole subdivision —
-    /// yet every intended note is still there, which is why counting notes alone missed it.
-    #[test]
-    fn a_grid_with_a_trailing_blank_row_over_its_bar_span_is_flagged() {
-        let dir = dir_of(
-            "trailing-blank-row",
-            &[
-                ("kick", &(doc("a fixture kick") + "sin(2*pi*50*t)\n")),
-                (
-                    "pattern-4b",
-                    &(doc("a fixture pattern") + &("@kick\n".repeat(32) + "\n")),
-                ),
-                ("master", &(doc("a fixture signal") + "@pattern-4b\n")),
-            ],
-        );
-        let whole = lint(&dir, None).unwrap();
-        assert!(
-            whole
-                .findings
-                .iter()
-                .any(|f| f.code == LintCode::GridRowsPerBar && f.subject == "pattern-4b"),
-            "33 rows over 4 bars must be flagged: {:?}",
-            whole.findings.iter().map(|f| &f.code).collect::<Vec<_>>()
-        );
-
-        let targeted = lint(&dir, Some("@master([0, 1s])")).unwrap();
-        assert!(
-            targeted
-                .findings
-                .iter()
-                .any(|f| f.code == LintCode::GridRowsPerBar),
-            "the target-scoped path must run this check too"
-        );
-    }
-
-    #[test]
-    fn a_grid_whose_rows_tile_its_bar_span_evenly_is_clean() {
-        let dir = dir_of(
-            "clean-grid",
-            &[
-                ("kick", &(doc("a fixture kick") + "sin(2*pi*50*t)\n")),
-                (
-                    "pattern-4b",
-                    &(doc("a fixture pattern") + &"@kick\n".repeat(32)),
-                ),
-                ("master", &(doc("a fixture signal") + "@pattern-4b\n")),
-            ],
-        );
-        assert!(
-            !lint(&dir, None)
-                .unwrap()
-                .findings
-                .iter()
-                .any(|f| f.code == LintCode::GridRowsPerBar),
-            "32 rows over 4 bars is an exact subdivision"
-        );
-        assert!(
-            !lint(&dir, Some("@master([0, 1s])"))
-                .unwrap()
-                .findings
-                .iter()
-                .any(|f| f.code == LintCode::GridRowsPerBar)
-        );
-    }
-
-    #[test]
-    fn a_grid_spanned_in_seconds_has_no_bar_count_to_check() {
-        let dir = dir_of(
-            "seconds-spanned",
-            &[
-                ("kick", &(doc("a fixture kick") + "sin(2*pi*50*t)\n")),
-                (
-                    "pattern-2s",
-                    &(doc("a fixture pattern") + &("@kick\n".repeat(33) + "\n")),
-                ),
-                ("master", &(doc("a fixture signal") + "@pattern-2s\n")),
-            ],
-        );
-        assert!(
-            !lint(&dir, None)
-                .unwrap()
-                .findings
-                .iter()
-                .any(|f| f.code == LintCode::GridRowsPerBar),
-            "a `-Ns` grid declares no bars, so there is nothing to divide"
-        );
     }
 
     type ThresholdCase = (&'static str, std::path::PathBuf, Box<dyn Fn()>);
@@ -791,29 +671,25 @@ mod tests {
         );
     }
 
-    /// `; lane`-style inline comments inside a TSV grid, well below the header, are a
-    /// separate, already-legitimate feature (`sva-ast`'s `code_rows`) — not a second doc
-    /// comment competing with the header for "exactly one".
+    /// A comment between a scale's rows, below the header, is no second doc comment.
     #[test]
-    fn a_grids_own_inline_comment_below_a_well_formed_header_is_not_multiline_comment() {
+    fn a_scales_own_inline_comment_below_a_well_formed_header_is_not_multiline_comment() {
         let dir = dir_of(
-            "grid-inline-comment",
+            "scale-inline-comment",
             &[
-                ("kick", &(doc("a fixture kick") + "sin(2*pi*50*t)\n")),
                 (
-                    "pattern-1b",
-                    "; Models: a kick pattern | Neglects: dynamics, humanization | \
-                     IO: (t) -> amplitude | Tags: kick\n@kick\n; lane\n@kick\n",
+                    "scale",
+                    &(doc("a fixture scale") + "200\n; the third\n400\n1200\n"),
                 ),
                 (
                     "master",
-                    &(String::from(WELL_FORMED_MASTER_COMMENT) + "@pattern-1b\n"),
+                    &(String::from(WELL_FORMED_MASTER_COMMENT) + "sin(t)\n"),
                 ),
             ],
         );
         assert!(
             lint(&dir, None).is_ok(),
-            "a grid's own inline comment must not be mistaken for a second doc comment"
+            "a scale's own inline comment must not be mistaken for a second doc comment"
         );
     }
 

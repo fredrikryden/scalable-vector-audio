@@ -4,7 +4,6 @@
 /// the variant is how this workspace spells it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LintCode {
-    GridRowsPerBar,
     MissingComment,
     MalformedComment,
     MultilineComment,
@@ -19,7 +18,6 @@ pub enum LintCode {
 
 impl LintCode {
     pub const ALL: &'static [LintCode] = &[
-        LintCode::GridRowsPerBar,
         LintCode::MissingComment,
         LintCode::MalformedComment,
         LintCode::MultilineComment,
@@ -34,7 +32,6 @@ impl LintCode {
 
     pub fn code_str(self) -> &'static str {
         match self {
-            LintCode::GridRowsPerBar => "grid-rows-per-bar",
             LintCode::MissingComment => "missing-comment",
             LintCode::MalformedComment => "malformed-comment",
             LintCode::MultilineComment => "multiline-comment",
@@ -51,9 +48,6 @@ impl LintCode {
     /// Exhaustive, so a code cannot be added without saying what to write instead of it.
     pub fn help(self) -> &'static str {
         match self {
-            LintCode::GridRowsPerBar => {
-                "make the row count a whole multiple of the filename's bar span, or restate the span"
-            }
             LintCode::MissingComment | LintCode::MalformedComment => {
                 "give the node one `;`-comment line: `; Models: ... | Neglects: ... | IO: ... -> ... \
                  | Tags: ...`"

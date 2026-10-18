@@ -21,9 +21,39 @@ pub fn help_text() -> String {
 
 DESCRIPTION:
   A composition is a directory of node files, each one closed-form expression in
-  `t` or `f`. sva-cli reads that composition and prints what it is and what it
-  sounds like, as JSON on stdout. `render`, `lint` and `trace` read the current
-  directory; `new` writes beside it and `analyze` reads a file.
+  `t` or `f` on one line, or a score placing notes in time. sva-cli reads that
+  composition and prints what it is and what it sounds like, as JSON on stdout.
+  `render`, `lint` and `trace` read the current directory; `new` writes beside it
+  and `analyze` reads a file.
+
+SCORES:
+  A score is data: JSON Lines, one note per line, sorted by `at`. A file whose
+  first non-blank line starts with `{{` is a score; its name has no extension, and
+  `@score/bass` reads it like any node. Each line plays the sound it names,
+  shifted to its time, and the score is their sum, one closed form:
+    {{"at": "0b", "sound": "@../sounds/bass", "deg": 1, "len": "0.25b", "vel": 0.9}}
+    {{"at": "0.25b", "sound": "@../sounds/bass", "deg": 5, "cutoff": "900hz"}}
+  is @../sounds/bass(t, f0=<degree 1>, len=0.25b, vel=0.9) + @../sounds/bass(t -
+  0.25b, f0=<degree 5>, cutoff=900hz).
+    at     required: a time literal string, "0.25b" or "0.5s"; a bare number is
+           refused. One score counts in bars or in seconds, not both.
+    sound  required: an `@ref` string, resolved from the score's own directory.
+    len    a time literal string, bound as the sound's `len`.
+    deg    a scale degree, an integer counted from 1, the tonic. In a seven-row
+           scale 8 is the tonic an octave up, 0 the seventh degree below the
+           tonic and -6 the tonic an octave down. It binds `f0` to the tonic in
+           `variables/key` times the degree's ratio in the scale its `scale =
+           @../scales/<name>` line names; a line writing `f0` and `deg` refuses.
+    other  any other field binds the sound's parameter of that name: a number, or
+           one literal in a string ("0.03s", "-6db", "900hz", "A1").
+  A field the sound does not read, a parameter it reads that nothing binds, and a
+  `deg` with no scale refuse before any audio, each naming the score's line and
+  column. A scale file holds one row per degree in cents above the tonic,
+  ascending, the last the period it repeats at: `scales/major` is 200 400 500
+  700 900 1100 1200. Editing `variables/key`'s note transposes every score and
+  editing its `scale` line changes mode. Keep a score phrase-sized and place it
+  from an equation: `@score/verse(t - 8b)`, `repeat(@score/riff-1b, 4)`. A score
+  carries no automation: a moving argument is written in the sound's equation.
 
 RENDER:
   sva-cli render '<expression>' --representation <list> [--until '<condition>']
@@ -202,6 +232,10 @@ LINT:
   the files that target reaches, and prints the interval a render of it reads.
   Either refuses a type error as `render` does.
 
+  A score holds no `;` comment and no body, so the comment and length checks
+  pass it by; a file of two or more lines that is neither a score nor a scale
+  refuses as `multiline-body` before any check runs.
+
   Every check prints one `data.diagnostics` item. `warning` exits 0, `error`
   exits non-zero, so branch on the verdict and never on whether the array is
   empty. No flag downgrades an error.
@@ -217,9 +251,7 @@ LINT:
            literal-sample-rate   a written rate where `sp` belongs
            arity                 a builtin called without an argument it reads,
                                  or with one it does not, as `rand(seed=k)`
-  warning  grid-rows-per-bar     a TSV grid's row count does not divide evenly
-                                 into its filename's bar span
-           key-is-not-a-pitch    `variables/key` holds neither a note name nor
+  warning  key-is-not-a-pitch    `variables/key` holds neither a note name nor
                                  a number of hertz
            parameter-has-no-default
                                  a node reads a parameter no `name = value` line
@@ -234,7 +266,9 @@ TRACE:
   Prints one node's position without rendering audio: what it reads (`down`, one
   hop), everything that reads it (`up`, transitively to an entry point), each
   beside the expression doing the reading, the node that made it discrete, and
-  the feedback loop it sits in, if any. An interval the target reads is ignored.
+  the feedback loop it sits in, if any. A score is shown as its line count, its
+  first and last `at` and the sounds it plays, never the sum it lowers to. An
+  interval the target reads is ignored.
 
 BUILTINS:
   sva-cli builtins
@@ -255,7 +289,9 @@ OUTLINE:
   `args`, operators by `op`, refs by `path` with their `binds`, refs and `self`
   by how they `read`, `time` or `index`, literals by `value` and `unit`, names
   by `name`. A node the parser supplies itself, the `0` of a prefix minus or the
-  `t` of a bare `@ref`, has `written: false`. Reads no composition.
+  `t` of a bare `@ref`, has `written: false`. A score's text prints `score`
+  instead of `outline`: one item per line, with its `line`, `span`, `at`,
+  `sound`, `deg` and `args`. Reads no composition.
 
 NEW:
   sva-cli new <name> [--idempotency-key <key>]
@@ -277,7 +313,7 @@ EXAMPLES:
     --representation 'samples(buffer=100ms)=alsa:default,loudness'
   sva-cli lint
   sva-cli lint '@master'
-  sva-cli trace grid/phrase-2b
+  sva-cli trace score/phrase
   sva-cli builtins
 
 OUTPUT:

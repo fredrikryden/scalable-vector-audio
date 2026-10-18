@@ -6,11 +6,11 @@ use sva_engine::{DEFAULT_SAMPLE_RATE, RenderConfig};
 
 use crate::lint::Finding;
 
-/// Every node but a reserved variable is a sound a registry may play on its own.
+/// Every node but a reserved variable or a scale is a sound a registry may play on its own.
 pub fn bare_findings(graph: &Graph) -> Vec<Finding> {
     let sounds: Vec<&str> = graph
         .paths()
-        .filter(|p| !crate::trace::reserved_variable(p))
+        .filter(|p| !crate::trace::reserved_variable(p) && graph.scale(p).is_none())
         .collect();
     let mut findings = Vec::new();
     let mut whole = Vec::new();

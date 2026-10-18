@@ -502,7 +502,7 @@ impl<'b> Builder<'b> {
     ) -> Result<String, EngineError> {
         if self.out.nodes.len() >= MAX_INSTANCES {
             return Err(fault(
-                file,
+                caller,
                 span,
                 BindingFault::TooManyInstances(MAX_INSTANCES),
             ));

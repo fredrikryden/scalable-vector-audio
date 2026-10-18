@@ -35,17 +35,41 @@ pub fn trace(dir: &Path, target: &str) -> Result<Traceable, CliError> {
     {
         roots.push(target.to_string());
     }
-    let traced = match sva_engine::trace(&graph, &roots, target) {
+    let mut traced = match sva_engine::trace(&graph, &roots, target) {
         Err(EngineError::UnknownNode(ref name)) if name == target && !graph.defines(target) => {
             probe(&mut graph, target)?
         }
         other => other.map_err(CliError::Engine)?,
     };
+    let readers = traced.up.iter_mut().map(|up| (&up.node, &mut up.expr));
+    for (node, expr) in std::iter::once((&traced.node, &mut traced.expr)).chain(readers) {
+        if let Some(score) = graph.score(node) {
+            *expr = summary(score);
+        }
+    }
     Ok(Traceable {
         bpm: number(graph.global("bpm")),
         meter: text(graph.global("meter")),
         traced,
     })
+}
+
+/// A score is its lines, not the sum they lower to: how many, when, and what they play.
+fn summary(score: &sva_ast::Score) -> String {
+    let mut sounds: Vec<&str> = Vec::new();
+    for event in &score.events {
+        if !sounds.contains(&event.sound.as_str()) {
+            sounds.push(&event.sound);
+        }
+    }
+    let (first, last) = (&score.events[0], &score.events[score.events.len() - 1]);
+    format!(
+        "a score of {} lines, `at` {} to {}, each playing @{} shifted to its `at`",
+        score.events.len(),
+        first.at.spelled(),
+        last.at.spelled(),
+        sounds.join(", @")
+    )
 }
 
 /// `text` is neither node nor instance: argv math, an entry point of its own.
@@ -79,13 +103,14 @@ fn referenced(graph: &Graph) -> BTreeSet<String> {
     reached
 }
 
-/// Every node nothing references, bar a library node (one with a free parameter).
+/// Every node nothing references, bar a library node (one with a free parameter) and a scale,
+/// which is data a score's degrees read and no signal.
 pub(crate) fn entry_points(graph: &Graph) -> Vec<String> {
     let reached = referenced(graph);
     graph
         .paths()
         .filter(|p| !reached.contains(*p))
-        .filter(|p| !reserved_variable(p))
+        .filter(|p| !reserved_variable(p) && graph.scale(p).is_none())
         .filter(|p| graph.free_parameters(p).is_empty())
         .map(str::to_string)
         .collect()

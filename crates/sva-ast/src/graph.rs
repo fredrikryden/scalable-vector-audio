@@ -8,11 +8,10 @@ use crate::expr::{
     Address, Arg, BinOp, Binds, Expr, Literal, children, map_children, map_children_ok,
 };
 use crate::filename::{FileSpan, SpanUnit};
-use crate::ingest::{base_name, parse_file};
+use crate::ingest::{Data, base_name, parse_file};
 use crate::refusal::Refusal;
 use crate::skipped::{Skip, Skipped};
 use crate::source::Source;
-use crate::tsv::Grid;
 
 /// The one reserved folder name; its contents are ordinary nodes, so `@variables/bpm` refs.
 pub const VARIABLES: &str = "variables";
@@ -21,7 +20,7 @@ pub const VARIABLES: &str = "variables";
 pub struct Graph {
     root: String,
     nodes: BTreeMap<String, Arc<Defined>>,
-    grids: HashMap<String, Grid>,
+    data: HashMap<String, Data>,
     spans: HashMap<String, Option<FileSpan>>,
     per_bar: Option<PerBar>,
     skipped: Vec<Skipped>,
@@ -38,14 +37,14 @@ pub struct Defined {
     pub defaults: Vec<(String, Expr)>,
 }
 
-/// A node's parse with its text, span and grid, as one graph hands it to another.
+/// A node's parse with its text, span and data, as one graph hands it to another.
 #[derive(Clone, Debug)]
 pub struct Held {
     defined: Arc<Defined>,
     text: String,
     generation: Option<u64>,
     span: Option<FileSpan>,
-    grid: Option<Grid>,
+    data: Option<Data>,
 }
 
 impl Held {
@@ -174,28 +173,37 @@ impl Graph {
         self.spans.get(path).copied().flatten()
     }
 
-    /// `None` for a node no TSV file backs — every other node reads as a plain expression.
-    pub fn grid(&self, path: &str) -> Option<&Grid> {
-        self.grids.get(path)
+    pub(crate) fn data(&self, path: &str) -> Option<&Data> {
+        self.data.get(path)
     }
 
-    /// Every TSV grid node is re-derived from its own cells against the span it now carries,
-    /// so a pattern's row spacing and the `crop`/`repeat` placing it share one resolved
-    /// number. Re-deriving changes only shift literals, so the checks already run stay valid.
+    /// The events a score file holds, `None` for every node an equation or a number writes.
+    pub fn score(&self, path: &str) -> Option<&crate::score::Score> {
+        match self.data.get(path)? {
+            Data::Score(score) => Some(score),
+            _ => None,
+        }
+    }
+
+    /// The cents a scale file holds: data a score's degrees read, never a signal.
+    pub fn scale(&self, path: &str) -> Option<&crate::scale::Scale> {
+        match self.data.get(path)? {
+            Data::Scale(scale) => Some(scale),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn rewrite(&mut self, path: &str, body: Expr) {
+        let defined = self.nodes.get_mut(path).expect("a node this graph holds");
+        Arc::make_mut(defined).body = body;
+    }
+
     pub fn resolve_bar_spans(&mut self, per_bar: PerBar) {
         let seconds_per_bar = per_bar.secs();
         for span in self.spans.values_mut().flatten() {
             if span.unit == SpanUnit::Bars {
                 span.amount *= seconds_per_bar;
                 span.unit = SpanUnit::Seconds;
-            }
-        }
-        for (path, grid) in &self.grids {
-            let Some(Some(span)) = self.spans.get(path) else {
-                continue;
-            };
-            if let Some(defined) = self.nodes.get_mut(path) {
-                Arc::make_mut(defined).body = crate::tsv::materialize(grid, span.amount);
             }
         }
         self.per_bar = Some(per_bar);
@@ -258,7 +266,7 @@ impl Graph {
                 defaults: Vec::new(),
             }),
             span: None,
-            grid: None,
+            data: None,
         }
     }
 
@@ -272,7 +280,7 @@ impl Graph {
                 .expect("every node holds its text"),
             generation: self.generations.get(path).copied(),
             span: self.spans.get(path).copied().flatten(),
-            grid: self.grids.get(path).cloned(),
+            data: self.data.get(path).cloned(),
         })
     }
 
@@ -287,9 +295,9 @@ impl Graph {
                     None => self.generations.remove(path),
                 };
                 self.spans.insert(path.to_string(), held.span);
-                match held.grid {
-                    Some(grid) => self.grids.insert(path.to_string(), grid),
-                    None => self.grids.remove(path),
+                match held.data {
+                    Some(data) => self.data.insert(path.to_string(), data),
+                    None => self.data.remove(path),
                 };
             }
             None => {
@@ -297,7 +305,7 @@ impl Graph {
                 self.texts.remove(path);
                 self.generations.remove(path);
                 self.spans.remove(path);
-                self.grids.remove(path);
+                self.data.remove(path);
             }
         }
         before
@@ -327,6 +335,7 @@ impl Graph {
         for (_, value) in &defined.defaults {
             out.extend(reads_of(path, value));
         }
+        out.extend(data_reads(path, self.data.get(path)));
         out
     }
 
@@ -341,6 +350,7 @@ impl Graph {
                 for (_, value) in &defined.defaults {
                     open.extend(reads_of(&path, value));
                 }
+                open.extend(data_reads(&path, self.data.get(&path)));
             }
         }
         seen
@@ -574,6 +584,14 @@ impl Graph {
     }
 }
 
+/// The key's scale line is a read no expression writes.
+fn data_reads(path: &str, data: Option<&Data>) -> Option<String> {
+    match data? {
+        Data::Key(line) => resolve_ref_path(path, &line.path),
+        _ => None,
+    }
+}
+
 fn arg_expr(args: &[Arg], idx: usize) -> Option<&Expr> {
     args.get(idx).map(|a| match a {
         Arg::Pos(e) | Arg::Named(_, e) => e,
@@ -677,7 +695,7 @@ struct Loading {
     name: String,
     nodes: BTreeMap<String, Expr>,
     defaults: BTreeMap<String, Vec<(String, Expr)>>,
-    grids: HashMap<String, Grid>,
+    data: HashMap<String, Data>,
     spans: HashMap<String, Option<FileSpan>>,
     missing: BTreeSet<String>,
     refusals: Vec<Refusal>,
@@ -692,7 +710,7 @@ impl Loading {
             name,
             nodes: BTreeMap::new(),
             defaults: BTreeMap::new(),
-            grids: HashMap::new(),
+            data: HashMap::new(),
             spans: HashMap::new(),
             missing: BTreeSet::new(),
             refusals: Vec::new(),
@@ -736,14 +754,14 @@ impl Loading {
         if let Some(at) = source.generation(path) {
             self.generations.insert(path.to_string(), at);
         }
-        match parse_file(base_name(path), &text) {
+        match parse_file(path, &text) {
             Ok(parsed) => {
                 self.nodes.insert(path.to_string(), parsed.expr);
                 if !parsed.defaults.is_empty() {
                     self.defaults.insert(path.to_string(), parsed.defaults);
                 }
-                if let Some(grid) = parsed.grid {
-                    self.grids.insert(path.to_string(), grid);
+                if let Some(data) = parsed.data {
+                    self.data.insert(path.to_string(), data);
                 }
                 true
             }
@@ -756,10 +774,24 @@ impl Loading {
     }
 
     fn reads(&self, path: &str) -> Vec<String> {
-        match self.nodes.get(path) {
+        let mut out = match self.nodes.get(path) {
             Some(expr) => reads_of(path, expr),
             None => Vec::new(),
+        };
+        out.extend(data_reads(path, self.data.get(path)));
+        out
+    }
+
+    /// A score is read line by line, so a refusal inside one names its line and column.
+    fn on_its_line(&self, mut refusal: Refusal) -> Refusal {
+        let path = refusal.at.path.as_str();
+        if let (Some(Data::Score(_)), Some(text)) = (self.data.get(path), self.texts.get(path)) {
+            let before = &text[..refusal.at.span.start];
+            let line = before.matches('\n').count() + 1;
+            let column = before.len() - before.rfind('\n').map_or(0, |at| at + 1) + 1;
+            refusal.reason = format!("line {line}, column {column}: {}", refusal.reason);
         }
+        refusal
     }
 
     /// Every ref resolving here or in `base`.
@@ -771,7 +803,7 @@ impl Loading {
             |path: &str| self.nodes.contains_key(path) || base.is_some_and(|b| b.defines(path));
         let dangling = check_refs((&self.nodes, &held), &self.texts, &self.name);
         if !dangling.is_empty() {
-            return Err(dangling);
+            return Err(dangling.into_iter().map(|r| self.on_its_line(r)).collect());
         }
         let cycles = check_cycles(&self.nodes);
         if !cycles.is_empty() {
@@ -785,7 +817,7 @@ impl Loading {
         Ok(Graph {
             root: self.name,
             nodes: nodes.collect(),
-            grids: self.grids,
+            data: self.data,
             spans: self.spans,
             per_bar: None,
             skipped: self.skipped,
@@ -1257,13 +1289,16 @@ mod tests {
             ("kick", "sin(2*pi*50*t)\n"),
             ("swung", "@kick(t - 0.02b)*0.9\n"),
             ("tiled", "crop(@kick(t % 1b), 0s, 16b)\n"),
-            ("grid-1b", "@kick\t@kick(t - 0.01b)\n"),
+            (
+                "phrase-1b",
+                "{\"at\": \"0b\", \"sound\": \"@kick\"}\n{\"at\": \"0.01b\", \"sound\": \"@kick\"}\n",
+            ),
         ];
         let mut g = load(&of(&files)).unwrap();
 
         assert_eq!(
             g.unresolved_bar_literals(),
-            vec!["grid-1b", "swung", "tiled"]
+            vec!["phrase-1b", "swung", "tiled"]
         );
 
         g.resolve_bar_spans(PerBar {
@@ -1280,9 +1315,9 @@ mod tests {
             Some(&parse("crop(@kick(t % (1*(2/1))), 0s, 16*(2/1))").unwrap())
         );
         assert_eq!(
-            g.expr("grid-1b"),
+            g.expr("phrase-1b"),
             Some(&parse("@kick + @kick(t - 0.01*(2/1))").unwrap()),
-            "a grid's cells are re-materialized, then their bar literals resolved"
+            "a score's times resolve as every other bar literal does"
         );
     }
 
@@ -1338,57 +1373,6 @@ mod tests {
             })
         );
         assert_eq!(g.span("drums/plain"), None);
-    }
-
-    /// The defect this pins: row shifts once baked in at parse time as raw bar-numbers while
-    /// the outer `crop` window was tempo-scaled, so the two disagreed by `seconds_per_bar`.
-    #[test]
-    fn resolve_bar_spans_rescales_a_grids_row_shifts_to_match_its_crop_window() {
-        let files: Vec<(&str, &str)> = vec![
-            ("kick", "sin(2*pi*50*t)\n"),
-            ("pattern-1b", "@kick\n@kick\n@kick\n@kick\n"),
-            ("track", "repeat(@pattern-1b, 2)\n"),
-        ];
-        let mut g = load(&of(&files)).unwrap();
-
-        g.resolve_bar_spans(PerBar {
-            seconds: 2.0,
-            per: 1.0,
-        });
-        let mut rows = Vec::new();
-        flatten_sum(g.expr("pattern-1b").unwrap(), &mut rows);
-        let shifts: Vec<f64> = rows.iter().map(ref_shift).collect();
-        assert_eq!(
-            shifts,
-            vec![0.0, 0.5, 1.0, 1.5],
-            "four rows must span the bar's full 2 resolved seconds"
-        );
-
-        g.desugar_arrangement().unwrap();
-        let mut copies = Vec::new();
-        flatten_sum(g.expr("track").unwrap(), &mut copies);
-        let Expr::Call { args, .. } = &copies[1] else {
-            panic!("expected a crop() call")
-        };
-        assert_eq!(
-            literal_num(&args[1]),
-            2.0,
-            "the second copy starts where the grid's own rows end"
-        );
-    }
-
-    fn ref_shift(e: &Expr) -> f64 {
-        match e {
-            Expr::Ref { arg, .. } => match &**arg {
-                Expr::Var(_) => 0.0,
-                Expr::Bin(BinOp::Sub, _, r) => match &**r {
-                    Expr::Lit(Literal::Num(n)) => *n,
-                    other => panic!("expected a literal shift, got {other:?}"),
-                },
-                other => panic!("expected `t` or `t - k`, got {other:?}"),
-            },
-            other => panic!("expected a Ref, got {other:?}"),
-        }
     }
 
     #[test]
@@ -1587,7 +1571,7 @@ mod tests {
         assert_eq!(
             *g.expr("repeated").unwrap(),
             Expr::Lit(Literal::Num(0.0)),
-            "0 copies is silence, same as an empty TSV grid"
+            "0 copies is silence"
         );
         assert_eq!(
             *g.expr("concatenated").unwrap(),

@@ -13,10 +13,12 @@ mod parameters;
 mod parser;
 mod print;
 mod refusal;
+mod scale;
+mod score;
 mod series;
 mod skipped;
 mod source;
-mod tsv;
+mod tuning;
 mod vocabulary;
 
 pub use diag::{ByteSpan, Diag, DiagCode};
@@ -31,7 +33,7 @@ pub use graph::{
     Defined, Graph, Held, PerBar, VARIABLES, load, load_beside, load_reaching, names_a_node,
     reads_of, resolve_ref_path,
 };
-pub use ingest::{Parsed, body_at, occurs_free, parse_file};
+pub use ingest::{Data, KEY, Parsed, ScaleLine, body_at, occurs_free, parse_file};
 pub use lexer::{
     LogUnit, Token, TokenKind, ref_spans, strip_line_comment, tokenize, whole_ref_path,
 };
@@ -40,6 +42,8 @@ pub use parameters::free_parameters;
 pub use parser::parse as parse_expr;
 pub use print::render as render_expr;
 pub use refusal::{Location, Refusal};
+pub use scale::Scale;
+pub use score::{Event, Score, Time, is_score, parse_score};
 pub use series::{
     bounds_waiting as series_bounds_waiting, folded as fold_number,
     waits_for_instance as series_waits_for_instance, written_out as write_out_series,
@@ -47,7 +51,6 @@ pub use series::{
 };
 pub use skipped::{Skip, Skipped};
 pub use source::{Composition, Listing, Source};
-pub use tsv::Grid;
 pub use vocabulary::{
     BUILTINS, CASTS, CHANNEL, FILTERS, FINITE_DIFFERENCE, MODAL, RESERVED, SELF, is_builtin,
     is_language_value, is_reserved, note_midi,
