@@ -668,7 +668,8 @@ impl ValueGraph {
 
     /// What a release keeps of each value, `ends` where each run stands. A wanted value keeps
     /// everything, as a wanted reader's rerun reads it from its start; the target's own value,
-    /// which no wanted value reads, keeps only the output's samples.
+    /// which no wanted value reads, keeps only the output's samples. A periodic value keeps them
+    /// folded into `[0, period)`, where it holds them.
     fn keeps(
         &self,
         (mut needs, reach): (Vec<Need>, Vec<Segments>),
@@ -703,6 +704,9 @@ impl ValueGraph {
             if let (Kind::MachineRun(machine_run), Some(end)) = (&value.kind, ends(at, value)) {
                 kept.add(Extent::new(end.saturating_sub(machine_run.own), end));
                 kept.union(&reach[at].intersect(Extent::new(i64::MIN, end)));
+            }
+            if let Some(period) = value.period {
+                kept = kept.folded(period);
             }
             out.push((at, kept));
         }

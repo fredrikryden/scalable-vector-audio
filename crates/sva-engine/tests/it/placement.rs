@@ -243,3 +243,32 @@ fn no_identity_or_body_holds_a_reads_shift() {
     };
     assert_eq!(of("near"), of("far"), "one identity wherever it is read");
 }
+
+/// 1 kHz repeats every 441 samples; each range starting past 0 wraps or folds into it.
+#[test]
+fn a_periodic_value_read_across_its_period_from_past_zero_holds_every_sample() {
+    let g = graph_of("periodic-offset", &[("s", "sin(2*pi*1000*t)\n")]);
+    for (start, end) in [(300, 600), (441, 445), (11_025, 11_029), (440, 444)] {
+        let mut config = RenderConfig::at(RATE);
+        config.range = Range {
+            start: Some(start),
+            end: Some(end),
+        };
+        let rendered = render(&g, "s", config, &Tier::default()).unwrap_or_else(|e| panic!("{e}"));
+        let out = rendered
+            .output(rendered.id("s").expect("s"))
+            .expect("its samples");
+        assert_eq!(
+            (out.start, out.plane(0).len()),
+            (start, (end - start) as usize)
+        );
+        for (i, x) in out.plane(0).iter().enumerate() {
+            let n = start + i as i64;
+            let exact = (std::f64::consts::TAU * 1000.0 * n as f64 / f64::from(RATE)).sin();
+            assert!(
+                (x - exact).abs() < 1e-9,
+                "[{start}, {end}) sample {n}: {x} for {exact}"
+            );
+        }
+    }
+}
