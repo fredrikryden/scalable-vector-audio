@@ -138,7 +138,10 @@ fn atoms_print_each_window_in_seconds_and_null_where_unbounded() {
     put(&dir, "x", "0.1*sin(2*pi*50*t) + @voice(t - 1s, f0=330hz)\n");
     let rendered = probe(&dir, "@x([0, 2s])").expect("a closed form");
     let json = json_of(&rendered, "atoms", Representation::Atoms);
-    let items: Vec<&str> = json.split("{ \"sketch\": ").skip(1).collect();
+    let items: Vec<&str> = json
+        .split("{ \"channel\": 0, \"sketch\": ")
+        .skip(1)
+        .collect();
     assert_eq!(items.len(), 4, "two conjugate pairs: {json}");
     let held = items
         .iter()

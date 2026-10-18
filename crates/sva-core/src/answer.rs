@@ -860,9 +860,10 @@ fn atom_json(a: &sva_engine::Atom) -> String {
         sva_engine::Var::F => ("hz", "hz", "secs"),
     };
     format!(
-        "\n    {{ \"sketch\": \"{}\", \"{turns}\": {}, \"re\": {}, \"im\": {}, \"db\": {}, \
-         \"decay_per_{per}\": {}, \"decay_from_{at}\": {}, \"degree\": {}, \
+        "\n    {{ \"channel\": {}, \"sketch\": \"{}\", \"{turns}\": {}, \"re\": {}, \"im\": {}, \
+         \"db\": {}, \"decay_per_{per}\": {}, \"decay_from_{at}\": {}, \"degree\": {}, \
          \"polynomial_at_{at}\": {}, \"start_{at}\": {}, \"end_{at}\": {} }}",
+        a.channel,
         escape(&a.sketch),
         num(a.turns),
         num(a.amp.re),

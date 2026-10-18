@@ -130,9 +130,13 @@ fn exact(
             (Output::Lines(held), Listed::joined(each))
         }
         Representation::Atoms => {
-            let listed = enumerated()?;
-            let found = listed.atoms.iter().map(|a| atom_of(sum.var, a)).collect();
-            (Output::Atoms(found), listed)
+            let each = per_channel(render, node, sum)?;
+            let found = each
+                .iter()
+                .enumerate()
+                .flat_map(|(c, one)| one.atoms.iter().map(move |a| atom_of(sum.var, a, c)))
+                .collect();
+            (Output::Atoms(found), Listed::joined(each))
         }
         // A pair states its partials; `max_notes` is the question, not a cut answer.
         Representation::Pitch { max_notes, .. } => {
@@ -670,11 +674,12 @@ pub fn sketch_atom(a: &SpectralAtom) -> String {
 
 /// The atom's own fields, read off as it holds them; a constant turns at zero and decays at
 /// none. Adding zero writes a negative zero as the zero it equals.
-fn atom_of(var: Var, a: &SpectralAtom) -> Atom {
+fn atom_of(var: Var, a: &SpectralAtom, channel: usize) -> Atom {
     let (sigma, omega, mu) = a.exp.map_or((0.0, 0.0, 0.0), |e| (e.sigma, e.omega, e.mu));
     let bounded = |edge: Edge| Some(edge.value() + 0.0).filter(|x| x.is_finite());
     Atom {
         var,
+        channel,
         sketch: sketch_atom(a),
         amp: a.c,
         turns: omega / std::f64::consts::TAU + 0.0,

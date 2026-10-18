@@ -927,6 +927,35 @@ fn self_similarity_past_the_cap_names_both_remedies() {
     assert!(said.contains("@x([0, 10.25s])"), "{said}");
 }
 
+/// `atoms` names the channel of each term.
+#[test]
+fn a_two_channel_forms_atoms_name_their_channel() {
+    let law = rendered(
+        "two-channel-atoms",
+        "join(sin(2*pi*256*t), 0.5*sin(2*pi*512*t))\n",
+        vec!["lines"],
+    );
+    let id = law.id("node").expect("the root");
+    let Output::Atoms(atoms) = answer(&law, id, Representation::Atoms)
+        .expect("atoms")
+        .value
+    else {
+        panic!("a law's atoms");
+    };
+    let at = |channel: usize| -> Vec<f64> {
+        atoms
+            .iter()
+            .filter(|a| a.channel == channel)
+            .map(|a| a.turns.abs().round())
+            .collect()
+    };
+    assert_eq!(
+        (at(0), at(1)),
+        (vec![256.0; 2], vec![512.0; 2]),
+        "{atoms:?}"
+    );
+}
+
 /// A first difference has no value at the first sample, which has none before it.
 #[test]
 fn a_first_difference_starts_at_the_second_sample() {

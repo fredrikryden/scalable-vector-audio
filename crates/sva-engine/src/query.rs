@@ -172,7 +172,8 @@ static LINES: Reading = Reading {
     name: "lines",
     takes: &[],
     reads: Reads::ClosedForm,
-    help: "the exact line list of a closed form",
+    help: "the exact line list of a closed form, every channel's in channel order with no \
+           channel named; `atoms` names each term's",
     build: |_| Representation::Lines,
 };
 
@@ -180,7 +181,7 @@ static ATOMS: Reading = Reading {
     name: "atoms",
     takes: &[],
     reads: Reads::ClosedForm,
-    help: "each term of a closed form: its sketch, line, decay, polynomial and window",
+    help: "each term of a closed form: its channel, sketch, line, decay, polynomial and window",
     build: |_| Representation::Atoms,
 };
 
@@ -591,6 +592,8 @@ pub enum Output {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Atom {
     pub var: Var,
+    /// The lane, or channel, it stands in.
+    pub channel: usize,
     pub sketch: String,
     pub amp: C64,
     pub turns: f64,
