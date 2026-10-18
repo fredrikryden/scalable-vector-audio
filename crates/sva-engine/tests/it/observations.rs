@@ -831,15 +831,26 @@ fn a_closed_forms_periodicity_is_measured_off_its_samples() {
     }
 }
 
-/// A target under the window refuses under its own code, naming the interval and the window
-/// that would read.
+/// A target under the window refuses under its own code, naming the interval that would
+/// read, and the shorter window only where one fits the target.
 #[test]
-fn periodicity_of_a_target_under_its_window_names_both_remedies() {
+fn periodicity_of_a_target_under_its_window_names_the_remedies_that_read() {
     let (law, asked) = periodicity_of("periodic-short", 1.0);
     let refused = answer(&law, law.id("node").expect("the root"), asked).expect_err("1 s < 4 s");
     assert_eq!(refused.code(), "read.target_under_window");
     let said = format!("{refused}");
     assert!(said.contains("([0, 4s])"), "{said}");
+    assert!(!said.contains("periodicity(window="), "{said}");
+    assert!(said.contains("no window under 4s holds"), "{said}");
+    let wide = Representation::Periodicity {
+        frame_secs: 0.5,
+        window_secs: 6.0,
+        curve: false,
+    };
+    let (law, _) = periodicity_of("periodic-five", 5.0);
+    let refused = answer(&law, law.id("node").expect("the root"), wide).expect_err("5 s < 6 s");
+    let said = format!("{refused}");
+    assert!(said.contains("([0, 6s])"), "{said}");
     assert!(said.contains("periodicity(window=4s)"), "{said}");
 }
 

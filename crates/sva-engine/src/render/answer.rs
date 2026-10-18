@@ -406,11 +406,17 @@ fn unread(
         } => (
             "read.target_under_window",
             format!("the target holds {held_secs}s, under the {window_secs}s window"),
-            format!(
-                "{}, or ask a window as short as {least_secs}s, as \
-                 `{reading}(window={least_secs}s)`",
-                longer(window_secs)
-            ),
+            match least_secs <= held_secs {
+                true => format!(
+                    "{}, or ask a window as short as {least_secs}s, as \
+                     `{reading}(window={least_secs}s)`",
+                    longer(window_secs)
+                ),
+                false => format!(
+                    "{}; no window under {least_secs}s holds two of the longest period",
+                    longer(window_secs)
+                ),
+            },
         ),
     };
     EngineError::refused(Diagnostic {
