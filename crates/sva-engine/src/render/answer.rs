@@ -970,13 +970,13 @@ fn behind(render: &Render, node: sva_formula::NodeId) -> Result<sva_formula::Nod
     }
 }
 
-/// The score a point sampling's label carries where a reading asks for one.
+/// The score a point sampling's label carries where a reading asks for one, at its multiple.
 pub(super) fn alias_db(
     render: &Render,
     node: sva_formula::NodeId,
     buffer: &Buffer,
+    oversample: u32,
 ) -> Result<f64, EngineError> {
-    let oversample = sva_samples::ALIAS_OVERSAMPLE as u32;
     let reference = oversampled(render, behind(render, node)?, oversample)?;
     Ok(worst_alias(render, node, buffer, &reference, oversample)?.asr_db)
 }

@@ -613,13 +613,12 @@ pub(crate) fn finer(
 
 /// A point sampling a reading asks the score of says in its label what the grid lost.
 fn scored(held: &mut Render) -> Result<(), EngineError> {
-    let asked: Vec<NodeId> = held
+    let asked: Vec<(NodeId, u32)> = held
         .labels
         .keys()
-        .copied()
-        .filter(|id| held.alias_oversample(*id).is_some())
+        .filter_map(|id| Some((*id, held.alias_oversample(*id)?)))
         .collect();
-    for id in asked {
+    for (id, oversample) in asked {
         let sva_samples::Detail::Point {
             rule,
             alias_db: None,
@@ -629,7 +628,7 @@ fn scored(held: &mut Render) -> Result<(), EngineError> {
             continue;
         };
         let buffer = held.output(id)?;
-        let alias_db = Some(answer::alias_db(held, id, &buffer)?);
+        let alias_db = Some(answer::alias_db(held, id, &buffer, oversample)?);
         let label = held.labels.get_mut(&id).expect("an asked label");
         label.detail = sva_samples::Detail::Point {
             rule,

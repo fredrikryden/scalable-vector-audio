@@ -3,7 +3,9 @@
 use std::f64::consts::TAU;
 
 use crate::fixtures::graph_of;
-use sva_engine::{Ask, Detail, RenderConfig, Representation, Rule, Source, Tier, render};
+use sva_engine::{
+    Ask, Detail, Output, RenderConfig, Representation, Rule, Source, Tier, answer, render,
+};
 
 /// The operand crossed `ifourier`, so there is no spectral sum and no written closed form either.
 #[test]
@@ -425,4 +427,30 @@ fn a_finite_sum_written_out_past_the_cap_refuses() {
         "type.domain_mismatch",
         "the term's own failure, not the cap"
     );
+}
+
+/// The label is scored at the multiple the reading asked for, so both state one score.
+#[test]
+fn the_labels_alias_db_is_the_readings_score_at_its_multiple() {
+    let g = graph_of(
+        "labelled-twice",
+        &[
+            ("src", "2*sin(2*pi*3000*t)\n"),
+            ("body", "sat(lowpass(@src, cutoff=8000, q=0.7))\n"),
+        ],
+    );
+    let asked = Representation::Alias { oversample: 2 };
+    let config = RenderConfig::seconds(44_100, 0.1).asking(vec![Ask {
+        node: "body".to_string(),
+        representation: asked,
+    }]);
+    let held = render(&g, "body", config, &Tier::default()).expect("a reading");
+    let root = held.id("body").expect("the root");
+    let Detail::Point { alias_db, .. } = held.labels[&root].detail else {
+        panic!("a point sampling carries an alias score");
+    };
+    let Output::Alias(score) = answer(&held, root, asked).expect("a score").value else {
+        panic!("an alias reading answers a score");
+    };
+    assert_eq!(alias_db, Some(score.asr_db));
 }
