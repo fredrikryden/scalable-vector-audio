@@ -224,7 +224,7 @@ const PINNED: &str = r#"
 7 bands b1152050da45e57d
 7 crest 046c981ae06261fc
 7 loudness 7d6440ef7def4aca
-7 onsets 5029bf00c546aa72
+7 onsets 947180301b950186
 7 alias 2e6ca0047cafaf68
 7 bindings e78c34f33117e96f
 7 arguments bcbf8809de18a142
@@ -242,7 +242,7 @@ const PINNED: &str = r#"
 8 bands a3ee3343e5d5994c
 8 crest fb94330cd10aafeb
 8 loudness 470df9d7cf11cbe3
-8 onsets ae516789bfea72ef
+8 onsets 015eef63a6fac75f
 8 alias refused "engine.alias_needs_a_closed_form"
 8 bindings 79396b2f23896766
 8 arguments a5fe2d9cfe6ecec2

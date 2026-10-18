@@ -57,11 +57,7 @@ impl Spanned {
 
     /// A program writing +0 where no span reaches.
     pub(super) fn silent(&self) -> Result<CompiledOps, SampleError> {
-        let zero = match self.layout.width {
-            0 | 1 => NodeRenderer::Const(0.0),
-            w => NodeRenderer::Join(vec![NodeRenderer::Const(0.0); w]),
-        };
-        zero.compile(&self.layout)
+        NodeRenderer::zeros(self.layout.width).compile(&self.layout)
     }
 }
 
@@ -350,10 +346,7 @@ impl<'r> Cut<'r> {
 
     fn made(&self) -> NodeRenderer {
         match &self.made {
-            Made::Zeros => match self.width {
-                1 => NodeRenderer::Const(0.0),
-                w => NodeRenderer::Join(vec![NodeRenderer::Const(0.0); w]),
-            },
+            Made::Zeros => NodeRenderer::zeros(self.width),
             Made::Minuend => self.operands[0].made(),
             Made::Terms(live) => {
                 NodeRenderer::Add(live.iter().map(|&k| self.operands[k].made()).collect())

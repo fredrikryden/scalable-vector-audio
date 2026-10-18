@@ -73,6 +73,15 @@ impl C64 {
         C64::new(r * self.im.cos(), r * self.im.sin())
     }
 
+    /// `e^z - 1` without the cancellation `exp() - ONE` meets near zero.
+    pub fn exp_m1(self) -> C64 {
+        let half = (self.im * 0.5).sin();
+        C64::new(
+            self.re.exp_m1() * self.im.cos() - 2.0 * half * half,
+            self.re.exp() * self.im.sin(),
+        )
+    }
+
     pub fn powi(self, n: u32) -> C64 {
         let mut out = C64::ONE;
         for _ in 0..n {

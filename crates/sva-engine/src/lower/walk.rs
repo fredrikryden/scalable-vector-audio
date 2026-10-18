@@ -358,6 +358,24 @@ impl Lowering<'_> {
                 span,
             ));
         }
+        if name == sva_ast::JOIN
+            && args.len() > 1
+            && let Some(at) = args
+                .iter()
+                .position(|(id, _)| widens_with_self(self.typing, *id, &mut Default::default()))
+        {
+            return Err(self.refused_at(
+                "type.join_over_self",
+                format!(
+                    "`{}` joins `self` into its own channels: `join` stacks its operands' \
+                     channels, and operand {at} reads `self` whole, as wide as the node, so \
+                     the node would be wider than itself",
+                    self.node
+                ),
+                "read one channel of the loop in each operand, as ch(self[idx(t) - 1], 0)",
+                span,
+            ));
+        }
         let ty = match overload::resolve(name, &self.operands(&args, var)) {
             Err(m) if m.code == "type.samples_in_closed_form" => {
                 for (id, _) in &mut args {
@@ -771,6 +789,34 @@ impl Lowering<'_> {
             &help,
             Some(span),
         )
+    }
+}
+
+/// Whether `id`'s width follows the node's own through a `self` read: one under `ch` is one
+/// channel wide, whatever the node's width.
+fn widens_with_self(
+    typing: &crate::typing::Typing,
+    id: NodeId,
+    seen: &mut std::collections::BTreeSet<NodeId>,
+) -> bool {
+    if !seen.insert(id) {
+        return false;
+    }
+    match typing.value(id) {
+        Value::Op { name, .. } if name == sva_ast::CHANNEL => false,
+        Value::SelfAt { .. } => true,
+        Value::Cast(Cast::Sample, _) | Value::Read { .. } => false,
+        Value::Cast(_, source) => widens_with_self(typing, *source, seen),
+        Value::Op { args, .. } => args.iter().any(|a| widens_with_self(typing, *a, seen)),
+        Value::Filter {
+            x, cutoff, q, gain, ..
+        } => [x, cutoff, q, gain]
+            .into_iter()
+            .any(|operand| widens_with_self(typing, *operand, seen)),
+        Value::Solver { varying, .. } => varying
+            .iter()
+            .any(|(_, a)| widens_with_self(typing, *a, seen)),
+        Value::ClosedForm(_) | Value::Noise(_) => false,
     }
 }
 

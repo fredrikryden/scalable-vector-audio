@@ -233,3 +233,31 @@ fn notes_let_go_early_stay_under_the_level_together() {
     let moved = moved.fold(0.0f64, f64::max);
     assert!(moved > 0.0 && moved < 1e-6, "the root moved {moved}");
 }
+
+/// A felt strike rings the bank as an impulse does, from the contact on: an open render of it
+/// ends where the ring falls under the threshold, not when the felt lets go.
+#[test]
+fn a_struck_string_rings_on_past_its_contact() {
+    let g = graph_of(
+        "struck",
+        &[
+            ("rung", "string(220)\n"),
+            ("struck", "string(220, vel=3)\n"),
+        ],
+    );
+    let ends = |target: &str| {
+        let held = rendered(&g, target, PSYCHOACOUSTIC_V1);
+        let len = plane(&held).len();
+        assert_eq!(
+            cut(&held, target),
+            Some(len as i64),
+            "{target} ends at its cut"
+        );
+        len
+    };
+    let (rung, struck) = (ends("rung"), ends("struck"));
+    assert!(
+        struck > RATE as usize,
+        "the strike rings past a second, as the impulse's {rung} samples do: {struck}"
+    );
+}

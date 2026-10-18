@@ -4,7 +4,7 @@ use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
 use sva_core::{Asked, Call, CliError, Destination, asked_all, calls, is_wav, wav_path};
-use sva_engine::{DEFAULT_SAMPLE_RATE, MAX_PINNED_FRAME, READINGS, Representation, pinned_frame};
+use sva_engine::READINGS;
 
 use super::{AnalyzeArgs, CacheAt, Command, RenderArgs, value};
 
@@ -43,10 +43,7 @@ impl Flags {
                 refuse_device(&one.name, device, off_file)?;
             }
         }
-        if let Some(one) = out
-            .iter()
-            .find(|one| off_file && !one.representation.off_samples(true))
-        {
+        if let Some(one) = out.iter().find(|one| off_file && !one.off_samples(true)) {
             let answered: Vec<&str> = READINGS
                 .iter()
                 .filter(|row| row.reads.off_samples(true))
@@ -116,7 +113,6 @@ pub(super) fn render_args(rest: &[String]) -> Result<Command, CliError> {
              samples=<path>.wav` writes audio",
         ));
     }
-    check_frame(&asked, rate.unwrap_or(DEFAULT_SAMPLE_RATE))?;
     Ok(Command::Render(Box::new(RenderArgs {
         target,
         until,
@@ -263,29 +259,4 @@ fn refuse_device(name: &str, device: &str, off_file: bool) -> Result<(), CliErro
         ));
     }
     crate::device::refuse_unsupported(device)
-}
-
-/// A transform sized to fit is not the grid the caller asked two windows to share.
-pub(crate) fn check_frame(asked: &[Asked], rate: u32) -> Result<(), CliError> {
-    let sr = f64::from(rate);
-    for one in asked {
-        let Representation::Spectrum {
-            frame_secs: Some(secs),
-            ..
-        } = one.representation
-        else {
-            continue;
-        };
-        let frame = pinned_frame(secs, sr);
-        if frame > MAX_PINNED_FRAME {
-            return Err(CliError::usage(
-                "query.bad_value",
-                format!(
-                    "`spectrum(frame={secs})` sizes its transform to {frame} samples at {sr} Hz, \
-                 past the {MAX_PINNED_FRAME}-sample bound"
-                ),
-            ));
-        }
-    }
-    Ok(())
 }

@@ -75,6 +75,16 @@ impl Rendered {
         Ok(answer)
     }
 
+    /// `asked`'s reading, its bars in this render's tempo.
+    pub fn answered(&self, asked: &Asked) -> Result<Answer, CliError> {
+        let per_bar = self.graph.tempo().map(|tempo| tempo.seconds_per_bar());
+        let representation = asked.representation(self.config.rate, per_bar)?;
+        self.answer(
+            asked.node.as_deref().unwrap_or(&self.target),
+            representation,
+        )
+    }
+
     /// An alias score reads beside how many instances the render holds.
     fn attribute(&self, answer: &mut Answer) -> Result<(), CliError> {
         let Output::Alias(alias) = &mut answer.value else {
@@ -180,11 +190,13 @@ fn settle(job: &Job) -> Result<(Graph, RenderConfig, Song), CliError> {
     config.asks = job
         .asked
         .iter()
-        .map(|asked| Ask {
-            node: asked.node.clone().unwrap_or_else(|| PROBE.to_string()),
-            representation: asked.representation,
+        .map(|asked| {
+            Ok(Ask {
+                node: asked.node.clone().unwrap_or_else(|| PROBE.to_string()),
+                representation: asked.representation(rate, per_bar)?,
+            })
         })
-        .collect();
+        .collect::<Result<_, CliError>>()?;
     let song = sung(&mut graph, PROBE, rate)?;
     Ok((graph, config, song))
 }

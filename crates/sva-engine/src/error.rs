@@ -218,7 +218,7 @@ impl std::error::Error for EngineError {}
 
 /// Every code a judgment in this engine can refuse under, with what trips it. The prefix
 /// says which judgment refused, per FORMAT 16.
-pub static REGISTRY: [(&str, &str); 92] = [
+pub static REGISTRY: [(&str, &str); 94] = [
     (
         "type.no_overload",
         "a builtin applied to operand types no row names",
@@ -264,6 +264,10 @@ pub static REGISTRY: [(&str, &str); 92] = [
     (
         "type.discrete_self_at_time",
         "a discrete loop reading its own past at an instant rather than by index",
+    ),
+    (
+        "type.join_over_self",
+        "a join operand reading its own loop whole, so no width holds the node",
     ),
     (
         "type.stateful_warp",
@@ -336,6 +340,10 @@ pub static REGISTRY: [(&str, &str); 92] = [
     (
         "samples.channel_out_of_range",
         "a component past the width of the value it was asked of",
+    ),
+    (
+        "samples.own_width",
+        "a node's program writing another width than its samples hold, an engine defect",
     ),
     (
         "samples.grid_too_large",

@@ -17,6 +17,11 @@ pub enum SampleError {
         k: usize,
         width: usize,
     },
+    /// A node's program writes another number of components than its own samples hold.
+    OwnWidth {
+        writes: usize,
+        holds: usize,
+    },
     /// A grid sized from the rate and the fundamental, past what one call may allocate.
     GridTooLarge {
         model: &'static str,
@@ -171,6 +176,7 @@ impl SampleError {
             SampleError::WindowNotPowerOfTwo { .. } => "samples.window_not_power_of_two",
             SampleError::WidthMismatch { .. } => "type.width_mismatch",
             SampleError::ChannelOutOfRange { .. } => "samples.channel_out_of_range",
+            SampleError::OwnWidth { .. } => "samples.own_width",
             SampleError::GridTooLarge { .. } => "samples.grid_too_large",
             SampleError::StringPastRate { .. } => "samples.string_past_rate",
             SampleError::BridgeUnstable { .. } => "samples.bridge_unstable",
@@ -202,6 +208,12 @@ impl std::fmt::Display for SampleError {
             SampleError::ChannelOutOfRange { k, width } => {
                 write!(f, "component {k} of a value {width} wide")
             }
+            SampleError::OwnWidth { writes, holds } => write!(
+                f,
+                "a node's program writes {writes} components into samples {holds} wide; the \
+                 engine built it at another width than its type, a defect in the engine and \
+                 not in the composition"
+            ),
             SampleError::GridTooLarge {
                 model,
                 nodes,

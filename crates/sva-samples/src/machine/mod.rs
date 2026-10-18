@@ -230,6 +230,12 @@ impl Machine {
         (own, origin): Own,
     ) -> Result<(), SampleError> {
         let p = &self.compiled_ops;
+        if p.width != own.width() {
+            return Err(SampleError::OwnWidth {
+                writes: p.width,
+                holds: own.width(),
+            });
+        }
         while own.end() < to {
             let from = own.end();
             let most = (to - from).min(BLOCK as i64 - from.rem_euclid(BLOCK as i64)) as usize;

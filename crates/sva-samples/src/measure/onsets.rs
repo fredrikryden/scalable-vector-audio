@@ -1,4 +1,4 @@
-// Concern: spectral flux onset detection, each onset placed at the sample its strike rises | Non-concern: a tempo grid, what an onset means musically | IO: (&[f64], rate, start) -> Onsets
+// Concern: spectral flux onset detection, each onset placed at the sample its strike rises | Non-concern: a tempo grid, what an onset means musically | IO: (planes, rate, start) -> Onsets
 
 use crate::measure::spectrum::{MAX_PINNED_FRAME, magnitudes, pinned_frame};
 
@@ -42,18 +42,22 @@ pub struct Onsets {
 
 struct SpectralFrame {
     t_secs: f64,
-    mags: Vec<f64>,
+    mags: Vec<Vec<f64>>,
     span_secs: f64,
 }
 
-fn spectral_frames(samples: &[f64], sample_rate: f64, start_secs: f64) -> Vec<SpectralFrame> {
+fn spectral_frames(planes: &[&[f64]], sample_rate: f64, start_secs: f64) -> Vec<SpectralFrame> {
     let frame_len = pinned_frame(FRAME_SECS, sample_rate).min(MAX_PINNED_FRAME);
     let hop = ((HOP_SECS * sample_rate).round() as usize).max(1);
-    (0..samples.len())
+    let len = planes.iter().map(|p| p.len()).min().unwrap_or(0);
+    (0..len)
         .step_by(hop)
         .map(|start| {
-            let end = (start + frame_len).min(samples.len());
-            let (mags, ..) = magnitudes(&samples[start..end], sample_rate, Some(FRAME_SECS));
+            let end = (start + frame_len).min(len);
+            let mags = planes
+                .iter()
+                .map(|p| magnitudes(&p[start..end], sample_rate, Some(FRAME_SECS)).0)
+                .collect();
             SpectralFrame {
                 t_secs: start_secs + start as f64 / sample_rate,
                 mags,
@@ -63,14 +67,15 @@ fn spectral_frames(samples: &[f64], sample_rate: f64, start_secs: f64) -> Vec<Sp
         .collect()
 }
 
-pub fn detect(samples: &[f64], sample_rate: f64, start_secs: f64) -> Onsets {
-    let frames = spectral_frames(samples, sample_rate, start_secs);
+/// Every channel, so opposite phases cancel nothing.
+pub fn detect(planes: &[&[f64]], sample_rate: f64, start_secs: f64) -> Onsets {
+    let frames = spectral_frames(planes, sample_rate, start_secs);
     let floor = LEVEL_FRACTION * frames.iter().map(|f| total(&f.mags)).fold(0.0, f64::max);
     let flux = flux_of(&frames, floor);
     let onsets = pick_peaks(
         &flux,
         &frames,
-        &Energy::of(samples, sample_rate, start_secs),
+        &Energy::of(planes, sample_rate, start_secs),
         floor,
     );
     Onsets {
@@ -80,8 +85,8 @@ pub fn detect(samples: &[f64], sample_rate: f64, start_secs: f64) -> Onsets {
     }
 }
 
-fn total(mags: &[f64]) -> f64 {
-    mags.iter().sum()
+fn total(mags: &[Vec<f64>]) -> f64 {
+    mags.iter().flatten().sum()
 }
 
 /// The rise into each frame; nothing precedes the buffer, so one opening above the floor
@@ -96,7 +101,12 @@ fn flux_of(frames: &[SpectralFrame], floor: f64) -> Vec<f64> {
                 true => total(&frames[0].mags),
                 false => 0.0,
             },
-            _ => spectral_flux(&frames[i - 1].mags, &frames[i].mags),
+            _ => frames[i - 1]
+                .mags
+                .iter()
+                .zip(&frames[i].mags)
+                .map(|(prev, curr)| spectral_flux(prev, curr))
+                .sum(),
         })
         .collect()
 }
@@ -147,16 +157,17 @@ struct Energy {
 }
 
 impl Energy {
-    fn of(samples: &[f64], sample_rate: f64, start_secs: f64) -> Energy {
-        let mut running = Vec::with_capacity(samples.len() + 1);
+    fn of(planes: &[&[f64]], sample_rate: f64, start_secs: f64) -> Energy {
+        let len = planes.iter().map(|p| p.len()).min().unwrap_or(0);
+        let mut running = Vec::with_capacity(len + 1);
         running.push(0.0);
-        for s in samples {
+        for n in 0..len {
             let held = running[running.len() - 1];
-            running.push(held + s * s);
+            running.push(held + planes.iter().map(|p| p[n] * p[n]).sum::<f64>());
         }
         let reach = (STRIKE_SPAN_SECS * sample_rate).round().max(1.0) as usize;
-        let loudest = (0..samples.len())
-            .map(|n| running[(n + reach).min(samples.len())] - running[n])
+        let loudest = (0..len)
+            .map(|n| running[(n + reach).min(len)] - running[n])
             .fold(0.0, f64::max);
         Energy {
             running,
@@ -167,7 +178,7 @@ impl Energy {
         }
     }
 
-    /// The energy of samples `[from, to)`, silence outside the buffer.
+    /// The energy of `[from, to)`, silence outside the buffer.
     fn over(&self, from: usize, to: usize) -> f64 {
         let last = self.running.len() - 1;
         self.running[to.min(last)] - self.running[from.min(last)]

@@ -1,6 +1,6 @@
 // Concern: states what a target sampling its one ref read, `sample(@x([a, b]))`, answers | Non-concern: `sample` inside a node | IO: (target) -> a reading, its source, memory's lookups
 
-use sva_core::{Asked, CliError, Edge, Job, Out, Output, PROBE, asked, call, execute};
+use sva_core::{Asked, CliError, Edge, Job, Out, Output, asked, call, execute};
 use sva_engine::{Source, Tier};
 
 const RAMP: &str = "crop(tanh(4*(2*t - 1)), 0s, 1s)\n";
@@ -21,7 +21,7 @@ fn pitched(target: &str, tier: &Tier) -> Result<sva_engine::Answer, CliError> {
         asked: &asking,
         ..Job::over(&held, target)
     };
-    execute(job, tier)?.answer(PROBE, asking[0].representation)
+    execute(job, tier)?.answered(&asking[0])
 }
 
 #[test]

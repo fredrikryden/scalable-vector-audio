@@ -100,10 +100,16 @@ pub(super) fn contributed(
     };
     let (value_graph, at) =
         machine_run_of(render, parent).expect("an isolated edge is a machine run's");
+    let Kind::MachineRun(machine_run) = &value_graph.values[at].kind else {
+        unreachable!("machine_run_of answers a machine run");
+    };
     let range = render.range.expect("a ledger reads a decided range");
-    let held = |id: BufId| kept.contains(&id);
+    let others = Silenced {
+        kept: &|id: BufId| kept.contains(&id),
+        widths: &machine_run.layout.read_widths,
+    };
     value_graph
-        .rerun(at, &silenced(&renderer, &held), range)
+        .rerun(at, &others.of(&renderer), range)
         .map(Some)
 }
 
@@ -186,73 +192,82 @@ fn reads(r: &NodeRenderer, kept: &dyn Fn(BufId) -> bool) -> bool {
     }
 }
 
-fn silenced(r: &NodeRenderer, kept: &dyn Fn(BufId) -> bool) -> NodeRenderer {
-    match r {
-        NodeRenderer::Read {
-            slot: Slot::Read(id),
-            ..
+/// A renderer with every read but the kept ones at exact zero, each zero as wide as the
+/// slot it stands for, so the renderer writes the width its value holds.
+struct Silenced<'a> {
+    kept: &'a dyn Fn(BufId) -> bool,
+    widths: &'a [usize],
+}
+
+impl Silenced<'_> {
+    fn of(&self, r: &NodeRenderer) -> NodeRenderer {
+        match r {
+            NodeRenderer::Read {
+                slot: Slot::Read(id),
+                ..
+            }
+            | NodeRenderer::Indexed {
+                slot: Slot::Read(id),
+                ..
+            } if !(self.kept)(*id) => NodeRenderer::zeros(self.widths[id.0 as usize]),
+            NodeRenderer::Add(set) => NodeRenderer::Add(self.each(set)),
+            NodeRenderer::Mul(set) => NodeRenderer::Mul(self.each(set)),
+            NodeRenderer::Join(set) => NodeRenderer::Join(self.each(set)),
+            NodeRenderer::Sub(l, r) => NodeRenderer::Sub(self.one(l), self.one(r)),
+            NodeRenderer::Div(l, r) => NodeRenderer::Div(self.one(l), self.one(r)),
+            NodeRenderer::Pow(l, r) => NodeRenderer::Pow(self.one(l), self.one(r)),
+            NodeRenderer::Zip(op, l, r) => NodeRenderer::Zip(*op, self.one(l), self.one(r)),
+            NodeRenderer::Map(op, x) => NodeRenderer::Map(*op, self.one(x)),
+            NodeRenderer::Crop {
+                x,
+                window,
+                a,
+                b,
+                rise,
+                fall,
+            } => NodeRenderer::Crop {
+                x: self.one(x),
+                window: *window,
+                a: *a,
+                b: *b,
+                rise: *rise,
+                fall: *fall,
+            },
+            NodeRenderer::Channel { x, k } => NodeRenderer::Channel {
+                x: self.one(x),
+                k: *k,
+            },
+            NodeRenderer::Filter {
+                site,
+                from,
+                x,
+                cutoff,
+                q,
+                gain,
+            } => NodeRenderer::Filter {
+                site: *site,
+                from: *from,
+                x: self.one(x),
+                cutoff: self.one(cutoff),
+                q: self.one(q),
+                gain: self.one(gain),
+            },
+            NodeRenderer::Physics { site, from, args } => NodeRenderer::Physics {
+                site: *site,
+                from: *from,
+                args: self.each(args),
+            },
+            leaf => leaf.clone(),
         }
-        | NodeRenderer::Indexed {
-            slot: Slot::Read(id),
-            ..
-        } if !kept(*id) => NodeRenderer::Const(0.0),
-        NodeRenderer::Add(set) => NodeRenderer::Add(each(set, kept)),
-        NodeRenderer::Mul(set) => NodeRenderer::Mul(each(set, kept)),
-        NodeRenderer::Join(set) => NodeRenderer::Join(each(set, kept)),
-        NodeRenderer::Sub(l, r) => NodeRenderer::Sub(one(l, kept), one(r, kept)),
-        NodeRenderer::Div(l, r) => NodeRenderer::Div(one(l, kept), one(r, kept)),
-        NodeRenderer::Pow(l, r) => NodeRenderer::Pow(one(l, kept), one(r, kept)),
-        NodeRenderer::Zip(op, l, r) => NodeRenderer::Zip(*op, one(l, kept), one(r, kept)),
-        NodeRenderer::Map(op, x) => NodeRenderer::Map(*op, one(x, kept)),
-        NodeRenderer::Crop {
-            x,
-            window,
-            a,
-            b,
-            rise,
-            fall,
-        } => NodeRenderer::Crop {
-            x: one(x, kept),
-            window: *window,
-            a: *a,
-            b: *b,
-            rise: *rise,
-            fall: *fall,
-        },
-        NodeRenderer::Channel { x, k } => NodeRenderer::Channel {
-            x: one(x, kept),
-            k: *k,
-        },
-        NodeRenderer::Filter {
-            site,
-            from,
-            x,
-            cutoff,
-            q,
-            gain,
-        } => NodeRenderer::Filter {
-            site: *site,
-            from: *from,
-            x: one(x, kept),
-            cutoff: one(cutoff, kept),
-            q: one(q, kept),
-            gain: one(gain, kept),
-        },
-        NodeRenderer::Physics { site, from, args } => NodeRenderer::Physics {
-            site: *site,
-            from: *from,
-            args: each(args, kept),
-        },
-        leaf => leaf.clone(),
     }
-}
 
-fn each(set: &[NodeRenderer], kept: &dyn Fn(BufId) -> bool) -> Vec<NodeRenderer> {
-    set.iter().map(|p| silenced(p, kept)).collect()
-}
+    fn each(&self, set: &[NodeRenderer]) -> Vec<NodeRenderer> {
+        set.iter().map(|p| self.of(p)).collect()
+    }
 
-fn one(r: &NodeRenderer, kept: &dyn Fn(BufId) -> bool) -> Box<NodeRenderer> {
-    Box::new(silenced(r, kept))
+    fn one(&self, r: &NodeRenderer) -> Box<NodeRenderer> {
+        Box::new(self.of(r))
+    }
 }
 
 fn operands(r: &NodeRenderer) -> Vec<&NodeRenderer> {

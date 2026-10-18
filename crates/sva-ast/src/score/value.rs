@@ -222,7 +222,7 @@ impl<N: Amount> Walk<'_, '_, N> {
             (Kind::Home, other) | (other, Kind::Home) => Ok(other),
             (a, b) if a.is_time() && b.is_time() => Err(self.refused(
                 at,
-                "counts in bars and in seconds; one file writes its times in one".to_string(),
+                "counts in bars and in seconds; a time counts in one of them".to_string(),
             )),
             (a, b) if a.is_time() || b.is_time() => Err(self.refused(
                 at,

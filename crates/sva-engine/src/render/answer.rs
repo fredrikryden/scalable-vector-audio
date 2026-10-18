@@ -702,7 +702,10 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
         }
         Representation::Bands => Output::Bands(Box::new(bands::analyze(plane, sr, start))),
         Representation::Crest => Output::Crest(Box::new(crest::analyze(plane, sr))),
-        Representation::Onsets => Output::Onsets(Box::new(onsets::detect(plane, sr, start))),
+        Representation::Onsets => {
+            let planes: Vec<&[f64]> = (0..buffer.width()).map(|c| buffer.plane(c)).collect();
+            Output::Onsets(Box::new(onsets::detect(&planes, sr, start)))
+        }
         Representation::Loudness => {
             let planes: Vec<&[f64]> = (0..buffer.width()).map(|c| buffer.plane(c)).collect();
             Output::Loudness(Box::new(loudness::analyze(&planes, sr, start)))

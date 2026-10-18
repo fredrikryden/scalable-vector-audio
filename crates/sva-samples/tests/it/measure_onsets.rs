@@ -19,7 +19,7 @@ fn click_track(sr: f64, secs: f64, gap_secs: f64) -> Vec<f64> {
 #[test]
 fn evenly_spaced_clicks_are_found_at_roughly_their_own_spacing() {
     let (sr, gap) = (44_100.0, 0.25);
-    let found = detect(&click_track(sr, 4.0, gap), sr, 0.0);
+    let found = detect(&[&click_track(sr, 4.0, gap)], sr, 0.0);
     assert!(found.onsets.len() >= 12, "{}", found.onsets.len());
     for w in found.onsets.windows(2) {
         let ioi = w[1].t_secs - w[0].t_secs;
@@ -30,8 +30,8 @@ fn evenly_spaced_clicks_are_found_at_roughly_their_own_spacing() {
 #[test]
 fn an_onset_is_placed_on_the_buffers_own_clock() {
     let sr = 8_000.0;
-    let from_zero = detect(&click_track(sr, 1.0, 0.25), sr, 0.0);
-    let later = detect(&click_track(sr, 1.0, 0.25), sr, 2.0);
+    let from_zero = detect(&[&click_track(sr, 1.0, 0.25)], sr, 0.0);
+    let later = detect(&[&click_track(sr, 1.0, 0.25)], sr, 2.0);
     let shifted: Vec<f64> = later.onsets.iter().map(|o| o.t_secs - 2.0).collect();
     let own: Vec<f64> = from_zero.onsets.iter().map(|o| o.t_secs).collect();
     assert!(!own.is_empty());
@@ -42,7 +42,7 @@ fn an_onset_is_placed_on_the_buffers_own_clock() {
 
 #[test]
 fn silence_holds_no_onsets() {
-    let found = detect(&vec![0.0; 44_100], 44_100.0, 0.0);
+    let found = detect(&[&vec![0.0; 44_100]], 44_100.0, 0.0);
     assert!(found.onsets.is_empty());
     assert!(found.ioi_histogram.iter().all(|b| b.count == 0));
 }
@@ -54,7 +54,7 @@ fn a_close_double_trigger_on_one_transient_is_suppressed() {
     for (i, s) in samples.iter_mut().enumerate().take(200) {
         *s = (1.0 - i as f64 / 200.0) * if i % 2 == 0 { 1.0 } else { -1.0 };
     }
-    let found = detect(&samples, sr, 0.0);
+    let found = detect(&[&samples], sr, 0.0);
     assert!(found.onsets.len() <= 1, "{:?}", found.onsets);
 }
 
@@ -79,7 +79,7 @@ fn bursts(sr: f64, gap: f64, count: usize) -> Vec<f64> {
 fn strikes_down_to_25_ms_apart_are_each_their_own_onset() {
     let sr = 44_100.0;
     for gap in [0.05, 1.0 / 30.0, 0.025] {
-        let found = detect(&bursts(sr, gap, 32), sr, 0.0);
+        let found = detect(&[&bursts(sr, gap, 32)], sr, 0.0);
         let at: Vec<f64> = found.onsets.iter().map(|o| o.t_secs).collect();
         assert_eq!(at.len(), 32, "{gap} s apart: {at:?}");
         for (k, heard) in at.iter().enumerate() {
@@ -90,4 +90,33 @@ fn strikes_down_to_25_ms_apart_are_each_their_own_onset() {
             );
         }
     }
+}
+
+/// Every channel is read: strikes in the right channel alone are found where a mono track of
+/// them is, and the same strikes inverted in the other channel cancel nothing.
+#[test]
+fn a_stereo_track_is_read_in_every_channel() {
+    let (sr, gap) = (44_100.0, 0.25);
+    let clicks = click_track(sr, 2.0, gap);
+    let silent = vec![0.0; clicks.len()];
+    let inverted: Vec<f64> = clicks.iter().map(|s| -s).collect();
+    let at = |planes: &[&[f64]]| -> Vec<f64> {
+        detect(planes, sr, 0.0)
+            .onsets
+            .iter()
+            .map(|o| o.t_secs)
+            .collect()
+    };
+    let mono = at(&[&clicks]);
+    assert!(mono.len() >= 6, "{mono:?}");
+    assert_eq!(
+        at(&[&silent, &clicks]),
+        mono,
+        "strikes in the right channel alone"
+    );
+    assert_eq!(
+        at(&[&clicks, &inverted]),
+        mono,
+        "opposite phases sum no silence"
+    );
 }

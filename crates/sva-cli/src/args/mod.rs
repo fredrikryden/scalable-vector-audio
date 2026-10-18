@@ -6,7 +6,6 @@ use sva_core::{Asked, CliError};
 
 mod reading;
 
-pub(crate) use reading::check_frame;
 use reading::{analyze_args, render_args};
 
 #[derive(Debug, PartialEq)]
@@ -408,14 +407,18 @@ mod tests {
         assert_eq!(names, ["samples", "spectrum", "ledger", "bindings"]);
         assert_eq!(args.asked[0].path(), Some(Path::new("/tmp/out.wav")));
         assert_eq!(
-            args.asked[1].representation,
+            args.asked[1]
+                .representation(sva_engine::DEFAULT_SAMPLE_RATE, None)
+                .unwrap(),
             sva_engine::Representation::Spectrum {
                 max_peaks: 8,
                 frame_secs: Some(0.05)
             }
         );
         assert_eq!(
-            args.asked[2].representation,
+            args.asked[2]
+                .representation(sva_engine::DEFAULT_SAMPLE_RATE, None)
+                .unwrap(),
             sva_engine::Representation::Ledger { depth: 2 }
         );
         assert!(args.asked[2].brief);
@@ -665,7 +668,9 @@ mod tests {
             "voice_leading(frame=10ms, floor=-60db, norm=l2),dissonance",
         ]);
         assert_eq!(
-            args.asked[0].representation,
+            args.asked[0]
+                .representation(sva_engine::DEFAULT_SAMPLE_RATE, None)
+                .unwrap(),
             sva_engine::Representation::Harmony {
                 reading: sva_engine::Harmonic::VoiceLeading {
                     norm: sva_engine::harmony::voice_leading::Norm::L2
@@ -675,7 +680,9 @@ mod tests {
             }
         );
         assert_eq!(
-            args.asked[1].representation,
+            args.asked[1]
+                .representation(sva_engine::DEFAULT_SAMPLE_RATE, None)
+                .unwrap(),
             sva_engine::Representation::Harmony {
                 reading: sva_engine::Harmonic::Dissonance {
                     max_pairs: sva_engine::DEFAULT_MAX_PAIRS
@@ -706,7 +713,9 @@ mod tests {
             "inharmonicity(frame=10ms, floor=-60db)",
         ]);
         assert_eq!(
-            args.asked[0].representation,
+            args.asked[0]
+                .representation(sva_engine::DEFAULT_SAMPLE_RATE, None)
+                .unwrap(),
             sva_engine::Representation::Harmony {
                 reading: sva_engine::Harmonic::Inharmonicity,
                 frame_secs: 0.01,
@@ -724,7 +733,9 @@ mod tests {
             "periodicity(frame=0.5s, window=8s, curve=1)",
         ]);
         assert_eq!(
-            args.asked[0].representation,
+            args.asked[0]
+                .representation(sva_engine::DEFAULT_SAMPLE_RATE, None)
+                .unwrap(),
             sva_engine::Representation::Periodicity {
                 frame_secs: 0.5,
                 window_secs: 8.0,
@@ -742,7 +753,9 @@ mod tests {
             "modulation(frame=0.25s, window=6s, bpm=140)",
         ]);
         assert_eq!(
-            args.asked[0].representation,
+            args.asked[0]
+                .representation(sva_engine::DEFAULT_SAMPLE_RATE, None)
+                .unwrap(),
             sva_engine::Representation::Modulation {
                 frame_secs: 0.25,
                 window_secs: 6.0,
@@ -763,7 +776,9 @@ mod tests {
              peaks=4, curve=1)",
         ]);
         assert_eq!(
-            args.asked[0].representation,
+            args.asked[0]
+                .representation(sva_engine::DEFAULT_SAMPLE_RATE, None)
+                .unwrap(),
             sva_engine::Representation::SelfSimilarity {
                 frame_secs: 0.1,
                 cell_secs: 1.0,

@@ -2,8 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
+use sva_ast::SpanUnit;
+use sva_ast::score::{Field, Kind, Reading as Folding, Refused, evaluate};
 use sva_engine::harmony::voice_leading::Norm;
-use sva_engine::{Arg, DEFAULT_BUFFER_SECS, Given, READINGS, Representation};
+use sva_engine::{
+    Arg, DEFAULT_BUFFER_SECS, Given, MAX_PINNED_FRAME, READINGS, Reading, Representation,
+    pinned_frame,
+};
 
 use crate::cli_error::CliError;
 
@@ -35,11 +40,13 @@ pub enum Destination {
     },
 }
 
-/// A call resolved to the reading it names and the arguments only a front end reads.
+/// A call resolved to the reading it names and the arguments only a front end reads. Its
+/// times stay as written until a render says what a bar lasts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Asked {
     pub name: String,
-    pub representation: Representation,
+    given: Given,
+    times: Vec<(Arg, Time)>,
     pub dest: Option<Destination>,
     /// `bindings(node=@voice)`: the instance whose bindings are read.
     pub node: Option<String>,
@@ -155,7 +162,63 @@ pub fn asked_all(calls: &[Call]) -> Result<Vec<Asked>, CliError> {
     Ok(out)
 }
 
+/// A time argument as written: seconds, or bars a tempo counts.
+#[derive(Clone, Debug, PartialEq)]
+struct Time {
+    amount: f64,
+    unit: SpanUnit,
+    written: String,
+}
+
 impl Asked {
+    fn reading(&self) -> &'static Reading {
+        READINGS
+            .iter()
+            .find(|row| row.name == self.name)
+            .expect("an asked reading names a row")
+    }
+
+    /// Whether the reading answers off samples alone, as `Representation::off_samples`.
+    pub fn off_samples(&self, sampled: bool) -> bool {
+        self.reading().reads.off_samples(sampled)
+    }
+
+    /// The reading at `rate`, every time argument in seconds: a bar is `seconds_per_bar`,
+    /// and one written where no tempo is known refuses.
+    pub fn representation(
+        &self,
+        rate: u32,
+        seconds_per_bar: Option<f64>,
+    ) -> Result<Representation, CliError> {
+        let mut given = self.given;
+        for (arg, time) in &self.times {
+            let secs = match (time.unit, seconds_per_bar) {
+                (SpanUnit::Seconds, _) => time.amount,
+                (SpanUnit::Bars, Some(per)) => time.amount * per,
+                (SpanUnit::Bars, None) => {
+                    return Err(CliError::BadTempo(format!(
+                        "`{}({}={})` is written in bars, and this reading has no tempo to \
+                         count them in: a render reads it off `variables/bpm` and \
+                         `variables/meter`, and a file holds none; write seconds",
+                        self.name,
+                        arg.key(),
+                        time.written
+                    )));
+                }
+            };
+            match arg {
+                Arg::Frame => given.frame = Some(secs),
+                Arg::Window => given.window = Some(secs),
+                Arg::Cell => given.cell_secs = secs,
+                Arg::Smooth => given.smooth_secs = secs,
+                _ => unreachable!("only a time argument is held as a time"),
+            }
+        }
+        let representation = self.reading().representation(&given);
+        pinned(representation, rate)?;
+        Ok(representation)
+    }
+
     pub fn path(&self) -> Option<&Path> {
         match &self.dest {
             Some(Destination::File(path)) => Some(path),
@@ -184,7 +247,7 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
         ));
     };
     let (mut given, mut node, mut brief, mut skim) = (Given::default(), None, false, false);
-    let mut buffer = None;
+    let (mut buffer, mut times) = (None, Vec::new());
     for (key, raw) in &call.args {
         let Some(arg) = row.takes.iter().find(|arg| arg.key() == key) else {
             let keys: Vec<&str> = row.takes.iter().map(|arg| arg.key()).collect();
@@ -199,7 +262,9 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
         match arg {
             Arg::Peaks => given.peaks = count(raw, key)?,
             Arg::Depth => given.depth = count(raw, key)?,
-            Arg::Frame => given.frame = Some(seconds(raw, key)?),
+            Arg::Frame | Arg::Window | Arg::Cell | Arg::Smooth => {
+                times.push((*arg, time(raw, key)?));
+            }
             Arg::Oversample => given.oversample = factor(raw)?,
             Arg::Brief => brief = switch(raw, key)?,
             Arg::Skim => skim = switch(raw, key)?,
@@ -208,11 +273,8 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
             Arg::Floor => given.floor_db = decibels(raw, key)?,
             Arg::Norm => given.norm = norm(raw)?,
             Arg::Pairs => given.max_pairs = count(raw, key)?,
-            Arg::Window => given.window = Some(seconds(raw, key)?),
             Arg::Curve => given.curve = switch(raw, key)?,
             Arg::Bpm => given.bpm = Some(tempo(raw, key)?),
-            Arg::Cell => given.cell_secs = seconds(raw, key)?,
-            Arg::Smooth => given.smooth_secs = seconds(raw, key)?,
         }
     }
     if row.takes.contains(&Arg::Node) && node.is_none() {
@@ -223,7 +285,8 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
     }
     Ok(Asked {
         name: call.name.clone(),
-        representation: row.representation(&given),
+        given,
+        times,
         dest: destination(name, call.dest.as_deref(), buffer)?,
         node,
         brief,
@@ -336,6 +399,68 @@ fn factor(raw: &str) -> Result<u32, CliError> {
             "query.bad_value",
             format!("`oversample` needs a power of two from 2 to 16, got `{raw}`"),
         )),
+    }
+}
+
+/// A positive time as a score folds one, `50ms`, `1b/8` or `2b + 1b/3`; a bare number is
+/// seconds. Bars stay bars until a tempo is known.
+fn time(raw: &str, key: &str) -> Result<Time, CliError> {
+    let bad = |why: String| {
+        CliError::usage(
+            "query.bad_value",
+            format!(
+                "`{key}` needs a positive time, in seconds as `50ms` or `0.05`, or in bars as \
+                 `1b/8`: {why}"
+            ),
+        )
+    };
+    let folding = Folding::<f64> {
+        field: Field::Time,
+        mark: &|_| None,
+        degree: &|_| Err("a reading's time counts no degrees".to_string()),
+        own: None,
+    };
+    let value = evaluate(raw, &folding).map_err(|refused| match refused {
+        Refused::At(_, why) => bad(why),
+        Refused::Mark(name, _) => bad(format!(
+            "`mark({name})` is a score's, and a reading has none"
+        )),
+    })?;
+    let unit = match value.kind {
+        Kind::Bars => SpanUnit::Bars,
+        Kind::Seconds | Kind::Number => SpanUnit::Seconds,
+        other => return Err(bad(format!("`{raw}` is a {}", other.name()))),
+    };
+    match value.amount > 0.0 && value.amount.is_finite() {
+        true => Ok(Time {
+            amount: value.amount,
+            unit,
+            written: raw.to_string(),
+        }),
+        false => Err(bad(format!("`{raw}` is not over zero"))),
+    }
+}
+
+/// A transform sized to fit is not the grid two windows asked to share.
+fn pinned(representation: Representation, rate: u32) -> Result<(), CliError> {
+    let Representation::Spectrum {
+        frame_secs: Some(secs),
+        ..
+    } = representation
+    else {
+        return Ok(());
+    };
+    let sr = f64::from(rate);
+    let frame = pinned_frame(secs, sr);
+    match frame > MAX_PINNED_FRAME {
+        true => Err(CliError::usage(
+            "query.bad_value",
+            format!(
+                "`spectrum(frame={secs})` sizes its transform to {frame} samples at {sr} Hz, \
+                 past the {MAX_PINNED_FRAME}-sample bound"
+            ),
+        )),
+        false => Ok(()),
     }
 }
 

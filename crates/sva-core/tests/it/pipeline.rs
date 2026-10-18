@@ -269,3 +269,56 @@ fn a_level_reads_every_channel() {
         assert!(frame.peak > 0.99, "{frame:?}");
     }
 }
+
+/// A reading's time arguments are times as a score writes them: a bar is what the render's
+/// tempo says, the same at any argument, and with no tempo to count it in a bar refuses.
+#[test]
+fn a_readings_times_count_bars_in_the_renders_tempo() {
+    let reading = |text: &str| sva_core::asked(&sva_core::call(text).unwrap()).unwrap();
+    let framed = |text: &str, per_bar| reading(text).representation(44_100, per_bar);
+    assert_eq!(
+        framed("pitch(frame=1b/8)", Some(2.0)).unwrap(),
+        framed("pitch(frame=250ms)", None).unwrap(),
+        "an eighth of a two-second bar"
+    );
+    assert_eq!(
+        framed(
+            "self_similarity(cell=1b/2, smooth=2b, window=4b)",
+            Some(2.0)
+        )
+        .unwrap(),
+        framed("self_similarity(cell=1s, smooth=4s, window=8s)", None).unwrap(),
+        "every time argument counts bars alike"
+    );
+    let Err(CliError::BadTempo(why)) = framed("pitch(frame=1b/8)", None) else {
+        panic!("a bar with no tempo has no length");
+    };
+    assert!(why.contains("pitch(frame=1b/8)"), "{why}");
+    let Err(CliError::Usage { code, .. }) =
+        sva_core::asked(&sva_core::call("pitch(frame=1/8b)").unwrap())
+    else {
+        panic!("one over eight bars is a rate, not a time");
+    };
+    assert_eq!(code, "query.bad_value");
+
+    let held = composition(&[
+        ("variables/bpm", "120\n"),
+        ("variables/meter", "4/4\n"),
+        ("tone", "crop(sin(2*pi*220*t), 0s, 1s)\n"),
+    ]);
+    let asked = [reading("pitch(frame=1b/8)")];
+    let job = Job {
+        asked: &asked,
+        ..Job::over(&held, "sample(@tone([0, 1s]))")
+    };
+    let rendered = execute(job, &Tier::default()).expect("a render");
+    let Output::Pitch(frames) = rendered.answered(&asked[0]).expect("a pitch").value else {
+        panic!("a pitch reading");
+    };
+    let steps: Vec<f64> = frames.iter().map(|f| f.t_secs).collect();
+    assert_eq!(
+        steps,
+        [0.0, 0.25, 0.5, 0.75],
+        "a frame every eighth of a bar"
+    );
+}

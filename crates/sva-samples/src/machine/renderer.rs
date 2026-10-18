@@ -514,6 +514,14 @@ pub enum NodeRenderer {
 }
 
 impl NodeRenderer {
+    /// Exact zero in each of `width` components, so a read it stands in for keeps its width.
+    pub fn zeros(width: usize) -> NodeRenderer {
+        match width {
+            0 | 1 => NodeRenderer::Const(0.0),
+            w => NodeRenderer::Join(vec![NodeRenderer::Const(0.0); w]),
+        }
+    }
+
     /// Holds no call site and reads none of its own past, so skipping a sample of it changes
     /// no later one.
     pub fn stateless(&self) -> bool {

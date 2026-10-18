@@ -89,8 +89,7 @@ fn answered(
     let kept: Vec<&Asked> = args.asked.iter().filter(|a| !plays(a)).collect();
     let mut taken = Vec::with_capacity(kept.len());
     for asked in &kept {
-        let node = asked.node.as_deref().unwrap_or(&rendered.target);
-        let answer = rendered.answer(node, asked.representation)?;
+        let answer = rendered.answered(asked)?;
         taken.push(match asked.brief {
             true => briefed(answer),
             false => answer,
@@ -203,7 +202,6 @@ pub fn analyze(args: &AnalyzeArgs) -> Result<String, CliError> {
             .map(|p| p.iter().map(|v| f64::from(*v)).collect())
             .collect(),
     );
-    crate::args::check_frame(&args.asked, rate)?;
     let buffer = held;
     let interval = Some((0.0, buffer.len() as f64 / f64::from(rate)));
     let framing = Framing {
@@ -222,7 +220,7 @@ pub fn analyze(args: &AnalyzeArgs) -> Result<String, CliError> {
             answer_buffer(
                 &target,
                 &buffer,
-                asked.representation,
+                asked.representation(rate, None)?,
                 PSYCHOACOUSTIC_V1.name,
             )
             .map_err(CliError::Engine)?,

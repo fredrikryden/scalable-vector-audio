@@ -6,7 +6,9 @@ use sva_formula::modal::membrane::MembraneGeom;
 use sva_formula::modal::room::RoomGeom;
 use sva_formula::modal::string::StringGeom;
 use sva_formula::modal::{HammerGeom, mode, strike};
-use sva_formula::{Body, Damping, Excitation, Geometry, ModalBank, Mode, modes};
+use sva_formula::{
+    Body, C64, Damping, Edge, Excitation, Geometry, ModalBank, Mode, Origin, Part, modes,
+};
 
 use crate::error::EngineError;
 use crate::lower::{Lowering, Piece};
@@ -135,9 +137,10 @@ impl Lowering<'_> {
         self.bank(vec![mode(hz, 1.0, args.damping())], args.excitation())
     }
 
-    /// A velocity closed form on its own: one undamped, unturning mode the contact shapes.
+    /// The hammer's force on its own, `f0/2 (1 - cos(2 pi (t - t0) / contact))` over the
+    /// contact: a constant under a crop whose rise and fall each take half of it.
     fn contact(&mut self, args: &Args, vel: f64) -> Piece {
-        let excite = strike(
+        let Excitation::HammerPulse { f0, t0, contact } = strike(
             vel,
             &HammerGeom {
                 reference_velocity: REFERENCE_VELOCITY,
@@ -146,14 +149,19 @@ impl Lowering<'_> {
                 force: args.named("force", REFERENCE_FORCE),
             },
             args.named("at", 0.0),
-        );
-        let carrier = Mode {
-            omega: 0.0,
-            tau: f64::INFINITY,
-            amp: 1.0,
-            phase: 0.0,
+        ) else {
+            unreachable!("a strike is a hammer's pulse");
         };
-        self.bank(vec![carrier], excite)
+        if contact <= 0.0 || !contact.is_finite() {
+            return Piece::ClosedForm(Body::Const(C64::ZERO));
+        }
+        Piece::ClosedForm(Body::Crop {
+            of: Part::new(Origin::UNKNOWN, Body::Const(C64::real(f0))),
+            l: Edge::at(t0),
+            r: Edge::at(t0 + contact),
+            rise: contact * 0.5,
+            fall: contact * 0.5,
+        })
     }
 
     fn bank(&mut self, modes: Vec<Mode>, excite: Excitation) -> Piece {

@@ -634,3 +634,46 @@ fn a_shifted_comb_keeps_its_lines() {
         }
     }
 }
+
+/// `join` stacks its operands' channels, so an operand reading `self` whole would make the node
+/// wider than itself: no width holds it, and typing says so before any sample is run.
+#[test]
+fn a_join_over_its_own_loop_refuses_at_typing() {
+    for body in [
+        "join(crop(sin(2*pi*440*t) + 0.5*self[idx(t - 17ms)], 0s, 1s), \
+         crop(sin(2*pi*660*t) + 0.5*self[idx(t - 23ms)], 0s, 1s))\n",
+        "join(crop(sin(2*pi*440*t) + 0.5*self[idx(t - 17ms)], 0s, 1s), crop(sin(t), 0s, 1s))\n",
+    ] {
+        let refused = form("join-over-self", body).expect_err("no width holds it");
+        assert_eq!(refused.code(), "type.join_over_self", "{body}");
+    }
+}
+
+/// Each operand reading one channel of the loop is its own echo, one per channel.
+#[test]
+fn a_join_of_one_channel_loops_echoes_each_channel_on_its_own() {
+    let rate = 8_000;
+    let held = at_rate(
+        &[(
+            "loop",
+            "join(crop(sin(2*pi*440*t) + 0.5*ch(self[idx(t - 17ms)], 0), 0s, 1s), \
+             crop(sin(2*pi*660*t) + 0.5*ch(self[idx(t - 23ms)], 1), 0s, 1s))\n",
+        )],
+        "loop",
+        rate,
+        0.05,
+    );
+    let id = held.id("loop").expect("the root");
+    let out = held.output(id).expect("two echoes");
+    assert_eq!(out.width(), 2, "one channel per operand");
+    for (c, hz, delay) in [(0, 440.0, 136), (1, 660.0, 184)] {
+        let x = |n: usize| (TAU * hz * n as f64 / f64::from(rate)).sin();
+        for (n, got) in out.plane(c).iter().enumerate().take(2 * delay).skip(delay) {
+            let want = x(n) + 0.5 * x(n - delay);
+            assert!(
+                (got - want).abs() < 1e-9,
+                "channel {c}, sample {n}: {got} against {want}"
+            );
+        }
+    }
+}

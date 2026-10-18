@@ -172,7 +172,11 @@ RENDER:
 
   `--representation <list>` takes a comma list of readings and may repeat. Each
   is a call in the language's own syntax, its options its named arguments:
-  `spectrum(peaks=8, frame=50ms)`, `ledger(depth=3, brief=1)`. An entry
+  `spectrum(peaks=8, frame=50ms)`, `ledger(depth=3, brief=1)`. A `frame`,
+  `window`, `cell` or `smooth` is a time as a score writes one, in seconds,
+  `50ms`, or in bars, `1b/8` (`1/8b` is one over eight bars), a bar lasting
+  what the render's tempo says; where none is known, as in `analyze`, bars
+  refuse as `tempo.invalid_bpm_meter`. An entry
   followed by `=<path>` writes a file instead, listed under `written`:
   `samples=<path>.wav` writes audio, encoded as `--bits` says; any other path
   takes the reading's JSON, uncapped. A path that already holds a file refuses
@@ -202,7 +206,9 @@ RENDER:
   per `frame`; for the spectrum at one instant, read a range one frame long.
   A measured `envelope` is framed too, and reads every channel: a frame's
   `rms` is the root mean square of all its channels' samples together, its
-  `peak` the largest magnitude in any channel.
+  `peak` the largest magnitude in any channel. `onsets` reads every channel
+  as well: a frame's flux is the sum of each channel's, and a strike's energy
+  that of all channels' samples together, so opposite phases cancel nothing.
 
   `--bits <n>` is the precision every sample is written to, from 2 to 52: the
   point where a series is truncated, and the encoding of a `.wav`, integer PCM

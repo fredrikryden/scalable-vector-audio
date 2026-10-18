@@ -274,3 +274,88 @@ fn sides(atoms: &[sva_formula::SpectralAtom]) -> Vec<f64> {
         .map(|a| a.c.re)
         .collect()
 }
+
+/// A struck bank is each mode's impulse response convolved with the felt's force: it follows
+/// the force while the felt presses, and once it lets go rings on with what the contact gave
+/// it. Checked against the convolution integral, summed here by Simpson's rule.
+#[test]
+fn a_struck_bank_is_its_impulse_response_convolved_with_the_force() {
+    let felt = HammerGeom {
+        reference_velocity: 3.2,
+        reference_contact: 1.5e-3,
+        stiffness_exponent: 2.5,
+        force: 500.0,
+    };
+    let t0 = 0.25;
+    let excite = strike(3.0, &felt, t0);
+    let Excitation::HammerPulse { f0, contact, .. } = excite else {
+        panic!("a strike is a hammer's pulse");
+    };
+    let mode = |hz: f64, tau: f64, amp: f64, phase: f64| Mode {
+        omega: TAU * hz,
+        tau,
+        amp,
+        phase,
+    };
+    // Lossless modes on a force line, beside it and at rest meet it where the two cancel.
+    let modes = vec![
+        mode(220.0, 0.5, 1.0, 0.0),
+        mode(1500.0, 0.05, 0.4, 0.3),
+        mode(1.0 / contact, f64::INFINITY, 0.2, 0.0),
+        mode((1.0 + 1e-12) / contact, f64::INFINITY, 0.2, 0.1),
+        mode(0.0, f64::INFINITY, 0.1, 0.0),
+    ];
+    let bank = ModalBank {
+        modes: modes.clone(),
+        excite,
+    };
+    let atoms = sva_formula::modal::atoms(&bank, sva_formula::Origin::UNKNOWN);
+    let value = |t: f64| -> f64 {
+        atoms
+            .iter()
+            .map(|a| a.smooth_at(t).expect("no pole").re)
+            .sum()
+    };
+    let rings = |u: f64| -> f64 {
+        modes
+            .iter()
+            .map(|m| m.amp * (-u / m.tau).exp() * (m.omega * u + m.phase).cos())
+            .sum()
+    };
+    let force = |s: f64| f0 * 0.5 * (1.0 - (TAU * (s - t0) / contact).cos());
+    let convolved = |t: f64| -> f64 {
+        let end = t.min(t0 + contact);
+        if end <= t0 {
+            return 0.0;
+        }
+        let n = 20_000;
+        let h = (end - t0) / f64::from(n);
+        let at = |k: u32| {
+            let s = t0 + f64::from(k) * h;
+            force(s) * rings(t - s)
+        };
+        let inner: f64 = (1..n)
+            .map(|k| if k % 2 == 1 { 4.0 } else { 2.0 } * at(k))
+            .sum();
+        h / 3.0 * (at(0) + inner + at(n))
+    };
+    let momentum = f0 * contact * 0.5;
+    for t in [
+        t0 - 0.01,
+        t0 + 0.3 * contact,
+        t0 + 0.9 * contact,
+        t0 + 1.5 * contact,
+        t0 + 0.01,
+        t0 + 0.4,
+    ] {
+        let (got, want) = (value(t), convolved(t));
+        assert!(
+            (got - want).abs() < 1e-9 * momentum,
+            "at {t}: {got} against the integral's {want}"
+        );
+    }
+    assert!(
+        value(t0 + 0.4).abs() > 1e-3 * momentum,
+        "the struck bank still rings long after the felt let go"
+    );
+}

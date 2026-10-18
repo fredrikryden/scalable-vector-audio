@@ -394,3 +394,39 @@ fn a_row_read_late_states_what_it_holds_to_the_end() {
     }
     assert_eq!(named(&entries, "voice").share, Some(1.0));
 }
+
+/// A mono addend beside a stereo one is isolated by silencing the stereo read: the zero that
+/// stands for it keeps both channels, so the run writes the width it holds and ends.
+#[test]
+fn a_mono_addend_beside_a_stereo_one_is_shared_in_every_channel() {
+    let entries = ledger(
+        "mono-beside-stereo",
+        &[
+            (
+                "wide",
+                "join(sample(sin(2*pi*440*t)), sample(sin(2*pi*550*t)))\n",
+            ),
+            ("mono", "sample(sin(2*pi*330*t))\n"),
+            ("master", "@wide + 0.5*@mono\n"),
+        ],
+        2,
+    );
+    let rows =
+        |node: &str| -> Vec<&LedgerEntry> { entries.iter().filter(|e| e.node == node).collect() };
+    assert_eq!(
+        rows("mono").len(),
+        2,
+        "one row per channel: {:?}",
+        names(&entries)
+    );
+    for (wide, mono) in rows("wide").into_iter().zip(rows("mono")) {
+        let (wide, mono) = (
+            wide.share.expect("an addend"),
+            mono.share.expect("an addend"),
+        );
+        assert!(
+            (wide - 0.8).abs() < 1e-3 && (mono - 0.2).abs() < 1e-3,
+            "a unit sine against a half one carries four fifths of the energy: {wide} {mono}"
+        );
+    }
+}

@@ -229,8 +229,9 @@ impl<'a> Sink<'a> {
             self.f64(*phase);
         }
         match m.excite {
+            // 0 is retired: a value stored under it rang only while the felt pressed.
             Excitation::HammerPulse { f0, t0, contact } => {
-                self.byte(0);
+                self.byte(2);
                 self.f64(f0);
                 self.f64(t0);
                 self.f64(contact);

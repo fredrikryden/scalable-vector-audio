@@ -477,7 +477,7 @@ impl Composition {
         let asked = representations_of(&names)?;
         let samples = asked
             .iter()
-            .find(|asked| asked.representation == Representation::Samples);
+            .find(|asked| asked.name == Representation::Samples.name());
         if let (Out::Dropped, Some(samples)) = (out, samples) {
             return Err(refuse(
                 format!(
@@ -692,10 +692,7 @@ impl Rendering {
 fn answered(rendered: &Rendered, asked: &[Asked]) -> Result<JsValue, JsValue> {
     let mut answers = Vec::with_capacity(asked.len());
     for asked in asked {
-        let node = asked.node.as_deref().unwrap_or(&rendered.target);
-        let answer = rendered
-            .answer(node, asked.representation)
-            .map_err(|e| thrown(&e))?;
+        let answer = rendered.answered(asked).map_err(|e| thrown(&e))?;
         answers.push(Printed {
             name: asked.name.clone(),
             answer,
