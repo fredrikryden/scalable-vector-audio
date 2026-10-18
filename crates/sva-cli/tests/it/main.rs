@@ -15,5 +15,6 @@ mod render_integration;
 mod scaffold;
 mod score;
 mod score_rows;
+mod song_reads;
 mod store;
 mod trace;

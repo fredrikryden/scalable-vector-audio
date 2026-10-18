@@ -93,6 +93,9 @@ SCORES:
     {{"at": "mark(intro) + 8b", "mark": "verse"}}
     {{"at": "mark(verse)", "node": "@verse"}}
   `concat` and `repeat` place parts on the curve too: `repeat(@score/riff-1b, 4)`.
+  An equation reading a score at `t - d`, an echo or a send, hears the song as
+  it was d earlier: its lines keep their song time, and a move however many
+  reads reach it is one move.
   A control score is one no sounding score places, read by an equation as a
   signal: `@score/song(t) * (1 - @score/pump(t))` ducks the song under it.
   `sva-cli outline @score/song` prints a song's marks, tempo, lanes, events and

@@ -81,15 +81,17 @@ pub struct Chain(Option<Rc<Link>>);
 struct Link {
     file: String,
     line: Option<usize>,
+    item: usize,
     at: Option<Pos>,
     up: Chain,
 }
 
 impl Chain {
-    fn by(&self, file: String, line: Option<usize>, at: Option<Pos>) -> Chain {
+    fn by(&self, file: String, line: Option<(usize, usize)>, at: Option<Pos>) -> Chain {
         Chain(Some(Rc::new(Link {
             file,
-            line,
+            line: line.map(|(number, _)| number),
+            item: line.map_or(0, |(_, item)| item),
             at,
             up: self.clone(),
         })))
@@ -123,6 +125,19 @@ impl Chain {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_none()
+    }
+
+    /// The score lines and items placing it, innermost first: which reads led there is left out.
+    fn placement(&self) -> Vec<(&str, usize, usize, Option<Pos>)> {
+        let mut out = Vec::new();
+        let mut at = &self.0;
+        while let Some(link) = at {
+            if let Some(line) = link.line {
+                out.push((link.file.as_str(), line, link.item, link.at));
+            }
+            at = &link.up.0;
+        }
+        out
     }
 }
 
@@ -177,6 +192,19 @@ pub struct Reached {
     pub chain: Chain,
 }
 
+impl Reached {
+    /// The same line placed by the same score lines at the same position, whatever reads led
+    /// there.
+    fn same(&self, other: &Reached) -> bool {
+        (&self.score, self.line, self.item) == (&other.score, other.line, other.item)
+            && self.lane == other.lane
+            && self.start == other.start
+            && self.end == other.end
+            && self.chain.placement() == other.chain.placement()
+    }
+}
+
+#[derive(PartialEq)]
 pub struct PlacedMark {
     pub name: String,
     pub at: Pos,
@@ -410,12 +438,15 @@ impl<'g> Placing<'g> {
                     Item::Comment(_) => {}
                     Item::Mark(mark) => {
                         if let Some(pos) = pos {
-                            self.marks.push(PlacedMark {
+                            let placed = PlacedMark {
                                 name: mark.name.clone(),
                                 at: pos,
                                 score: path.to_string(),
                                 line: line.number,
-                            });
+                            };
+                            if !self.marks.contains(&placed) {
+                                self.marks.push(placed);
+                            }
                         }
                     }
                     Item::Move(m) => self.moved(path, m, (li, ii), pos, crop, chain),
@@ -472,7 +503,7 @@ impl<'g> Placing<'g> {
             ));
             return None;
         }
-        let here = chain.by(format!("{path}{EXTENSION}"), Some(line.number), pos);
+        let here = chain.by(format!("{path}{EXTENSION}"), Some((line.number, ii)), pos);
         if !container {
             let mut bound: BTreeSet<String> = event.binds.iter().map(|b| b.name.clone()).collect();
             if event.deg.is_some() {
@@ -660,15 +691,19 @@ impl<'g> Placing<'g> {
         }
         let file = format!("{path}{EXTENSION}");
         let line_number = graph.score(path).expect("a score").lines[li].number;
-        self.moves.push(Reached {
+        let reached = Reached {
             lane,
             score: path.to_string(),
             line: li,
             item: ii,
             start,
             end,
-            chain: chain.by(file, Some(line_number), Some(start)),
-        });
+            chain: chain.by(file, Some((line_number, ii)), Some(start)),
+        };
+        // Lanes are the song's: one placement read by several paths is one move.
+        if !self.moves.iter().any(|m| m.same(&reached)) {
+            self.moves.push(reached);
+        }
     }
 
     fn equation(&mut self, path: &str, at: Option<Pos>, chain: &Chain) -> Vec<Site> {
@@ -705,6 +740,12 @@ impl<'g> Placing<'g> {
                 let shift = (*address == Address::Time)
                     .then(|| constant_shift(arg))
                     .flatten();
+                // A score read at `t - d` is a view of it: its lines keep their song time.
+                let view = resolve_ref_path(path, to).is_some_and(|n| self.is_container(&n));
+                let shift = match (shift, view) {
+                    (Some(_), true) => Some(0.0),
+                    (shift, _) => shift,
+                };
                 let placed = match shift {
                     Some(d) => shifted(at, Offset::Seconds(d), self.curve),
                     None => None,
