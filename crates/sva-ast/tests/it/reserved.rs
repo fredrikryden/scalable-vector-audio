@@ -1,4 +1,4 @@
-// Concern: proves each reserved variable is found one way, lowered where read, and again where its value changes | Non-concern: score line checks (score.rs) | IO: (a composition, an edit) -> nodes
+// Concern: proves each reserved variable is found one way, lowered where read, and again where its value changes | Non-concern: a score's lines (score/) | IO: (a composition, an edit) -> nodes
 use sva_ast::{Composition, DiagCode, Expr, FileSpan, SpanUnit, load, load_beside, parse_expr};
 
 fn tempo(bpm: &str) -> Composition {
@@ -9,7 +9,7 @@ fn tempo(bpm: &str) -> Composition {
         ("swung", "@kick(t - 0.02b)*0.9\n"),
         ("tiled", "crop(@kick(t % 1b), 0s, 16b)\n"),
         (
-            "phrase-1b",
+            "phrase-1b.jsonl",
             "{\"at\": \"0b\", \"node\": \"@kick\"}\n{\"at\": \"0.01b\", \"node\": \"@kick\"}\n",
         ),
         ("tail-1.5s", "@kick\n"),
@@ -20,11 +20,17 @@ fn expr(text: &str) -> Expr {
     parse_expr(text).expect("an expression")
 }
 
-/// A literal, a score's time and a file's span are one read, so the three always agree.
+/// A literal and a steady song's score time are one read, so the two always agree; a file's
+/// span stays as written until a song places it on the curve.
 #[test]
 fn a_bar_is_beats_times_sixty_over_the_bpm_wherever_it_is_written() {
     let mut g = load(&tempo("120\n")).expect("a composition");
     g.lower_reserved(None).expect("a tempo");
+    g.define_settled(None, "song", expr("@phrase-1b"))
+        .expect("a root");
+    let mut song = g.song("song").expect("a song");
+    let lowered = song.lowered(&g, &[]).expect("lowered");
+    g.apply(lowered);
     assert_eq!(
         g.expr("swung"),
         Some(&expr("@kick(t - 0.02*(240/120))*0.9"))
@@ -37,14 +43,9 @@ fn a_bar_is_beats_times_sixty_over_the_bpm_wherever_it_is_written() {
         g.expr("phrase-1b"),
         Some(&expr("@kick + @kick(t - 0.01*(240/120))"))
     );
-    let seconds = |amount| {
-        Some(FileSpan {
-            amount,
-            unit: SpanUnit::Seconds,
-        })
-    };
-    assert_eq!(g.span("phrase-1b"), seconds(2.0));
-    assert_eq!(g.span("tail-1.5s"), seconds(1.5));
+    let span = |amount, unit| Some(FileSpan { amount, unit });
+    assert_eq!(g.span("phrase-1b"), span(1.0, SpanUnit::Bars));
+    assert_eq!(g.span("tail-1.5s"), span(1.5, SpanUnit::Seconds));
     assert_eq!(g.tempo().map(|t| t.seconds_per_bar()), Some(2.0));
 }
 

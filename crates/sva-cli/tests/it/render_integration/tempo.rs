@@ -20,7 +20,7 @@ fn a_bpm_change_re_renders_bar_resolved_timing_and_nothing_else() {
     put(&dir, "tone", "sin(2*pi*440*t)*0.1\n");
     put(
         &dir,
-        "pattern-1b",
+        "pattern-1b.jsonl",
         "{\"at\": \"0b\", \"node\": \"@kick\"}\n\
          {\"at\": \"0.25b\", \"node\": \"@kick\", \"gain\": 0.5}\n\
          {\"at\": \"0.75b\", \"node\": \"@kick\", \"gain\": 0.7}\n",

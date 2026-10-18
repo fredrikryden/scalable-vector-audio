@@ -619,7 +619,7 @@ impl<'b> Builder<'b> {
             Expr::Lit(sva_ast::Literal::Num(n)) => Some(*n),
             Expr::Lit(_) => None,
             Expr::Var(name) if name == "pi" => Some(std::f64::consts::PI),
-            Expr::Var(name) => crate::vocabulary::note_hz(name),
+            Expr::Var(name) => sva_ast::note_hz(name),
             Expr::Bin(op, l, r) => {
                 let (a, b) = (
                     self.one_number(l, file, open)?,

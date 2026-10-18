@@ -32,6 +32,8 @@ impl Finding {
 pub struct LintReport {
     pub nodes: usize,
     pub findings: Vec<Finding>,
+    /// What each song's files earn: warnings, each located at its line.
+    pub song: Vec<sva_ast::song::Warning>,
     /// The seconds a render of the target reads.
     pub interval: Option<(f64, f64)>,
 }
@@ -50,12 +52,14 @@ pub fn lint(dir: &Path, target: Option<&str>) -> Result<LintReport, CliError> {
 /// whole is left to the render that refuses it. A lint violation refuses before a type does.
 fn lint_files(source: &dyn Source, graph: Graph) -> Result<LintReport, CliError> {
     let violations = lint_violations(source, &graph);
+    let mut song = Vec::new();
     if violations.is_empty() {
         for root in crate::trace::entry_points(&graph) {
-            sva_core::types(&Job::over(source, &format!("@{root}")))?;
+            song.extend(sva_core::types(&Job::over(source, &format!("@{root}")))?);
         }
     }
-    verdict(graph.paths().count(), violations, per_file(&graph), None)
+    let report = verdict(graph.paths().count(), violations, per_file(&graph), None)?;
+    Ok(LintReport { song, ..report })
 }
 
 /// The findings no file's neighbours change.
@@ -76,6 +80,7 @@ fn verdict(
         return Ok(LintReport {
             nodes,
             findings,
+            song: Vec::new(),
             interval,
         });
     }
@@ -99,20 +104,22 @@ fn lint_reaching(source: &dyn Source, target: &str) -> Result<LintReport, CliErr
     let graph = settled(sva_ast::load_reaching(source, &roots))?;
     let violations = lint_violations(source, &graph);
     let mut interval = None;
+    let mut song = Vec::new();
     if violations.is_empty() {
-        let job = Job::over(source, target);
-        let render = sva_core::plan(&job)?;
+        let (render, warned) = sva_core::plan(&Job::over(source, target))?;
+        song = warned;
         let rate = f64::from(render.config.rate);
         interval = render
             .range
             .map(|r| (r.start_secs(render.config.rate), r.end as f64 / rate));
     }
-    verdict(
+    let report = verdict(
         graph.paths().count(),
         violations,
         per_file(&graph),
         interval,
-    )
+    )?;
+    Ok(LintReport { song, ..report })
 }
 
 /// Refuses with every violation found, not just the first: a tree-wide scan, unlike
@@ -183,10 +190,48 @@ fn flush_comment_run(
     }
 }
 
-/// Exactly one doc-comment line at the top, or `lint` refuses it. Only the leading run is
-/// judged, so a scale's inline comments stay out of scope; a score is JSON and holds none.
-fn doc_comment_violations(source: &dyn Source, graph: &Graph) -> Vec<LintViolation> {
+/// A score's doc comment is its line-1 `annotation`, the same four fields under the same codes.
+fn annotation_violations(graph: &Graph) -> Vec<LintViolation> {
     let mut violations = Vec::new();
+    for path in graph.paths() {
+        let Some(score) = graph.score(path) else {
+            continue;
+        };
+        let file = format!("{path}{}", sva_ast::score::EXTENSION);
+        let (code, message) = match &score.annotation {
+            None => (
+                LintCode::MissingComment,
+                format!(
+                    "`{file}`'s line 1 is no annotation — every score opens with {{\"annotation\": \
+                     \"Models: ... | Neglects: ... | IO: ... -> ... | Tags: ...\"}} documenting it"
+                ),
+            ),
+            Some(text) => match parse_doc_comment(&format!("; {text}")) {
+                Ok(_) => continue,
+                Err(reason) => (
+                    LintCode::MalformedComment,
+                    format!(
+                        "`{file}`'s annotation does not match `Models: ... | Neglects: ... | IO: \
+                         ... -> ... | Tags: ...` ({reason})"
+                    ),
+                ),
+            },
+        };
+        violations.push(LintViolation {
+            code,
+            severity: Severity::Error,
+            subject: file,
+            message,
+            line: Some(1),
+        });
+    }
+    violations
+}
+
+/// Exactly one doc-comment line at the top, or `lint` refuses it. Only the leading run is
+/// judged, so a scale's inline comments stay out of scope; a score's is its annotation.
+fn doc_comment_violations(source: &dyn Source, graph: &Graph) -> Vec<LintViolation> {
+    let mut violations = annotation_violations(graph);
     for path in graph.paths().filter(|path| graph.score(path).is_none()) {
         let Ok(Some(text)) = source.get(path) else {
             continue;

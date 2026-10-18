@@ -27,65 +27,78 @@ DESCRIPTION:
   and `analyze` reads a file.
 
 SCORES:
-  A score is data: JSON Lines, one event per line, sorted by `at`. A file whose
-  first line that is neither blank nor a `;` comment starts with `{{` is a
-  score; its name has no extension, and `@score/bass` reads it like any node.
-  A `;` line is a comment, so a score opens with its `; Models: ...` line like
-  any file. Each line plays the node it names, a sound, another score or a
-  control curve, shifted to its time, and the score is their sum, one closed
-  form. `b` is a bar, so "0.25b" is a quarter of a bar, against
-  `variables/bpm` and `variables/meter`:
-    {{"at": "0b", "node": "@../instruments/bass", "deg": 1, "len": "0.25b", "vel": 0.9}}
-    {{"at": "0.25b", "node": "@../instruments/bass", "deg": 5, "cutoff": "900hz"}}
-  is @../instruments/bass(t, f0=deg(1), len=0.25b, vel=0.9) +
-  @../instruments/bass(t - 0.25b, f0=deg(5), cutoff=900hz).
-    at     required: a time string, "0.25b" or "0.5s", or constant arithmetic
-           over times, "2b + 1b/3" for a triplet; a bare number has no unit and
-           is refused. One time, and one score, counts in bars or in seconds.
-    node   required: an `@ref` string, resolved from the score's own directory.
-           A line writing `sound`, this field's old name, refuses.
-    len    a time string as `at` takes, bound as the node's `len`.
-    deg    a scale degree, a whole number counted from 1, the tonic: sugar for
-           "f0": "deg(n)". In a seven-row scale 8 is the tonic an octave up, 0
-           the seventh degree below it and -6 the tonic an octave down. A line
-           writing `f0` and `deg` refuses.
-    other  any other field binds the node's parameter of that name: a number,
-           or a constant in a string: one literal ("0.03s", "-6db", "900hz",
-           "A1") or arithmetic over literals and `deg(n)`, as "0.8*0.9".
-  Any field may be a list. A line listing N items is N events, event i taking
-  item i of every list and a single value going to all N; lists of different
-  lengths refuse. So a chord with a voice per note is one line:
+  A score is a `.jsonl` file: JSON Lines, one object per line, sorted by `at`;
+  `@score/drop` reads `score/drop.jsonl`, and a ref never writes `.jsonl`. A
+  file with no extension opening with `{{` refuses with the rename. Line 1 is
+  its annotation, the doc comment's four fields, which `lint` holds it to:
+    {{"annotation": "Models: ... | Neglects: ... | IO: (t) -> amplitude | Tags: ..."}}
+  Every other line is one kind, told by its keys, and may add `"comment"`:
+    event    "at", "node", "deg", "len" and the node's parameters: plays it
+    mark     "at", "mark": a point `mark(name)` reads in this file's times
+    comment  "at", "comment": a note to the reader at a time
+    move     "at", "lane", "to", and "node", "len", "shape" where written
+  A score lowers to equations, the sum of its events in written order, each
+  its node shifted to its `at`; marks, comments and moves sound nothing.
+    at     a time string, "0.25b" or "0.5s", or arithmetic over times, "2b +
+           1b/3" for a triplet; a bare number has no unit and refuses. A file
+           counts every time in bars or every one in seconds. "mark(verse) -
+           2b" is a position, "mark(drop) - mark(build)" a duration.
+    node   an `@ref` from the score's own directory: a sound, an equation or
+           another score. On a line placing a score `len` crops it there and
+           nothing else binds; a `node` list mixing scores and sounds refuses
+           `len`.
+    deg    a whole scale degree counted from 1, the tonic: sugar for "f0":
+           "deg(n)". In a seven-row scale 8 is the tonic an octave up, 0 the
+           seventh below and -6 the tonic an octave down. A chromatic note
+           binds "f0": "deg(7)*1st"; a line writing both refuses.
+    len    a time as `at` takes, bound as the node's `len`.
+    other  binds the node's parameter of that name: a number, or a constant in
+           a string, "0.03s", "-6db", "900hz", "A1", "0.8*0.9", "deg(5)/2".
+  Any field but `comment` may be a list. A line listing N items is N events,
+  moves or marks, item i of every list going to the i-th and a single value to
+  all; lists of different lengths refuse. A chord is a `deg` list on one `at`:
     {{"at": "0b", "node": "@../instruments/keys", "deg": [1, 3, 5],
-      "vel": [0.8, 0.5, 0.6], "len": ["1b", "0.5b", "1b"]}}
-  and a list of `at` is a run of one node, its items in order.
+      "vel": [0.8, 0.5, 0.6]}}
   `deg(n)` is the tonic in `variables/key` times degree n's ratio in the scale
-  `variables/scale` names, in a score value or in any equation. A chromatic
-  note is a degree times a ratio and an octave is a factor of 2: "f0":
-  "deg(7)*1st" raises the seventh, "f0": "deg(5)/2" is the fifth an octave
-  down, and both follow every edit of the key or its scale. A scale is one
-  the language names, as `minor` or `dorian` (`sva-cli builtins` lists each
-  with its cents), or a scale file of one row per degree in cents above the
-  tonic, ascending, the last the period it repeats at, named by a ref: a file
-  `scales/custom` holding 200 400 500 700 900 1100 1200 is the major scale.
-  Editing `variables/key`'s note transposes every score and editing
-  `variables/scale` changes mode. By convention a sound's `vel` runs 0..1 and its
-  mix level is a constant in its own equation, so a score's dynamics survive a
-  change of mix. A value reading `t` or a `@ref`, a field the node does not
-  read, a parameter it reads that nothing binds, and a `deg` with no scale
-  refuse before any audio, each naming the score's line and column. Keep a
-  score phrase-sized and place it from an equation: `@score/verse(t - 8b)`,
-  `repeat(@score/riff-1b, 4)`.
+  `variables/scale` names, read where the line sits, in a score or in any
+  equation. A scale is one the language names, as `minor` or `dorian` (`sva-cli
+  builtins` lists each with its cents), or a file of one row per degree in cents
+  above the tonic, ascending, the last the period, named by a ref: a file
+  `scales/custom` holding 200 400 500 700 900 1100 1200 is the major scale. A
+  value reading `t` or a `@ref`, a field the node does not read, a parameter it
+  reads that nothing binds, and a `deg` with no scale refuse before any audio,
+  each naming the score's file, line and column.
 
-  A score binds constants; what moves is a score of control curves, an
-  automation lane, read by an equation. A riser sweeping a lowpass open over
-  bars 21-24:
-    curves/close   len = 1b
-                   crop(1 - t/len, 0s, len)
-    auto/riser     {{"at": "20b", "node": "@../curves/close", "len": "4b"}}
-    master-fx      crop(lowpass(sample(@master),
-                     cutoff=20khz*pow(0.02, @auto/riser(t))), 0s, 32b)
-  An fx throw is the same lane gating a send: `@fx/echo(t, x=sample(@lead) *
-  @auto/throw(t))`.
+  A lane is one value moving through the song: a node's parameter, a move
+  naming "node" and "lane": "cutoff", or a variable under `variables/`, a move
+  naming "lane" alone: "energy", "key", "scale", "bpm" (never "meter"). A move
+  with no `len` sets the lane at `at`; with "len" and "shape", `lin` or `exp`,
+  it ramps there from the value it holds:
+    {{"at": "24b", "node": "@../instruments/saw", "lane": "cutoff",
+      "to": "9khz", "len": "8b", "shape": "exp"}}
+    {{"at": "72b", "lane": "key", "to": "key*2st", "comment": "a tone up"}}
+    {{"at": "92b", "lane": "bpm", "to": "bpm*8/9", "len": "4b", "shape": "lin"}}
+  A `to` naming the lane means its home value, the node's default or the
+  variable's file, so it follows `--set`. A lane reaches every instance of its
+  node, from a score or an equation, inside a wrapper too, unless the line or
+  an invoking equation passes that parameter, which wins. Where it holds one
+  value over an instance's span it binds that number; where it moves there the
+  instance reads it at its song time, and where the engine refuses a moving
+  value, such as `sat`'s `drive`, the move refuses as `bad-lane`: pass a
+  constant, move the lane between notes, or close the sound's tail with a crop.
+  A score's times ride the tempo curve the `bpm` lane draws; `b` in an equation
+  stays a bar of `variables/bpm`. A song places its sections at marks:
+    {{"at": "0b", "mark": "intro"}}
+    {{"at": "mark(intro)", "node": "@intro"}}
+    {{"at": "mark(intro) + 8b", "mark": "verse"}}
+    {{"at": "mark(verse)", "node": "@verse"}}
+  `concat` and `repeat` place parts on the curve too: `repeat(@score/riff-1b, 4)`.
+  A control score is one no sounding score places, read by an equation as a
+  signal: `@score/song(t) * (1 - @score/pump(t))` ducks the song under it.
+  `sva-cli outline @score/song` prints a song's marks, tempo, lanes, events and
+  size. Lint and render warn of a line passing a parameter whose lane ramps
+  under it (`line-overrides-lane`), and of a lane no instance reads
+  (`lane-reaches-nothing`).
 
 RESERVED VARIABLES:
   Four nodes under `variables/` are reserved: a ref reads one like any node,
@@ -103,7 +116,10 @@ RESERVED VARIABLES:
   does a variable holding no such value, such as bpm without meter, or a
   scale name no built-in has, which refuses listing every built-in. A stream's
   edit to a variable, or to the scale file it names, replaces every read of it
-  again. A node elsewhere named `bpm` is an ordinary node.
+  again. A node elsewhere named `bpm` is an ordinary node. Any other file under
+  `variables/`, as `variables/energy` holding 0.5, is a variable of the
+  composition's own: a ref reads it, `--set` sets it, and a score's moves move
+  it, as they move the reserved ones but `meter` (SCORES).
 
 RENDER:
   sva-cli render '<expression>' --representation <list> [--until '<condition>']
@@ -198,14 +214,17 @@ RENDER:
   `rand` draws once per step, keyed by that step's index; a key between steps
   reads the step nearest it, ties to even.
 
-  `--set <name>=<text>` renders as if the reserved variable `variables/<name>`
-  held `<text>`, and writes no file: `--set key=G3` transposes every degree to
-  G3, `--set scale=dorian` changes mode (a scale file is a ref written from
+  `--set <name>=<text>` renders as if the variable `variables/<name>` held
+  `<text>`, and writes no file: `--set key=G3` transposes every degree to G3,
+  `--set scale=dorian` changes mode (a scale file is a ref written from
   `variables/`, as the file holds it: `--set scale=@../scales/custom`), `--set
-  bpm=140` moves every bar and `--set meter=3/4` regroups them. It may repeat,
-  once per variable: a variable set twice refuses as `render.set_twice`, a
-  name that is no reserved variable as `render.set_unreserved`, and the file's
-  path, `variables/key=G3`, as `render.set_path`, naming the short form.
+  bpm=140` moves every bar, `--set meter=3/4` regroups them and `--set
+  energy=0.8` sets a variable of the composition's own. It sets a lane's home
+  value: a move whose `to` names it follows. It may repeat, once per variable: a
+  variable set twice refuses as `render.set_twice`, a name with no file under
+  `variables/` that is no reserved one as `render.set_unreserved`, listing the
+  variables there, and the file's path, `variables/key=G3`, as
+  `render.set_path`, naming the short form.
 
   `--threads <n>` (default: every core the machine reports) is the most
   threads a render computes on; `1` computes every value in turn on one.
@@ -291,9 +310,10 @@ LINT:
   the files that target reaches, and prints the interval a render of it reads.
   Either refuses a type error as `render` does.
 
-  A score's `;` lines are free comments and its events no body, so the comment
-  and length checks pass it by; a file of two or more lines that is neither a
-  score nor a scale refuses as `multiline-body` before any check runs.
+  A score's annotation is its doc comment, under the same codes, and its lines
+  no body, so the length checks pass it by; a file of two or more lines that is
+  neither a score nor a scale refuses as `multiline-body` before any check
+  runs. Each song lint types prints its warnings beside the findings.
 
   Every check prints one `data.diagnostics` item. `warning` exits 0, `error`
   exits non-zero, so branch on the verdict and never on whether the array is
@@ -326,8 +346,9 @@ TRACE:
   hop), everything that reads it (`up`, transitively to an entry point), each
   beside the expression doing the reading, the node that made it discrete, and
   the feedback loop it sits in, if any. A score is shown as its line count, its
-  first and last `at` and the nodes it plays, never the sum it lowers to. An
-  interval the target reads is ignored.
+  first and last `at` and the nodes it plays, never the sum it lowers to; every
+  entry point's song is lowered first, each at song time 0. An interval the
+  target reads is ignored.
 
 BUILTINS:
   sva-cli builtins
@@ -348,10 +369,19 @@ OUTLINE:
   `args`, operators by `op`, refs by `path` with their `binds`, refs and `self`
   by how they `read`, `time` or `index`, literals by `value` and `unit`, names
   by `name`. A node the parser supplies itself, the `0` of a prefix minus or the
-  `t` of a bare `@ref`, has `written: false`. A score's text prints `score`
-  instead of `outline`: one item per event, a line listing N items N of them,
-  with its `line`, `span`, `at`, `node`, `deg` and `args`. Reads no
-  composition.
+  `t` of a bare `@ref`, has `written: false`. Reads no composition. Score text,
+  JSON opening with `{{`, prints `score` instead of `outline`: one item per item
+  a line lists, with its `kind`, `line`, `span`, `at` with marks resolved, and
+  its `node`, `deg`, `args`, `mark` or `lane`, `to`, `len` and `shape`.
+
+  sva-cli outline @score/song
+
+  Run in a composition, outlines that score as the song a render of it is:
+  `marks` in bars and seconds, the `tempo` curve's pieces, each lane with its
+  home and every move resolved with its placement chain, how many instances it
+  reaches and how many see it move, each placed event's position, node, pitch
+  in hertz and where each parameter comes from (`line`, `lane` or `default`),
+  and the `size`: placed events and the engine's instances beside its limit.
 
 NEW:
   sva-cli new <name> [--idempotency-key <key>]
@@ -376,6 +406,7 @@ EXAMPLES:
   sva-cli lint
   sva-cli lint '@master'
   sva-cli trace score/phrase
+  sva-cli outline @score/phrase
   sva-cli builtins
 
 OUTPUT:
@@ -453,7 +484,7 @@ DEFAULTS:
                        `~/.cache/sva`, holding at most {store_gb} GB; `none` keeps
                        no store. A store that fails fails no render: it answers
                        as without one, warned why in `diagnostics`.
-  --set <name>=<text>  a reserved variable read as `<text>` for this render.
+  --set <name>=<text>  a variable read as `<text>` for this render.
                        Default none: each is read off its file.
   --confirm            replaces a destination that already holds a file. Without
                        it a path already taken refuses as `conflict` and nothing

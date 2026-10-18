@@ -48,7 +48,7 @@ pub use render::{
     Abandon, Built, Change, Changed, Counts, Handle, Hear, LATEST, NOTES, Never, Out, Placed,
     Range, Render, RenderConfig, STREAMED, Session, Stream, StreamConfig, Until, Work, answer,
     answer_buffer, change, ends, fetch, plan, render, render_called, render_in, render_over,
-    sketch_atom,
+    sketch_atom, supports,
 };
 pub use schedule::{Order, Schedule, schedule_from};
 pub use sva_formula::{C64, Codomain, Held, Line, NodeId, SpectralSum, Ty, Var};

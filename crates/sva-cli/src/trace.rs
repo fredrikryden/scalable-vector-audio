@@ -28,6 +28,7 @@ pub fn trace(dir: &Path, target: &str) -> Result<Traceable, CliError> {
     let mut graph = prepared(&sva_ast::Dir::at(dir))?;
 
     let mut roots = entry_points(&graph);
+    sung_together(&mut graph, &roots)?;
     if graph.defines(target)
         && !roots.iter().any(|r| r == target)
         && !referenced(&graph).contains(target)
@@ -54,20 +55,49 @@ pub fn trace(dir: &Path, target: &str) -> Result<Traceable, CliError> {
     })
 }
 
-/// A score is its lines, not the sum they lower to: how many, when, and what they play.
+/// Every entry point's song lowered together, each at song time 0.
+fn sung_together(graph: &mut Graph, roots: &[String]) -> Result<(), CliError> {
+    const SONGS: &str = "#songs";
+    let reads = roots.iter().map(|root| Expr::Ref {
+        path: root.clone(),
+        arg: Box::new(Expr::Var("t".to_string())),
+        binds: Vec::new(),
+        address: sva_ast::Address::Time,
+        span: sva_ast::ByteSpan::at(0),
+    });
+    let Some(sum) = reads.reduce(|a, b| Expr::Bin(sva_ast::BinOp::Add, Box::new(a), Box::new(b)))
+    else {
+        return Ok(());
+    };
+    graph
+        .define_settled(None, SONGS, sum)
+        .map_err(CliError::Refusals)?;
+    sva_core::sung(graph, SONGS, sva_engine::DEFAULT_SAMPLE_RATE)?;
+    graph.set(SONGS, None);
+    Ok(())
+}
+
 fn summary(score: &sva_ast::Score) -> String {
     let mut nodes: Vec<&str> = Vec::new();
-    for event in &score.events {
-        if !nodes.contains(&event.node.as_str()) {
-            nodes.push(&event.node);
+    let mut ats = Vec::new();
+    for (_, item) in score.items() {
+        ats.push(item.at().amount.to_f64());
+        if let sva_ast::score::Item::Event(event) = item
+            && !nodes.contains(&event.node.name.as_str())
+        {
+            nodes.push(&event.node.name);
         }
     }
-    let (first, last) = (&score.events[0], &score.events[score.events.len() - 1]);
+    let spelled = |at: Option<&f64>| {
+        at.map_or("none".to_string(), |at| {
+            sva_ast::score::spelled(*at, score.unit)
+        })
+    };
     format!(
         "a score of {} lines, `at` {} to {}, each playing @{} shifted to its `at`",
-        score.events.len(),
-        first.at.spelled(),
-        last.at.spelled(),
+        score.lines.len(),
+        spelled(ats.first()),
+        spelled(ats.last()),
         nodes.join(", @")
     )
 }
@@ -75,6 +105,7 @@ fn summary(score: &sva_ast::Score) -> String {
 /// `text` is neither node nor instance: argv math, an entry point of its own.
 fn probe(graph: &mut Graph, text: &str) -> Result<Traced, CliError> {
     define_probe_for(graph, text)?;
+    sva_core::sung(graph, PROBE, sva_engine::DEFAULT_SAMPLE_RATE)?;
     let roots = entry_points(graph);
     sva_engine::trace(graph, &roots, PROBE).map_err(CliError::Engine)
 }
@@ -96,16 +127,15 @@ pub(crate) fn entry_points(graph: &Graph) -> Vec<String> {
     graph
         .paths()
         .filter(|p| !reached.contains(*p))
-        .filter(|p| !reserved_variable(p) && graph.scale(p).is_none())
+        .filter(|p| !variable(p) && graph.scale(p).is_none())
         .filter(|p| graph.free_parameters(p).is_empty())
         .map(str::to_string)
         .collect()
 }
 
-pub(crate) fn reserved_variable(path: &str) -> bool {
-    sva_core::RESERVED_VARIABLES
-        .iter()
-        .any(|name| sva_ast::variable(name) == path)
+/// A variable is data a song reads and moves, never a sound of its own.
+pub(crate) fn variable(path: &str) -> bool {
+    path.starts_with(&format!("{}/", sva_ast::VARIABLES))
 }
 
 fn collect_refs(from: &str, expr: &Expr, out: &mut BTreeSet<String>) {

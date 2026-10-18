@@ -1,16 +1,15 @@
-// Concern: folds a source's node texts into a graph, desugars repeat/concat | Non-concern: where the texts come from (source.rs), one file's own content (ingest.rs) | IO: (&dyn Source) -> Graph
+// Concern: folds a source's node texts into a graph, a song-lowered node kept beside its body | Non-concern: where the texts come from (source.rs), lowering a song (song/) | IO: (&dyn Source) -> Graph
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::diag::{ByteSpan, DiagCode};
-use crate::expr::{
-    Address, Arg, BinOp, Binds, Expr, Literal, children, map_children, map_children_ok,
-};
-use crate::filename::{FileSpan, SpanUnit};
-use crate::ingest::{Data, base_name, parse_file};
+use crate::expr::{Binds, Expr, children, map_children_ok};
+use crate::filename::FileSpan;
+use crate::ingest::{Data, base_name, parse_file, parse_score_file};
 use crate::refusal::Refusal;
 use crate::reserved::{Values, variable};
+use crate::score::EXTENSION;
 use crate::skipped::{Skip, Skipped};
 use crate::source::Source;
 
@@ -19,7 +18,6 @@ pub const VARIABLES: &str = "variables";
 
 #[derive(Clone, Debug)]
 pub struct Graph {
-    root: String,
     nodes: BTreeMap<String, Arc<Defined>>,
     data: HashMap<String, Data>,
     spans: HashMap<String, Option<FileSpan>>,
@@ -29,6 +27,7 @@ pub struct Graph {
     skipped: Vec<Skipped>,
     /// Each node's text as its source answered it, or as a defined one prints.
     texts: HashMap<String, String>,
+    origins: HashMap<String, Origin>,
     /// The edit of its source each node's text was read at, where the source counts them.
     generations: HashMap<String, u64>,
 }
@@ -40,10 +39,17 @@ pub struct Defined {
     pub defaults: Vec<(String, Expr)>,
 }
 
+#[derive(Clone, Debug)]
+enum Origin {
+    Lowered(Arc<Defined>),
+    Made,
+}
+
 /// A node's parse with its text, span and data, as one graph hands it to another.
 #[derive(Clone, Debug)]
 pub struct Held {
     defined: Arc<Defined>,
+    origin: Option<Origin>,
     text: String,
     generation: Option<u64>,
     span: Option<FileSpan>,
@@ -112,7 +118,55 @@ impl Graph {
         self.nodes.get(path)
     }
 
-    /// A node's whole text, comments and all, before any parse.
+    pub fn source(&self, path: &str) -> Option<&Arc<Defined>> {
+        match self.origins.get(path) {
+            Some(Origin::Lowered(source)) => Some(source),
+            Some(Origin::Made) => None,
+            None => self.nodes.get(path),
+        }
+    }
+
+    pub fn source_expr(&self, path: &str) -> Option<Expr> {
+        self.source(path).map(|d| d.body.clone())
+    }
+
+    /// Each node as its file holds it, what only a song made gone.
+    pub fn sourced(&self) -> Graph {
+        let mut out = self.clone();
+        for (path, origin) in std::mem::take(&mut out.origins) {
+            match origin {
+                Origin::Lowered(source) => {
+                    out.nodes.insert(path, source);
+                }
+                Origin::Made => {
+                    out.set(&path, None);
+                }
+            }
+        }
+        out
+    }
+
+    pub(crate) fn derive(&mut self, path: &str, defined: Defined) {
+        match self.nodes.get(path) {
+            Some(held) => {
+                if !self.origins.contains_key(path) {
+                    let source = Origin::Lowered(Arc::clone(held));
+                    self.origins.insert(path.to_string(), source);
+                }
+                self.nodes.insert(path.to_string(), Arc::new(defined));
+            }
+            None => {
+                let mut held = self.defining(defined.body);
+                held.defined = Arc::new(Defined {
+                    body: held.defined.body.clone(),
+                    defaults: defined.defaults,
+                });
+                held.origin = Some(Origin::Made);
+                self.set(path, Some(held));
+            }
+        }
+    }
+
     pub fn text(&self, path: &str) -> Option<&str> {
         self.texts.get(path).map(String::as_str)
     }
@@ -166,10 +220,13 @@ impl Graph {
     /// `from`'s node at `path`, parsed again from its own text, before any pass rewrote it.
     pub(crate) fn reread(&mut self, path: &str, from: &Graph) -> Result<(), Refusal> {
         let mut held = from.held(path).expect("a node `from` holds");
-        let parsed =
-            parse_file(&held.text).map_err(|d| Refusal::new(path, d.span, d.code, d.message))?;
+        let parsed = match held.data {
+            Some(Data::Score(_)) => parse_score_file(path, &held.text),
+            _ => parse_file(&held.text),
+        };
+        let parsed = parsed.map_err(|d| Refusal::new(path, d.span, d.code, d.message))?;
         held.span = crate::filename::parse_filename(base_name(path)).1;
-        held.reserved = crate::reserved::reads(&parsed.expr, &parsed.defaults, held.span);
+        held.reserved = crate::reserved::parsed_reads(&parsed, held.span);
         held.lowered = None;
         held.defined = Arc::new(Defined {
             body: parsed.expr,
@@ -178,15 +235,6 @@ impl Graph {
         held.data = parsed.data;
         self.set(path, Some(held));
         Ok(())
-    }
-
-    pub(crate) fn spans_in_seconds(&mut self, seconds_per_bar: f64) {
-        for span in self.spans.values_mut().flatten() {
-            if span.unit == SpanUnit::Bars {
-                span.amount *= seconds_per_bar;
-                span.unit = SpanUnit::Seconds;
-            }
-        }
     }
 
     pub fn paths(&self) -> impl Iterator<Item = &str> {
@@ -214,6 +262,7 @@ impl Graph {
     /// A node no file backs, its reads of reserved variables already lowered.
     pub fn defining(&self, body: Expr) -> Held {
         Held {
+            origin: None,
             text: crate::print::render(&body),
             generation: None,
             defined: Arc::new(Defined {
@@ -230,6 +279,7 @@ impl Graph {
     pub fn held(&self, path: &str) -> Option<Held> {
         Some(Held {
             defined: Arc::clone(self.nodes.get(path)?),
+            origin: self.origins.get(path).cloned(),
             text: self
                 .texts
                 .get(path)
@@ -266,6 +316,10 @@ impl Graph {
                     Some(values) => self.lowered.insert(path.to_string(), values),
                     None => self.lowered.remove(path),
                 };
+                match held.origin {
+                    Some(origin) => self.origins.insert(path.to_string(), origin),
+                    None => self.origins.remove(path),
+                };
             }
             None => {
                 self.nodes.remove(path);
@@ -275,12 +329,12 @@ impl Graph {
                 self.data.remove(path);
                 self.reserved.remove(path);
                 self.lowered.remove(path);
+                self.origins.remove(path);
             }
         }
         before
     }
 
-    /// Whether `other` holds `path` with the same body and defaults.
     pub fn holds_as(&self, path: &str, other: &Graph) -> bool {
         match (self.nodes.get(path), other.nodes.get(path)) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
@@ -289,7 +343,6 @@ impl Graph {
         }
     }
 
-    /// Whether `other` read `path` as the same text, at the same edit of its source.
     pub fn read_as(&self, path: &str, other: &Graph) -> bool {
         self.texts.get(path) == other.texts.get(path)
             && self.generations.get(path) == other.generations.get(path)
@@ -318,7 +371,6 @@ impl Graph {
         seen
     }
 
-    /// Each node `roots` reach through `from` that this graph lacks, taken.
     pub fn adopt(&mut self, from: &Graph, roots: &[String]) -> Vec<String> {
         let lacking: Vec<String> = from
             .reaching(roots)
@@ -331,59 +383,7 @@ impl Graph {
         lacking
     }
 
-    /// Expands every `repeat`/`concat` call into `crop` + shifted-ref + sum (FORMAT.md sugar),
-    /// each span already in seconds.
-    pub fn desugar_arrangement(&mut self) -> Result<(), Vec<Refusal>> {
-        self.desugared(None)
-    }
-
-    /// The same, a span this graph lacks read in `beside`.
-    pub fn desugar_arrangement_beside(&mut self, beside: &Graph) -> Result<(), Vec<Refusal>> {
-        self.desugared(Some(beside))
-    }
-
-    fn desugared(&mut self, beside: Option<&Graph>) -> Result<(), Vec<Refusal>> {
-        let paths: Vec<String> = self.nodes.keys().cloned().collect();
-        let mut refusals = Vec::new();
-        let mut rewritten = Vec::new();
-
-        for path in &paths {
-            let expr = self.expr(path).expect("path came from nodes.keys()");
-            match self.rewrite_arrangement(path, expr, beside) {
-                Ok(new_expr) => rewritten.push((path.clone(), new_expr)),
-                Err(r) => refusals.push(r),
-            }
-        }
-
-        if !refusals.is_empty() {
-            return Err(refusals);
-        }
-        for (path, new_expr) in rewritten {
-            if let Some(defined) = self.nodes.get_mut(&path)
-                && defined.body != new_expr
-            {
-                Arc::make_mut(defined).body = new_expr;
-            }
-        }
-        Ok(())
-    }
-
-    /// A target defined at `path` as a file's node settles.
-    pub fn define_arranged(&mut self, path: &str, expr: Expr) -> Result<bool, Vec<Refusal>> {
-        self.arranged(None, path, expr)
-    }
-
-    /// The same, a span this graph lacks read in `beside`.
-    pub fn define_arranged_beside(
-        &mut self,
-        beside: &Graph,
-        path: &str,
-        expr: Expr,
-    ) -> Result<bool, Vec<Refusal>> {
-        self.arranged(Some(beside), path, expr)
-    }
-
-    fn arranged(
+    pub fn define_settled(
         &mut self,
         beside: Option<&Graph>,
         path: &str,
@@ -402,174 +402,13 @@ impl Graph {
             let values = self.values(beside)?;
             defined = self.lowered(path, &defined, &values)?;
         }
-        let arranged = self
-            .rewrite_arrangement(path, &defined.body, beside)
-            .map_err(|r| vec![r])?;
-        Ok(self.define(path, arranged))
-    }
-
-    fn rewrite_arrangement(
-        &self,
-        referencing: &str,
-        e: &Expr,
-        beside: Option<&Graph>,
-    ) -> Result<Expr, Refusal> {
-        let rebuilt = map_children(e, Binds::Substitute, |c| {
-            self.rewrite_arrangement(referencing, c, beside)
-        })?;
-        // Bottom-up: a `repeat`/`concat` expands only once its own arguments are rewritten.
-        match &rebuilt {
-            Expr::Call { name, args, span } if name == "repeat" => {
-                self.expand_repeat((referencing, beside), args, *span)
-            }
-            Expr::Call { name, args, span } if name == "concat" => {
-                self.expand_concat((referencing, beside), args, *span)
-            }
-            _ => Ok(rebuilt),
-        }
-    }
-
-    /// `repeat(@x, n)` desugars to `concat(@x, @x, ..., @x)`, `n` copies of the same argument.
-    fn expand_repeat(
-        &self,
-        (referencing, beside): (&str, Option<&Graph>),
-        args: &[Arg],
-        span: ByteSpan,
-    ) -> Result<Expr, Refusal> {
-        let (x, n_expr) = match (arg_expr(args, 0), arg_expr(args, 1)) {
-            (Some(x), Some(n)) if args.len() == 2 => (x, n),
-            _ => {
-                return Err(Refusal::new(
-                    referencing,
-                    span,
-                    DiagCode::BadArrangementArg,
-                    "`repeat` takes exactly two arguments: a ref and an integer copy count",
-                ));
-            }
-        };
-
-        let n = match n_expr {
-            Expr::Lit(Literal::Num(n)) if *n >= 0.0 && n.fract() == 0.0 => *n as usize,
-            _ => {
-                return Err(Refusal::new(
-                    referencing,
-                    span,
-                    DiagCode::BadArrangementArg,
-                    "`repeat`'s second argument must be a non-negative whole-number literal",
-                ));
-            }
-        };
-
-        let concat_args: Vec<Arg> = (0..n).map(|_| Arg::Pos(x.clone())).collect();
-        self.expand_concat((referencing, beside), &concat_args, span)
-    }
-
-    /// `concat(@a, @b, ...)` desugars to a sum of each argument, cropped to its own
-    /// filename-declared span and time-shifted by the cumulative duration of the args before
-    /// it — sequential placement, zero manual offset arithmetic from the composition author.
-    fn expand_concat(
-        &self,
-        (referencing, beside): (&str, Option<&Graph>),
-        args: &[Arg],
-        span: ByteSpan,
-    ) -> Result<Expr, Refusal> {
-        let mut terms = Vec::with_capacity(args.len());
-        let mut offset = 0.0f64;
-
-        for a in args {
-            let e = match a {
-                Arg::Pos(e) | Arg::Named(_, e) => e,
-            };
-            let Expr::Ref {
-                path,
-                arg,
-                binds,
-                address,
-                span: ref_span,
-            } = e
-            else {
-                return Err(Refusal::new(
-                    referencing,
-                    span,
-                    DiagCode::BadArrangementArg,
-                    "`concat`'s arguments must each be a plain `@path` ref to a file with a \
-                     declared span",
-                ));
-            };
-            if **arg != Expr::Var("t".to_string()) || *address != Address::Time {
-                return Err(Refusal::new(
-                    referencing,
-                    *ref_span,
-                    DiagCode::BadArrangementArg,
-                    format!(
-                        "`@{path}` inside `concat`/`repeat` must be a bare ref (no custom \
-                         time argument); a shift is added automatically"
-                    ),
-                ));
-            }
-
-            let Some(target) = resolve_ref_path(referencing, path) else {
-                return Err(above_root(referencing, *ref_span, path, &self.root));
-            };
-            let held = self.span(&target);
-            let file_span = match held.or_else(|| beside?.span(&target)) {
-                Some(fs) => {
-                    assert_eq!(
-                        fs.unit,
-                        SpanUnit::Seconds,
-                        "lower_reserved puts bars in seconds"
-                    );
-                    fs
-                }
-                None => {
-                    return Err(Refusal::new(
-                        referencing,
-                        *ref_span,
-                        DiagCode::BadArrangementArg,
-                        format!(
-                            "`@{path}` (resolved to `{target}`) has no declared span; `concat` \
-                             needs one to know its duration"
-                        ),
-                    ));
-                }
-            };
-
-            let start = offset;
-            let end = offset + file_span.amount;
-            let shifted_ref = Expr::Ref {
-                path: path.clone(),
-                arg: Box::new(Expr::Bin(
-                    BinOp::Sub,
-                    Box::new(Expr::Var("t".to_string())),
-                    Box::new(Expr::Lit(Literal::Num(start))),
-                )),
-                binds: binds.clone(),
-                address: Address::Time,
-                span: *ref_span,
-            };
-            terms.push(Expr::Call {
-                name: "crop".to_string(),
-                args: vec![
-                    Arg::Pos(shifted_ref),
-                    Arg::Pos(Expr::Lit(Literal::Num(start))),
-                    Arg::Pos(Expr::Lit(Literal::Num(end))),
-                ],
-                span,
-            });
-            offset = end;
-        }
-
-        Ok(terms
-            .into_iter()
-            .reduce(|acc, t| Expr::Bin(BinOp::Add, Box::new(acc), Box::new(t)))
-            .unwrap_or(Expr::Lit(Literal::Num(0.0))))
+        Ok(self.define(path, defined.body))
     }
 }
 
-fn arg_expr(args: &[Arg], idx: usize) -> Option<&Expr> {
-    args.get(idx).map(|a| match a {
-        Arg::Pos(e) | Arg::Named(_, e) => e,
-    })
+pub(crate) fn variable_text<'g>(graph: &'g Graph, name: &str) -> Option<&'g str> {
+    let text = graph.text(&format!("{VARIABLES}/{name}"))?;
+    Some(&text[crate::ingest::body_at(text)..])
 }
 
 /// Every node the source names. What a whole composition can be told about itself — `lint`, an
@@ -580,10 +419,12 @@ pub fn load(source: &dyn Source) -> Result<Graph, Vec<Refusal>> {
         .paths()
         .map_err(|reason| vec![loading.directory(reason)])?;
     for path in &listing.found {
-        match names_a_node(path) {
-            true => {
-                loading.pull(source, path);
+        let node = path.strip_suffix(EXTENSION).unwrap_or(path);
+        match names_a_node(node) {
+            true if !loading.holds(node) => {
+                loading.pull(source, node);
             }
+            true => {}
             false => loading.skipped.push(Skipped {
                 path: path.clone(),
                 reason: Skip::Unnameable,
@@ -647,9 +488,7 @@ pub fn load_beside(
     let mut work: Vec<String> = roots.iter().rev().map(|r| (*r).to_string()).collect();
     while let Some(path) = work.pop() {
         let current = base.defines(&path)
-            && source
-                .generation(&path)
-                .is_none_or(|at| base.generation(&path) == Some(at));
+            && generation(source, &path).is_none_or(|at| base.generation(&path) == Some(at));
         if current {
             if walked.insert(path.clone()) {
                 work.extend(base.reaching_from(&path));
@@ -662,6 +501,12 @@ pub fn load_beside(
         work.extend(loading.reads(&path));
     }
     loading.finish(Some(base))
+}
+
+fn generation(source: &dyn Source, path: &str) -> Option<u64> {
+    source
+        .generation(path)
+        .or_else(|| source.generation(&format!("{path}{EXTENSION}")))
 }
 
 /// One parsed node at a time, so pulling everything and pulling a closure are the same walk.
@@ -711,13 +556,36 @@ impl Loading {
     /// `false` where nothing was added: the source does not hold this path, or its text is not
     /// a node — and the second is already recorded as its own located refusal.
     fn pull(&mut self, source: &dyn Source, path: &str) -> bool {
-        let text = match source.get(path) {
-            Ok(Some(text)) => text,
-            Ok(None) => {
+        let file = format!("{path}{EXTENSION}");
+        let read = |at: &str| {
+            source
+                .get(at)
+                .map(|text| text.map(|text| text.into_owned()))
+        };
+        let (text, score) = match (read(path), read(&file)) {
+            (Ok(Some(_)), Ok(Some(_))) => {
+                self.refusals.push(
+                    Refusal::new(
+                        file.as_str(),
+                        ByteSpan::at(0),
+                        DiagCode::BadScore,
+                        format!(
+                            "line 1, column 1: `@{path}` matches two files, `{path}` and \
+                             `{file}`; a ref names one file, so rename or remove one of them"
+                        ),
+                    )
+                    .placed((1, 1)),
+                );
+                self.spans.insert(path.to_string(), None);
+                return false;
+            }
+            (Ok(Some(text)), Ok(None)) => (text, false),
+            (Ok(None), Ok(Some(text))) => (text, true),
+            (Ok(None), Ok(None)) => {
                 self.missing.insert(path.to_string());
                 return false;
             }
-            Err(reason) => {
+            (Err(reason), _) | (_, Err(reason)) => {
                 self.refusals
                     .push(Refusal::new(path, ByteSpan::at(0), DiagCode::Io, reason));
                 self.spans.insert(path.to_string(), None);
@@ -726,13 +594,18 @@ impl Loading {
         };
         let (_, span) = crate::filename::parse_filename(base_name(path));
         self.spans.insert(path.to_string(), span);
-        self.texts.insert(path.to_string(), text.to_string());
-        if let Some(at) = source.generation(path) {
+        self.texts.insert(path.to_string(), text.clone());
+        let held = if score { file.as_str() } else { path };
+        if let Some(at) = generation(source, path) {
             self.generations.insert(path.to_string(), at);
         }
-        match parse_file(&text) {
+        let parsed = match score {
+            true => parse_score_file(path, &text),
+            false => parse_file(&text),
+        };
+        match parsed {
             Ok(parsed) => {
-                let reads = crate::reserved::reads(&parsed.expr, &parsed.defaults, span);
+                let reads = crate::reserved::parsed_reads(&parsed, span);
                 if !reads.is_empty() {
                     self.reserved.insert(path.to_string(), reads);
                 }
@@ -746,8 +619,11 @@ impl Loading {
                 true
             }
             Err(d) => {
-                self.refusals
-                    .push(Refusal::new(path, d.span, d.code, d.message));
+                let refusal = Refusal::new(held, d.span, d.code, d.message);
+                self.refusals.push(match score {
+                    true => refusal.placed(crate::score::line_column(&text, d.span.start)),
+                    false => refusal,
+                });
                 false
             }
         }
@@ -763,16 +639,19 @@ impl Loading {
         out
     }
 
-    /// A score is read line by line, so a refusal inside one names its line and column.
-    fn on_its_line(&self, mut refusal: Refusal) -> Refusal {
+    /// A refusal in a score names its file, line and column.
+    fn on_its_line(&self, refusal: Refusal) -> Refusal {
         let path = refusal.at.path.as_str();
-        if let (Some(Data::Score(_)), Some(text)) = (self.data.get(path), self.texts.get(path)) {
-            let before = &text[..refusal.at.span.start];
-            let line = before.matches('\n').count() + 1;
-            let column = before.len() - before.rfind('\n').map_or(0, |at| at + 1) + 1;
-            refusal.reason = format!("line {line}, column {column}: {}", refusal.reason);
+        match (self.data.get(path), self.texts.get(path)) {
+            (Some(Data::Score(_)), Some(text)) => crate::score::refused(
+                format!("{path}{EXTENSION}"),
+                text,
+                refusal.at.span.start,
+                crate::diag::DiagCode::BadScore,
+                &refusal.reason,
+            ),
+            _ => refusal,
         }
-        refusal
     }
 
     /// Every ref resolving here or in `base`.
@@ -782,13 +661,31 @@ impl Loading {
         }
         let held =
             |path: &str| self.nodes.contains_key(path) || base.is_some_and(|b| b.defines(path));
-        let dangling = check_refs((&self.nodes, &held), &self.texts, &self.name);
+        let is_score = |path: &str| matches!(self.data.get(path), Some(Data::Score(_)));
+        let dangling: Vec<Refusal> = check_refs((&self.nodes, &held), &self.texts, &self.name)
+            .into_iter()
+            .filter(|r| !(is_score(&r.at.path) && r.reason.contains(&format!("`{VARIABLES}/"))))
+            .collect();
         if !dangling.is_empty() {
             return Err(dangling.into_iter().map(|r| self.on_its_line(r)).collect());
         }
         let cycles = check_cycles(&self.nodes);
         if !cycles.is_empty() {
-            return Err(cycles);
+            let placed = |r: Refusal| match is_score(&r.at.path) {
+                true => Refusal {
+                    reason: format!(
+                        "a score places itself, directly or through others: `{}` places what \
+                         places it back ({})",
+                        r.at.path, r.reason
+                    ),
+                    ..r
+                },
+                false => r,
+            };
+            return Err(cycles
+                .into_iter()
+                .map(|r| self.on_its_line(placed(r)))
+                .collect());
         }
         let mut defaults = self.defaults;
         let nodes = self.nodes.into_iter().map(|(path, body)| {
@@ -796,7 +693,6 @@ impl Loading {
             (path, Arc::new(Defined { body, defaults }))
         });
         Ok(Graph {
-            root: self.name,
             nodes: nodes.collect(),
             data: self.data,
             spans: self.spans,
@@ -805,6 +701,7 @@ impl Loading {
             skipped: self.skipped,
             texts: self.texts,
             generations: self.generations,
+            origins: HashMap::new(),
         })
     }
 }
@@ -1318,133 +1215,5 @@ mod tests {
         assert_eq!(r.at.path, "piano/bench");
         assert!(r.reason.contains("@../../secrets"), "{}", r.reason);
         assert!(r.reason.contains("./song1"), "{}", r.reason);
-    }
-
-    #[test]
-    fn repeat_produces_n_back_to_back_crop_shifted_copies() {
-        let files: Vec<(&str, &str)> = vec![
-            ("loop-2s", "sin(2*pi*220*t)\n"),
-            ("track", "repeat(@loop-2s, 3)\n"),
-        ];
-        let mut g = load(&of(&files)).unwrap();
-        g.lower_reserved(None).unwrap();
-        g.desugar_arrangement().unwrap();
-
-        let expr = g.expr("track").unwrap().clone();
-        let mut terms = Vec::new();
-        flatten_sum(&expr, &mut terms);
-        assert_eq!(terms.len(), 3, "expected 3 distinct copies, got {terms:?}");
-
-        for (idx, term) in terms.iter().enumerate() {
-            let Expr::Call { name, args, .. } = term else {
-                panic!("expected each term to be a crop() call: {term:?}");
-            };
-            assert_eq!(name, "crop");
-            let start = literal_num(&args[1]);
-            let end = literal_num(&args[2]);
-            assert_eq!(start, idx as f64 * 2.0);
-            assert_eq!(end, (idx as f64 + 1.0) * 2.0);
-        }
-    }
-
-    #[test]
-    fn concat_places_differently_spanned_args_sequentially_with_no_manual_offsets() {
-        let files: Vec<(&str, &str)> = vec![
-            ("intro-3s", "sin(2*pi*220*t)\n"),
-            ("drop-5s", "sin(2*pi*110*t)\n"),
-            ("track", "concat(@intro-3s, @drop-5s)\n"),
-        ];
-        let mut g = load(&of(&files)).unwrap();
-        g.lower_reserved(None).unwrap();
-        g.desugar_arrangement().unwrap();
-
-        let expr = g.expr("track").unwrap().clone();
-        let mut terms = Vec::new();
-        flatten_sum(&expr, &mut terms);
-        assert_eq!(terms.len(), 2);
-
-        let Expr::Call { args: a0, .. } = &terms[0] else {
-            panic!()
-        };
-        let Expr::Call { args: a1, .. } = &terms[1] else {
-            panic!()
-        };
-        assert_eq!(literal_num(&a0[1]), 0.0);
-        assert_eq!(literal_num(&a0[2]), 3.0);
-        assert_eq!(literal_num(&a1[1]), 3.0);
-        assert_eq!(literal_num(&a1[2]), 8.0, "3 + 5 total duration");
-    }
-
-    #[test]
-    fn repeat_with_a_non_integer_count_is_refused_not_guessed() {
-        let files: Vec<(&str, &str)> = vec![
-            ("loop-1s", "sin(2*pi*220*t)\n"),
-            ("track", "repeat(@loop-1s, 2.5)\n"),
-        ];
-        let mut g = load(&of(&files)).unwrap();
-        g.lower_reserved(None).unwrap();
-        let errs = g.desugar_arrangement().unwrap_err();
-        assert!(errs.iter().any(|r| r.code == DiagCode::BadArrangementArg));
-    }
-
-    #[test]
-    fn concat_with_a_non_ref_argument_is_refused_not_guessed() {
-        let files: Vec<(&str, &str)> = vec![("track", "concat(1 + 2, 3)\n")];
-        let mut g = load(&of(&files)).unwrap();
-        g.lower_reserved(None).unwrap();
-        let errs = g.desugar_arrangement().unwrap_err();
-        assert!(errs.iter().any(|r| r.code == DiagCode::BadArrangementArg));
-    }
-
-    #[test]
-    fn concat_with_a_custom_time_arg_ref_is_refused_not_silently_dropped() {
-        let files: Vec<(&str, &str)> = vec![
-            ("a-1s", "sin(2*pi*220*t)\n"),
-            ("b-1s", "sin(2*pi*440*t)\n"),
-            ("track", "concat(@a-1s(t*2), @b-1s)\n"),
-        ];
-        let mut g = load(&of(&files)).unwrap();
-        g.lower_reserved(None).unwrap();
-        let errs = g.desugar_arrangement().unwrap_err();
-        assert!(errs.iter().any(|r| r.code == DiagCode::BadArrangementArg));
-    }
-
-    #[test]
-    fn a_zero_count_repeat_and_an_argument_less_concat_are_silence() {
-        let files: Vec<(&str, &str)> = vec![
-            ("loop-1s", "sin(2*pi*220*t)\n"),
-            ("repeated", "repeat(@loop-1s, 0)\n"),
-            ("concatenated", "concat()\n"),
-        ];
-        let mut g = load(&of(&files)).unwrap();
-        g.lower_reserved(None).unwrap();
-        g.desugar_arrangement().unwrap();
-
-        assert_eq!(
-            *g.expr("repeated").unwrap(),
-            Expr::Lit(Literal::Num(0.0)),
-            "0 copies is silence"
-        );
-        assert_eq!(
-            *g.expr("concatenated").unwrap(),
-            Expr::Lit(Literal::Num(0.0))
-        );
-    }
-
-    fn flatten_sum(e: &Expr, out: &mut Vec<Expr>) {
-        match e {
-            Expr::Bin(BinOp::Add, l, r) => {
-                flatten_sum(l, out);
-                flatten_sum(r, out);
-            }
-            other => out.push(other.clone()),
-        }
-    }
-
-    fn literal_num(a: &Arg) -> f64 {
-        match a {
-            Arg::Pos(Expr::Lit(Literal::Num(n))) => *n,
-            other => panic!("expected a numeric literal arg, got {other:?}"),
-        }
     }
 }

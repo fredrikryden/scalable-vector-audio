@@ -11,9 +11,28 @@ use sva_cli::{
     trace_data, version_data,
 };
 
-/// Parsing, desugaring and dropping a node's expression all recurse to its depth, which `sum`
+/// Parsing, lowering and dropping a node's expression all recurse to its depth, which `sum`
 /// lets an author choose. The process's own stack is fixed before it starts; a thread's is not.
 const STACK_BYTES: usize = 128 << 20;
+
+/// A lone `@ref` to a score in the current composition outlines that score as the song; any
+/// other text is outlined as written, reading no composition.
+fn outline(text: &str) -> Result<String, CliError> {
+    let score = text
+        .strip_prefix('@')
+        .filter(|path| sva_ast::whole_ref_path(path))
+        .filter(|path| {
+            cwd().is_ok_and(|dir| {
+                dir.join(format!("{path}{}", sva_ast::score::EXTENSION))
+                    .is_file()
+            })
+        });
+    let data = match score {
+        Some(_) => sva_core::song_data(&sva_ast::Dir::at(composition()?), text)?,
+        None => sva_core::outline_data(text)?,
+    };
+    Ok(success_envelope(&data, &[]))
+}
 
 fn main() -> ExitCode {
     match caught(STACK_BYTES, run) {
@@ -42,9 +61,7 @@ fn run() -> ExitCode {
         Ok(Command::Lint { target, format }) => lint_composition(target.as_deref(), format),
         Ok(Command::Trace { target }) => trace_node(&target),
         Ok(Command::Builtins) => Ok(success_envelope(&builtins_data(&builtins()), &[])),
-        Ok(Command::Outline { text }) => {
-            sva_core::outline_data(&text).map(|data| success_envelope(&data, &[]))
-        }
+        Ok(Command::Outline { text }) => outline(&text),
         Ok(Command::New {
             name,
             idempotency_key,
@@ -86,7 +103,8 @@ fn lint_composition(target: Option<&str>, format: Format) -> Result<String, CliE
         None => (here, None),
     };
     let report = lint(&dir, target.as_deref())?;
-    let found: Vec<Diagnostic> = report.findings.iter().map(Finding::diagnostic).collect();
+    let mut found: Vec<Diagnostic> = report.findings.iter().map(Finding::diagnostic).collect();
+    found.extend(report.song.iter().map(sva_core::warning_diagnostic));
     if format == Format::Text {
         return Ok(diagnostics_text(&found, colored()));
     }

@@ -7,7 +7,7 @@ use sva_core::CliError;
 /// `(path under the new directory, contents)`, written in this order so a directory always
 /// exists before a file lands in it. Every body stays a closed form until its own layer's
 /// written `sample()`, and each equation's comment says why it is written that way rather
-/// than the way that costs orders of magnitude more; a score is JSON and carries none.
+/// than the way that costs orders of magnitude more; a score's annotation line is its comment.
 pub const FILES: [(&str, &str); 12] = [
     (
         "variables/bpm",
@@ -62,15 +62,15 @@ len = 0.5s
 ",
     ),
     (
-        "score/chord",
-        r#"{"at": "0b", "node": "@../voice/tone", "deg": 1}
-{"at": "0b", "node": "@../voice/tone", "deg": 3}
-{"at": "0b", "node": "@../voice/tone", "deg": 5}
+        "score/chord.jsonl",
+        r#"{"annotation": "Models: the tonic triad, one event per voice of a `deg` list on one `at` | Neglects: rhythm, which score/phrase has; every voice is the same tone | IO: (t) -> amplitude | Tags: score, chord"}
+{"at": "0b", "node": "@../voice/tone", "deg": [1, 3, 5]}
 "#,
     ),
     (
-        "score/phrase",
-        r#"{"at": "0b", "node": "@../voice/note", "deg": 8, "len": "0.25b"}
+        "score/phrase.jsonl",
+        r#"{"annotation": "Models: two bars of eighth notes down the scale and back, each a note with its len | Neglects: dynamics; every note's `vel` is voice/note's default | IO: (t) -> amplitude | Tags: score, melody"}
+{"at": "0b", "node": "@../voice/note", "deg": 8, "len": "0.25b"}
 {"at": "0.25b", "node": "@../voice/note", "deg": 5, "len": "0.25b"}
 {"at": "0.5b", "node": "@../voice/note", "deg": 3, "len": "0.25b"}
 {"at": "0.75b", "node": "@../voice/note", "deg": 5, "len": "0.25b"}

@@ -1,4 +1,4 @@
-// Concern: proves which names the language answers itself, notes and builtins included | Non-concern: what any of them evaluates to (sva-engine) | IO: (name) -> bool or a MIDI number
+// Concern: proves which names the language answers itself, notes with their pitch and builtins included | Non-concern: what a builtin evaluates to (sva-engine) | IO: (name) -> bool, MIDI number or Hz
 
 use sva_ast::{FILTERS, RESERVED, is_builtin, is_language_value, is_reserved, note_midi};
 
@@ -77,4 +77,16 @@ fn builtins_include_the_filters_the_series_and_the_sample_index() {
     for name in ["x", "f0", "self", "t", "A4", "comb"] {
         assert!(!is_builtin(name), "{name}");
     }
+}
+
+#[test]
+fn a_note_sounds_at_its_equal_tempered_frequency() {
+    assert_eq!(sva_ast::note_hz("A4"), Some(440.0));
+    assert_eq!(
+        sva_ast::note_hz("A5"),
+        Some(880.0),
+        "an octave is a doubling"
+    );
+    assert!((sva_ast::note_hz("C4").unwrap() - 261.6255653005986).abs() < 1e-9);
+    assert!((sva_ast::note_hz("As4").unwrap() / 440.0 - 2f64.powf(1.0 / 12.0)).abs() < 1e-12);
 }

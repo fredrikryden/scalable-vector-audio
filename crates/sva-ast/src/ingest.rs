@@ -1,10 +1,10 @@
-// Concern: classifies one file's raw content and parses it to an Expr | Non-concern: walking the directory, resolving refs (graph.rs) | IO: (path, content) -> Expr or a Diag
+// Concern: classifies one file's raw content and parses it, a score's lines too | Non-concern: walking the directory, resolving refs (graph.rs) | IO: (path, content) -> Parsed or a Diag
 
 use crate::diag::{ByteSpan, Diag, DiagCode};
 use crate::expr::{Arg, Binds, Expr, Literal, SERIES, children};
 use crate::parser::parse;
 use crate::scale::{Scale, is_scale, parse_scale};
-use crate::score::{Score, is_score, parse_score};
+use crate::score::{EXTENSION, Score, is_old_score, parse_score};
 
 /// What a file holds beside the expression every other pass reads.
 #[derive(Clone, Debug, PartialEq)]
@@ -23,13 +23,18 @@ pub struct Parsed {
 /// A leading `<name> = <expr>` line states what a caller that says nothing about `<name>` gets.
 /// Everything after the last one is the body, read exactly as a file with no defaults is.
 pub fn parse_file(content: &str) -> Result<Parsed, Diag> {
-    if is_score(content) {
-        let score = parse_score(content)?;
-        return Ok(Parsed {
-            expr: score.lowered(),
-            data: Some(Data::Score(score)),
-            defaults: Vec::new(),
-        });
+    if is_old_score(content) {
+        return Err(Diag::new(
+            DiagCode::BadScore,
+            ByteSpan::at(0),
+            format!(
+                "this file opens with `{{`, a 0.13 score; a score is now a `{EXTENSION}` file: \
+                 rename it with `{EXTENSION}`, make its leading `;` doc comment the line-1 \
+                 annotation, {{\"annotation\": \"Models: ... | Neglects: ... | IO: ... | Tags: \
+                 ...\"}}, and every other `;` line a timed comment, {{\"at\": \"4b\", \"comment\": \
+                 \"...\"}}, or a `comment` key on the line it explains"
+            ),
+        ));
     }
     let rows = code_rows(content);
     let split = default_rows(&rows);
@@ -62,11 +67,37 @@ pub fn parse_file(content: &str) -> Result<Parsed, Diag> {
     Ok(parsed)
 }
 
+/// A `.jsonl` file at `path`: its lines, and the files they name as the body loading follows.
+pub fn parse_score_file(path: &str, content: &str) -> Result<Parsed, Diag> {
+    let score = parse_score(content)?;
+    Ok(Parsed {
+        expr: score.reads(path),
+        data: Some(Data::Score(score)),
+        defaults: Vec::new(),
+    })
+}
+
 /// The byte the body starts at: past the comment and default lines that lead a node's text.
 pub fn body_at(content: &str) -> usize {
     let rows = code_rows(content);
     rows.get(default_rows(&rows))
         .map_or(content.len(), |(at, _)| *at)
+}
+
+/// Each default line's name and the text of its value, as written.
+pub(crate) fn default_texts(content: &str) -> Vec<(String, String)> {
+    let rows = code_rows(content);
+    let (heads, _) = rows.split_at(default_rows(&rows));
+    heads
+        .iter()
+        .map(|(_, line)| {
+            let eq = line.find('=').expect("a default line holds one");
+            (
+                line[..eq].trim().to_string(),
+                line[eq + 1..].trim().to_string(),
+            )
+        })
+        .collect()
 }
 
 fn default_rows(rows: &[(usize, &str)]) -> usize {
@@ -351,8 +382,12 @@ mod tests {
     }
 
     #[test]
-    fn a_first_line_opening_with_a_brace_is_a_score() {
-        let p = parse_file("\n{\"at\": \"0b\", \"node\": \"@../bass\"}\n").unwrap();
+    fn a_file_with_no_extension_opening_with_a_brace_refuses_with_the_rename() {
+        let err = parse_file("; doc\n\n{\"at\": \"0b\", \"node\": \"@../bass\"}\n").unwrap_err();
+        assert_eq!(err.code, DiagCode::BadScore);
+        assert!(err.message.contains(".jsonl"), "{}", err.message);
+        assert!(err.message.contains("annotation"), "{}", err.message);
+        let p = parse_score_file("score/a", "{\"at\": \"0b\", \"node\": \"@../bass\"}\n").unwrap();
         assert!(matches!(p.data, Some(Data::Score(_))));
         assert!(matches!(p.expr, Expr::Ref { ref path, .. } if path == "../bass"));
     }

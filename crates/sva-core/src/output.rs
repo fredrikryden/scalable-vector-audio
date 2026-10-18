@@ -23,7 +23,9 @@ pub struct Diagnostic {
     pub severity: Severity,
     pub message: String,
     pub file: Option<String>,
-    pub line: Option<usize>,
+    /// The line and column, from 1, it starts and ends at, where the check knows them.
+    pub start: Option<(usize, usize)>,
+    pub end: Option<(usize, usize)>,
     pub span: Option<(usize, usize)>,
     pub help: Option<String>,
 }
@@ -35,7 +37,8 @@ impl Diagnostic {
             severity: Severity::Error,
             message: message.into(),
             file: None,
-            line: None,
+            start: None,
+            end: None,
             span: None,
             help: None,
         }
@@ -52,8 +55,15 @@ impl Diagnostic {
         self
     }
 
+    /// A check knowing only the line points at its first column, no guess.
     pub fn on_line(mut self, line: Option<usize>) -> Diagnostic {
-        self.line = line;
+        self.start = line.map(|l| (l, 1));
+        self
+    }
+
+    pub fn placed(mut self, at: Option<(usize, usize)>) -> Diagnostic {
+        self.start = at;
+        self.end = at;
         self
     }
 
@@ -72,16 +82,18 @@ fn diagnostic_json(d: &Diagnostic) -> String {
         || NONE.to_string(),
         |(o, l)| format!("{{ \"offset\": {o}, \"length\": {l} }}"),
     );
-    // A check knowing only the line points at its first column, no guess.
-    let start = d.line.map_or_else(
-        || NONE.to_string(),
-        |l| format!("{{ \"line\": {l}, \"column\": 1 }}"),
-    );
+    let place = |at: Option<(usize, usize)>| {
+        at.map_or_else(
+            || NONE.to_string(),
+            |(l, c)| format!("{{ \"line\": {l}, \"column\": {c} }}"),
+        )
+    };
+    let (start, end) = (place(d.start), place(d.end));
     let location = d.file.as_ref().map_or_else(
         || NONE.to_string(),
         |f| {
             format!(
-                "{{ \"file\": \"{}\", \"span\": {span}, \"start\": {start}, \"end\": {NONE} }}",
+                "{{ \"file\": \"{}\", \"span\": {span}, \"start\": {start}, \"end\": {end} }}",
                 escape(f)
             )
         },

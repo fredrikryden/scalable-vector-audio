@@ -21,10 +21,6 @@ pub fn shape_name(shape: Shape) -> &'static str {
     FILTERS[at.expect("ALL_SHAPES holds every shape")]
 }
 
-pub(crate) fn note_hz(name: &str) -> Option<f64> {
-    sva_ast::note_midi(name).map(sva_formula::note::frequency)
-}
-
 /// Consts, so `recognized_named` hands back the same data a call site checks against.
 const NO_NAMED: &[&str] = &[];
 const WAVE_NAMED: &[&str] = &["tol"];

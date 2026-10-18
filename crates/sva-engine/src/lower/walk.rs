@@ -202,7 +202,7 @@ impl Lowering<'_> {
                 let secs = exact.map_or_else(|| grid.steps_f64(*n), Q::to_f64);
                 Ok(Piece::ClosedForm(Body::Const(C64::real(secs))))
             }
-            Literal::Str(s) => match crate::vocabulary::note_hz(s) {
+            Literal::Str(s) => match sva_ast::note_hz(s) {
                 Some(hz) => Ok(Piece::ClosedForm(Body::Const(C64::real(hz)))),
                 None => Err(self.refused(
                     "grammar.unknown_name",
@@ -233,7 +233,7 @@ impl Lowering<'_> {
             "pi" => C64::real(std::f64::consts::PI),
             "i" => C64::new(0.0, 1.0),
             "inf" => C64::real(f64::INFINITY),
-            other => match crate::vocabulary::note_hz(other) {
+            other => match sva_ast::note_hz(other) {
                 Some(hz) => C64::real(hz),
                 None => return Err(EngineError::UnknownBuiltin(other.to_string())),
             },

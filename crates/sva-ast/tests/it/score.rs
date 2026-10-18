@@ -1,13 +1,28 @@
-// Concern: proves a score lowers against variables/scale, and again wherever that scale changes | Non-concern: one line's JSON (score.rs) | IO: (a composition, an edit) -> each line's f0
-use sva_ast::{BinOp, Composition, Expr, Graph, Literal, Refusal, load, load_beside};
+// Concern: proves a score's degrees lower against variables/scale as a song reaches them, whatever the scale | Non-concern: one line's JSON, lanes | IO: (a composition) -> each line's f0
+use sva_ast::{Address, BinOp, ByteSpan, Composition, Expr, Graph, Literal, Refusal, load};
 
 const KEY: &str = "variables/key";
 const SCALE: &str = "variables/scale";
 
-/// Every reserved variable lowered, and every score line checked, as a render settles one.
-fn settle(graph: &mut Graph, beside: Option<&Graph>) -> Result<(), Vec<Refusal>> {
-    graph.lower_reserved(beside)?;
-    graph.check_scores(beside)
+/// Loaded, every reserved variable lowered and `scores` lowered as one song reaches them.
+fn settle(source: &Composition, scores: &[&str]) -> Result<Graph, Vec<Refusal>> {
+    let mut graph = load(source)?;
+    graph.lower_reserved(None)?;
+    let reads = scores.iter().map(|path| Expr::Ref {
+        path: path.to_string(),
+        arg: Box::new(Expr::Var("t".to_string())),
+        binds: Vec::new(),
+        address: Address::Time,
+        span: ByteSpan::at(0),
+    });
+    let root = reads
+        .reduce(|a, b| Expr::Bin(BinOp::Add, Box::new(a), Box::new(b)))
+        .expect("a score");
+    graph.define_settled(None, "song", root)?;
+    let mut song = graph.song("song")?;
+    let lowered = song.lowered(&graph, &[])?;
+    graph.apply(lowered);
+    Ok(graph)
 }
 
 fn composition(scale: &str) -> Composition {
@@ -24,7 +39,7 @@ fn with<const N: usize>(scale: &str, more: [(&str, &str); N]) -> Composition {
         ("scales/minor", "200\n300\n500\n700\n800\n1000\n1200\n"),
         ("voice", "f0 = 440\nsin(2*pi*f0*t)\n"),
         (
-            "phrase",
+            "phrase.jsonl",
             "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 3}\n",
         ),
     ]);
@@ -87,54 +102,30 @@ fn third(e: &Expr) -> f64 {
 }
 
 #[test]
-fn an_edit_to_the_scale_lowers_every_held_score_again() {
-    let mut source = composition("@../scales/major\n");
-    let mut held = load(&source).expect("a composition");
-    settle(&mut held, None).expect("every line settles");
+fn a_score_counts_its_degrees_in_the_scale_variables_scale_names() {
+    let held = settle(&composition("@../scales/major\n"), &["phrase"]).expect("every line settles");
     assert_eq!(third(held.expr("phrase").unwrap()), 400.0);
-
-    source.insert(SCALE, "@../scales/minor\n");
-    let mut delta = load_beside(&source, &["phrase"], &held).expect("the edit loads");
-    assert!(
-        !delta.defines("phrase"),
-        "the score's own text did not change"
-    );
-    settle(&mut delta, Some(&held)).expect("every line settles");
-    assert_eq!(third(delta.expr("phrase").unwrap()), 300.0);
+    let minor =
+        settle(&composition("@../scales/minor\n"), &["phrase"]).expect("every line settles");
+    assert_eq!(third(minor.expr("phrase").unwrap()), 300.0);
 }
 
-/// A built-in's name is a scale like any file's: an edit between the two lowers again only
-/// where the scale's cents differ.
+/// A built-in's name is a scale like any file's.
 #[test]
-fn an_edit_between_a_scale_file_and_a_built_in_name_lowers_where_the_cents_change() {
-    let mut source = composition("@../scales/minor\n");
-    let mut held = load(&source).expect("a composition");
-    settle(&mut held, None).expect("every line settles");
-    assert_eq!(third(held.expr("phrase").unwrap()), 300.0);
-
-    source.insert(SCALE, "minor\n");
-    let mut same = load_beside(&source, &["phrase"], &held).expect("the edit loads");
-    settle(&mut same, Some(&held)).expect("every line settles");
-    assert!(
-        !same.defines("phrase"),
-        "the same cents leave the score as it was lowered"
-    );
-
-    source.insert(SCALE, "harmonic-minor\n");
-    let mut named = load_beside(&source, &["phrase"], &held).expect("the edit loads");
-    settle(&mut named, Some(&held)).expect("every line settles");
-    assert_eq!(third(named.expr("phrase").unwrap()), 300.0);
-
-    source.insert(SCALE, "major-pentatonic\n");
-    let mut moved = load_beside(&source, &["phrase"], &held).expect("the edit loads");
-    settle(&mut moved, Some(&held)).expect("every line settles");
-    assert_eq!(third(moved.expr("phrase").unwrap()), 400.0);
+fn a_built_in_name_counts_as_the_scale_file_holding_its_cents() {
+    let file = settle(&composition("@../scales/minor\n"), &["phrase"]).expect("settles");
+    let named = settle(&composition("minor\n"), &["phrase"]).expect("settles");
+    assert_eq!(file.expr("phrase"), named.expr("phrase"));
+    let harmonic = settle(&composition("harmonic-minor\n"), &["phrase"]).expect("settles");
+    assert_eq!(third(harmonic.expr("phrase").unwrap()), 300.0);
+    let pentatonic = settle(&composition("major-pentatonic\n"), &["phrase"]).expect("settles");
+    assert_eq!(third(pentatonic.expr("phrase").unwrap()), 400.0);
 }
 
 #[test]
 fn a_degree_with_no_scale_refuses_on_its_line() {
-    let mut held = load(&composition("")).expect("a composition");
-    let refused = settle(&mut held, None).unwrap_err();
+    let refused = settle(&composition(""), &["phrase"]).unwrap_err();
+    assert_eq!(refused[0].at.path, "phrase.jsonl");
     assert!(
         refused[0].reason.starts_with("line 1, column 39: `deg`"),
         "{}",
@@ -143,22 +134,26 @@ fn a_degree_with_no_scale_refuses_on_its_line() {
 }
 
 #[test]
-fn a_chromatic_note_and_an_octave_follow_a_key_or_scale_change() {
-    let phrase = "; Models: the raised seventh | Neglects: rhythm | IO: (t) -> amplitude | Tags: score\n\
+fn a_chromatic_note_and_an_octave_count_in_the_scale_too() {
+    let phrase = "{\"annotation\": \"Models: the raised seventh | Neglects: rhythm | IO: (t) -> amplitude | Tags: score\"}\n\
                   {\"at\": \"0b\", \"node\": \"@voice\", \"f0\": \"deg(7)*1st\"}\n\
                   {\"at\": \"2b + 1b/3\", \"node\": \"@voice\", \"f0\": \"deg(5)/2\"}\n";
     let lead = "f0 = deg(3)\nsin(2*pi*f0*t)\n";
-    let mut source = with("@../scales/minor\n", [("phrase", phrase), ("lead", lead)]);
-    let mut held = load(&source).expect("a composition");
-    settle(&mut held, None).expect("every degree settles");
+    let minor = with(
+        "@../scales/minor\n",
+        [("phrase.jsonl", phrase), ("lead", lead)],
+    );
+    let held = settle(&minor, &["phrase", "lead"]).expect("every degree settles");
     assert_eq!(cents(held.expr("phrase").unwrap()), [1100.0, -500.0]);
     assert_eq!(ratio(&held.defaults("lead")[0].1), 300.0);
 
-    source.insert(SCALE, "@../scales/major\n");
-    let mut delta = load_beside(&source, &["phrase", "lead"], &held).expect("the edit loads");
-    settle(&mut delta, Some(&held)).expect("every degree settles");
-    assert_eq!(cents(delta.expr("phrase").unwrap()), [1200.0, -500.0]);
-    assert_eq!(ratio(&delta.defaults("lead")[0].1), 400.0);
+    let major = with(
+        "@../scales/major\n",
+        [("phrase.jsonl", phrase), ("lead", lead)],
+    );
+    let held = settle(&major, &["phrase", "lead"]).expect("every degree settles");
+    assert_eq!(cents(held.expr("phrase").unwrap()), [1200.0, -500.0]);
+    assert_eq!(ratio(&held.defaults("lead")[0].1), 400.0);
 }
 
 #[test]
@@ -167,9 +162,11 @@ fn a_chord_lowers_as_its_lines_would() {
     let lines = "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 1}\n\
                  {\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 3}\n\
                  {\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 5}\n";
-    let source = with("@../scales/major\n", [("chord", chord), ("lines", lines)]);
-    let mut held = load(&source).expect("a composition");
-    settle(&mut held, None).expect("every degree settles");
+    let source = with(
+        "@../scales/major\n",
+        [("chord.jsonl", chord), ("lines.jsonl", lines)],
+    );
+    let held = settle(&source, &["chord", "lines"]).expect("every degree settles");
     assert_eq!(held.expr("chord"), held.expr("lines"));
 }
 
@@ -184,19 +181,17 @@ fn a_broadcast_line_lowers_as_its_lines_would() {
                  {\"at\": \"1b/3\", \"node\": \"@keys\", \"deg\": 5, \"vel\": 0.6, \"len\": \"1b\"}\n";
     let source = with(
         "@../scales/major\n",
-        [("keys", KEYS), ("one", one), ("lines", lines)],
+        [("keys", KEYS), ("one.jsonl", one), ("lines.jsonl", lines)],
     );
-    let mut held = load(&source).expect("a composition");
-    settle(&mut held, None).expect("every degree settles");
+    let held = settle(&source, &["one", "lines"]).expect("every degree settles");
     assert_eq!(held.expr("one"), held.expr("lines"));
 }
 
 #[test]
 fn each_node_a_line_lists_is_checked_against_its_own_parameters() {
     let both = "{\"at\": \"0b\", \"node\": [\"@keys\", \"@voice\"], \"vel\": 0.5}\n";
-    let source = with("@../scales/major\n", [("keys", KEYS), ("both", both)]);
-    let mut held = load(&source).expect("a composition");
-    let refused = settle(&mut held, None).unwrap_err();
+    let source = with("@../scales/major\n", [("keys", KEYS), ("both.jsonl", both)]);
+    let refused = settle(&source, &["both"]).unwrap_err();
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert!(
         refused[0]
@@ -210,8 +205,7 @@ fn each_node_a_line_lists_is_checked_against_its_own_parameters() {
 #[test]
 fn a_degree_in_an_equation_with_no_whole_number_refuses_where_written() {
     let source = with("@../scales/major\n", [("lead", "sin(2*pi*deg(1.5)*t)\n")]);
-    let mut held = load(&source).expect("a composition");
-    let refused = settle(&mut held, None).unwrap_err();
+    let refused = settle(&source, &["lead"]).unwrap_err();
     assert_eq!(refused[0].at.path, "lead");
     assert_eq!(refused[0].at.span.start, 9);
     assert!(

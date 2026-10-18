@@ -61,6 +61,7 @@ fn answered(
     };
     let played = hearing.map(Hearing::finish).transpose()?;
 
+    warnings.extend(rendered.warnings.iter().map(sva_core::warning_diagnostic));
     let rate = rendered.config.rate;
     let stats = rendered.render.cache_stats.as_ref();
     if let Some(why) = stats.and_then(|stats| stats.unstaged.as_deref()) {

@@ -1,4 +1,4 @@
-// Concern: decides which names the language owns: reserved words, notes, builtins | Non-concern: what any of them evaluates to, a builtin's named arguments | IO: (name) -> bool
+// Concern: decides which names the language owns: reserved words, notes and their pitch, builtins | Non-concern: what a builtin evaluates to, its named arguments | IO: (name) -> bool or a frequency
 
 use crate::expr::{INDEX, JOIN, SERIES};
 
@@ -132,6 +132,11 @@ pub fn note_midi(name: &str) -> Option<i32> {
     let octave = octave.parse::<u8>().ok()?;
     let midi = (i32::from(octave) + 1) * 12 + step + accidental;
     (0..=127).contains(&midi).then_some(midi)
+}
+
+/// Twelve-tone equal temperament, `A4` = 440 Hz = MIDI 69.
+pub fn note_hz(name: &str) -> Option<f64> {
+    note_midi(name).map(|midi| 440.0 * ((f64::from(midi) - 69.0) / 12.0).exp2())
 }
 
 pub fn is_language_value(name: &str) -> bool {

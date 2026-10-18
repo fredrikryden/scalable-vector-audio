@@ -10,6 +10,7 @@ mod outline;
 mod output;
 mod query;
 mod set;
+mod song;
 mod target;
 mod until;
 
@@ -18,15 +19,16 @@ pub use answer::{
     label_json, query_data, stats_json, stream_stats_json, value_json, work_json,
 };
 pub use builtins::{Builtins, Callable, Crossing, builtins, builtins_data};
-pub use cli_error::{CliError, LintViolation, lint_diagnostic};
+pub use cli_error::{CliError, LintViolation, lint_diagnostic, warning_diagnostic};
 pub use lint_code::LintCode;
-pub use outline::outline_data;
+pub use outline::{outline_data, song_data};
 pub use output::{Diagnostic, Severity, diagnostics_json, error_envelope, success_envelope};
 pub use query::{
     Asked, Call, Destination, RETIRED, asked, asked_all, call, calls, is_wav, retired, seconds,
     wav_path,
 };
 pub use set::{overlaid, set};
+pub use song::{as_lane, sung};
 pub use sva_ast::RESERVED_VARIABLES;
 pub use target::{Edge, Target, target};
 pub use until::until;
@@ -35,6 +37,7 @@ use std::cell::RefCell;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
+use sva_ast::song::Song;
 use sva_ast::{Dir, Graph, Refusal, Source};
 use sva_engine::{
     Ask, Change, Changed, DEFAULT_SAMPLE_RATE, EngineError, Kind, PSYCHOACOUSTIC_V1, Phase, Range,
@@ -54,6 +57,8 @@ pub const PROBE: &str = "probe";
 
 pub struct Rendered {
     pub config: RenderConfig,
+    /// What the song's files earn: each prints, and the render goes on.
+    pub warnings: Vec<sva_ast::song::Warning>,
     pub expression: String,
     pub target: String,
     pub render: sva_engine::Render,
@@ -120,7 +125,7 @@ impl<'a> Job<'a> {
     }
 }
 
-fn settle(job: &Job) -> Result<(Graph, RenderConfig), CliError> {
+fn settle(job: &Job) -> Result<(Graph, RenderConfig, Song), CliError> {
     let Target { expr, interval } = target(job.target)?;
     let roots = roots_of(job.source, &expr)?;
     let mut graph = settled(sva_ast::load_reaching(
@@ -180,7 +185,16 @@ fn settle(job: &Job) -> Result<(Graph, RenderConfig), CliError> {
             representation: asked.representation,
         })
         .collect();
-    Ok((graph, config))
+    let song = sung(&mut graph, PROBE, rate)?;
+    Ok((graph, config, song))
+}
+
+/// An engine refusal as the song names it where a moving lane reaches it, else as written.
+fn refused(song: &Song, graph: &Graph, e: EngineError, target: &str) -> CliError {
+    match as_lane(song, graph, e) {
+        CliError::Engine(e) => CliError::Engine(as_written(e, target)),
+        other => other,
+    }
 }
 
 /// `trace` names one instance of a parameterized file as `<path>(<name>=<value>, ..)`.
@@ -217,9 +231,9 @@ fn instance_read(graph: &Graph, text: &str) -> Option<sva_ast::Expr> {
 }
 
 pub fn execute(job: Job, tier: &Tier) -> Result<Rendered, CliError> {
-    let (graph, config) = settle(&job)?;
+    let (graph, config, song) = settle(&job)?;
     let render = render(&graph, PROBE, config, tier);
-    rendered(&job, graph, render)
+    rendered(&job, (graph, song), render)
 }
 
 /// `job` over `tier`, typing anew only what `session` typed otherwise; only `persist` commits
@@ -230,19 +244,20 @@ pub async fn execute_over<B: Backend>(
     session: &mut Session,
 ) -> Result<Rendered, CliError> {
     let call = tier.call(Kind::Render, job.target, Phase::Parsing);
-    let (graph, config) = settle(&job)?;
+    let (graph, config, song) = settle(&job)?;
     let hooks = (job.abandon, job.hear);
     let render = render_called(session, &graph, PROBE, config, tier, hooks, call).await;
-    rendered(&job, graph, render)
+    rendered(&job, (graph, song), render)
 }
 
 fn rendered(
     job: &Job,
-    graph: Graph,
+    (graph, song): (Graph, Song),
     render: Result<sva_engine::Render, EngineError>,
 ) -> Result<Rendered, CliError> {
-    let render = render.map_err(|e| CliError::Engine(as_written(e, job.target)))?;
+    let render = render.map_err(|e| refused(&song, &graph, e, job.target))?;
     Ok(Rendered {
+        warnings: song.warnings().to_vec(),
         config: render.config.clone(),
         expression: job.target.to_string(),
         target: PROBE.to_string(),
@@ -251,17 +266,27 @@ fn rendered(
     })
 }
 
-pub fn plan(job: &Job) -> Result<sva_engine::Render, CliError> {
-    let (graph, config) = settle(job)?;
-    sva_engine::plan(&graph, PROBE, config).map_err(|e| CliError::Engine(as_written(e, job.target)))
+/// The render a job would run, and the warnings its song earns.
+pub fn plan(job: &Job) -> Result<(sva_engine::Render, Vec<sva_ast::song::Warning>), CliError> {
+    let (graph, config, song) = settle(job)?;
+    let planned = sva_engine::plan(&graph, PROBE, config);
+    let planned = planned.map_err(|e| refused(&song, &graph, e, job.target))?;
+    Ok((planned, song.warnings().to_vec()))
 }
 
-/// Every refusal typing the target reaches, and no render's.
-pub fn types(job: &Job) -> Result<(), CliError> {
-    let (graph, config) = settle(job)?;
+/// Every refusal typing the target reaches, and no render's; the warnings its song earns.
+pub fn types(job: &Job) -> Result<Vec<sva_ast::song::Warning>, CliError> {
+    let (graph, config, song) = settle(job)?;
     sva_engine::types_at(&graph, PROBE, config.rate)
-        .map(|_| ())
-        .map_err(|e| CliError::Engine(as_written(e, job.target)))
+        .map_err(|e| refused(&song, &graph, e, job.target))?;
+    Ok(song.warnings().to_vec())
+}
+
+/// `root`'s song derived and laid over `graph`, as `outline` reads it.
+pub fn song_of(source: &dyn Source, target: &str) -> Result<(Graph, Song), CliError> {
+    let job = Job::over(source, target);
+    let (graph, _, song) = settle(&job)?;
+    Ok((graph, song))
 }
 
 /// `channels`: what it plays, the target's own where `None`.
@@ -271,7 +296,7 @@ pub async fn stream<B: Backend>(
     tier: &Tier<B>,
 ) -> Result<Stream, CliError> {
     let call = tier.call(Kind::Stream, job.target, Phase::Parsing);
-    let (graph, config) = settle(job)?;
+    let (graph, config, _) = settle(job)?;
     let target = graph
         .expr(PROBE)
         .cloned()
@@ -295,7 +320,7 @@ pub async fn edit<B: Backend>(
     tier: &Tier<B>,
 ) -> Result<(), CliError> {
     let build = |s: &Stream| {
-        let (graph, expr) = streamed(s, source, target)?;
+        let (graph, expr) = streamed(s, source, target, None)?;
         Ok(Change::Target(graph, expr))
     };
     changed(stream, build, Some(target), tier).await.map(|_| ())
@@ -309,7 +334,7 @@ pub async fn add<B: Backend>(
     tier: &Tier<B>,
 ) -> Result<Handle, CliError> {
     let build = |s: &Stream| {
-        let (graph, expr) = streamed(s, source, term)?;
+        let (graph, expr) = streamed(s, source, term, Some(at))?;
         Ok(Change::Add(graph, expr, at))
     };
     match changed(stream, build, Some(term), tier).await? {
@@ -326,7 +351,7 @@ pub async fn replace<B: Backend>(
     tier: &Tier<B>,
 ) -> Result<bool, CliError> {
     let build = |s: &Stream| {
-        let (graph, expr) = streamed(s, source, term)?;
+        let (graph, expr) = streamed(s, source, term, Some(at))?;
         Ok(Change::Replace(handle, graph, expr, at))
     };
     Ok(changed(stream, build, Some(term), tier).await? == Changed::Held(true))
@@ -365,6 +390,7 @@ fn streamed(
     stream: &Stream,
     source: &dyn Source,
     text: &str,
+    term: Option<Placed>,
 ) -> Result<(Graph, sva_ast::Expr), CliError> {
     let Target { expr, interval } = target(text)?;
     if interval.is_some() {
@@ -380,29 +406,95 @@ fn streamed(
     delta
         .lower_reserved(Some(held))
         .map_err(CliError::Refusals)?;
-    delta.check_scores(Some(held)).map_err(CliError::Refusals)?;
-    delta
-        .desugar_arrangement_beside(held)
-        .map_err(CliError::Refusals)?;
     let parsed = sva_ast::parse_expr(&expr).map_err(|d| {
         CliError::BadProbe(format!(
             "`{text}` does not parse as an expression: {}",
             d.message
         ))
     })?;
-    let defined = delta
-        .define_arranged_beside(held, PROBE, parsed)
-        .map_err(CliError::Refusals)?;
-    if !defined {
-        return Err(CliError::BadProbe(format!(
-            "this composition already has a node named `{PROBE}`"
-        )));
+    let mut view = held.sourced();
+    for path in delta.paths() {
+        view.set(path, delta.held(path));
     }
-    let expr = delta
-        .expr(PROBE)
-        .cloned()
-        .expect("the target was defined as the probe");
-    Ok((delta, expr))
+    let rate = stream.config().render.rate;
+    let lowered = match term {
+        None => {
+            view.set(PROBE, None);
+            define_probe(&mut view, parsed)?;
+            sung(&mut view, PROBE, rate)?;
+            view.expr(PROBE)
+                .cloned()
+                .expect("the target was defined as the probe")
+        }
+        Some(placed) => termed(&mut view, parsed, placed, rate)?,
+    };
+    let mut out = delta;
+    let changed: Vec<String> = view
+        .paths()
+        .filter(|path| !held.holds_as(path, &view) || !held.read_as(path, &view))
+        .map(str::to_string)
+        .collect();
+    for path in changed {
+        out.set(&path, view.held(&path));
+    }
+    Ok((out, lowered))
+}
+
+/// A stream term lowered beside the stream's song: its instances read the song's lanes at
+/// their position, and a term reaching a move of its own refuses, since lanes derive from the
+/// song's files.
+fn termed(
+    view: &mut Graph,
+    term: sva_ast::Expr,
+    placed: Placed,
+    rate: u32,
+) -> Result<sva_ast::Expr, CliError> {
+    const ALONE: &str = "#term";
+    const BESIDE: &str = "#song";
+    let mut alone = view.clone();
+    alone
+        .define_settled(None, ALONE, term)
+        .map_err(CliError::Refusals)?;
+    let written = alone.expr(ALONE).cloned().expect("just defined");
+    let own = alone.song(ALONE).map_err(CliError::Refusals)?;
+    if let Some(lane) = own.lanes().first() {
+        let first = &lane.moves[0].reached;
+        return Err(CliError::Refusals(vec![Refusal::new(
+            format!("{}{}", first.score, sva_ast::score::EXTENSION),
+            sva_ast::ByteSpan::at(0),
+            sva_ast::DiagCode::BadLane,
+            format!(
+                "a stream term reaches this move on `{}`; a term adds sound and never moves, \
+                 since lanes derive from the song's files: move it in one",
+                lane.id.name()
+            ),
+        )]));
+    }
+    let target = view.source_expr(PROBE).expect("a stream holds its target");
+    let both = sva_ast::Expr::Bin(
+        sva_ast::BinOp::Add,
+        Box::new(target),
+        Box::new(written.clone()),
+    );
+    view.define_settled(None, BESIDE, both)
+        .map_err(CliError::Refusals)?;
+    sung(view, BESIDE, rate)?;
+    let Some(sva_ast::Expr::Bin(_, _, lowered)) = view.expr(BESIDE).cloned() else {
+        unreachable!("a sum lowers to a sum")
+    };
+    view.set(BESIDE, None);
+    if placed == Placed::Landing && *lowered != written {
+        return Err(CliError::Refusals(vec![Refusal::new(
+            ALONE,
+            sva_ast::ByteSpan::at(0),
+            sva_ast::DiagCode::BadLane,
+            "this term lands where the stream is when it arrives, so it has no song time, and a \
+             lane of the song moves what it plays; a lane reaches an instance at its song \
+             position, so add it at a written time"
+                .to_string(),
+        )]));
+    }
+    Ok(*lowered)
 }
 
 /// The precision a render writes every sample to: `bits`, else the profile's own.
@@ -497,7 +589,7 @@ fn reads_as_a_value(text: &str) -> bool {
 /// Argv math settled the way a file is; `concat` is no file-only dialect.
 fn define_probe(graph: &mut Graph, expr: sva_ast::Expr) -> Result<(), CliError> {
     let defined = graph
-        .define_arranged(PROBE, expr)
+        .define_settled(None, PROBE, expr)
         .map_err(CliError::Refusals)?;
     if !defined {
         return Err(CliError::BadProbe(format!(
@@ -507,11 +599,10 @@ fn define_probe(graph: &mut Graph, expr: sva_ast::Expr) -> Result<(), CliError> 
     Ok(())
 }
 
+/// Loaded with its reserved variables lowered; a song lowers its scores once a root is named.
 pub fn settled(loaded: Result<Graph, Vec<Refusal>>) -> Result<Graph, CliError> {
     let mut graph = loaded.map_err(CliError::Refusals)?;
     graph.lower_reserved(None).map_err(CliError::Refusals)?;
-    graph.check_scores(None).map_err(CliError::Refusals)?;
-    graph.desugar_arrangement().map_err(CliError::Refusals)?;
     Ok(graph)
 }
 
@@ -519,8 +610,20 @@ pub fn settled(loaded: Result<Graph, Vec<Refusal>>) -> Result<Graph, CliError> {
 /// roots. Only a node path is asked of the source: math is never looked up as a file.
 pub fn roots_of(source: &dyn Source, target: &str) -> Result<Vec<String>, CliError> {
     let mut roots: Vec<String> = RESERVED_VARIABLES.map(sva_ast::variable).to_vec();
+    let listed = source.paths().map_err(CliError::Io)?.found;
+    let variables = format!("{}/", sva_ast::VARIABLES);
+    roots.extend(listed.into_iter().filter(|p| p.starts_with(&variables)));
+    roots.sort();
+    roots.dedup();
     let held = |path: &str| -> Result<bool, CliError> {
-        Ok(sva_ast::whole_ref_path(path) && source.get(path).map_err(CliError::Io)?.is_some())
+        let file = format!("{path}{}", sva_ast::score::EXTENSION);
+        let get = |at: &str| {
+            source
+                .get(at)
+                .map(|text| text.is_some())
+                .map_err(CliError::Io)
+        };
+        Ok(sva_ast::whole_ref_path(path) && (get(path)? || get(&file)?))
     };
     match target {
         target if held(target)? => {

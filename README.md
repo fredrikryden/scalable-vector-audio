@@ -72,21 +72,21 @@ rate-free, below it there is a rate, and a feedback term reading what it wrote s
 
 ## Notes in time: a score
 
-A file whose first line past its `;` comments opens with `{` is a score: JSON Lines, one event
-per line, sorted by `at`, each playing the `node` it names (a sound, a score, a curve) at its time,
-one closed form `@voice(t, f0=deg(1), vel=0.8) + …`. `b` is a bar, `2b + 1b/3` a triplet. A line
-listing N items is N events, event i taking item i of each list and a single value going to all:
+A `.jsonl` file is a score, read as `@score/verse`: JSON Lines sorted by `at`, its annotation first,
+each line playing a `node`, marking a point, moving a lane or commenting, one closed form `@voice(t,
+f0=deg(1)) + …`. `b` is a bar, `2b + 1b/3` a triplet; a line listing N items is N events:
 
 ```
-{"at": "0b", "node": "@voice", "deg": [1, 3, 5], "vel": [0.8, 0.5, 0.6]}
-{"at": "2b + 1b/3", "node": "@voice", "f0": "deg(7)*1st", "vel": "0.8*0.9"}
+{"annotation": "Models: an arpeggio, then a raised seventh a tone up | Neglects: dynamics | IO: (t) -> amplitude | Tags: score"}
+{"at": ["0b", "1b/3", "2b/3"], "node": "@voice", "deg": [1, 3, 5]}
+{"at": "2b", "lane": "key", "to": "key*2st"}
+{"at": "2b + 1b/3", "node": "@voice", "f0": "deg(7)*1st"}
 ```
 
-`deg(n)`, in a score or any equation, is the tonic in `variables/key` times degree `n`'s ratio in
-the scale `variables/scale` names, `minor`, `dorian` or any `sva-cli builtins` lists, or a file of
-cents as `@../scales/custom`; `"deg": 5` is `"f0": "deg(5)"`. Editing the key transposes every
-score and editing the scale changes mode, live too. A value is constant: what moves is an automation lane, as `cutoff=20khz*pow(0.02, @auto/riser(t))`. Place one as `@bass(t - 8b)`.
-
+`deg(n)` is the tonic in `variables/key` times degree `n`'s ratio in the scale `variables/scale`
+names, `minor`, `dorian` or any `sva-cli builtins` lists, or a file of cents. A move sets or ramps a
+lane, a node's parameter or a variable as `energy`, `key` or `bpm`, whose tempo curve every score
+time rides. A song places sections at marks, and `sva-cli outline @score/song` prints its lanes.
 ## Literals and waveforms
 
 `C4` is a note name, `440hz` a frequency, `0.25s` a duration. `4st` and `50ct` are a semitone

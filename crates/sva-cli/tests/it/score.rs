@@ -45,7 +45,7 @@ fn composition(name: &str, (tonic, scale): (&str, &str), score: &str) -> PathBuf
         "voice",
         &format!("{}f0 = 440\nsin(2*pi*f0*t)\n", doc("a sine")),
     );
-    put(&dir, "phrase", score);
+    put(&dir, "phrase.jsonl", score);
     dir
 }
 
@@ -163,7 +163,7 @@ fn a_refusal_names_the_score_line() {
     let Err(CliError::Refusals(refused)) = probe(&dir, "@phrase([0, 1s])") else {
         panic!("a key the sound does not read refuses");
     };
-    assert_eq!(refused[0].at.path, "phrase");
+    assert_eq!(refused[0].at.path, "phrase.jsonl");
     assert!(
         refused[0].reason.starts_with("line 2, column 34: `cutoff`"),
         "{}",

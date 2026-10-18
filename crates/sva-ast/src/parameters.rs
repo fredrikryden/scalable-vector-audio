@@ -116,6 +116,9 @@ impl<'a, F: Fn(&str) -> bool> Walk<'a, F> {
                 Some(Arg::Pos(time)) => self.expr(time),
                 _ => self.args(args),
             },
+            Expr::Call { name, args, .. } if name == "concat" || name == "repeat" => {
+                self.args(args)
+            }
             Expr::Call { name, args, .. } => {
                 self.args(args);
                 if !is_builtin(name) && !(self.is_node)(name) {

@@ -14,5 +14,6 @@ mod pinned;
 mod render_integration;
 mod scaffold;
 mod score;
+mod score_rows;
 mod store;
 mod trace;

@@ -6,6 +6,8 @@ use crate::diag::{ByteSpan, DiagCode};
 pub struct Location {
     pub path: String,
     pub span: ByteSpan,
+    /// The line and column, from 1, where a check that read the file's text knows them.
+    pub start: Option<(usize, usize)>,
 }
 
 /// `{ at, code, reason }`: never a panic, never a poison node — a hole in the graph
@@ -28,9 +30,15 @@ impl Refusal {
             at: Location {
                 path: path.into(),
                 span,
+                start: None,
             },
             code,
             reason: reason.into(),
         }
+    }
+
+    pub fn placed(mut self, start: (usize, usize)) -> Refusal {
+        self.at.start = Some(start);
+        self
     }
 }

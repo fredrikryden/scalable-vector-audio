@@ -1,4 +1,4 @@
-// Concern: lays the reserved variables a caller sets over a composition | Non-concern: what a variable's text means (sva-ast) | IO: (source, sets) -> an Overlay or CliError
+// Concern: lays the variables a caller sets over a composition | Non-concern: what a variable's text means (sva-ast) | IO: (source, sets) -> an Overlay or CliError
 
 use std::collections::BTreeMap;
 
@@ -12,24 +12,22 @@ pub fn set(written: &str) -> Result<(String, String), CliError> {
         None => Err(CliError::usage(
             "cli.bad_value",
             format!(
-                "`--set {written}` has no `=`; it takes a reserved variable's name and its \
-                 text, as `--set key=G3`"
+                "`--set {written}` has no `=`; it takes a variable's name and its text, as \
+                 `--set key=G3`"
             ),
         )),
     }
 }
 
-/// `source` with each reserved variable `sets` names, bare as `key`, holding its text instead
-/// of its file's.
+/// `source` with each variable `sets` names, bare as `key` or `energy`, holding its text
+/// instead of its file's.
 pub fn overlaid<'a>(
     source: &'a dyn Source,
     sets: &[(String, String)],
 ) -> Result<Overlay<'a>, CliError> {
     let mut over = BTreeMap::new();
     for (name, text) in sets {
-        if let Some(bare) = name.strip_prefix(&format!("{VARIABLES}/"))
-            && RESERVED_VARIABLES.contains(&bare)
-        {
+        if let Some(bare) = name.strip_prefix(&format!("{VARIABLES}/")) {
             return Err(CliError::usage(
                 "render.set_path",
                 format!(
@@ -38,12 +36,25 @@ pub fn overlaid<'a>(
                 ),
             ));
         }
-        if !RESERVED_VARIABLES.contains(&name.as_str()) {
+        let held = source.get(&variable(name)).map_err(CliError::Io)?.is_some();
+        if !RESERVED_VARIABLES.contains(&name.as_str()) && !held {
+            let listed = source.paths().map_err(CliError::Io)?;
+            let mut there: Vec<&str> = listed
+                .found
+                .iter()
+                .filter_map(|p| p.strip_prefix(&format!("{VARIABLES}/")))
+                .collect();
+            there.sort_unstable();
             return Err(CliError::usage(
                 "render.set_unreserved",
                 format!(
-                    "`{name}` is no reserved variable; a render sets only {}",
-                    RESERVED_VARIABLES.join(", ")
+                    "`{name}` names no file under `{VARIABLES}/`; a render sets a variable a file \
+                     there holds, or a reserved one ({}); the variables there are {}",
+                    RESERVED_VARIABLES.join(", "),
+                    match there.is_empty() {
+                        true => "none".to_string(),
+                        false => format!("`{}`", there.join("`, `")),
+                    }
                 ),
             ));
         }

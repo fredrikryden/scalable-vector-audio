@@ -15,10 +15,10 @@ mod print;
 mod refusal;
 mod reserved;
 mod scale;
-mod score;
-mod score_check;
+pub mod score;
 mod series;
 mod skipped;
+pub mod song;
 mod source;
 mod vocabulary;
 
@@ -34,7 +34,7 @@ pub use graph::{
     Defined, Graph, Held, VARIABLES, load, load_beside, load_reaching, names_a_node, reads_of,
     resolve_ref_path,
 };
-pub use ingest::{Data, Parsed, body_at, occurs_free, parse_file};
+pub use ingest::{Data, Parsed, body_at, occurs_free, parse_file, parse_score_file};
 pub use lexer::{
     LogUnit, Token, TokenKind, ref_spans, strip_line_comment, tokenize, whole_ref_path,
 };
@@ -45,7 +45,7 @@ pub use print::render as render_expr;
 pub use refusal::{Location, Refusal};
 pub use reserved::{RESERVED_VARIABLES, Tempo, Values, variable};
 pub use scale::{BUILTIN_SCALES, Scale, builtin_scale};
-pub use score::{Event, Score, Time, is_score, parse_score};
+pub use score::{Score, parse_score};
 pub use series::{
     bounds_waiting as series_bounds_waiting, folded as fold_number,
     waits_for_instance as series_waits_for_instance, written_out as write_out_series,
@@ -55,7 +55,7 @@ pub use skipped::{Skip, Skipped};
 pub use source::{Composition, Listing, Overlay, Source};
 pub use vocabulary::{
     BUILTINS, CASTS, CHANNEL, FILTERS, FINITE_DIFFERENCE, MODAL, RESERVED, SELF, is_builtin,
-    is_language_value, is_reserved, note_midi,
+    is_language_value, is_reserved, note_hz, note_midi,
 };
 
 use std::path::Path;

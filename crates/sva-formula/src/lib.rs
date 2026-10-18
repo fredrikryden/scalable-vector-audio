@@ -14,7 +14,6 @@ pub mod hash;
 pub mod infer;
 pub mod modal;
 pub mod noise;
-pub mod note;
 pub mod origin;
 pub mod rational;
 pub mod refusal;

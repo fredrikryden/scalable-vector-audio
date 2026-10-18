@@ -449,7 +449,7 @@ fn folded(
         Node::Lit(Literal::Samples(n)) => Some(cx.grid.steps_f64(*n)),
         Node::Name("pi") => Some(std::f64::consts::PI),
         Node::Name("inf") => Some(f64::INFINITY),
-        Node::Name(other) => crate::vocabulary::note_hz(other),
+        Node::Name(other) => sva_ast::note_hz(other),
         Node::Bin(op, l, r) => {
             let (a, b) = (folded(inst, l, cx, chosen)?, folded(inst, r, cx, chosen)?);
             Some(match op {

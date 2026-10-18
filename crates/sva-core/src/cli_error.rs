@@ -131,10 +131,12 @@ impl CliError {
             CliError::Refusals(rs) => rs
                 .iter()
                 .map(|r| {
-                    Diagnostic::new(r.code.code_str(), r.reason.clone()).at(
-                        Some(r.at.path.clone()),
-                        Some((r.at.span.start, r.at.span.end - r.at.span.start)),
-                    )
+                    Diagnostic::new(r.code.code_str(), r.reason.clone())
+                        .at(
+                            Some(r.at.path.clone()),
+                            Some((r.at.span.start, r.at.span.end - r.at.span.start)),
+                        )
+                        .placed(r.at.start)
                 })
                 .collect(),
             CliError::Engine(e) => vec![engine_diagnostic(e)],
@@ -163,6 +165,14 @@ impl CliError {
             CliError::Io(_) => Vec::new(),
         }
     }
+}
+
+/// A song's warning, located at its line and column as a refusal is.
+pub fn warning_diagnostic(w: &sva_ast::song::Warning) -> Diagnostic {
+    Diagnostic::new(w.code, w.message.clone())
+        .with_severity(Severity::Warning)
+        .at(Some(w.file.clone()), Some((w.span.start, 0)))
+        .placed(Some(w.start))
 }
 
 /// `Display` runs a refusal's three parts together; a diagnostic keeps each apart.

@@ -1,4 +1,4 @@
-// Concern: builds an Expr from one expression string's tokens | Non-concern: lexing, ref resolution, a score's lines (score.rs) | IO: (&str) -> Expr or a located Diag
+// Concern: builds an Expr from one expression string's tokens | Non-concern: lexing, ref resolution, a score's lines (score/) | IO: (&str) -> Expr or a located Diag
 
 use crate::diag::{ByteSpan, Diag, DiagCode};
 use crate::expr::{Address, Arg, BinOp, CEIL, Expr, FLOOR, INDEX, Literal};
@@ -198,6 +198,15 @@ impl<'t> Parser<'t> {
                     ));
                 }
             };
+            if let (Expr::Ref { path, .. }, "jsonl") = (&lhs, name.as_str()) {
+                return Err(Diag::new(
+                    DiagCode::BadScore,
+                    name_span,
+                    format!(
+                        "`@{path}.jsonl` names a score's extension; a ref drops it, as `@{path}`"
+                    ),
+                ));
+            }
             if !matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
                 return Err(Diag::new(
                     DiagCode::UnexpectedToken,
@@ -1020,6 +1029,17 @@ mod tests {
         );
         assert_eq!(parse("@x[idx()]").unwrap_err().code, DiagCode::BadArity);
         assert_eq!(parse("@x[]").unwrap_err().code, DiagCode::BadArity);
+    }
+
+    #[test]
+    fn a_ref_writing_a_scores_extension_refuses_naming_the_ref_without_it() {
+        let refused = parse("@score/drop.jsonl").unwrap_err();
+        assert_eq!(refused.code, DiagCode::BadScore);
+        assert!(
+            refused.message.contains("as `@score/drop`"),
+            "{}",
+            refused.message
+        );
     }
 
     #[test]

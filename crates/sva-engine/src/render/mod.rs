@@ -337,6 +337,24 @@ pub fn ends(
         .collect()
 }
 
+/// Where each of `roots` can be nonzero, as the engine bounds it before rendering: no cut
+/// under the silence threshold, which only rendering finds.
+pub fn supports(graph: &Graph, roots: &[String], rate: u32) -> Result<Vec<Extent>, EngineError> {
+    let (instances, named) = instantiate::from_roots(graph, roots, rate)?;
+    let order = schedule::schedule_from(&instances, &named)?;
+    let tys = typing::infer_all(&instances, &order)?;
+    let supports = Supports::new(&tys);
+    named
+        .iter()
+        .map(|held| {
+            let id = tys
+                .id(held)
+                .ok_or_else(|| EngineError::UnknownNode(held.clone()))?;
+            Ok(supports.of(id))
+        })
+        .collect()
+}
+
 /// An open render's end, found on what each node computes, never on what memory answers.
 /// `found` are the supports and `end` the end a session found of nodes it still holds.
 pub(crate) fn ended(

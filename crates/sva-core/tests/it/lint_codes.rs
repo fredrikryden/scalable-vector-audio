@@ -30,8 +30,8 @@ fn a_lint_codes_diagnostic_is_namespaced_and_carries_that_remediation() {
         );
         assert_eq!(d.help.as_deref(), Some(code.help()));
         assert_eq!(
-            d.line,
-            Some(7),
+            d.start,
+            Some((7, 1)),
             "the line the check found it on carries through"
         );
     }

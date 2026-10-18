@@ -179,3 +179,79 @@ fn an_edit_to_a_reserved_variable_retunes_and_retimes_what_the_stream_holds() {
         assert_eq!(played, rendered, "after {path} = {text:?}");
     }
 }
+
+/// A song moving a lane, its note reading the lane, and a master the stream plays.
+fn laned() -> Composition {
+    let mut held = Composition::new();
+    held.insert("variables/bpm", "120\n");
+    held.insert("variables/meter", "4/4\n");
+    held.insert("variables/energy", "0.5\n");
+    held.insert(
+        "tone",
+        "f0 = 220\ncrop(@variables/energy*sin(2*pi*f0*t), 0s, 0.5s)\n",
+    );
+    held.insert(
+        "song.jsonl",
+        "{\"at\": \"0b\", \"node\": \"@tone\"}\n{\"at\": \"0.125b\", \"lane\": \"energy\", \"to\": 1}\n",
+    );
+    held.insert(
+        "moving.jsonl",
+        "{\"at\": \"0b\", \"lane\": \"energy\", \"to\": 0.2}\n",
+    );
+    held.insert("master", "crop(@song, 0s, 1s)\n");
+    held
+}
+
+/// An edit to a score derives its song again, and the stream plays what a render of the
+/// edited source writes.
+#[test]
+fn an_edit_to_a_score_derives_its_lanes_again() {
+    let mut held = laned();
+    let job = Job::over(&held, "@master");
+    let stream = now(sva_core::stream(&job, (64, None), &Tier::default())).expect("a stream");
+    let stream = RefCell::new(stream);
+    stream.borrow_mut().read(0, 64).expect("a block");
+    held.insert(
+        "song.jsonl",
+        "{\"at\": \"0b\", \"node\": \"@tone\"}\n{\"at\": \"0.1b\", \"lane\": \"energy\", \"to\": 0.25}\n",
+    );
+    let (played, rendered) = edited(&stream, &held);
+    assert_eq!(played, rendered);
+}
+
+/// A term at a written time reads the song's lanes where it sits; one reaching a move of its
+/// own refuses, as does one with no song time that a lane reaches.
+#[test]
+fn a_term_reads_the_songs_lanes_and_never_moves_one() {
+    let held = laned();
+    let job = Job::over(&held, "@notes + @master");
+    let stream = now(sva_core::stream(&job, (64, None), &Tier::default())).expect("a stream");
+    let stream = RefCell::new(stream);
+    let term = ("@tone(t - 0.375s)", Placed::Written);
+    now(sva_core::add(&stream, &held, term, &Tier::default())).expect("a term at a written time");
+    let at = 26_460;
+    let block = stream.borrow_mut().read(at, 64).expect("a block");
+    let played = block.expect("samples").plane(0).to_vec();
+    let job = Job::over(&held, "crop(@master + @tone(t - 0.375s), 0s, 1s)");
+    let rendered = sva_core::execute(job, &Tier::default()).expect("a render");
+    let whole = rendered
+        .render
+        .output(rendered.render.root)
+        .expect("the root");
+    assert_eq!(
+        played,
+        whole.plane(0)[at as usize..at as usize + 64].to_vec(),
+        "the term reads energy at 1 where it sits, as the song's own note would"
+    );
+    for (term, placed) in [("@moving", Placed::Written), ("@tone", Placed::Landing)] {
+        let refused = now(sva_core::add(
+            &stream,
+            &held,
+            (term, placed),
+            &Tier::default(),
+        ))
+        .expect_err("a term that moves a lane, or that a lane reaches with no song time");
+        let found = refused.diagnostics();
+        assert_eq!(found[0].code, "bad-lane", "{term}: {}", found[0].message);
+    }
+}

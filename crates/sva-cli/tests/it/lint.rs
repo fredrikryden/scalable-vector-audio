@@ -49,7 +49,11 @@ fn a_lint_finding_names_its_line() {
         Some("master"),
         "the node it was found in"
     );
-    assert_eq!(held.line, Some(3), "the line the run it found starts on");
+    assert_eq!(
+        held.start,
+        Some((3, 1)),
+        "the line the run it found starts on"
+    );
 }
 
 /// A rate is what a render chooses, so a node written against one sounds different at every
@@ -150,7 +154,10 @@ fn lint_of_a_node_with_a_default_resolves() {
     assert!(report.nodes > 0, "one node was checked, so one is reported");
 }
 
-/// A score is JSON lines: no `;` comment to require and no body to measure, however long.
+const ANNOTATION: &str = "{\"annotation\": \"Models: a kick on every line | Neglects: dynamics | IO: (t) -> amplitude | Tags: score\"}\n";
+
+/// A score is JSON lines: its annotation is its comment, and it has no body to measure, however
+/// long.
 #[test]
 fn a_long_score_lints_clean() {
     let line = "{\"at\": \"0b\", \"node\": \"@kick\"}\n";
@@ -158,9 +165,36 @@ fn a_long_score_lints_clean() {
         "long-score",
         &[("kick", "crop(sin(2*pi*50*t), 0s, 0.1s)\n")],
     );
-    std::fs::write(dir.join("hits"), line.repeat(400)).expect("a score");
+    let score = format!("{ANNOTATION}{}", line.repeat(400));
+    std::fs::write(dir.join("hits.jsonl"), score).expect("a score");
     let report = lint(&dir, None).unwrap_or_else(|e| panic!("{}", e.message()));
     assert_eq!(codes(&report), "", "{}", codes(&report));
+}
+
+/// Line 1 of a score is its annotation, held to the doc comment's codes.
+#[test]
+fn a_score_without_its_annotation_refuses_as_a_node_without_its_comment() {
+    let line = "{\"at\": \"0b\", \"node\": \"@kick\"}\n";
+    let dir = composition(
+        "bare-score",
+        &[("kick", "crop(sin(2*pi*50*t), 0s, 0.1s)\n")],
+    );
+    for (score, code) in [
+        (line.to_string(), "lint.missing_comment"),
+        (
+            format!("{{\"annotation\": \"Models: a kick\"}}\n{line}"),
+            "lint.malformed_comment",
+        ),
+    ] {
+        std::fs::write(dir.join("hits.jsonl"), score).expect("a score");
+        let Err(refused) = lint(&dir, None) else {
+            panic!("{code} refuses");
+        };
+        let found = refused.diagnostics();
+        assert_eq!(found[0].code, code, "{}", found[0].message);
+        assert_eq!(found[0].file.as_deref(), Some("hits.jsonl"));
+        assert_eq!(found[0].start, Some((1, 1)));
+    }
 }
 
 /// A typo'd target refuses under the code `render` answers a ref to it with.

@@ -1,13 +1,13 @@
-// Concern: finds the reserved variables' values and lowers each read of them, again where one changes | Non-concern: score lines (score_check.rs) | IO: (&mut Graph[, beside]) -> Refusals
+// Concern: finds the reserved variables' values and lowers each read of them, again where one changes | Non-concern: a song's moves of a variable (song/) | IO: (&mut Graph[, beside]) -> Refusals
 
 use crate::diag::{ByteSpan, DiagCode};
 use crate::expr::{Address, Arg, BinOp, Binds, DEGREE, Expr, Literal, children, map_children_ok};
 use crate::filename::{FileSpan, SpanUnit, parse_filename};
 use crate::graph::{Defined, Graph, VARIABLES, resolve_ref_path};
-use crate::ingest::{base_name, body_at};
+use crate::ingest::{Data, Parsed, base_name, body_at};
 use crate::refusal::Refusal;
 use crate::scale::{BUILTIN_SCALES, Scale, builtin_scale};
-use crate::score::refused;
+use crate::score::{Item, Ratio};
 
 /// Each one the node `variables/<name>`: a `b` literal or span reads `bpm` and `meter`, and a
 /// `deg` call reads `key`, its tonic, and `scale`, a built-in scale's name or a ref to the
@@ -32,6 +32,37 @@ pub(crate) fn reads(
     let mut degrees = false;
     for e in std::iter::once(body).chain(defaults.iter().map(|(_, value)| value)) {
         scan(e, &mut bars, &mut degrees);
+    }
+    let mut out = Vec::new();
+    if bars {
+        out.extend(BARS);
+    }
+    if degrees {
+        out.extend(DEGREES);
+    }
+    out
+}
+
+/// The same of a parsed file: a score reads bars where it counts in them or binds one, and
+/// degrees where a line counts one.
+pub(crate) fn parsed_reads(parsed: &Parsed, span: Option<FileSpan>) -> Vec<&'static str> {
+    let Some(Data::Score(score)) = &parsed.data else {
+        return reads(&parsed.expr, &parsed.defaults, span);
+    };
+    let mut bars = in_bars(span);
+    let mut degrees = score.reads_degrees();
+    for (_, item) in score.items() {
+        let lasts = match item {
+            Item::Event(event) => {
+                for bind in &event.binds {
+                    scan(&bind.value, &mut bars, &mut degrees);
+                }
+                event.len.is_some()
+            }
+            Item::Move(m) => m.ramp.is_some(),
+            _ => false,
+        };
+        bars |= score.unit == SpanUnit::Bars && (lasts || item.at().amount != Ratio::ZERO);
     }
     let mut out = Vec::new();
     if bars {
@@ -79,6 +110,10 @@ pub struct Tempo {
 impl Tempo {
     pub fn seconds_per_bar(&self) -> f64 {
         self.beats * 60.0 / self.bpm
+    }
+
+    pub fn beats(&self) -> f64 {
+        self.beats
     }
 
     fn seconds(&self, bars: f64) -> Expr {
@@ -166,7 +201,7 @@ fn tempo(bpm: Option<&Expr>, meter: Option<&Expr>) -> Result<Option<Tempo>, Refu
 }
 
 /// The one whole degree a `deg` call names, folded from literals.
-fn degree(args: &[Arg]) -> Result<i64, String> {
+pub(crate) fn degree(args: &[Arg]) -> Result<i64, String> {
     let whole = match args {
         [Arg::Pos(x)] => crate::series::folded(x, &|_| None)
             .filter(|d| d.fract() == 0.0 && d.abs() < 2f64.powi(53)),
@@ -179,8 +214,24 @@ fn degree(args: &[Arg]) -> Result<i64, String> {
     })
 }
 
+/// `deg(n)`'s value: the tonic `variables/key` holds, read at `t`, times degree n's ratio.
+pub(crate) fn tonic_times(key: &str, ratio: f64, span: ByteSpan) -> Expr {
+    let tonic = Expr::Ref {
+        path: key.to_string(),
+        arg: Box::new(Expr::Var("t".to_string())),
+        binds: Vec::new(),
+        address: Address::Time,
+        span,
+    };
+    Expr::Bin(
+        BinOp::Mul,
+        Box::new(tonic),
+        Box::new(Expr::Lit(Literal::Num(ratio))),
+    )
+}
+
 /// `variables/key` as a node at `path` spells a ref to it.
-fn key_ref(path: &str) -> String {
+pub(crate) fn key_ref(path: &str) -> String {
     format!(
         "{}{}",
         "../".repeat(path.matches('/').count()),
@@ -210,12 +261,24 @@ impl Graph {
         let held = |path: &str| self.defines(path) || beside.is_some_and(|b| b.defines(path));
         let node = |name: &str| {
             let path = variable(name);
-            self.expr(&path).or_else(|| beside?.expr(&path))
+            self.source(&path)
+                .or_else(|| beside?.source(&path))
+                .map(|d| &d.body)
         };
         let tempo = tempo(node("bpm"), node("meter"));
         let scale = match node("scale") {
             None => Ok(None),
-            Some(written) => self.scale_named(written, beside).map(Some),
+            Some(written) => self
+                .scale_at(written, &variable("scale"), beside)
+                .map(Some)
+                .map_err(|reason| {
+                    Refusal::new(
+                        variable("scale"),
+                        ByteSpan::at(0),
+                        DiagCode::BadScale,
+                        reason,
+                    )
+                }),
         };
         match (tempo, scale) {
             (Ok(tempo), Ok(scale)) => Ok(Values {
@@ -227,13 +290,14 @@ impl Graph {
         }
     }
 
-    /// The scale `variables/scale` names: a built-in by its name, any other by a bare ref to
-    /// its file.
-    fn scale_named(&self, written: &Expr, beside: Option<&Graph>) -> Result<Scale, Refusal> {
-        let path = variable("scale");
-        let refused = |reason: String| {
-            Refusal::new(path.clone(), ByteSpan::at(0), DiagCode::BadScale, reason)
-        };
+    /// The scale `written` at `referencing` names: a built-in by its name, any other by a bare
+    /// ref to its file.
+    pub(crate) fn scale_at(
+        &self,
+        written: &Expr,
+        referencing: &str,
+        beside: Option<&Graph>,
+    ) -> Result<Scale, String> {
         let target = match written {
             Expr::Ref {
                 path: to,
@@ -242,24 +306,23 @@ impl Graph {
                 address: Address::Time,
                 ..
             } if binds.is_empty() && **arg == Expr::Var("t".to_string()) => {
-                resolve_ref_path(&path, to)
+                resolve_ref_path(referencing, to)
             }
             _ => {
                 return match scale_name(written) {
                     Some(name) => builtin_scale(&name).ok_or_else(|| {
-                        refused(format!(
-                            "`variables/scale` names `{name}`, which is no built-in scale; the \
+                        format!(
+                            "`{referencing}` names `{name}`, which is no built-in scale; the \
                              built-ins are {}, and any other scale is a file of cents named by \
                              a ref, as `@../scales/custom`",
                             builtin_names()
-                        ))
+                        )
                     }),
-                    None => Err(refused(format!(
-                        "`variables/scale` holds `{}`; it names the scale every `deg` counts in, \
-                         a built-in by its name, as `minor`, or a scale file by a ref, as \
-                         `@../scales/custom`",
+                    None => Err(format!(
+                        "`{referencing}` holds `{}`; a scale is a built-in named bare, as \
+                         `minor`, or a scale file named by a ref, as `@../scales/custom`",
                         crate::print::render(written)
-                    ))),
+                    )),
                 };
             }
         };
@@ -268,8 +331,8 @@ impl Graph {
             .and_then(|target| self.scale(target).or_else(|| beside?.scale(target)));
         match (target, found) {
             (Some(_), Some(scale)) => Ok(scale.clone()),
-            (target, _) => Err(refused(format!(
-                "`variables/scale` names {}, and a scale is a file of rows of cents above the \
+            (target, _) => Err(format!(
+                "`{referencing}` names {}, and a scale is a file of rows of cents above the \
                  tonic, the last the period, as `scales/custom` would hold them, or a built-in \
                  named bare: {}",
                 match target {
@@ -280,7 +343,7 @@ impl Graph {
                     None => "a path above the composition root".to_string(),
                 },
                 builtin_names()
-            ))),
+            )),
         }
     }
 
@@ -325,9 +388,6 @@ impl Graph {
                 Err(refused) => refusals.extend(refused),
             }
         }
-        if let Some(tempo) = &values.tempo {
-            self.spans_in_seconds(tempo.seconds_per_bar());
-        }
         match refusals.is_empty() {
             true => Ok(()),
             false => Err(refusals),
@@ -341,6 +401,18 @@ impl Graph {
         path: &str,
         defined: &Defined,
         values: &Values,
+    ) -> Result<Defined, Vec<Refusal>> {
+        self.lowered_with(path, defined, values, None)
+    }
+
+    /// The same, each `deg(n)`'s ratio read off `ratio` where given: a song whose scale moves
+    /// passes degree n's ratio lane there.
+    pub(crate) fn lowered_with(
+        &self,
+        path: &str,
+        defined: &Defined,
+        values: &Values,
+        ratio: Option<&dyn Fn(i64) -> Expr>,
     ) -> Result<Defined, Vec<Refusal>> {
         let reads = match self.defines(path) {
             true => self.reserved_reads(path).to_vec(),
@@ -379,13 +451,13 @@ impl Graph {
         let text = self.text(path);
         let score = self.score(path).is_some();
         let refuse = |span: ByteSpan, message: String| match (score, text) {
-            (true, Some(text)) => {
-                let before = &text[..span.start];
-                let line = before.matches('\n').count() + 1;
-                let column = before.len() - before.rfind('\n').map_or(0, |at| at + 1) + 1;
-                let diag = refused(span.start, (line, column), &message);
-                Refusal::new(path, diag.span, diag.code, diag.message)
-            }
+            (true, Some(text)) => crate::score::refused(
+                format!("{path}{}", crate::score::EXTENSION),
+                text,
+                span.start,
+                DiagCode::BadScore,
+                &message,
+            ),
             _ => Refusal::new(path, span, DiagCode::BadScale, message),
         };
         let from = match (score, text) {
@@ -397,6 +469,7 @@ impl Graph {
             key: key_ref(path),
             refuse: &refuse,
             refusals: Vec::new(),
+            ratio,
         };
         let body = lowering.lower(&defined.body, from);
         let defaults = defined
@@ -416,6 +489,7 @@ struct Lowering<'a> {
     key: String,
     refuse: &'a dyn Fn(ByteSpan, String) -> Refusal,
     refusals: Vec<Refusal>,
+    ratio: Option<&'a dyn Fn(i64) -> Expr>,
 }
 
 impl Lowering<'_> {
@@ -429,6 +503,23 @@ impl Lowering<'_> {
                 .as_ref()
                 .expect("a node counting in bars is refused with no tempo")
                 .seconds(*bars),
+            Expr::Call { name, args, span } if name == DEGREE && self.ratio.is_some() => {
+                match degree(args) {
+                    Ok(n) => {
+                        let ratio = (self.ratio.expect("matched"))(n);
+                        let tonic = tonic_times(&self.key, 1.0, *span);
+                        let Expr::Bin(_, tonic, _) = tonic else {
+                            unreachable!("a product")
+                        };
+                        Expr::Bin(BinOp::Mul, tonic, Box::new(ratio))
+                    }
+                    Err(message) => {
+                        let at = ByteSpan::new(span.start + from, span.end + from);
+                        self.refusals.push((self.refuse)(at, message));
+                        e.clone()
+                    }
+                }
+            }
             Expr::Call { name, args, span } if name == DEGREE => {
                 let ratio = degree(args).and_then(|n| match &self.values.scale {
                     None => Err(
@@ -442,20 +533,7 @@ impl Lowering<'_> {
                     }),
                 });
                 match ratio {
-                    Ok(ratio) => {
-                        let tonic = Expr::Ref {
-                            path: self.key.clone(),
-                            arg: Box::new(Expr::Var("t".to_string())),
-                            binds: Vec::new(),
-                            address: Address::Time,
-                            span: *span,
-                        };
-                        Expr::Bin(
-                            BinOp::Mul,
-                            Box::new(tonic),
-                            Box::new(Expr::Lit(Literal::Num(ratio))),
-                        )
-                    }
+                    Ok(ratio) => tonic_times(&self.key, ratio, *span),
                     Err(message) => {
                         let at = ByteSpan::new(span.start + from, span.end + from);
                         self.refusals.push((self.refuse)(at, message));

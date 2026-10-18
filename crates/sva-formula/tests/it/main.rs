@@ -7,7 +7,6 @@ mod fixtures;
 mod hashing;
 mod inference;
 mod modal;
-mod note;
 mod refusals;
 mod series;
 mod spectral_sum;

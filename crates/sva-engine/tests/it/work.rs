@@ -131,7 +131,9 @@ fn a_late_window_streams_its_history_and_holds_no_more_the_later_it_starts() {
             ),
         ],
     );
-    g.desugar_arrangement().expect("concat expands");
+    let mut song = g.song("dry").expect("a song");
+    let lowered = song.lowered(&g, &[]).expect("concat expands");
+    g.apply(lowered);
     let over = |from: f64, to: f64| {
         let at = |secs: f64| (secs * f64::from(RATE)) as i64;
         let config = RenderConfig {
