@@ -54,6 +54,17 @@ fn located(mags: &[f64], bin_hz: f64) -> Vec<(usize, Peak)> {
 
 /// Loudest first, peaks no kept peak's sidelobes explain, nor a DC's at bin 0.
 pub fn resolved(mags: &[f64], bin_hz: f64, spanned: usize, max_peaks: usize) -> Vec<Peak> {
+    resolved_counting(mags, bin_hz, spanned, max_peaks, |_| true)
+}
+
+/// As [`resolved`], until `max_peaks` kept pass `counts`.
+pub fn resolved_counting(
+    mags: &[f64],
+    bin_hz: f64,
+    spanned: usize,
+    max_peaks: usize,
+    counts: impl Fn(&Peak) -> bool,
+) -> Vec<Peak> {
     let r = spanned as f64 / (2 * (mags.len() - 1)) as f64;
     let half = r / 2.0;
     let dc = match mags {
@@ -61,8 +72,9 @@ pub fn resolved(mags: &[f64], bin_hz: f64, spanned: usize, max_peaks: usize) -> 
         _ => 0.0,
     };
     let mut kept: Vec<(usize, Peak)> = Vec::new();
+    let mut counted = 0;
     for (k, peak) in located(mags, bin_hz) {
-        if kept.len() == max_peaks {
+        if counted == max_peaks {
             break;
         }
         let leaked: f64 = kept
@@ -75,6 +87,7 @@ pub fn resolved(mags: &[f64], bin_hz: f64, spanned: usize, max_peaks: usize) -> 
             .sum::<f64>()
             + dc / kernel(half) * leakage(k as f64 * r - half);
         if mags[k] > leaked {
+            counted += usize::from(counts(&peak));
             kept.push((k, peak));
         }
     }

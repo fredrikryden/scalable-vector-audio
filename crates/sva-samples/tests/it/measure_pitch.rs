@@ -331,3 +331,18 @@ fn a_frame_longer_than_its_transform_seeks_a_fundamental_at_the_transforms_resol
         assert_eq!(heads, ["Cs2", "Ds2"], "at {} s", frame.t_secs);
     }
 }
+
+/// `peaks` counts notes: eighty louder sines over 5 kHz crowd no faint A3 out.
+#[test]
+fn peaks_past_the_named_band_crowd_no_note_out() {
+    let rate = 44100.0;
+    let mut tone: Vec<f64> = sine(220.0, rate, 0.2).iter().map(|x| 0.005 * x).collect();
+    for k in 1..=80 {
+        let high = sine(5200.0 + 97.0 * f64::from(k), rate, 0.2);
+        tone.iter_mut().zip(high).for_each(|(x, h)| *x += h / 80.0);
+    }
+    for frame in track(&[&tone[..]], rate, 0.0, 0.05, 16) {
+        let names: Vec<&str> = frame.notes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["A3"], "at {} s", frame.t_secs);
+    }
+}

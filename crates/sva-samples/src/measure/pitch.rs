@@ -1,6 +1,6 @@
 // Concern: names each frame's spectral peaks as notes and flags likely harmonics | Non-concern: computing the spectrum (spectrum.rs), chord or key identity | IO: (planes, sample rate) -> frames
 
-use crate::measure::peaks::{Peak, resolved};
+use crate::measure::peaks::{Peak, resolved_counting};
 use crate::measure::spectrum::magnitudes_of;
 use crate::measure::stiff::{fit, stretch};
 
@@ -46,7 +46,13 @@ pub fn track(
                 .map(|p| &p[from..len.min(from + stride)])
                 .collect();
             let framed = magnitudes_of(&chunk, sample_rate, None);
-            let found = resolved(&framed.mags, framed.bin_hz, framed.spanned, max_notes * 4);
+            let found = resolved_counting(
+                &framed.mags,
+                framed.bin_hz,
+                framed.spanned,
+                max_notes,
+                named,
+            );
             let resolution_hz = sample_rate / framed.spanned as f64;
             PitchFrame {
                 t_secs: start_secs + (n * stride) as f64 / sample_rate,
@@ -61,13 +67,14 @@ pub fn name_peaks(found: &[Peak], max_notes: usize) -> Vec<Note> {
     name_all(found, max_notes, 0.0)
 }
 
+/// Whether a peak stands in the band notes are named in.
+fn named(peak: &Peak) -> bool {
+    (LOWEST_HZ..=HIGHEST_HZ).contains(&peak.hz)
+}
+
 /// `spread_hz`: how far a peak may stand from where it was measured, 0 where exact.
 fn name_all(found: &[Peak], max_notes: usize, spread_hz: f64) -> Vec<Note> {
-    let listed: Vec<&Peak> = found
-        .iter()
-        .filter(|p| (LOWEST_HZ..=HIGHEST_HZ).contains(&p.hz))
-        .take(max_notes)
-        .collect();
+    let listed: Vec<&Peak> = found.iter().filter(|p| named(p)).take(max_notes).collect();
     let roots = series_roots(&listed, spread_hz);
 
     listed

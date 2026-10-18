@@ -245,8 +245,8 @@ static PITCH: Reading = Reading {
     name: "pitch",
     takes: &[Arg::Peaks, Arg::Frame],
     reads: Reads::Either,
-    help: "the notes it holds, per frame off samples, every channel's power per bin averaged; \
-           off samples its peaks are picked as `spectrum` picks them, and a series' \
+    help: "the `peaks` loudest notes it holds, per frame off samples, every channel's power \
+           per bin averaged; off samples its peaks are picked as `spectrum` picks them, and a series' \
            fundamental is read within half a bin of its root's peak, the rate over the samples \
            its Hann spans",
     build: |g| Representation::Pitch {
