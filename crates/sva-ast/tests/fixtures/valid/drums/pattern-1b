@@ -1,2 +1,2 @@
-{"at": "0b", "sound": "@kick"}
-{"at": "0.5b", "sound": "@snare"}
+{"at": "0b", "node": "@kick"}
+{"at": "0.5b", "node": "@snare"}

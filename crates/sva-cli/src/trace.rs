@@ -56,10 +56,10 @@ pub fn trace(dir: &Path, target: &str) -> Result<Traceable, CliError> {
 
 /// A score is its lines, not the sum they lower to: how many, when, and what they play.
 fn summary(score: &sva_ast::Score) -> String {
-    let mut sounds: Vec<&str> = Vec::new();
+    let mut nodes: Vec<&str> = Vec::new();
     for event in &score.events {
-        if !sounds.contains(&event.sound.as_str()) {
-            sounds.push(&event.sound);
+        if !nodes.contains(&event.node.as_str()) {
+            nodes.push(&event.node);
         }
     }
     let (first, last) = (&score.events[0], &score.events[score.events.len() - 1]);
@@ -68,7 +68,7 @@ fn summary(score: &sva_ast::Score) -> String {
         score.events.len(),
         first.at.spelled(),
         last.at.spelled(),
-        sounds.join(", @")
+        nodes.join(", @")
     )
 }
 

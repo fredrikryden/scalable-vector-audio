@@ -28,11 +28,11 @@ fn score_data(text: &str) -> Result<String, CliError> {
     let line = |e: &sva_ast::Event| {
         format!(
             "{{ \"line\": {}, \"span\": {}, \"at\": \"{}\", \
-             \"sound\": \"@{}\", \"deg\": {}, \"args\": {} }}",
+             \"node\": \"@{}\", \"deg\": {}, \"args\": {} }}",
             e.line,
             span(e.span),
             e.at.spelled(),
-            escape(&e.sound),
+            escape(&e.node),
             e.deg
                 .map_or_else(|| crate::json::NONE.to_string(), |d| d.to_string()),
             list(&e.args, |(name, value)| format!(

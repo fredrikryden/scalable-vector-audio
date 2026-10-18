@@ -13,7 +13,7 @@ fn with<const N: usize>(key: &str, more: [(&str, &str); N]) -> Composition {
         ("voice", "f0 = 440\nsin(2*pi*f0*t)\n"),
         (
             "phrase",
-            "{\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": 3}\n",
+            "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 3}\n",
         ),
     ]);
     for (path, text) in more {
@@ -93,7 +93,7 @@ fn a_degree_with_no_scale_line_refuses_on_its_line() {
     let mut held = load(&composition("D3\n")).expect("a composition");
     let refused = held.lower_scores(None).unwrap_err();
     assert!(
-        refused[0].reason.starts_with("line 1, column 40: `deg`"),
+        refused[0].reason.starts_with("line 1, column 39: `deg`"),
         "{}",
         refused[0].reason
     );
@@ -102,8 +102,8 @@ fn a_degree_with_no_scale_line_refuses_on_its_line() {
 #[test]
 fn a_chromatic_note_and_an_octave_follow_a_key_or_scale_change() {
     let phrase = "; Models: the raised seventh | Neglects: rhythm | IO: (t) -> amplitude | Tags: score\n\
-                  {\"at\": \"0b\", \"sound\": \"@voice\", \"f0\": \"deg(7)*1st\"}\n\
-                  {\"at\": \"2b + 1b/3\", \"sound\": \"@voice\", \"f0\": \"deg(5)/2\"}\n";
+                  {\"at\": \"0b\", \"node\": \"@voice\", \"f0\": \"deg(7)*1st\"}\n\
+                  {\"at\": \"2b + 1b/3\", \"node\": \"@voice\", \"f0\": \"deg(5)/2\"}\n";
     let lead = "f0 = deg(3)\nsin(2*pi*f0*t)\n";
     let mut source = with(
         "scale = @../scales/minor\nD3\n",
@@ -125,10 +125,10 @@ fn a_chromatic_note_and_an_octave_follow_a_key_or_scale_change() {
 
 #[test]
 fn a_chord_lowers_as_its_lines_would() {
-    let chord = "{\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": [1, 3, 5]}\n";
-    let lines = "{\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": 1}\n\
-                 {\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": 3}\n\
-                 {\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": 5}\n";
+    let chord = "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": [1, 3, 5]}\n";
+    let lines = "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 1}\n\
+                 {\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 3}\n\
+                 {\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 5}\n";
     let source = with(
         "scale = @../scales/major\nD3\n",
         [("chord", chord), ("lines", lines)],
@@ -136,6 +136,43 @@ fn a_chord_lowers_as_its_lines_would() {
     let mut held = load(&source).expect("a composition");
     held.lower_scores(None).expect("every degree settles");
     assert_eq!(held.expr("chord"), held.expr("lines"));
+}
+
+const KEYS: &str = "f0 = 440\nvel = 1\nlen = 1s\nvel*crop(sin(2*pi*f0*t), 0s, len)\n";
+
+#[test]
+fn a_broadcast_line_lowers_as_its_lines_would() {
+    let one = "{\"at\": [\"0b\", \"0b\", \"1b/3\"], \"node\": \"@keys\", \"deg\": [1, 3, 5], \
+               \"vel\": [0.8, 0.5, 0.6], \"len\": [\"1b\", \"0.5b\", \"1b\"]}\n";
+    let lines = "{\"at\": \"0b\", \"node\": \"@keys\", \"deg\": 1, \"vel\": 0.8, \"len\": \"1b\"}\n\
+                 {\"at\": \"0b\", \"node\": \"@keys\", \"deg\": 3, \"vel\": 0.5, \"len\": \"0.5b\"}\n\
+                 {\"at\": \"1b/3\", \"node\": \"@keys\", \"deg\": 5, \"vel\": 0.6, \"len\": \"1b\"}\n";
+    let source = with(
+        "scale = @../scales/major\nD3\n",
+        [("keys", KEYS), ("one", one), ("lines", lines)],
+    );
+    let mut held = load(&source).expect("a composition");
+    held.lower_scores(None).expect("every degree settles");
+    assert_eq!(held.expr("one"), held.expr("lines"));
+}
+
+#[test]
+fn each_node_a_line_lists_is_checked_against_its_own_parameters() {
+    let both = "{\"at\": \"0b\", \"node\": [\"@keys\", \"@voice\"], \"vel\": 0.5}\n";
+    let source = with(
+        "scale = @../scales/major\nD3\n",
+        [("keys", KEYS), ("both", both)],
+    );
+    let mut held = load(&source).expect("a composition");
+    let refused = held.lower_scores(None).unwrap_err();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(
+        refused[0]
+            .reason
+            .contains("`vel` is no parameter `@voice` reads"),
+        "{}",
+        refused[0].reason
+    );
 }
 
 #[test]

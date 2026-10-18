@@ -73,19 +73,19 @@ rate-free, below it there is a rate, and a feedback term reading what it wrote s
 ## Notes in time: a score
 
 A file whose first line past its `;` comments opens with `{` is a score: JSON Lines, one event
-per line, sorted by `at`. Each line plays the sound it names shifted to its time, so this score
-is `@voice(t, f0=deg(1)) + …`, still one closed form. `b` is a bar, so `2b + 1b/3` is a triplet:
+per line, sorted by `at`, each playing the `node` it names (a sound, a score, a curve) at its time,
+one closed form `@voice(t, f0=deg(1), vel=0.8) + …`. `b` is a bar, `2b + 1b/3` a triplet. A line
+listing N items is N events, event i taking item i of each list and a single value going to all:
 
 ```
-{"at": "0b", "sound": "@voice", "deg": [1, 3, 5]}
-{"at": "2b + 1b/3", "sound": "@voice", "f0": "deg(7)*1st", "vel": "0.8*0.9"}
+{"at": "0b", "node": "@voice", "deg": [1, 3, 5], "vel": [0.8, 0.5, 0.6]}
+{"at": "2b + 1b/3", "node": "@voice", "f0": "deg(7)*1st", "vel": "0.8*0.9"}
 ```
 
 `deg(n)`, in a score or any equation, is the tonic in `variables/key` times degree `n`'s ratio in
-the scale its `scale = @../scales/minor` line names; `"deg": 5` is `"f0": "deg(5)"`, a list a
-chord. Editing the key's note transposes every score, chromatic notes too; its `scale` line
-changes mode. A value is constant: what moves is an automation lane, a score of curves an
-equation reads, as `cutoff=20khz*pow(0.02, @auto/riser(t))`. Place a phrase as `@bass(t - 8b)`.
+the scale its `scale = @../scales/minor` line names; `"deg": 5` is `"f0": "deg(5)"`. Editing the
+key's note transposes every score; its `scale` line changes mode. A value is constant: what moves
+is an automation lane, as `cutoff=20khz*pow(0.02, @auto/riser(t))`. Place one as `@bass(t - 8b)`.
 
 ## Literals and waveforms
 

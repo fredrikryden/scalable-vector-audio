@@ -82,21 +82,21 @@ len = 0.5s
     ),
     (
         "score/chord",
-        r#"{"at": "0b", "sound": "@../voice/tone", "deg": 1}
-{"at": "0b", "sound": "@../voice/tone", "deg": 3}
-{"at": "0b", "sound": "@../voice/tone", "deg": 5}
+        r#"{"at": "0b", "node": "@../voice/tone", "deg": 1}
+{"at": "0b", "node": "@../voice/tone", "deg": 3}
+{"at": "0b", "node": "@../voice/tone", "deg": 5}
 "#,
     ),
     (
         "score/phrase",
-        r#"{"at": "0b", "sound": "@../voice/note", "deg": 8, "len": "0.25b"}
-{"at": "0.25b", "sound": "@../voice/note", "deg": 5, "len": "0.25b"}
-{"at": "0.5b", "sound": "@../voice/note", "deg": 3, "len": "0.25b"}
-{"at": "0.75b", "sound": "@../voice/note", "deg": 5, "len": "0.25b"}
-{"at": "1b", "sound": "@../voice/note", "deg": 6, "len": "0.25b"}
-{"at": "1.25b", "sound": "@../voice/note", "deg": 5, "len": "0.25b"}
-{"at": "1.5b", "sound": "@../voice/note", "deg": 3, "len": "0.25b"}
-{"at": "1.75b", "sound": "@../voice/note", "deg": 1, "len": "0.25b"}
+        r#"{"at": "0b", "node": "@../voice/note", "deg": 8, "len": "0.25b"}
+{"at": "0.25b", "node": "@../voice/note", "deg": 5, "len": "0.25b"}
+{"at": "0.5b", "node": "@../voice/note", "deg": 3, "len": "0.25b"}
+{"at": "0.75b", "node": "@../voice/note", "deg": 5, "len": "0.25b"}
+{"at": "1b", "node": "@../voice/note", "deg": 6, "len": "0.25b"}
+{"at": "1.25b", "node": "@../voice/note", "deg": 5, "len": "0.25b"}
+{"at": "1.5b", "node": "@../voice/note", "deg": 3, "len": "0.25b"}
+{"at": "1.75b", "node": "@../voice/note", "deg": 1, "len": "0.25b"}
 "#,
     ),
     (

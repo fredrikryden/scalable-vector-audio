@@ -153,7 +153,7 @@ fn lint_of_a_node_with_a_default_resolves() {
 /// A score is JSON lines: no `;` comment to require and no body to measure, however long.
 #[test]
 fn a_long_score_lints_clean() {
-    let line = "{\"at\": \"0b\", \"sound\": \"@kick\"}\n";
+    let line = "{\"at\": \"0b\", \"node\": \"@kick\"}\n";
     let dir = composition(
         "long-score",
         &[("kick", "crop(sin(2*pi*50*t), 0s, 0.1s)\n")],

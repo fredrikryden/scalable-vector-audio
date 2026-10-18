@@ -21,9 +21,9 @@ fn a_bpm_change_re_renders_bar_resolved_timing_and_nothing_else() {
     put(
         &dir,
         "pattern-1b",
-        "{\"at\": \"0b\", \"sound\": \"@kick\"}\n\
-         {\"at\": \"0.25b\", \"sound\": \"@kick\", \"gain\": 0.5}\n\
-         {\"at\": \"0.75b\", \"sound\": \"@kick\", \"gain\": 0.7}\n",
+        "{\"at\": \"0b\", \"node\": \"@kick\"}\n\
+         {\"at\": \"0.25b\", \"node\": \"@kick\", \"gain\": 0.5}\n\
+         {\"at\": \"0.75b\", \"node\": \"@kick\", \"gain\": 0.7}\n",
     );
     put(&dir, "master", "crop(@pattern-1b(t), 0s, 3s) + @tone*0.2\n");
 

@@ -1322,7 +1322,7 @@ mod tests {
             ("tiled", "crop(@kick(t % 1b), 0s, 16b)\n"),
             (
                 "phrase-1b",
-                "{\"at\": \"0b\", \"sound\": \"@kick\"}\n{\"at\": \"0.01b\", \"sound\": \"@kick\"}\n",
+                "{\"at\": \"0b\", \"node\": \"@kick\"}\n{\"at\": \"0.01b\", \"node\": \"@kick\"}\n",
             ),
         ];
         let mut g = load(&of(&files)).unwrap();

@@ -1,4 +1,4 @@
-// Concern: reads a score's JSON Lines and lowers it to the sum of each line's sound shifted to its time | Non-concern: checking a line against its sound (tuning.rs) | IO: (&str) -> Score -> Expr
+// Concern: reads a score's JSON Lines and lowers it to the sum of each event's node shifted to its time | Non-concern: checking a line against its node (tuning.rs) | IO: (&str) -> Score -> Expr
 
 use std::fmt;
 
@@ -17,14 +17,14 @@ pub struct Score {
     pub events: Vec<Event>,
 }
 
-/// One sound placed by a line: at `at`, `sound` plays with `args` bound, `len` among them
-/// where written. A line listing a chord in `deg` places one event per degree.
+/// One node placed by a line: at `at`, `node` plays with `args` bound, `len` among them
+/// where written. A line whose fields list N items places N events, the i-th taking item i.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Event {
     pub line: usize,
     pub span: ByteSpan,
     pub at: Time,
-    pub sound: String,
+    pub node: String,
     pub deg: Option<i64>,
     /// Where this event's degree is written, which a refusal about it names.
     pub deg_at: ByteSpan,
@@ -88,23 +88,28 @@ pub fn parse_score(content: &str) -> Result<Score, Diag> {
         })?;
         let refuse =
             |at: usize, message: String| refused(span.start + at, (number, at + 1), &message);
-        let written = Line::read(line, span.start, fields, &refuse)?;
-        if let Some(before) = events.last() {
-            sorted(before, written.at, (number, span.start))?;
-        }
-        let degrees: Vec<(Option<i64>, ByteSpan)> = match written.deg.is_empty() {
-            true => vec![(None, span)],
-            false => written.deg.iter().map(|&(d, at)| (Some(d), at)).collect(),
-        };
-        for (deg, deg_at) in degrees {
+        let written = Line::read(line, span.start, number, fields, &refuse)?;
+        for i in 0..written.count {
+            let (at, by) = *item(&written.at, i);
+            if let Some(before) = events.last() {
+                sorted(before, at, (number, by - span.start + 1), by)?;
+            }
+            let (deg, deg_at) = match written.deg.is_empty() {
+                true => (None, span),
+                false => {
+                    let (d, at) = *item(&written.deg, i);
+                    (Some(d), at)
+                }
+            };
+            let args = written.args.iter();
             events.push(Event {
                 line: number,
                 span,
-                at: written.at,
-                sound: written.sound.clone(),
+                at,
+                node: item(&written.node, i).clone(),
                 deg,
                 deg_at,
-                args: written.args.clone(),
+                args: args.map(|(k, v)| (k.clone(), item(v, i).clone())).collect(),
             });
         }
     }
@@ -120,28 +125,36 @@ pub fn refused(at: usize, (line, column): (usize, usize), message: &str) -> Diag
     )
 }
 
-fn sorted(before: &Event, next: Time, (line, at): (usize, usize)) -> Result<(), Diag> {
+fn sorted(
+    before: &Event,
+    next: Time,
+    (line, column): (usize, usize),
+    at: usize,
+) -> Result<(), Diag> {
+    let earlier = match before.line == line {
+        true => "earlier on this line".to_string(),
+        false => format!("on line {}", before.line),
+    };
     if before.at.unit != next.unit {
         return Err(refused(
             at,
-            (line, 1),
+            (line, column),
             &format!(
-                "`at` is {} here and {} on line {}; one score counts its time in bars or in \
+                "`at` is {} here and {} {earlier}; one score counts its time in bars or in \
                  seconds, not both",
                 next.spelled(),
                 before.at.spelled(),
-                before.line
             ),
         ));
     }
     if next.amount < before.at.amount {
         return Err(refused(
             at,
-            (line, 1),
+            (line, column),
             &format!(
-                "`at` is {} here, before line {}'s {}; a score's lines are sorted by `at`",
+                "`at` is {} here, before {} {earlier}; a score's events are sorted by `at`, \
+                 a list's items too",
                 next.spelled(),
-                before.line,
                 before.at.spelled()
             ),
         ));
@@ -150,7 +163,7 @@ fn sorted(before: &Event, next: Time, (line, at): (usize, usize)) -> Result<(), 
 }
 
 impl Score {
-    /// Σ soundᵢ(t − atᵢ; argsᵢ), summed as a balanced tree so its depth is log₂ of its events.
+    /// Σ nodeᵢ(t − atᵢ; argsᵢ), summed as a balanced tree so its depth is log₂ of its events.
     /// A degree stays a `deg` call, which the tuning pass reads off the key's scale.
     pub fn lowered(&self) -> Expr {
         balanced(self.events.iter().map(Event::lowered).collect())
@@ -169,7 +182,7 @@ impl Event {
             binds.push(("f0".to_string(), degree));
         }
         Expr::Ref {
-            path: self.sound.clone(),
+            path: self.node.clone(),
             arg: Box::new(shifted(self.at)),
             binds,
             address: Address::Time,
@@ -219,7 +232,9 @@ impl<'de> Visitor<'de> for FieldsVisitor {
     type Value = Fields<'de>;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("one event, an object such as {\"at\": \"0b\", \"sound\": \"@../voice/note\"}")
+        f.write_str(
+            "one event, an object such as {\"at\": \"0b\", \"node\": \"@../instruments/bass\"}",
+        )
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Fields<'de>, A::Error> {
@@ -242,53 +257,94 @@ type Inside = (usize, String);
 const MOVING: &str = "a score binds constants, and a moving argument belongs in an equation that \
                       reads an automation score (see SCORES in --help)";
 
-/// The fields a line names, each value read where it is written.
+/// The fields a line names, each value read where it is written: one item, or a list's,
+/// item i of each list going to its event i and a single value to every event.
 struct Line {
-    at: Time,
-    sound: String,
+    count: usize,
+    /// Each `at` beside its byte in the score, where a refusal of its order lands.
+    at: Vec<(Time, usize)>,
+    node: Vec<String>,
     deg: Vec<(i64, ByteSpan)>,
-    args: Vec<(String, Expr)>,
+    args: Vec<(String, Vec<Expr>)>,
+}
+
+/// Item `i` of a field: its own where it lists one per event, else its one value.
+fn item<T>(items: &[T], i: usize) -> &T {
+    &items[if items.len() == 1 { 0 } else { i }]
 }
 
 impl Line {
     fn read(
         line: &str,
         start: usize,
+        number: usize,
         fields: Vec<(String, &RawValue)>,
         refuse: &dyn Fn(usize, String) -> Diag,
     ) -> Result<Line, Diag> {
-        let (mut at, mut sound) = (None, None);
+        let (mut at, mut node) = (Vec::new(), Vec::new());
         let mut deg: Vec<(i64, ByteSpan)> = Vec::new();
-        let mut args: Vec<(String, Expr)> = Vec::new();
+        let mut args: Vec<(String, Vec<Expr>)> = Vec::new();
+        let mut listed: Option<(&str, usize)> = None;
         for (key, raw) in &fields {
             let from = raw.get().as_ptr() as usize - line.as_ptr() as usize;
             let located = |(by, message): Inside| refuse(from + by, message);
-            match key.as_str() {
-                "at" => at = Some(time(raw.get(), true).map_err(located)?),
-                "sound" => sound = Some(self::sound(raw.get()).map_err(located)?),
-                "deg" => {
-                    let found = degrees(raw.get()).map_err(located)?;
-                    let spans = found.into_iter().map(|(d, by, len)| {
-                        (d, ByteSpan::new(start + from + by, start + from + by + len))
-                    });
-                    deg = spans.collect();
+            if key == "sound" {
+                let written = line[..from].rfind("\"sound\"").unwrap_or(from);
+                return Err(refuse(
+                    written,
+                    "`sound` is now `node`, since what a line plays is any node: a sound, \
+                     another score or a control curve; write \"node\": \"@../instruments/bass\""
+                        .to_string(),
+                ));
+            }
+            let items = items(key, raw.get()).map_err(located)?;
+            if raw.get().starts_with('[') {
+                match listed {
+                    Some((first, n)) if n != items.len() => {
+                        return Err(Diag::new(
+                            DiagCode::BadScore,
+                            ByteSpan::new(start + from, start + from),
+                            format!(
+                                "line {number}: `{first}` has {}, `{key}` has {}",
+                                counted(n),
+                                items.len()
+                            ),
+                        ));
+                    }
+                    Some(_) => {}
+                    None => listed = Some((key, items.len())),
                 }
-                "len" => {
-                    let len = time(raw.get(), false).map_err(located)?;
-                    args.push((key.clone(), len.literal()));
-                }
-                _ => {
-                    let value = value(raw.get()).map_err(located)?;
-                    args.push((
-                        key.clone(),
-                        crate::ingest::relocate(&value, start + from + 1),
-                    ));
+            }
+            for (by, written) in items {
+                let at_byte = from + by;
+                let located = |(by, message): Inside| refuse(at_byte + by, message);
+                match key.as_str() {
+                    "at" => at.push((time(written, true).map_err(located)?, start + at_byte)),
+                    "node" => node.push(self::node(written).map_err(located)?),
+                    "deg" => {
+                        let d = degree(written).map_err(located)?;
+                        let span = ByteSpan::new(start + at_byte, start + at_byte + written.len());
+                        deg.push((d, span));
+                    }
+                    "len" => {
+                        let len = time(written, false).map_err(located)?;
+                        bound(&mut args, key).push(len.literal());
+                    }
+                    _ => {
+                        let value = value(written).map_err(located)?;
+                        let value = crate::ingest::relocate(&value, start + at_byte + 1);
+                        bound(&mut args, key).push(value);
+                    }
                 }
             }
         }
         let end = line.trim_end().len().saturating_sub(1);
-        let at = at.ok_or_else(|| refuse(end, "missing field `at`".to_string()))?;
-        let sound = sound.ok_or_else(|| refuse(end, "missing field `sound`".to_string()))?;
+        if at.is_empty() {
+            return Err(refuse(end, "missing field `at`".to_string()));
+        }
+        if node.is_empty() {
+            return Err(refuse(end, "missing field `node`".to_string()));
+        }
         if let Some((_, written)) = deg.first()
             && args.iter().any(|(key, _)| key == "f0")
         {
@@ -298,12 +354,53 @@ impl Line {
             ));
         }
         Ok(Line {
+            count: listed.map_or(1, |(_, n)| n),
             at,
-            sound,
+            node,
             deg,
             args,
         })
     }
+}
+
+/// The items `key` binds where it is pushed, the slot opened on its first.
+fn bound<'a>(args: &'a mut Vec<(String, Vec<Expr>)>, key: &str) -> &'a mut Vec<Expr> {
+    if args.last().is_none_or(|(held, _)| held != key) {
+        args.push((key.to_string(), Vec::new()));
+    }
+    &mut args.last_mut().expect("just pushed").1
+}
+
+/// `3 items`, or `1 item`.
+fn counted(n: usize) -> String {
+    format!("{n} item{}", if n == 1 { "" } else { "s" })
+}
+
+/// A field's value as one item, or a list's items, each beside its byte in `raw`.
+fn items<'a>(key: &str, raw: &'a str) -> Result<Vec<(usize, &'a str)>, Inside> {
+    if !raw.starts_with('[') {
+        return Ok(vec![(0, raw)]);
+    }
+    let list: Vec<&RawValue> =
+        serde_json::from_str(raw).map_err(|e| (0, format!("`{key}` {e}")))?;
+    if list.is_empty() {
+        return Err((
+            0,
+            format!("`{key}` lists no item; a list holds one item per event, as [1, 3, 5]"),
+        ));
+    }
+    list.iter()
+        .map(|item| {
+            let by = item.get().as_ptr() as usize - raw.as_ptr() as usize;
+            match item.get().starts_with('[') {
+                true => Err((
+                    by,
+                    format!("`{key}` lists a list; each item is one value for one event"),
+                )),
+                false => Ok((by, item.get())),
+            }
+        })
+        .collect()
 }
 
 /// A JSON string's contents, which an SVA value never needs to escape.
@@ -510,11 +607,11 @@ fn constant(s: &str, tokens: &[Token], degrees: bool) -> Result<(), Inside> {
     Ok(())
 }
 
-fn sound(raw: &str) -> Result<String, Inside> {
+fn node(raw: &str) -> Result<String, Inside> {
     let refuse = || {
         (
             0,
-            format!("`sound` is an `@ref` string such as \"@../voice/note\", not {raw}"),
+            format!("`node` is an `@ref` string such as \"@../instruments/bass\", not {raw}"),
         )
     };
     let s = string(raw).unwrap_or_else(|| Err(refuse()))?;
@@ -526,32 +623,17 @@ fn sound(raw: &str) -> Result<String, Inside> {
     }
 }
 
-/// One whole degree, or a chord of them, each with its byte and length in `raw`.
-fn degrees(raw: &str) -> Result<Vec<(i64, usize, usize)>, Inside> {
-    let whole = |written: &str, by: usize| {
-        serde_json::from_str::<i64>(written)
-            .map(|d| (d, by, written.len()))
-            .map_err(|_| {
-                (
-                    by,
-                    format!(
-                        "`deg` is a whole scale degree or a chord of them, as 5 or [1, 3, 5], \
-                         not {written}; a chromatic note binds `f0`, as \"f0\": \"deg(7)*1st\""
-                    ),
-                )
-            })
-    };
-    if !raw.starts_with('[') {
-        return Ok(vec![whole(raw, 0)?]);
-    }
-    let chord: Vec<&RawValue> = serde_json::from_str(raw).map_err(|e| (0, format!("`deg` {e}")))?;
-    if chord.is_empty() {
-        return Err((0, "`deg` lists no degree; a chord is [1, 3, 5]".to_string()));
-    }
-    chord
-        .iter()
-        .map(|d| whole(d.get(), d.get().as_ptr() as usize - raw.as_ptr() as usize))
-        .collect()
+/// One whole scale degree.
+fn degree(written: &str) -> Result<i64, Inside> {
+    serde_json::from_str::<i64>(written).map_err(|_| {
+        (
+            0,
+            format!(
+                "`deg` is a whole scale degree or a chord of them, as 5 or [1, 3, 5], not \
+                 {written}; a chromatic note binds `f0`, as \"f0\": \"deg(7)*1st\""
+            ),
+        )
+    })
 }
 
 /// A number, or a constant in a string: one literal (`"0.03s"`, `"-6db"`, `"A1"`), or
@@ -590,17 +672,14 @@ mod tests {
     }
 
     fn line(fields: &str) -> Score {
-        parse_score(&format!(
-            "{{\"at\": \"0b\", \"sound\": \"@b\", {fields}}}\n"
-        ))
-        .unwrap()
+        parse_score(&format!("{{\"at\": \"0b\", \"node\": \"@b\", {fields}}}\n")).unwrap()
     }
 
     #[test]
     fn each_line_is_an_event_in_written_order() {
         let score = parse_score(
-            "{\"at\": \"0b\", \"sound\": \"@bass\", \"deg\": 1, \"vel\": 0.9}\n\n\
-             {\"at\": \"0.5b\", \"sound\": \"@bass\", \"len\": \"0.25b\", \"cutoff\": \"900hz\"}\n",
+            "{\"at\": \"0b\", \"node\": \"@bass\", \"deg\": 1, \"vel\": 0.9}\n\n\
+             {\"at\": \"0.5b\", \"node\": \"@bass\", \"len\": \"0.25b\", \"cutoff\": \"900hz\"}\n",
         )
         .unwrap();
         assert_eq!(score.events.len(), 2);
@@ -611,32 +690,32 @@ mod tests {
 
     #[test]
     fn a_refusal_names_the_line_and_column() {
-        let text = "{\"at\": \"0b\", \"sound\": \"@bass\"}\n{\"at\": 0.5, \"sound\": \"@bass\"}\n";
+        let text = "{\"at\": \"0b\", \"node\": \"@bass\"}\n{\"at\": 0.5, \"node\": \"@bass\"}\n";
         let refused = refusal(text);
         assert!(refused.starts_with("line 2, column 8:"), "{refused}");
         assert!(refused.contains("bare number"), "{refused}");
-        assert!(refusal("{\"at\": \"0b\"}").contains("missing field `sound`"));
-        assert!(refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"at\": \"1b\"}").contains("twice"));
+        assert!(refusal("{\"at\": \"0b\"}").contains("missing field `node`"));
+        assert!(refusal("{\"at\": \"0b\", \"node\": \"@b\", \"at\": \"1b\"}").contains("twice"));
         assert!(
-            refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"deg\": 1, \"f0\": 440}")
+            refusal("{\"at\": \"0b\", \"node\": \"@b\", \"deg\": 1, \"f0\": 440}")
                 .contains("`deg`")
         );
         assert!(
-            refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"vel\": \"x+1\"}").contains("literal")
+            refusal("{\"at\": \"0b\", \"node\": \"@b\", \"vel\": \"x+1\"}").contains("literal")
         );
     }
 
     #[test]
     fn a_refusal_inside_a_value_names_its_own_column() {
-        let refused = refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"vel\": \"0.5*sin(t)\"}");
-        assert!(refused.starts_with("line 1, column 41: "), "{refused}");
+        let refused = refusal("{\"at\": \"0b\", \"node\": \"@b\", \"vel\": \"0.5*sin(t)\"}");
+        assert!(refused.starts_with("line 1, column 40: "), "{refused}");
         assert!(refused.contains("calls `sin`"), "{refused}");
-        let moving = refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"vel\": \"0.5 + t\"}");
-        assert!(moving.starts_with("line 1, column 43: "), "{moving}");
+        let moving = refusal("{\"at\": \"0b\", \"node\": \"@b\", \"vel\": \"0.5 + t\"}");
+        assert!(moving.starts_with("line 1, column 42: "), "{moving}");
         assert!(moving.contains("automation score"), "{moving}");
-        let reads = refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"vel\": \"@../lfo\"}");
+        let reads = refusal("{\"at\": \"0b\", \"node\": \"@b\", \"vel\": \"@../lfo\"}");
         assert!(reads.contains("reads `@../lfo`"), "{reads}");
-        let mixed = refusal("{\"at\": \"1b + 0.5s\", \"sound\": \"@b\"}");
+        let mixed = refusal("{\"at\": \"1b + 0.5s\", \"node\": \"@b\"}");
         assert!(mixed.starts_with("line 1, column 14: "), "{mixed}");
     }
 
@@ -652,12 +731,12 @@ mod tests {
 
     #[test]
     fn a_time_folds_in_bars_before_any_tempo() {
-        let score = parse_score("{\"at\": \"2b + 1b/3\", \"sound\": \"@b\"}\n").unwrap();
+        let score = parse_score("{\"at\": \"2b + 1b/3\", \"node\": \"@b\"}\n").unwrap();
         assert_eq!(score.events[0].at.amount, 2.0 + 1.0 / 3.0);
         assert_eq!(score.events[0].at.unit, SpanUnit::Bars);
-        assert!(refusal("{\"at\": \"1/3\", \"sound\": \"@b\"}").contains("no time"));
+        assert!(refusal("{\"at\": \"1/3\", \"node\": \"@b\"}").contains("no time"));
         let at =
-            |written: &str| parse_score(&format!("{{\"at\": \"{written}\", \"sound\": \"@b\"}}"));
+            |written: &str| parse_score(&format!("{{\"at\": \"{written}\", \"node\": \"@b\"}}"));
         assert_eq!(at("(2b + 1b)/3").unwrap().events[0].at.amount, 1.0);
         assert_eq!(at("-0.5s").unwrap().events[0].at.amount, -0.5);
         for (written, why) in [
@@ -671,7 +750,7 @@ mod tests {
             assert!(refused.contains(why), "{written}: {refused}");
         }
         assert!(
-            refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"len\": \"1b - 2b\"}").contains("window")
+            refusal("{\"at\": \"0b\", \"node\": \"@b\", \"len\": \"1b - 2b\"}").contains("window")
         );
     }
 
@@ -680,17 +759,76 @@ mod tests {
         let score = line("\"deg\": [1, 3, 5]");
         let degrees: Vec<_> = score.events.iter().map(|e| e.deg).collect();
         assert_eq!(degrees, [Some(1), Some(3), Some(5)]);
-        assert_eq!(score.events[2].deg_at, ByteSpan::new(42, 43));
-        assert!(refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"deg\": []}").contains("no degree"));
-        let chromatic = refusal("{\"at\": \"0b\", \"sound\": \"@b\", \"deg\": [1, 6.5]}");
-        assert!(chromatic.starts_with("line 1, column 40: "), "{chromatic}");
+        assert_eq!(score.events[2].deg_at, ByteSpan::new(41, 42));
+        assert!(refusal("{\"at\": \"0b\", \"node\": \"@b\", \"deg\": []}").contains("no item"));
+        let chromatic = refusal("{\"at\": \"0b\", \"node\": \"@b\", \"deg\": [1, 6.5]}");
+        assert!(chromatic.starts_with("line 1, column 39: "), "{chromatic}");
         assert!(chromatic.contains("deg(7)*1st"), "{chromatic}");
+    }
+
+    #[test]
+    fn a_list_on_any_field_broadcasts_item_by_item() {
+        let score = line(
+            "\"deg\": [1, 3, 5], \"vel\": [0.8, 0.5, 0.6], \"len\": [\"1b\", \"0.5b\", \"1b\"], \
+             \"cutoff\": \"900hz\"",
+        );
+        assert_eq!(score.events.len(), 3);
+        let second = &score.events[1];
+        assert_eq!(second.deg, Some(3));
+        assert_eq!(
+            second.args[0],
+            ("vel".to_string(), Expr::Lit(Literal::Num(0.5)))
+        );
+        assert_eq!(second.args[1].1, Expr::Lit(Literal::Bars(0.5)));
+        assert_eq!(second.args[2].1, Expr::Lit(Literal::Num(900.0)));
+        let run = parse_score(
+            "{\"at\": [\"0b\", \"1b/3\"], \"node\": [\"@a\", \"@b\"], \"f0\": [\"deg(5)\", \"deg(7)*1st\"]}",
+        )
+        .unwrap();
+        let placed: Vec<_> = run.events.iter().map(|e| (e.at.amount, &*e.node)).collect();
+        assert_eq!(placed, [(0.0, "a"), (1.0 / 3.0, "b")]);
+        assert!(matches!(
+            &run.events[1].args[0].1,
+            Expr::Bin(BinOp::Mul, ..)
+        ));
+    }
+
+    #[test]
+    fn lists_of_different_lengths_refuse_naming_both() {
+        let text = "{\"at\": \"0b\", \"node\": \"@b\"}\n; a comment\n\n\
+                    {\"at\": \"1b\", \"node\": \"@b\", \"deg\": [1, 3, 5], \"vel\": [0.8, 0.5]}\n";
+        assert_eq!(refusal(text), "line 4: `deg` has 3 items, `vel` has 2");
+        let one = refusal("{\"at\": [\"0b\"], \"node\": \"@b\", \"deg\": [1, 3]}");
+        assert_eq!(one, "line 1: `at` has 1 item, `deg` has 2");
+    }
+
+    #[test]
+    fn a_list_item_keeps_its_fields_rules_and_its_own_column() {
+        let refused = refusal("{\"at\": \"0b\", \"node\": \"@b\", \"vel\": [0.5, \"t\"]}");
+        assert!(refused.starts_with("line 1, column 42: "), "{refused}");
+        assert!(refused.contains("automation score"), "{refused}");
+        let late = refusal("{\"at\": [\"1b\", \"0.5b\"], \"node\": \"@b\"}");
+        assert!(late.starts_with("line 1, column 15: "), "{late}");
+        assert!(late.contains("earlier on this line"), "{late}");
+        assert!(
+            refusal("{\"at\": \"0b\", \"node\": \"@b\", \"vel\": [[1]]}").contains("lists a list")
+        );
+        assert!(refusal("{\"at\": \"0b\", \"node\": \"@b\", \"vel\": []}").contains("no item"));
+    }
+
+    #[test]
+    fn sound_is_refused_as_the_old_name_of_node() {
+        let refused = refusal("{\"at\": \"0b\", \"sound\": \"@b\"}");
+        assert!(
+            refused.starts_with("line 1, column 14: `sound` is now `node`"),
+            "{refused}"
+        );
     }
 
     #[test]
     fn comment_lines_are_skipped_and_a_comment_may_lead_a_score() {
         let text = "; Models: a bar | Neglects: the rest | IO: (t) -> amplitude | Tags: score\n\
-                    {\"at\": \"0b\", \"sound\": \"@b\"}\n  ; bar 2\n{\"at\": \"1b\", \"sound\": \"@b\"}\n";
+                    {\"at\": \"0b\", \"node\": \"@b\"}\n  ; bar 2\n{\"at\": \"1b\", \"node\": \"@b\"}\n";
         assert!(is_score(text));
         let score = parse_score(text).unwrap();
         assert_eq!(score.events.len(), 2);
@@ -700,15 +838,15 @@ mod tests {
 
     #[test]
     fn lines_out_of_order_or_mixing_units_refuse() {
-        let late = "{\"at\": \"1b\", \"sound\": \"@b\"}\n{\"at\": \"0.5b\", \"sound\": \"@b\"}\n";
+        let late = "{\"at\": \"1b\", \"node\": \"@b\"}\n{\"at\": \"0.5b\", \"node\": \"@b\"}\n";
         assert!(refusal(late).contains("sorted"));
-        let mixed = "{\"at\": \"0b\", \"sound\": \"@b\"}\n{\"at\": \"1s\", \"sound\": \"@b\"}\n";
+        let mixed = "{\"at\": \"0b\", \"node\": \"@b\"}\n{\"at\": \"1s\", \"node\": \"@b\"}\n";
         assert!(refusal(mixed).contains("not both"));
     }
 
     #[test]
     fn the_sum_is_balanced() {
-        let line = "{\"at\": \"0.5s\", \"sound\": \"@b\"}\n";
+        let line = "{\"at\": \"0.5s\", \"node\": \"@b\"}\n";
         let score = parse_score(&line.repeat(1024)).unwrap();
         fn depth(e: &Expr) -> usize {
             match e {

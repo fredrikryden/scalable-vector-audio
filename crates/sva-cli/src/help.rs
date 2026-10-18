@@ -31,26 +31,33 @@ SCORES:
   first line that is neither blank nor a `;` comment starts with `{{` is a
   score; its name has no extension, and `@score/bass` reads it like any node.
   A `;` line is a comment, so a score opens with its `; Models: ...` line like
-  any file. Each line plays the sound it names, shifted to its time, and the
-  score is their sum, one closed form. `b` is a bar, so "0.25b" is a quarter of
-  a bar, against `variables/bpm` and `variables/meter`:
-    {{"at": "0b", "sound": "@../sounds/bass", "deg": 1, "len": "0.25b", "vel": 0.9}}
-    {{"at": "0.25b", "sound": "@../sounds/bass", "deg": 5, "cutoff": "900hz"}}
-  is @../sounds/bass(t, f0=deg(1), len=0.25b, vel=0.9) + @../sounds/bass(t -
-  0.25b, f0=deg(5), cutoff=900hz).
+  any file. Each line plays the node it names, a sound, another score or a
+  control curve, shifted to its time, and the score is their sum, one closed
+  form. `b` is a bar, so "0.25b" is a quarter of a bar, against
+  `variables/bpm` and `variables/meter`:
+    {{"at": "0b", "node": "@../instruments/bass", "deg": 1, "len": "0.25b", "vel": 0.9}}
+    {{"at": "0.25b", "node": "@../instruments/bass", "deg": 5, "cutoff": "900hz"}}
+  is @../instruments/bass(t, f0=deg(1), len=0.25b, vel=0.9) +
+  @../instruments/bass(t - 0.25b, f0=deg(5), cutoff=900hz).
     at     required: a time string, "0.25b" or "0.5s", or constant arithmetic
            over times, "2b + 1b/3" for a triplet; a bare number has no unit and
            is refused. One time, and one score, counts in bars or in seconds.
-    sound  required: an `@ref` string, resolved from the score's own directory.
-    len    a time string as `at` takes, bound as the sound's `len`.
+    node   required: an `@ref` string, resolved from the score's own directory.
+           A line writing `sound`, this field's old name, refuses.
+    len    a time string as `at` takes, bound as the node's `len`.
     deg    a scale degree, a whole number counted from 1, the tonic: sugar for
            "f0": "deg(n)". In a seven-row scale 8 is the tonic an octave up, 0
-           the seventh degree below it and -6 the tonic an octave down. A list,
-           "deg": [1, 3, 5], is one event per degree, a chord on one line. A
-           line writing `f0` and `deg` refuses.
-    other  any other field binds the sound's parameter of that name: a number,
+           the seventh degree below it and -6 the tonic an octave down. A line
+           writing `f0` and `deg` refuses.
+    other  any other field binds the node's parameter of that name: a number,
            or a constant in a string: one literal ("0.03s", "-6db", "900hz",
            "A1") or arithmetic over literals and `deg(n)`, as "0.8*0.9".
+  Any field may be a list. A line listing N items is N events, event i taking
+  item i of every list and a single value going to all N; lists of different
+  lengths refuse. So a chord with a voice per note is one line:
+    {{"at": "0b", "node": "@../instruments/keys", "deg": [1, 3, 5],
+      "vel": [0.8, 0.5, 0.6], "len": ["1b", "0.5b", "1b"]}}
+  and a list of `at` is a run of one node, its items in order.
   `deg(n)` is the tonic in `variables/key` times degree n's ratio in the scale
   its `scale = @../scales/<name>` line names, in a score value or in any
   equation. A chromatic note is a degree times a ratio and an octave is a
@@ -61,7 +68,7 @@ SCORES:
   1200. Editing `variables/key`'s note transposes every score and editing its
   `scale` line changes mode. By convention a sound's `vel` runs 0..1 and its
   mix level is a constant in its own equation, so a score's dynamics survive a
-  change of mix. A value reading `t` or a `@ref`, a field the sound does not
+  change of mix. A value reading `t` or a `@ref`, a field the node does not
   read, a parameter it reads that nothing binds, and a `deg` with no scale
   refuse before any audio, each naming the score's line and column. Keep a
   score phrase-sized and place it from an equation: `@score/verse(t - 8b)`,
@@ -72,7 +79,7 @@ SCORES:
   bars 21-24:
     curves/close   len = 1b
                    crop(1 - t/len, 0s, len)
-    auto/riser     {{"at": "20b", "sound": "@../curves/close", "len": "4b"}}
+    auto/riser     {{"at": "20b", "node": "@../curves/close", "len": "4b"}}
     master-fx      crop(lowpass(sample(@master),
                      cutoff=20khz*pow(0.02, @auto/riser(t))), 0s, 32b)
   An fx throw is the same lane gating a send: `@fx/echo(t, x=sample(@lead) *
@@ -290,7 +297,7 @@ TRACE:
   hop), everything that reads it (`up`, transitively to an entry point), each
   beside the expression doing the reading, the node that made it discrete, and
   the feedback loop it sits in, if any. A score is shown as its line count, its
-  first and last `at` and the sounds it plays, never the sum it lowers to. An
+  first and last `at` and the nodes it plays, never the sum it lowers to. An
   interval the target reads is ignored.
 
 BUILTINS:
@@ -313,8 +320,8 @@ OUTLINE:
   by how they `read`, `time` or `index`, literals by `value` and `unit`, names
   by `name`. A node the parser supplies itself, the `0` of a prefix minus or the
   `t` of a bare `@ref`, has `written: false`. A score's text prints `score`
-  instead of `outline`: one item per event, a chord's line one per degree,
-  with its `line`, `span`, `at`, `sound`, `deg` and `args`. Reads no
+  instead of `outline`: one item per event, a line listing N items N of them,
+  with its `line`, `span`, `at`, `node`, `deg` and `args`. Reads no
   composition.
 
 NEW:

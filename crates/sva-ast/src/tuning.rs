@@ -1,4 +1,4 @@
-// Concern: reads each `deg` call off the key's scale, and checks each score line against its sound | Non-concern: reading scores or scales (score.rs, scale.rs) | IO: (&mut Graph[, beside]) -> Refusals
+// Concern: reads each `deg` call off the key's scale, and checks each score line against its node | Non-concern: reading scores or scales (score.rs, scale.rs) | IO: (&mut Graph[, beside]) -> Refusals
 
 use crate::diag::{ByteSpan, DiagCode};
 use crate::expr::{Address, Arg, BinOp, Binds, DEGREE, Expr, Literal, map_children_ok};
@@ -60,7 +60,7 @@ type Tuning = Option<(String, Scale)>;
 
 impl Graph {
     /// Every `deg` call here, in a score or an equation, read off the scale here or in
-    /// `beside`, and every score line checked against its sound. A key or scale this graph
+    /// `beside`, and every score line checked against its node. A key or scale this graph
     /// changes reads each of `beside`'s nodes that calls `deg` again from its text.
     pub fn lower_scores(&mut self, beside: Option<&Graph>) -> Result<(), Vec<Refusal>> {
         let tuning = self.tuning(beside).map_err(|r| vec![r])?;
@@ -190,15 +190,21 @@ impl Graph {
         Some((body, defaults))
     }
 
-    /// Each line's first event against its sound: a chord's events bind alike.
+    /// Each line's first event per node it plays against that node: a line's events bind
+    /// the same keys, so one refusal per line and node says all there is.
     fn checked(&self, path: &str, score: &Score, beside: Option<&Graph>) -> Vec<Refusal> {
         let text = self.text(path).expect("every node holds its text");
         let mut refusals = Vec::new();
-        let mut last = None;
+        let mut seen: Vec<(usize, &str)> = Vec::new();
         for event in &score.events {
-            if last.replace(event.line) == Some(event.line) {
+            let key = (event.line, event.node.as_str());
+            if seen.last().is_some_and(|(line, _)| *line != event.line) {
+                seen.clear();
+            }
+            if seen.contains(&key) {
                 continue;
             }
+            seen.push(key);
             let Some((key, message)) = self.unread(path, event, beside) else {
                 continue;
             };
@@ -214,20 +220,20 @@ impl Graph {
         refusals
     }
 
-    /// The first key this line binds that its sound does not read, or the first parameter the
-    /// sound reads that neither the line nor a default of the sound binds.
+    /// The first key this line binds that its node does not read, or the first parameter the
+    /// node reads that neither the line nor a default of the node binds.
     fn unread(
         &self,
         path: &str,
         event: &Event,
         beside: Option<&Graph>,
     ) -> Option<(String, String)> {
-        let sound = resolve_ref_path(path, &event.sound)?;
+        let target = resolve_ref_path(path, &event.node)?;
         let defined = self
-            .defined(&sound)
-            .or_else(|| beside.and_then(|b| b.defined(&sound)))?;
+            .defined(&target)
+            .or_else(|| beside.and_then(|b| b.defined(&target)))?;
         let is_node = |name: &str| {
-            resolve_ref_path(&sound, name)
+            resolve_ref_path(&target, name)
                 .is_some_and(|n| self.defines(&n) || beside.is_some_and(|b| b.defines(&n)))
         };
         let mut reads: Vec<String> = defined.defaults.iter().map(|(k, _)| k.clone()).collect();
@@ -258,7 +264,7 @@ impl Graph {
                 written.to_string(),
                 format!(
                     "{set} is no parameter `@{}` reads; it reads `{reads_list}`",
-                    event.sound
+                    event.node
                 ),
             ));
         }
@@ -266,10 +272,10 @@ impl Graph {
         let unbound = free_parameters(&defined.body, &defined.defaults, &names, is_node);
         let first = unbound.first()?;
         Some((
-            "sound".to_string(),
+            "node".to_string(),
             format!(
                 "`@{}` reads `{first}`, which neither this line nor a default line of it binds",
-                event.sound
+                event.node
             ),
         ))
     }

@@ -5,8 +5,8 @@ use crate::helpers::{put, scratch};
 use sva_core::{CliError, PROBE, probe};
 use sva_engine::{Output, Representation};
 
-const SCORE: &str = "{\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": 1}\n\
-                     {\"at\": \"0.5b\", \"sound\": \"@voice\", \"deg\": 3}\n";
+const SCORE: &str = "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 1}\n\
+                     {\"at\": \"0.5b\", \"node\": \"@voice\", \"deg\": 3}\n";
 
 fn composition(name: &str, key: &str, score: &str) -> PathBuf {
     let dir = scratch(&format!("score-{name}"));
@@ -84,15 +84,15 @@ fn the_key_transposes_a_score_and_its_scale_line_changes_mode() {
 
 #[test]
 fn a_refusal_names_the_score_line() {
-    let bad = "{\"at\": \"0b\", \"sound\": \"@voice\", \"deg\": 1}\n\
-               {\"at\": \"0.5b\", \"sound\": \"@voice\", \"cutoff\": 900}\n";
+    let bad = "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 1}\n\
+               {\"at\": \"0.5b\", \"node\": \"@voice\", \"cutoff\": 900}\n";
     let dir = composition("unread-key", "scale = @../scales/major\nD3", bad);
     let Err(CliError::Refusals(refused)) = probe(&dir, "@phrase([0, 1s])") else {
         panic!("a key the sound does not read refuses");
     };
     assert_eq!(refused[0].at.path, "phrase");
     assert!(
-        refused[0].reason.starts_with("line 2, column 35: `cutoff`"),
+        refused[0].reason.starts_with("line 2, column 34: `cutoff`"),
         "{}",
         refused[0].reason
     );

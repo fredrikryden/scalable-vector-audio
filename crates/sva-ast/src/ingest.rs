@@ -401,11 +401,7 @@ mod tests {
 
     #[test]
     fn a_first_line_opening_with_a_brace_is_a_score() {
-        let p = parse_file(
-            "score/bass",
-            "\n{\"at\": \"0b\", \"sound\": \"@../bass\"}\n",
-        )
-        .unwrap();
+        let p = parse_file("score/bass", "\n{\"at\": \"0b\", \"node\": \"@../bass\"}\n").unwrap();
         assert!(matches!(p.data, Some(Data::Score(_))));
         assert!(matches!(p.expr, Expr::Ref { ref path, .. } if path == "../bass"));
     }
