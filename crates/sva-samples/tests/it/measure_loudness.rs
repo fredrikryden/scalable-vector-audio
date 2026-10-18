@@ -96,3 +96,46 @@ fn a_finite_buffer_too_loud_to_square_still_reads_its_loudness() {
         assert!((level - at_scale - lift).abs() < 1e-6, "{gain}: {level}");
     }
 }
+
+/// A block sums its own samples: ten seconds at full scale before it round no quiet block off.
+#[test]
+fn a_quiet_block_after_a_loud_stretch_reads_its_own_level() {
+    let sr = 48_000.0;
+    let quiet_amp = 1e-7;
+    let alone = of(&[&sine(1_000.0, sr, 2.0, quiet_amp)], sr);
+    let steady = alone
+        .momentary_max_lufs
+        .expect("a level under the absolute gate");
+    let mut after = sine(1_000.0, sr, 10.0, 1.0);
+    after.extend(sine(1_000.0, sr, 2.0, quiet_amp));
+    let read = of(&[&after], sr);
+    let quiet: Vec<f64> = (read.momentary.iter())
+        .filter(|f| f.t >= 10.5 && f.t + 0.4 <= 12.0)
+        .map(|f| f.lufs)
+        .collect();
+    assert!(!quiet.is_empty());
+    for lufs in quiet {
+        assert!(
+            (lufs - steady).abs() < 0.01,
+            "{lufs} LUFS after a loud stretch, {steady} alone"
+        );
+    }
+}
+
+/// The headroom works both ways: a square too small for a double is still a level.
+#[test]
+fn a_finite_buffer_too_quiet_to_square_still_reads_its_loudness() {
+    let sr = 48_000.0;
+    let unit = sine(1_000.0, sr, 4.0, 1.0);
+    let at_scale = of(&[&unit], sr).momentary_max_lufs.expect("a level");
+    let gain = 1e-200;
+    let quiet: Vec<f64> = unit.iter().map(|v| v * gain).collect();
+    let read = of(&[&quiet], sr);
+    let level = read
+        .momentary_max_lufs
+        .expect("a level under the smallest square");
+    assert!(
+        (level - at_scale - -4000.0).abs() < 1e-6,
+        "{level} against {at_scale}"
+    );
+}

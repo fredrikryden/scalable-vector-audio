@@ -79,13 +79,8 @@ pub fn analyze(planes: &[&[f64]], sr: f64, start_secs: f64) -> Loudness {
         .flat_map(|p| p.iter())
         .fold(0.0f64, |acc, v| acc.max(v.abs()));
     let scale = headroom(sample_peak);
-    let squares: Vec<Vec<f64>> = planes
-        .iter()
-        .map(|p| running_squares(p, sr, scale))
-        .collect();
-    let samples = planes.first().map_or(0, |p| p.len());
+    let squares = weighted_squares(planes, sr, scale);
     let at = Blocks {
-        samples,
         sr,
         start_secs,
         lift_db: 20.0 * scale.log10(),
@@ -107,55 +102,69 @@ pub fn analyze(planes: &[&[f64]], sr: f64, start_secs: f64) -> Loudness {
     }
 }
 
-/// A power of two over the peak: no square overflows, dividing is exact.
+/// A power of two at the peak: dividing is exact; only 3000 dB under it does a square underflow.
 fn headroom(peak: f64) -> f64 {
-    match peak > 1.0 {
-        true => 2f64.powi(peak.log2().ceil().min(f64::from(f64::MAX_EXP - 1)) as i32),
+    match peak > 0.0 && peak.is_finite() {
+        true => {
+            let exponent = peak
+                .log2()
+                .ceil()
+                .clamp(f64::from(f64::MIN_EXP - 1), f64::from(f64::MAX_EXP - 1));
+            2f64.powi(exponent as i32)
+        }
         false => 1.0,
     }
 }
 
-/// A prefix sum, so a block costs two reads rather than a pass of its own.
-fn running_squares(plane: &[f64], sr: f64, scale: f64) -> Vec<f64> {
-    let shelf = shelf(sr);
-    let cut = highpass(sr);
-    let mut first = State::default();
-    let mut second = State::default();
-    let mut out = Vec::with_capacity(plane.len() + 1);
-    let mut total = 0.0;
-    out.push(0.0);
-    for x in plane {
-        let k = second.step(&cut, first.step(&shelf, *x / scale));
-        total += k * k;
-        out.push(total);
+fn weighted_squares(planes: &[&[f64]], sr: f64, scale: f64) -> Vec<f64> {
+    let samples = planes.first().map_or(0, |p| p.len());
+    let mut out = vec![0.0; samples];
+    let (shelf, cut) = (shelf(sr), highpass(sr));
+    for plane in planes {
+        let (mut first, mut second) = (State::default(), State::default());
+        for (sum, x) in out.iter_mut().zip(plane.iter()) {
+            let k = second.step(&cut, first.step(&shelf, *x / scale));
+            *sum += k * k;
+        }
     }
     out
 }
 
 struct Blocks {
-    samples: usize,
     sr: f64,
     start_secs: f64,
     lift_db: f64,
 }
 
-fn blocks(squares: &[Vec<f64>], at: &Blocks, block_secs: f64) -> Vec<LoudnessFrame> {
+/// A block sums its own samples, piece by piece between edges, whatever loud stretch precedes it.
+fn blocks(squares: &[f64], at: &Blocks, block_secs: f64) -> Vec<LoudnessFrame> {
     let n = (block_secs * at.sr).round() as usize;
     let step = ((STEP_SECS * at.sr).round() as usize).max(1);
-    if n == 0 || at.samples < n {
+    if n == 0 || squares.len() < n {
         return Vec::new();
     }
-    (0..=(at.samples - n))
-        .step_by(step)
-        .map(|k| LoudnessFrame {
-            t: at.start_secs + k as f64 / at.sr,
-            lufs: level(squares, k, n) + at.lift_db,
+    let starts: Vec<usize> = (0..=(squares.len() - n)).step_by(step).collect();
+    let mut edges: Vec<usize> = starts.iter().flat_map(|k| [*k, k + n]).collect();
+    edges.sort_unstable();
+    edges.dedup();
+    let pieces: Vec<f64> = edges
+        .windows(2)
+        .map(|w| squares[w[0]..w[1]].iter().sum())
+        .collect();
+    let piece = |sample: usize| edges.binary_search(&sample).expect("a block edge");
+    starts
+        .iter()
+        .map(|&k| {
+            let power = pieces[piece(k)..piece(k + n)].iter().sum::<f64>() / n as f64;
+            LoudnessFrame {
+                t: at.start_secs + k as f64 / at.sr,
+                lufs: level(power) + at.lift_db,
+            }
         })
         .collect()
 }
 
-fn level(squares: &[Vec<f64>], at: usize, n: usize) -> f64 {
-    let power: f64 = squares.iter().map(|s| (s[at + n] - s[at]) / n as f64).sum();
+fn level(power: f64) -> f64 {
     if power <= 0.0 {
         return f64::NEG_INFINITY;
     }

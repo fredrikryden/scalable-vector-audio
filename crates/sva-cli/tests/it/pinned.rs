@@ -84,7 +84,7 @@ const PINNED: &str = r#"
 0 stereo refused "type.width_mismatch"
 0 bands 5ddbbb246c27967f
 0 crest 9da293a2a033e041
-0 loudness 8546363c7f1ff81e
+0 loudness 6beb066a8865bf77
 0 onsets 92cf9251e506cef7
 0 alias 12566b98eb3a9c25
 0 bindings b2361ce7b3484da7
@@ -102,7 +102,7 @@ const PINNED: &str = r#"
 1 stereo refused "type.width_mismatch"
 1 bands 652286a71d7ba909
 1 crest 6589fb8644e10ca3
-1 loudness 85260bff5b79b87e
+1 loudness 8b44aa2ca17316b1
 1 onsets 6ca01aa1e441539d
 1 alias 4b29f3d8f7553303
 1 bindings b2361ce7b3484da7
@@ -120,7 +120,7 @@ const PINNED: &str = r#"
 2 stereo refused "type.width_mismatch"
 2 bands f7a5e849debf50b2
 2 crest fbd77b10d5dde3ac
-2 loudness 606a38acc7131c55
+2 loudness b53fa58b1c3cfcf7
 2 onsets efb1e0d9cfd3e02a
 2 alias fdf260e22e2a1011
 2 bindings b2361ce7b3484da7
@@ -138,7 +138,7 @@ const PINNED: &str = r#"
 3 stereo refused "type.width_mismatch"
 3 bands 3d2781a6afdfb4c8
 3 crest e0f4c5aaa9c7c270
-3 loudness 6e1791349e7075fa
+3 loudness 1efebe0b0fefa1a0
 3 onsets dbcecdca3f1439a5
 3 alias 02979bbbe4119071
 3 bindings de379a53261f899f
@@ -174,7 +174,7 @@ const PINNED: &str = r#"
 5 stereo refused "type.width_mismatch"
 5 bands 41f346248f013bb4
 5 crest 7e413e4086bc977c
-5 loudness 8e4f1c0baecfe087
+5 loudness 2e51b000ed8e618a
 5 onsets 173bff23a26c5ebc
 5 alias f133ed27246b0558
 5 bindings b2361ce7b3484da7
@@ -205,7 +205,7 @@ const PINNED: &str = r#"
 6 stereo refused "type.width_mismatch"
 6 bands 5f534aa9aa3bbcd7
 6 crest 0ee986c4ebc6919e
-6 loudness cb5e566b2cbf9109
+6 loudness 0a34d0ed19f5e82e
 6 onsets 23fd16ed583e7d47
 6 alias refused "engine.alias_needs_a_closed_form"
 6 bindings 61d25ef94a8f6635
@@ -241,7 +241,7 @@ const PINNED: &str = r#"
 8 stereo 6494bdf51a307118
 8 bands a77c7f445be310ef
 8 crest 5acbf9ff63a1ae21
-8 loudness 470df9d7cf11cbe3
+8 loudness a3a819dc1ebce653
 8 onsets 015eef63a6fac75f
 8 alias refused "engine.alias_needs_a_closed_form"
 8 bindings 79396b2f23896766
@@ -259,7 +259,7 @@ const PINNED: &str = r#"
 9 stereo refused "type.width_mismatch"
 9 bands 21d75879d5a36084
 9 crest 17fd2a6d80a8ce3a
-9 loudness b0dbfaeaf9dddfe1
+9 loudness 834f5d4cfb83c638
 9 onsets 4ee4ba0234059d03
 9 alias 95e3d9a0d16a8cbd
 9 bindings b2361ce7b3484da7
@@ -277,7 +277,7 @@ const PINNED: &str = r#"
 10 stereo refused "type.width_mismatch"
 10 bands 198cf5dfb1458000
 10 crest bafbab9959c18d6e
-10 loudness 5357a6cb2a187221
+10 loudness 34aa5712017ee81c
 10 onsets 68c5c0cd4545e8af
 10 alias 94339908ea31be4d
 10 bindings 5d16a4e7b16c54d3
@@ -297,7 +297,7 @@ const PINNED: &str = r#"
 11 stereo refused "type.width_mismatch"
 11 bands 8f984c522da9befa
 11 crest d2139cfcaf0fd8ba
-11 loudness 66d733b1b2e46ac9
+11 loudness b45d9c8f9dc07543
 11 onsets 37700ad603214a15
 11 alias refused "engine.alias_needs_a_closed_form"
 11 bindings 6187812054881a9c
@@ -316,7 +316,7 @@ const PINNED: &str = r#"
 12 stereo refused "type.width_mismatch"
 12 bands 8d953bbc6e7a6774
 12 crest 93883cb32f667560
-12 loudness 2fb8be9dcf204d31
+12 loudness bdf143d2e6060672
 12 onsets c06285a3cd4cdfc5
 12 alias refused "engine.alias_needs_a_closed_form"
 12 bindings 2246221dde6bf19e
@@ -335,7 +335,7 @@ const PINNED: &str = r#"
 13 stereo refused "type.width_mismatch"
 13 bands ff24830f55ca7d97
 13 crest 9bad027881a738b0
-13 loudness 8cdcf4285fbb7827
+13 loudness e00776a8141b9681
 13 onsets d0a46d8903eff89d
 13 alias refused "engine.alias_needs_a_closed_form"
 13 bindings 4d733f3c0aabb4f4
@@ -356,7 +356,7 @@ const PINNED: &str = r#"
 14 stereo refused "type.width_mismatch"
 14 bands e59cf9c09fde48fd
 14 crest 946716d90df65745
-14 loudness 88bf6f18c551beaf
+14 loudness d3a463c6f70e21ea
 14 onsets 69c06a97fe46ace1
 14 alias refused "engine.alias_needs_a_closed_form"
 14 bindings 93b2bd559b5e577e
@@ -396,7 +396,7 @@ const PINNED: &str = r#"
 16 stereo refused "type.width_mismatch"
 16 bands a3d90ca6090450f6
 16 crest 45a7abc702e4a819
-16 loudness 17d3cd1a81f00579
+16 loudness b7addddc1aff3995
 16 onsets 1bd40e9bbdb7c65e
 16 alias refused "engine.alias_needs_a_closed_form"
 16 bindings 76ea2f9c67cc302d
