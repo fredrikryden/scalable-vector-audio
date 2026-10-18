@@ -1012,6 +1012,38 @@ fn self_similarity_past_the_cap_names_both_remedies() {
     assert!(said.contains("@x([0, 10.25s])"), "{said}");
 }
 
+/// A novelty window of 1e10 s is past the cap a side: refused, naming the widest that fits,
+/// 2048 cells of 4100 samples at 8192 Hz.
+#[test]
+fn self_similarity_with_a_kernel_past_the_cap_names_the_widest_window() {
+    let (law, asked) = self_similarity_of("crossfade-wide", 0.05, 0.5);
+    let Representation::SelfSimilarity {
+        frame_secs,
+        cell_secs,
+        smooth_secs,
+        floor_db,
+        listed,
+        curve,
+        ..
+    } = asked
+    else {
+        panic!("a self_similarity ask")
+    };
+    let wide = Representation::SelfSimilarity {
+        frame_secs,
+        cell_secs,
+        smooth_secs,
+        window_secs: 1e10,
+        floor_db,
+        listed,
+        curve,
+    };
+    let refused = answer(&law, law.id("node").expect("the root"), wide).expect_err("1e10 > 1024");
+    assert_eq!(refused.code(), "read.kernel_past_cap");
+    let said = format!("{refused}");
+    assert!(said.contains("self_similarity(window=1025s)"), "{said}");
+}
+
 /// `atoms` names the channel of each term.
 #[test]
 fn a_two_channel_forms_atoms_name_their_channel() {

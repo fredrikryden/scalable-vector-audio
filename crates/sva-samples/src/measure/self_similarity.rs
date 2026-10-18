@@ -108,6 +108,20 @@ pub struct TooManyCells {
     pub most_secs: f64,
 }
 
+/// Why no matrix is read. `widest_secs` is the widest novelty window the cap holds a side at
+/// `cell_secs`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Unfit {
+    TooManyCells(TooManyCells),
+    KernelPastCap {
+        window_secs: f64,
+        kernel_cells: usize,
+        cap: usize,
+        cell_secs: f64,
+        widest_secs: f64,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     Chroma,
@@ -192,7 +206,7 @@ pub fn measure(
     sample_rate: f64,
     start_secs: f64,
     asked: Asked,
-) -> Result<SelfSimilarity, TooManyCells> {
+) -> Result<SelfSimilarity, Unfit> {
     let held = crate::measure::held(planes);
     let frame_hop = ((asked.hop_secs * sample_rate).round() as usize).max(1);
     let per_cell = ((asked.cell_secs * sample_rate / frame_hop as f64).round() as usize).max(1);
@@ -201,13 +215,23 @@ pub fn measure(
     let count = held.div_ceil(cell_hop);
     if count > MAX_CELLS {
         let least = held.div_ceil(MAX_CELLS * frame_hop) * frame_hop;
-        return Err(TooManyCells {
+        return Err(Unfit::TooManyCells(TooManyCells {
             cells: count,
             cap: MAX_CELLS,
             cell_secs,
             held_secs: held as f64 / sample_rate,
             least_cell_secs: least as f64 / sample_rate,
             most_secs: (MAX_CELLS * cell_hop) as f64 / sample_rate,
+        }));
+    }
+    let kernel_cells = ((asked.window_secs / (2.0 * cell_secs)).round() as usize).max(1);
+    if kernel_cells > MAX_CELLS {
+        return Err(Unfit::KernelPastCap {
+            window_secs: asked.window_secs,
+            kernel_cells,
+            cap: MAX_CELLS,
+            cell_secs,
+            widest_secs: (2 * MAX_CELLS * cell_hop) as f64 / sample_rate,
         });
     }
     let (moments, framing) = measured::moments(
@@ -254,7 +278,6 @@ pub fn measure(
         .map(|(f, b)| cell(f, b, &chroma, &split))
         .collect();
     let smooth_cells = ((asked.smooth_secs / cell_secs).round() as usize).max(1);
-    let kernel_cells = ((asked.window_secs / (2.0 * cell_secs)).round() as usize).max(1);
     let read = Read {
         cells: &cells,
         cell_secs,

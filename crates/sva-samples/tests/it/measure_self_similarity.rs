@@ -3,7 +3,7 @@
 use std::f64::consts::TAU;
 
 use sva_samples::measure::self_similarity::{
-    Asked, MAX_CELLS, Reading, SelfSimilarity, Stripe, TooManyCells, View, measure,
+    Asked, MAX_CELLS, Reading, SelfSimilarity, Stripe, TooManyCells, Unfit, View, measure,
 };
 
 const RATE: f64 = 16_000.0;
@@ -167,13 +167,42 @@ fn a_matrix_past_the_cap_refuses() {
     let refused = measure(&[&held[..]], RATE, 0.0, asked(0.05)).expect_err("1200 > 1024");
     assert_eq!(
         refused,
-        TooManyCells {
+        Unfit::TooManyCells(TooManyCells {
             cells: 1200,
             cap: MAX_CELLS,
             cell_secs: 0.05,
             held_secs: 60.0,
             least_cell_secs: 0.1,
             most_secs: 51.2,
-        }
+        })
+    );
+}
+
+/// A novelty window of 1e10 s is 1e10 cells a side, past the cap: refused before any kernel
+/// is laid out, naming the widest window the cap holds.
+#[test]
+fn a_novelty_kernel_past_the_cap_refuses() {
+    let held = vec![0.0; RATE as usize];
+    let wide = Asked {
+        window_secs: 1e10,
+        ..asked(0.5)
+    };
+    assert_eq!(
+        measure(&[&held[..]], RATE, 0.0, wide),
+        Err(Unfit::KernelPastCap {
+            window_secs: 1e10,
+            kernel_cells: 10_000_000_000,
+            cap: MAX_CELLS,
+            cell_secs: 0.5,
+            widest_secs: 1024.0,
+        })
+    );
+    let widest = Asked {
+        window_secs: 1024.0,
+        ..asked(0.5)
+    };
+    assert_eq!(
+        measure(&[&held[..]], RATE, 0.0, widest).map(|s| s.kernel_cells),
+        Ok(MAX_CELLS)
     );
 }

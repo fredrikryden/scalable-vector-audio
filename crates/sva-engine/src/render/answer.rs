@@ -446,24 +446,45 @@ fn rate_under(
     })
 }
 
-/// Names the cell that fits and, through `shorter`, how to hand it a target that short.
-fn too_many_cells(
-    name: &str,
-    held: self_similarity::TooManyCells,
-    shorter: impl Fn(f64) -> String,
-) -> EngineError {
+/// Names the cell or window that fits and, through `shorter`, how to hand it a target that
+/// short.
+fn unfit(name: &str, why: self_similarity::Unfit, shorter: impl Fn(f64) -> String) -> EngineError {
+    let (code, message, help) = match why {
+        self_similarity::Unfit::TooManyCells(held) => (
+            "read.too_many_cells",
+            format!(
+                "the target's {}s at cell={}s is {} cells a side, past the {} a matrix holds",
+                held.held_secs, held.cell_secs, held.cells, held.cap
+            ),
+            format!(
+                "ask a coarser cell, as `self_similarity(cell={}s)`, or {}",
+                held.least_cell_secs,
+                shorter(held.most_secs)
+            ),
+        ),
+        self_similarity::Unfit::KernelPastCap {
+            window_secs,
+            kernel_cells,
+            cap,
+            cell_secs,
+            widest_secs,
+        } => (
+            "read.kernel_past_cap",
+            format!(
+                "a {window_secs}s novelty window at cell={cell_secs}s is {kernel_cells} cells \
+                 a side, past the {cap} a matrix holds"
+            ),
+            format!(
+                "ask a window of at most {widest_secs}s, as \
+                 `self_similarity(window={widest_secs}s)`, or a coarser cell"
+            ),
+        ),
+    };
     EngineError::refused(Diagnostic {
-        code: "read.too_many_cells".to_string(),
-        message: format!(
-            "the target's {}s at cell={}s is {} cells a side, past the {} a matrix holds",
-            held.held_secs, held.cell_secs, held.cells, held.cap
-        ),
+        code: code.to_string(),
+        message,
         location: Located::at(name, None),
-        help: format!(
-            "ask a coarser cell, as `self_similarity(cell={}s)`, or {}",
-            held.least_cell_secs,
-            shorter(held.most_secs)
-        ),
+        help,
     })
 }
 
@@ -788,14 +809,12 @@ fn measured(
                 NoReading::RateUnder(held) => rate_under(render.tys.name(node), held, |hz| {
                     format!("render at a rate over {hz} Hz, as `--rate 48000` asks")
                 }),
-                NoReading::TooManyCells(held) => {
-                    too_many_cells(render.tys.name(node), held, |secs| {
-                        format!(
-                            "render an interval of at most {secs}s, as `@x([0, {secs}s])` \
+                NoReading::Unfit(why) => unfit(render.tys.name(node), why, |secs| {
+                    format!(
+                        "render an interval of at most {secs}s, as `@x([0, {secs}s])` \
                              writes one"
-                        )
-                    })
-                }
+                    )
+                }),
             });
         }
     })
@@ -809,7 +828,7 @@ pub enum NoReading {
     TooNarrow { need: usize, held: usize },
     Crowded(Crowded),
     Unread(sliding::Unread),
-    TooManyCells(self_similarity::TooManyCells),
+    Unfit(self_similarity::Unfit),
     RateUnder(sva_samples::RateUnderWeighting),
 }
 
@@ -912,8 +931,7 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
                 curve,
             };
             Output::SelfSimilarity(Box::new(
-                self_similarity::measure(&planes, sr, start, asked)
-                    .map_err(NoReading::TooManyCells)?,
+                self_similarity::measure(&planes, sr, start, asked).map_err(NoReading::Unfit)?,
             ))
         }
         _ => return Err(NoReading::NeedsAGraph),
@@ -1182,7 +1200,7 @@ pub fn answer_buffer(
             |secs| format!("analyze a file holding at least {secs}s"),
             |hz| format!("analyze a file sampled over {hz} Hz"),
         ),
-        NoReading::TooManyCells(held) => too_many_cells(name, held, |secs| {
+        NoReading::Unfit(why) => unfit(name, why, |secs| {
             format!("analyze a file holding at most {secs}s")
         }),
         NoReading::RateUnder(held) => rate_under(name, held, |hz| {

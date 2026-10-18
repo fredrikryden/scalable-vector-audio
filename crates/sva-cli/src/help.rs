@@ -501,7 +501,8 @@ DEFAULTS:
                        before stripes are picked, in seconds.
                        Default {DEFAULT_SMOOTH_SECS}.
   self_similarity(window=<t>) the whole width of the novelty kernel, in
-                       seconds. Default {DEFAULT_NOVELTY_WINDOW_SECS}.
+                       seconds, at most {MAX_CELLS} cells a side.
+                       Default {DEFAULT_NOVELTY_WINDOW_SECS}.
   self_similarity(curve=<0|1>) `1` adds every cell's chroma and band levels and
                        each view's matrix. Default 0.
   bindings(node=@<path>) the instance whose bindings are read; required.
