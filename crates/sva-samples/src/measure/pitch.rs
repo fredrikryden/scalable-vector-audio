@@ -20,6 +20,8 @@ pub struct Note {
     pub cents: f64,
     pub db: f64,
     pub harmonic_of: Option<f64>,
+    /// Its partial number: 1 for a root, q times the member's it joined.
+    pub n: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,7 +82,7 @@ fn name_all(found: &[Peak], max_notes: usize, spread_hz: f64) -> Vec<Note> {
     listed
         .iter()
         .zip(roots)
-        .map(|(p, harmonic_of)| {
+        .map(|(p, (harmonic_of, n))| {
             let midi = midi_of(p.hz);
             let nearest = midi.round();
             Note {
@@ -89,6 +91,7 @@ fn name_all(found: &[Peak], max_notes: usize, spread_hz: f64) -> Vec<Note> {
                 cents: (midi - nearest) * 100.0,
                 db: p.db,
                 harmonic_of,
+                n,
             }
         })
         .collect()
@@ -109,8 +112,8 @@ pub fn class_name(midi: i64) -> &'static str {
 /// Klapuri (ISMIR 2006): the greatest subharmonic sum (Hermes, JASA 83(1), 1988) roots a
 /// series; a note 2 to 8 times a louder member joins it, or the root if their pair's sum there
 /// reaches its amplitude. Exact peaks may stand as sharp as the series' stiff string fits.
-fn series_roots(notes: &[&Peak], spread_hz: f64) -> Vec<Option<f64>> {
-    let mut joined = vec![None; notes.len()];
+fn series_roots(notes: &[&Peak], spread_hz: f64) -> Vec<(Option<f64>, u32)> {
+    let mut joined = vec![(None, 1); notes.len()];
     let mut left: Vec<usize> = (0..notes.len()).collect();
     while let Some((root, f0)) = most_salient(notes, &left, spread_hz) {
         left.retain(|&i| i != root);
@@ -133,15 +136,34 @@ fn series_roots(notes: &[&Peak], spread_hz: f64) -> Vec<Option<f64>> {
                         || m.at == root && under + COMPRESSION.powi(q as i32 - 1) * over >= over
                 })
             };
+            // Joins as the q n the fit puts nearest, to the first member giving it.
+            let miss = |i: usize, m: &Member, q: u32| {
+                let k = f64::from(q * m.n);
+                let law = m.hz * f64::from(q) * stretch(k, b) / stretch(f64::from(m.n), b);
+                (notes[i].hz / law).ln().abs()
+            };
+            let nearest = |i: usize| {
+                let admitted: Vec<(Member, u32)> = series
+                    .iter()
+                    .filter_map(|m| joins(m, i).map(|q| (*m, q)))
+                    .collect();
+                let (best, q) = admitted
+                    .iter()
+                    .min_by(|x, y| miss(i, &x.0, x.1).total_cmp(&miss(i, &y.0, y.1)))?;
+                admitted
+                    .iter()
+                    .find(|(m, q2)| m.n * q2 == best.n * q)
+                    .copied()
+            };
             let Some((at, m, q)) = left
                 .iter()
                 .enumerate()
-                .find_map(|(at, &i)| series.iter().find_map(|m| joins(m, i).map(|q| (at, *m, q))))
+                .find_map(|(at, &i)| nearest(i).map(|(m, q)| (at, m, q)))
             else {
                 break;
             };
             let i = left.remove(at);
-            joined[i] = Some(notes[m.at].hz);
+            joined[i] = (Some(notes[m.at].hz), q * m.n);
             series.push(Member {
                 at: i,
                 n: q * m.n,

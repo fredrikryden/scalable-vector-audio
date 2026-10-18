@@ -110,6 +110,21 @@ fn a_stiff_strings_partials_fit_their_own_b_and_stand_sharp_by_the_law() {
     assert!(read.cents.expect("members").value > 3.0, "{read:?}");
 }
 
+/// At B = 6e-3 the 6th partial stands nearer 7 f1 than 6 f1; it joins as the 3rd's octave, n 6.
+#[test]
+fn a_member_is_numbered_by_the_partial_it_joined_not_by_its_ratio_to_the_root() {
+    let b = 6e-3;
+    let read = frame_of(stiff(b).iter().map(|(f, a)| exact(*f, *a)).collect());
+    let series = &read.series[0];
+    for m in &series.members {
+        assert_eq!(stiff_partial(110.0, b, m.n), m.partial.hz, "{series:?}");
+    }
+    assert!(series.members.iter().any(|m| m.n == 6), "{series:?}");
+    let fit = series.fit.expect("distinct n");
+    assert!((fit.b - b).abs() < 1e-9 * b, "{fit:?}");
+    assert!((fit.f0_hz - 110.0).abs() < 1e-9, "{fit:?}");
+}
+
 #[test]
 fn a_lone_tone_has_no_deviation_no_fit_and_is_wholly_unexplained() {
     let read = frame_of(vec![exact(440.0, 0.5)]);

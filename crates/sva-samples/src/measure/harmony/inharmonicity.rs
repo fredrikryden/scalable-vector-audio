@@ -15,7 +15,9 @@ pub const MODEL: &str = "per moment, the series `pitch` names: the partial with 
                          n joins it, or over the root if the pair's sum at the root is at \
                          least that partial's amplitude, and the rest go round again (Klapuri, A. (2006), Multiple \
                          fundamental frequency estimation by summing harmonic amplitudes, ISMIR); \
-                         a member's harmonic number n = round(f / f1) over the root f1; only \
+                         a member's harmonic number n is q times that of the member it \
+                         joined, 1 for the root, the q n the fit puts nearest it where several \
+                         members admit it; only \
                          partials from 25 Hz to 5 kHz at or above the floor are read. That \
                          window bounds how stretched a member may be, and a partial stretched \
                          past it, or a harmonic past the 8th with no member at a divisor (a saw's \
@@ -248,8 +250,7 @@ fn series_of(moment: &Moment, floor_db: f64) -> Vec<(Partial, Vec<(u32, Partial)
                     .find(|(lower, _)| *lower == hz)
                     .map(|(_, at)| *at)
                     .expect("a harmonic names a lower note of its series");
-                let n = (partial.hz / roots[at].0.hz).round() as u32;
-                roots[at].1.push((n, *partial));
+                roots[at].1.push((note.n, *partial));
                 at
             }
         };
