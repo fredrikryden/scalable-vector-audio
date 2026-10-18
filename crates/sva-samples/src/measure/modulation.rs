@@ -52,8 +52,8 @@ pub const MODEL: &str = "modulation spectrum: the spectrum of each band's amplit
                          envelope, off their coefficients, is what a modulation at f keeps to \
                          first order, and each envelope peak's depth is divided by G at its \
                          rate, a centroid peak's by L; `passband_gain_at_max_hz` is G at \
-                         `max_hz`. The first \
-                         component alone. Groups: a band is `low` where its centre is under \
+                         `max_hz`. Every \
+                         channel's band energy averaged. Groups: a band is `low` where its centre is under \
                          `splits_hz[0]`, `mid` under `splits_hz[1]` and `high` from it; the \
                          filters' skirts overlap, so a tone leaks attenuated into the \
                          neighbouring group, and its modulation with it. Each window is \
