@@ -61,6 +61,10 @@ fn help_lists_every_reading_with_its_arguments_and_line() {
             _ => format!("\n  {}({})", row.name, keys.join(", ")),
         };
         assert!(page.contains(&call), "{call}: {page}");
+        assert!(
+            page.contains(&format!("{} ", call.trim_end())),
+            "a space after the call, however long: {call}"
+        );
         assert!(page.contains(row.help), "{}: {page}", row.help);
     }
 }

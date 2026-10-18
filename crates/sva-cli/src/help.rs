@@ -567,7 +567,7 @@ fn representations() -> String {
                 Reads::Samples => "measured",
                 Reads::Graph => "measured, and the graph behind the samples",
             };
-            format!("  {call:<27}{source}\n      {}", row.help)
+            format!("  {call:<26} {source}\n      {}", row.help)
         })
         .collect::<Vec<_>>()
         .join("\n")
