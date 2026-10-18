@@ -1,4 +1,4 @@
-// Concern: proves a song read by several paths, or at a delay, keeps one set of lanes in song time | Non-concern: one lane's refusals (score_rows.rs) | IO: (a composition) -> samples or a diagnostic
+// Concern: proves a song read by several paths or at a delay keeps one set of lanes in song time, its notes sounding d later | Non-concern: one lane's refusals | IO: (a composition) -> samples, events
 
 use std::path::{Path, PathBuf};
 
@@ -119,5 +119,80 @@ fn distinct_moves_that_collide_still_refuse_under_two_reads() {
         found[0].message.contains("this line and song.jsonl:2"),
         "{}",
         found[0].message
+    );
+}
+
+/// Each placed note's song time and how long after it it sounds, in seconds, in song order.
+fn heard(dir: &Path, target: &str) -> Vec<(f64, f64)> {
+    let (_, song) = sva_core::song_of(&sva_ast::Dir::at(dir.to_path_buf()), target)
+        .unwrap_or_else(|e| panic!("{target}: {e}"));
+    let curve = song.curve();
+    let mut out: Vec<(f64, f64)> = song
+        .instances()
+        .iter()
+        .filter(|i| i.line.is_some())
+        .map(|i| {
+            let (at, sounds) = (
+                i.at.expect("a song time"),
+                i.sounds(curve).expect("a sound"),
+            );
+            (at.seconds(curve), sounds.seconds(curve) - at.seconds(curve))
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    out
+}
+
+/// A read of a score at `t - d` sounds d later, nested reads adding up, and keeps its song time.
+#[test]
+fn a_delayed_read_sounds_d_later_at_its_song_time() {
+    let dir = song("sounds");
+    put(&dir, "echo", "@song(t - 1s)\n");
+    put(
+        &dir,
+        "master",
+        "@song(t) + 0.5*@song(t - 1b) + 0.25*@echo(t - 0.5s)\n",
+    );
+    let dry: Vec<f64> = heard(&dir, "@song").iter().map(|(at, _)| *at).collect();
+    assert_eq!(dry.len(), 5, "a note a bar");
+    let want: Vec<(f64, f64)> = dry
+        .iter()
+        .flat_map(|at| [(*at, 0.0), (*at, 1.5), (*at, 2.0)])
+        .collect();
+    assert_eq!(heard(&dir, "@master"), want);
+}
+
+/// A note no view delays sounds at its song time, exactly, still in bars.
+#[test]
+fn an_undelayed_note_sounds_at_its_song_time_exactly() {
+    let dir = song("undelayed");
+    put(&dir, "master", "@song(t)\n");
+    let (_, song) = sva_core::song_of(&sva_ast::Dir::at(dir), "@master").expect("a song");
+    let curve = song.curve();
+    let notes: Vec<_> = song
+        .instances()
+        .iter()
+        .filter(|i| i.line.is_some())
+        .collect();
+    assert_eq!(notes.len(), 5);
+    for note in notes {
+        assert!(matches!(note.at, Some(sva_ast::song::Pos::Bars(_))));
+        assert_eq!(note.sounds(curve), note.at);
+    }
+}
+
+/// `outline` prints a delayed note's song time and, beside it, when it sounds.
+#[test]
+fn outline_prints_when_a_delayed_note_sounds() {
+    let dir = song("outline");
+    put(&dir, "late", "0.5*@song(t - 1b)\n");
+    put(&dir, "top.jsonl", "{\"at\": \"0b\", \"node\": \"@late\"}\n");
+    let printed =
+        sva_core::song_data(&sva_ast::Dir::at(dir), "@top").unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        printed.contains(
+            "\"at\": { \"bars\": 0, \"seconds\": 0 }, \"sounds\": { \"bars\": 1, \"seconds\": 2 }"
+        ),
+        "{printed}"
     );
 }

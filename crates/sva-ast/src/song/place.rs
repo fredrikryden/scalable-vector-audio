@@ -83,18 +83,46 @@ struct Link {
     line: Option<usize>,
     item: usize,
     at: Option<Pos>,
+    /// Seconds a view's read delays what it places: nonzero only on a read at `t - d` of a
+    /// score.
+    delay: f64,
     up: Chain,
 }
 
 impl Chain {
-    fn by(&self, file: String, line: Option<(usize, usize)>, at: Option<Pos>) -> Chain {
+    /// Placed by line `number`'s item `item` of score `file` at `at`.
+    fn by(&self, file: String, (number, item): (usize, usize), at: Option<Pos>) -> Chain {
         Chain(Some(Rc::new(Link {
             file,
-            line: line.map(|(number, _)| number),
-            item: line.map_or(0, |(_, item)| item),
+            line: Some(number),
+            item,
             at,
+            delay: 0.0,
             up: self.clone(),
         })))
+    }
+
+    /// Read by equation `file` at `at`, a view delaying what it reads by `delay` seconds.
+    fn read(&self, file: String, at: Option<Pos>, delay: f64) -> Chain {
+        Chain(Some(Rc::new(Link {
+            file,
+            line: None,
+            item: 0,
+            at,
+            delay,
+            up: self.clone(),
+        })))
+    }
+
+    /// Seconds the views above it delay its sound past its song time.
+    pub fn delay(&self) -> f64 {
+        let mut sum = 0.0;
+        let mut at = &self.0;
+        while let Some(link) = at {
+            sum += link.delay;
+            at = &link.up.0;
+        }
+        sum
     }
 
     /// `placed by score/drop.jsonl:3 at 40b, placed by score/song.jsonl:25 at 40b`.
@@ -117,7 +145,11 @@ impl Chain {
                 (false, Some(p)) => format!(" at {}", p.spelled(curve)),
                 (false, None) => " with no song time".to_string(),
             };
-            out.push(format!("placed by {}{line}{pos}", link.file));
+            let late = match link.delay {
+                0.0 => String::new(),
+                d => format!(" sounding {d}s later"),
+            };
+            out.push(format!("placed by {}{line}{pos}{late}", link.file));
             at = &link.up.0;
         }
         out.join(", ")
@@ -173,12 +205,20 @@ pub(crate) enum Site {
 /// A node no lane lowering places line by line: a sound, or an equation reaching no score.
 pub struct Instance {
     pub node: String,
+    /// Its song time, where it reads the lanes, key and scale.
     pub at: Option<Pos>,
     pub bound: BTreeSet<String>,
     pub chain: Chain,
     /// The score line placing it, as (score, line index, item index).
     pub line: Option<(String, usize, usize)>,
     pub lanes: Vec<LaneId>,
+}
+
+impl Instance {
+    /// When it sounds: its song time plus the delays of the views above it.
+    pub fn sounds(&self, curve: &Curve) -> Option<Pos> {
+        shifted(self.at, Offset::Seconds(self.chain.delay()), curve)
+    }
 }
 
 #[derive(Clone)]
@@ -503,7 +543,7 @@ impl<'g> Placing<'g> {
             ));
             return None;
         }
-        let here = chain.by(format!("{path}{EXTENSION}"), Some((line.number, ii)), pos);
+        let here = chain.by(format!("{path}{EXTENSION}"), (line.number, ii), pos);
         if !container {
             let mut bound: BTreeSet<String> = event.binds.iter().map(|b| b.name.clone()).collect();
             if event.deg.is_some() {
@@ -698,7 +738,7 @@ impl<'g> Placing<'g> {
             item: ii,
             start,
             end,
-            chain: chain.by(file, Some((line_number, ii)), Some(start)),
+            chain: chain.by(file, (line_number, ii), Some(start)),
         };
         // Lanes are the song's: one placement read by several paths is one move.
         if !self.moves.iter().any(|m| m.same(&reached)) {
@@ -740,11 +780,11 @@ impl<'g> Placing<'g> {
                 let shift = (*address == Address::Time)
                     .then(|| constant_shift(arg))
                     .flatten();
-                // A score read at `t - d` is a view of it: its lines keep their song time.
+                // A score read at `t - d` is a view: its lines keep song time and sound d later.
                 let view = resolve_ref_path(path, to).is_some_and(|n| self.is_container(&n));
-                let shift = match (shift, view) {
-                    (Some(_), true) => Some(0.0),
-                    (shift, _) => shift,
+                let (shift, delay) = match (shift, view) {
+                    (Some(d), true) => (Some(0.0), d),
+                    (shift, _) => (shift, 0.0),
                 };
                 let placed = match shift {
                     Some(d) => shifted(at, Offset::Seconds(d), self.curve),
@@ -758,7 +798,7 @@ impl<'g> Placing<'g> {
                     });
                 }
                 let names: BTreeSet<String> = binds.iter().map(|(k, _)| k.clone()).collect();
-                let target = self.target(path, to, placed, names, chain);
+                let target = self.target(path, to, placed, names, chain, delay);
                 out.push(Site::Read(shift, target));
                 self.sites_of(path, arg, None, chain, out);
                 for (_, value) in binds {
@@ -767,7 +807,7 @@ impl<'g> Placing<'g> {
                 self.lost = lost;
             }
             Expr::Call { name, span, args } if is_node_call(self.graph, path, name) => {
-                let target = self.target(path, name, at, BTreeSet::new(), chain);
+                let target = self.target(path, name, at, BTreeSet::new(), chain, 0.0);
                 out.push(Site::Read(Some(0.0), target));
                 let _ = span;
                 for a in args {
@@ -790,6 +830,7 @@ impl<'g> Placing<'g> {
         at: Option<Pos>,
         bound: BTreeSet<String>,
         chain: &Chain,
+        delay: f64,
     ) -> Target {
         let Some(node) = resolve_ref_path(from, to) else {
             return Target::Instance(self.instance(Instance {
@@ -801,7 +842,7 @@ impl<'g> Placing<'g> {
                 lanes: Vec::new(),
             }));
         };
-        let here = chain.by(from.to_string(), None, at);
+        let here = chain.read(from.to_string(), at, delay);
         if self.is_container(&node) {
             let graph = self.graph;
             if !self.cycle(&node, |cycle| {
@@ -933,7 +974,7 @@ impl<'g> Placing<'g> {
                 _ => None,
             };
             let names: BTreeSet<String> = binds.iter().map(|(k, _)| k.clone()).collect();
-            let target = self.target(path, to, start_at, names, chain);
+            let target = self.target(path, to, start_at, names, chain, 0.0);
             out.push((offset, offset + length, target));
             offset += length;
         }

@@ -156,8 +156,8 @@ pub fn song_data(source: &dyn sva_ast::Source, target: &str) -> Result<String, C
     });
     let events: Vec<String> = instances
         .iter()
-        .filter_map(|i| Some((i, i.line.as_ref()?, i.at?)))
-        .map(|(i, (score, li, ii), at)| {
+        .filter_map(|i| Some((i, i.line.as_ref()?, i.at?, i.sounds(curve)?)))
+        .map(|(i, (score, li, ii), at, sounds)| {
             let Some(Item::Event(e)) = graph.score(score).map(|s| &s.lines[*li].items[*ii]) else {
                 return String::new();
             };
@@ -184,8 +184,9 @@ pub fn song_data(source: &dyn sva_ast::Source, target: &str) -> Result<String, C
                 }
             };
             format!(
-                "{{ \"at\": {}, \"node\": \"{}\", \"hz\": {}, \"file\": \"{}{EXTENSION}\", \"line\": {}, \"params\": {} }}",
+                "{{ \"at\": {}, \"sounds\": {}, \"node\": \"{}\", \"hz\": {}, \"file\": \"{}{EXTENSION}\", \"line\": {}, \"params\": {} }}",
                 placed(at, curve),
+                placed(sounds, curve),
                 escape(&i.node),
                 hz.map_or_else(|| NONE.to_string(), num),
                 escape(score),
