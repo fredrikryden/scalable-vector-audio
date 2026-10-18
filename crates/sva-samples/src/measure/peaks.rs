@@ -52,10 +52,14 @@ fn located(mags: &[f64], bin_hz: f64) -> Vec<(usize, Peak)> {
     found.into_iter().map(|(_, k, peak)| (k, peak)).collect()
 }
 
-/// Loudest first, peaks no kept peak's sidelobes explain.
+/// Loudest first, peaks no kept peak's sidelobes explain, nor a DC's at bin 0.
 pub fn resolved(mags: &[f64], bin_hz: f64, spanned: usize, max_peaks: usize) -> Vec<Peak> {
     let r = spanned as f64 / (2 * (mags.len() - 1)) as f64;
     let half = r / 2.0;
+    let dc = match mags {
+        [zero, one, ..] if zero >= one => *zero,
+        _ => 0.0,
+    };
     let mut kept: Vec<(usize, Peak)> = Vec::new();
     for (k, peak) in located(mags, bin_hz) {
         if kept.len() == max_peaks {
@@ -68,7 +72,8 @@ pub fn resolved(mags: &[f64], bin_hz: f64, spanned: usize, max_peaks: usize) -> 
                 let image = (k + q) as f64 * r - half;
                 mags[q] / kernel(half) * (leakage(near) + leakage(image))
             })
-            .sum();
+            .sum::<f64>()
+            + dc / kernel(half) * leakage(k as f64 * r - half);
         if mags[k] > leaked {
             kept.push((k, peak));
         }

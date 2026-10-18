@@ -196,11 +196,11 @@ const PINNED: &str = r#"
 6 store:e41ecc22b1d8d907ef9ba75bd804e1e7 1dbdd6ed6f7b9789
 6 store:e51a27e86bcbd36a2c884364cb358a1e b13e933cd4588103
 6 lines refused "type.samples_in_closed_form"
-6 spectrum 0e7eda97fd299e30
+6 spectrum c143451080b1b42f
 6 envelope 510b9276d5e7c870
 6 derivative 2ada75b05fe73a68
 6 ledger e296c7b26fd92e2f
-6 pitch ad49e3bbc0ff4788
+6 pitch d8acbfd122ead830
 6 formants 4a5877c3e5e367d9
 6 stereo refused "type.width_mismatch"
 6 bands 5f534aa9aa3bbcd7
@@ -232,7 +232,7 @@ const PINNED: &str = r#"
 8 wav 083e3fdfa6fd2b2d
 8 store:0435c2987fec5f6fa5f7bc60ed42587e 31fc1d6de3a78d9f
 8 lines refused "type.samples_in_closed_form"
-8 spectrum 8036c3c04990beb1
+8 spectrum 1df6ea56e09c379f
 8 envelope 0c5253e952c2fa8d
 8 derivative d3faa20b9834549e
 8 ledger d7d7417544077963
@@ -288,7 +288,7 @@ const PINNED: &str = r#"
 11 store:b6774780ba26bd24289ee5a5a363539e 7509bfcfccb25771
 11 store:fef920a29d25f7e69ab776f1c1aa2df8 5a1a23698fff0512
 11 lines refused "type.samples_in_closed_form"
-11 spectrum d0ea49e9c415d55c
+11 spectrum f25da52885882adf
 11 envelope 7c67a5d377431f4e
 11 derivative 0234ccb44aa74534
 11 ledger 85f91208b93bf675
@@ -307,7 +307,7 @@ const PINNED: &str = r#"
 12 store:05fd9b34f0c3d96a4508e7fe93cef407 99763ac1b4f08b05
 12 store:eefd7456adda71f95410a477bc38064f 25998e4cba244b7c
 12 lines refused "type.samples_in_closed_form"
-12 spectrum f7ce98968fff277d
+12 spectrum 8ca9ad07eee19d5b
 12 envelope 1b9d192b3e91dcb6
 12 derivative 52556069c8911ad2
 12 ledger 9521693f05bf90e3
@@ -326,7 +326,7 @@ const PINNED: &str = r#"
 13 store:7766d37a0cdcc294553055f59415b4ee ecce9080780fff1a
 13 store:b636f740c7f5c69c7d133075cf6253c3 2fdd7da48324e1b7
 13 lines refused "type.samples_in_closed_form"
-13 spectrum 0c84a510941b3623
+13 spectrum 3abc3201aa4a2410
 13 envelope c7477734fba002a5
 13 derivative e43d66b13cd27645
 13 ledger 1a738c8d556a802e
@@ -347,7 +347,7 @@ const PINNED: &str = r#"
 14 store:979e8f53e59fb8d66035a41b9132d6a7 e5655bc3498b0d57
 14 store:f9f5071eb92a34c3a0ca9fe84c15c685 50d78de808a824d3
 14 lines refused "type.samples_in_closed_form"
-14 spectrum b23635798e5862ea
+14 spectrum 5efa6c48ce11d24c
 14 envelope 88f602a703affc7c
 14 derivative 2f09043a08b9ee72
 14 ledger 3ce3405aef9719b3
@@ -387,7 +387,7 @@ const PINNED: &str = r#"
 16 store:7d2a34d66251dbf649d696726b2f90f8 85083b1a5bdc5bf4
 16 store:7febd1dbb83c13997bf57fbce8e72f50 0d28f9abd7177441
 16 lines refused "type.samples_in_closed_form"
-16 spectrum 547386550b46a3a7
+16 spectrum 1d4445163666b88a
 16 envelope eedb58d4e0ba84e8
 16 derivative 70b92325601c8608
 16 ledger e9282e1791e85be2

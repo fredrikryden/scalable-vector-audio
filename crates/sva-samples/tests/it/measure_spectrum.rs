@@ -155,3 +155,58 @@ fn peaks_under_the_floor_rank_by_amplitude() {
     assert!((first.hz - 3000.0).abs() < s.resolution_hz, "{first:?}");
     assert!((second.hz - 1000.0).abs() < s.resolution_hz, "{second:?}");
 }
+
+/// A sine only in the last 50 ms of a second, under half a frame, is read.
+#[test]
+fn a_tone_in_the_last_partial_hop_is_read() {
+    let mut samples = vec![0.0; RATE as usize];
+    let tail = tone(1000.0, 0.05, 1.0);
+    let from = samples.len() - tail.len();
+    samples[from..].copy_from_slice(&tail);
+    let s = analyze(&[&samples[..]], RATE, 4, None);
+    let loudest = s.peaks.first().expect("the tail's sine is a peak");
+    assert!((loudest.hz - 1000.0).abs() < s.resolution_hz, "{s:?}");
+    assert!((s.centroid_hz - 1000.0).abs() < 50.0, "{}", s.centroid_hz);
+}
+
+/// A DC offset's Hann sidelobes are no peaks: under a short frame only the sine is one.
+#[test]
+fn a_dc_offsets_sidelobes_are_no_peaks() {
+    let samples: Vec<f64> = tone(1000.0, 0.05, 0.1).iter().map(|x| 0.5 + x).collect();
+    let s = analyze(&[&samples[..]], RATE, 8, None);
+    let [only] = s.peaks.as_slice() else {
+        panic!("one sine over a DC, one peak: {:?}", s.peaks);
+    };
+    assert!((only.hz - 1000.0).abs() < s.resolution_hz, "{only:?}");
+}
+
+/// 0.5 DC beside a unit 1 kHz sine is a third of the power, at bins 0 and 1, 2:1.
+#[test]
+fn a_dc_offset_weighs_its_own_power_in_the_centroid() {
+    let samples: Vec<f64> = tone(1000.0, 1.0, 1.0).iter().map(|x| 0.5 + x).collect();
+    let s = analyze(&[&samples[..]], RATE, 4, None);
+    let wanted = (1000.0 * 0.5 + s.resolution_hz / 3.0 * 0.25) / 0.75;
+    assert!(
+        (s.centroid_hz - wanted).abs() < 1.0,
+        "{} against {wanted}",
+        s.centroid_hz
+    );
+}
+
+/// A band reads its sine's amplitude however its frame pads; 900 Hz's lobe is inside its band.
+#[test]
+fn a_band_reads_a_sine_at_its_amplitude_at_any_length() {
+    for len in [2205, 4096, 4097, 6000, 44_100] {
+        let samples = tone(900.0, len as f64 / RATE, 0.5);
+        let s = analyze(&[&samples[..]], RATE, 4, None);
+        let holding = s
+            .bands
+            .iter()
+            .find(|b| b.lo_hz <= 900.0 && 900.0 < b.hi_hz)
+            .expect("a band holds 900 Hz");
+        assert!(
+            (holding.db - db(0.5)).abs() < 0.1,
+            "{len} samples: {holding:?}"
+        );
+    }
+}

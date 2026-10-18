@@ -3,8 +3,8 @@
 use crate::fft::fft;
 pub use crate::measure::peaks::{Peak, db, peaks};
 
-const MAX_FRAME: usize = 8192;
-const MIN_FRAME: usize = 64;
+pub const MAX_FRAME: usize = 8192;
+pub const MIN_FRAME: usize = 64;
 
 /// One FFT's memory, which is all that bounds a caller's own frame.
 pub const MAX_PINNED_FRAME: usize = 1 << 20;
@@ -50,7 +50,7 @@ pub fn analyze(
         frames,
         spanned,
     } = magnitudes_of(planes, sample_rate, frame_secs);
-    let power: Vec<f64> = mags.iter().map(|m| m * m).collect();
+    let power = one_sided(&mags);
     let total: f64 = power.iter().sum();
 
     let centroid_hz = if total > 0.0 {
@@ -83,14 +83,30 @@ pub fn analyze(
         rms,
         centroid_hz,
         rolloff85_hz,
-        bands: bands(&power, bin_hz, sample_rate),
+        bands: bands(
+            &power,
+            1.5 * frame_size as f64 / spanned as f64,
+            bin_hz,
+            sample_rate,
+        ),
         peaks: crate::measure::peaks::resolved(&mags, bin_hz, spanned, max_peaks),
     }
 }
 
-/// Welch-averaged, Hann-windowed magnitudes normalized so a full-scale sine reads 1.0 at its
-/// own bin. Without `frame_secs` the size follows the WINDOW, so one node's two windows land
-/// on two bin grids and cannot be compared. A Hann spans samples under a frame.
+/// 0 and Nyquist alone have no mirror folded in.
+fn one_sided(mags: &[f64]) -> Vec<f64> {
+    let last = mags.len() - 1;
+    mags.iter()
+        .enumerate()
+        .map(|(k, m)| match k == 0 || k == last {
+            true => m * m / 2.0,
+            false => m * m,
+        })
+        .collect()
+}
+
+/// A full-scale sine reads 1.0 at its own bin. Without `frame_secs` the size follows the
+/// range, so two ranges land on two bin grids.
 pub fn magnitudes(
     samples: &[f64],
     sample_rate: f64,
@@ -100,12 +116,12 @@ pub fn magnitudes(
     (f.mags, f.bin_hz, f.frame_size, f.frames)
 }
 
-/// `spanned`: the samples the Hann covers.
 pub struct Framed {
     pub mags: Vec<f64>,
     pub bin_hz: f64,
     pub frame_size: usize,
     pub frames: usize,
+    /// The samples the Hann spans, fewer than `frame_size` where the range is.
     pub spanned: usize,
 }
 
@@ -115,15 +131,13 @@ pub fn magnitudes_of(planes: &[&[f64]], sample_rate: f64, frame_secs: Option<f64
         Some(secs) => pinned_frame(secs, sample_rate).min(MAX_PINNED_FRAME),
         None => len.next_power_of_two().clamp(MIN_FRAME, MAX_FRAME),
     };
-    let hop = frame_size / 2;
     let bins = frame_size / 2 + 1;
     let spanned = len.clamp(1, frame_size);
     let window = crate::stft::hann_periodic(spanned);
 
+    let starts = starts(len, frame_size);
     let mut acc = vec![0f64; bins];
-    let mut frames = 0usize;
-    let mut start = 0usize;
-    loop {
+    for start in &starts {
         for samples in planes {
             let mut re = vec![0f64; frame_size];
             let mut im = vec![0f64; frame_size];
@@ -135,25 +149,31 @@ pub fn magnitudes_of(planes: &[&[f64]], sample_rate: f64, frame_secs: Option<f64
                 *a += re[k] * re[k] + im[k] * im[k];
             }
         }
-        frames += 1;
-        start += hop;
-        if start + frame_size > len {
-            break;
-        }
     }
 
     let scale = 4.0 / spanned as f64;
-    let averaged = (frames * planes.len()) as f64;
+    let averaged = (starts.len() * planes.len()) as f64;
     Framed {
         mags: acc.iter().map(|p| (p / averaged).sqrt() * scale).collect(),
         bin_hz: sample_rate / frame_size as f64,
         frame_size,
-        frames,
+        frames: starts.len(),
         spanned,
     }
 }
 
-/// Third-octave from 20 Hz up, the resolution a listener's critical bands roughly follow.
+/// Whole frames, first sample to last, evenly at most half a frame apart.
+fn starts(len: usize, frame: usize) -> Vec<usize> {
+    let Some(past) = len.checked_sub(frame).filter(|past| *past > 0) else {
+        return vec![0];
+    };
+    let gaps = past.div_ceil(frame / 2);
+    (0..=gaps)
+        .map(|i| (2 * i * past + gaps) / (2 * gaps))
+        .collect()
+}
+
+/// Third-octave from 20 Hz up.
 pub fn third_octave_edges(sample_rate: f64) -> Vec<(f64, f64)> {
     let nyquist = sample_rate / 2.0;
     let ratio = 2f64.powf(1.0 / 3.0);
@@ -167,7 +187,8 @@ pub fn third_octave_edges(sample_rate: f64) -> Vec<(f64, f64)> {
     out
 }
 
-fn bands(power: &[f64], bin_hz: f64, sample_rate: f64) -> Vec<Band> {
+/// Over `enbw`, the noise bandwidth in bins, a band reads as the one sine carrying its power.
+fn bands(power: &[f64], enbw: f64, bin_hz: f64, sample_rate: f64) -> Vec<Band> {
     let mut out = Vec::new();
     for (lo, hi) in third_octave_edges(sample_rate) {
         let sum: f64 = power
@@ -182,7 +203,7 @@ fn bands(power: &[f64], bin_hz: f64, sample_rate: f64) -> Vec<Band> {
         out.push(Band {
             lo_hz: lo,
             hi_hz: hi,
-            db: db(sum.sqrt()),
+            db: db((sum / enbw).sqrt()),
         });
     }
     out

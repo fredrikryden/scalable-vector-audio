@@ -52,7 +52,9 @@ pub use render::{
 };
 pub use schedule::{Order, Schedule, schedule_from};
 pub use sva_formula::{C64, Codomain, Held, Line, NodeId, SpectralSum, Ty, Var};
-pub use sva_samples::measure::{harmony, modulation, periodicity, pitch, self_similarity, sliding};
+pub use sva_samples::measure::{
+    harmony, modulation, periodicity, pitch, self_similarity, sliding, spectrum,
+};
 pub use sva_samples::{
     Alias, AliasBand, BAND_COUNT, BandCrest, BandTrack, Bands, Buffer, Crest,
     CuttingBelowSilenceThreshold, Detail, EnvelopeFrame, Extent, FormantFrame, Frames, Label,

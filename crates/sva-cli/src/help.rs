@@ -6,7 +6,7 @@ use sva_engine::{
     DEFAULT_LEDGER_DEPTH, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS, DEFAULT_MODULATION_WINDOW_SECS,
     DEFAULT_NOVELTY_WINDOW_SECS, DEFAULT_OVERSAMPLE, DEFAULT_PERIODICITY_WINDOW_SECS,
     DEFAULT_SAMPLE_RATE, DEFAULT_SMOOTH_SECS, PSYCHOACOUSTIC_V1, READINGS, Reads,
-    self_similarity::MAX_CELLS,
+    self_similarity::MAX_CELLS, spectrum,
 };
 
 /// Read off the constants the parser itself defaults to, so a printed default cannot drift
@@ -15,6 +15,7 @@ pub fn help_text() -> String {
     let bits = PSYCHOACOUSTIC_V1.precision_bits;
     let store_gb = DEFAULT_STORE_BYTES >> 30;
     let representations = representations();
+    let (min_frame, max_frame) = (spectrum::MIN_FRAME, spectrum::MAX_FRAME);
     format!(
         r#"USAGE:
   sva-cli (render | analyze | lint | trace | builtins | outline | new) [arguments]
@@ -201,8 +202,11 @@ RENDER:
   `sample(@x([0, 1s]))`, and an author writes `sample(...)` inside the node.
   A closed form with no exact envelope, such as a crop of a decay, refuses
   `envelope` with the reason rather than measuring it unasked; `sample(...)`
-  asks for the measured one. A measured `spectrum` is one spectrum: every
-  `frame`-long window across the range, averaged. `pitch` is framed, one entry
+  asks for the measured one. A measured `spectrum` is one spectrum: whole
+  windows across the range, averaged, the first at its first sample and the last
+  ending at its last, evenly at most half a window apart; a window is `frame`
+  rounded up to a power of two samples, at least {min_frame}, or without `frame`
+  the range's length so rounded, at most {max_frame}. `pitch` is framed, one entry
   per `frame`; for the spectrum at one instant, read a range one frame long.
   A measured `envelope` is framed too, and reads every channel: a frame's
   `rms` is the root mean square of all its channels' samples together, its

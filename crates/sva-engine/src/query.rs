@@ -189,11 +189,13 @@ static SPECTRUM: Reading = Reading {
     takes: &[Arg::Peaks, Arg::Frame],
     reads: Reads::Either,
     help: "its lines, or its spectrum averaged over every frame and, power per bin, every \
-           channel; off samples a Hann spans the samples a frame holds, zero past them, and, \
+           channel; off samples a Hann spans the samples a frame holds, zero past them, each \
+           third-octave band reads as the amplitude of the one sine carrying its power, and, \
            loudest first, a local maximum is no peak where its bin holds no more than the \
-           peaks kept can leak there, each bounded by Harris's (1978) Hann sidelobe bound \
-           1/(pi m (m^2 - 1)) at m bins, its sinusoid taken anywhere within half a bin of its \
-           own: a bound where the frame is stationary sinusoids at the kept peaks",
+           peaks kept, and a DC bin 0 holds as its maximum, can leak there, each bounded by \
+           Harris's (1978) Hann sidelobe bound 1/(pi m (m^2 - 1)) at m bins, its sinusoid taken \
+           anywhere within half a bin of its own: a bound where the frame is stationary \
+           sinusoids at the kept peaks",
     build: |g| Representation::Spectrum {
         max_peaks: g.peaks,
         frame_secs: g.frame,
