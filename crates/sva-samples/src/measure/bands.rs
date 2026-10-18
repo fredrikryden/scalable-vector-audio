@@ -165,12 +165,18 @@ fn floor_of(centre_hz: f64, sr: f64, smoothing: Smoothing, hop: usize, rate: f64
     }
 }
 
+pub const HIGHEST_CENTRE_OF_RATE: f64 = 0.45;
+
 /// A centre the design cannot place is left out, never clamped onto the last it could.
-fn centres(sr: f64) -> Vec<f64> {
+pub(crate) fn centres(sr: f64) -> Vec<f64> {
     (0..BAND_COUNT)
         .map(|k| hz_at_cam(FIRST_CAM + k as f64))
-        .filter(|hz| *hz < 0.45 * sr)
+        .filter(|hz| *hz < HIGHEST_CENTRE_OF_RATE * sr)
         .collect()
+}
+
+pub fn least_rate_hz() -> f64 {
+    hz_at_cam(FIRST_CAM) / HIGHEST_CENTRE_OF_RATE
 }
 
 pub fn analyze(planes: &[&[f64]], sr: f64, start_secs: f64) -> Bands {

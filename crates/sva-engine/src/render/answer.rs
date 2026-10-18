@@ -364,15 +364,27 @@ fn crowded(name: &str, representation: Representation, held: Crowded) -> EngineE
     })
 }
 
-/// Each names the window that would read, and `longer` how to hand it a target that long.
+/// Each names the window or rate that would read, `longer` how to hand it a target that
+/// long and `faster` how to hand it samples at a rate over that.
 fn unread(
     name: &str,
     representation: Representation,
     why: sliding::Unread,
     longer: impl Fn(f64) -> String,
+    faster: impl Fn(f64) -> String,
 ) -> EngineError {
     let reading = representation.name();
     let (code, message, help) = match why {
+        sliding::Unread::RateUnderBands { rate_hz, least_hz } => (
+            "read.rate_under_bands",
+            format!(
+                "`{reading}` reads ERB bands, and {rate_hz} Hz samples place none: the first \
+                 band's centre stands at {:.2} Hz, over {} of the rate",
+                least_hz * bands::HIGHEST_CENTRE_OF_RATE,
+                bands::HIGHEST_CENTRE_OF_RATE
+            ),
+            faster((least_hz * 100.0).ceil() / 100.0),
+        ),
         sliding::Unread::WindowUnderTwoPeriods {
             window_secs,
             least_secs,
@@ -755,11 +767,18 @@ fn measured(
                 NoReading::NeedsAGraph => not_a_reading(render, node, other),
                 NoReading::TooNarrow { need, held } => too_narrow(render, node, need, held),
                 NoReading::Crowded(held) => crowded(render.tys.name(node), other, held),
-                NoReading::Unread(why) => unread(render.tys.name(node), other, why, |secs| {
-                    format!(
-                        "render an interval of at least {secs}s, as `@x([0, {secs}s])` writes one"
-                    )
-                }),
+                NoReading::Unread(why) => unread(
+                    render.tys.name(node),
+                    other,
+                    why,
+                    |secs| {
+                        format!(
+                            "render an interval of at least {secs}s, as `@x([0, {secs}s])` \
+                             writes one"
+                        )
+                    },
+                    |hz| format!("render at a rate over {hz} Hz, as `--rate 48000` asks"),
+                ),
                 NoReading::RateUnder(held) => rate_under(render.tys.name(node), held, |hz| {
                     format!("render at a rate over {hz} Hz, as `--rate 48000` asks")
                 }),
@@ -1150,9 +1169,13 @@ pub fn answer_buffer(
             format!("this reading needs {need} components and the file holds {held}"),
         ),
         NoReading::Crowded(held) => crowded(name, representation, held),
-        NoReading::Unread(why) => unread(name, representation, why, |secs| {
-            format!("analyze a file holding at least {secs}s")
-        }),
+        NoReading::Unread(why) => unread(
+            name,
+            representation,
+            why,
+            |secs| format!("analyze a file holding at least {secs}s"),
+            |hz| format!("analyze a file sampled over {hz} Hz"),
+        ),
         NoReading::TooManyCells(held) => too_many_cells(name, held, |secs| {
             format!("analyze a file holding at most {secs}s")
         }),

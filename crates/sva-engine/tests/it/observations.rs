@@ -907,6 +907,35 @@ fn loudness_at_a_rate_under_the_k_weighting_names_the_least_rate() {
     assert!(said.contains("3363.94 Hz"), "{said}");
 }
 
+/// A render at 30 Hz places no ERB band: periodicity and modulation refuse, naming the rate.
+#[test]
+fn band_readings_at_a_rate_under_every_band_name_the_least_rate() {
+    for asked in [
+        Representation::Periodicity {
+            frame_secs: 0.5,
+            window_secs: 4.0,
+            curve: false,
+        },
+        Representation::Modulation {
+            frame_secs: 0.5,
+            window_secs: 4.0,
+            bpm: None,
+        },
+    ] {
+        let g = graph_of("bands-slow", &[("node", "sin(2*pi*3*t)\n")]);
+        let config = RenderConfig::seconds(30, 10.0).asking(vec![Ask {
+            node: "node".to_string(),
+            representation: asked,
+        }]);
+        let held = render(&g, "node", config, &Tier::default()).unwrap_or_else(|e| panic!("{e}"));
+        let refused = answer(&held, held.id("node").expect("the root"), asked)
+            .expect_err("a 15 Hz Nyquist is under the 26 Hz first band");
+        assert_eq!(refused.code(), "read.rate_under_bands");
+        let said = format!("{refused}");
+        assert!(said.contains("over 57.77 Hz"), "{said}");
+    }
+}
+
 /// A window under two periods of the slowest rate refuses, naming the window that would read.
 #[test]
 fn modulation_under_two_periods_names_the_least_window() {

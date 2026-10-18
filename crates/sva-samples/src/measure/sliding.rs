@@ -2,9 +2,13 @@
 
 use super::harmony::dissonance::Extreme;
 
-/// `least_secs` is twice the longest period read.
+/// `least_secs` is twice the longest period read; `least_hz` the rate the first band needs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Unread {
+    RateUnderBands {
+        rate_hz: f64,
+        least_hz: f64,
+    },
     WindowUnderTwoPeriods {
         window_secs: f64,
         least_secs: f64,
@@ -22,6 +26,12 @@ pub fn fits(
     window_secs: f64,
     longest_period_secs: f64,
 ) -> Result<(), Unread> {
+    if super::bands::centres(sample_rate).is_empty() {
+        return Err(Unread::RateUnderBands {
+            rate_hz: sample_rate,
+            least_hz: super::bands::least_rate_hz(),
+        });
+    }
     let least_secs = 2.0 * longest_period_secs;
     if window_secs < least_secs {
         return Err(Unread::WindowUnderTwoPeriods {
