@@ -76,8 +76,10 @@ pub const MODEL: &str = "self-similarity matrix of Foote, J. (1999), Visualizing
                          against silence); in [-0.5, 0.5], 0.5 for a cut between two \
                          blocks each wholly alike within and wholly unlike across. `values` \
                          from `from_secs` by `cell_secs`; peaks: those over the one before \
-                         and no lower than the one after, the `listed` highest, highest \
-                         first, every one counted in `peaks_found`. Exact path: none; a \
+                         and no lower than the one after, a missing neighbour counting as \
+                         lower, so the first boundary peaks wherever the second is no higher, \
+                         silence included, the `listed` highest, highest first, every one \
+                         counted in `peaks_found`. Exact path: none; a \
                          closed form is read off its rendered samples, because a frame's \
                          partials over a floor and a band's energy over a span are stated by \
                          no closed form";

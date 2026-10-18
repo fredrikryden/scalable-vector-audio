@@ -228,3 +228,16 @@ fn a_cell_under_the_band_step_refuses() {
     let cells = read.cells.expect("asked");
     assert!(cells.iter().flat_map(|c| &c.levels_db).all(|l| !l.is_nan()));
 }
+
+/// Silence reads novelty 0 at every boundary, and the first, with no boundary before it,
+/// peaks as MODEL states.
+#[test]
+fn silences_first_boundary_is_its_one_novelty_peak() {
+    let s = read(&vec![0.0; (4.0 * RATE) as usize]);
+    for which in [View::Chroma, View::Timbre] {
+        let v = view(&s, which);
+        assert!(v.novelty.iter().all(|n| *n == 0.0));
+        assert_eq!(v.peaks_found, 1);
+        assert_eq!(v.peaks[0].t_secs, s.novelty_from_secs);
+    }
+}
