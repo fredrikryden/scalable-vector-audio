@@ -305,3 +305,29 @@ fn a_measured_fundamental_holds_its_pitch_between_resolvable_neighbours() {
         }
     }
 }
+
+/// A frame past 8192 samples reads 8192-sample Hanns: 80 and 70 Hz strings pull each other there.
+#[test]
+fn a_frame_longer_than_its_transform_seeks_a_fundamental_at_the_transforms_resolution() {
+    let chord = [string(80.0, 1.5e-4, 0.7), string(70.0, 1.5e-4, 1.0)].concat();
+    let rate = 44100.0;
+    let tone: Vec<f64> = (0..rate as usize)
+        .map(|n| {
+            let t = n as f64 / rate;
+            chord
+                .iter()
+                .map(|(hz, a)| a * (std::f64::consts::TAU * hz * t).sin())
+                .sum()
+        })
+        .collect();
+    for frame in track(&[&tone[..]], rate, 0.0, 0.5, 16) {
+        let mut heads: Vec<String> = frame
+            .notes
+            .into_iter()
+            .filter(|n| n.harmonic_of.is_none())
+            .map(|n| n.name)
+            .collect();
+        heads.sort();
+        assert_eq!(heads, ["Cs2", "Ds2"], "at {} s", frame.t_secs);
+    }
+}

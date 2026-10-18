@@ -47,7 +47,7 @@ pub fn track(
                 .collect();
             let framed = magnitudes_of(&chunk, sample_rate, None);
             let found = resolved(&framed.mags, framed.bin_hz, framed.spanned, max_notes * 4);
-            let resolution_hz = sample_rate / chunk[0].len().max(1) as f64;
+            let resolution_hz = sample_rate / framed.spanned as f64;
             PitchFrame {
                 t_secs: start_secs + (n * stride) as f64 / sample_rate,
                 notes: name_all(&found, max_notes, resolution_hz / 2.0),

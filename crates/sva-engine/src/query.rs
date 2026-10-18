@@ -247,7 +247,8 @@ static PITCH: Reading = Reading {
     reads: Reads::Either,
     help: "the notes it holds, per frame off samples, every channel's power per bin averaged; \
            off samples its peaks are picked as `spectrum` picks them, and a series' \
-           fundamental is read within half the frame's resolution of its root's peak",
+           fundamental is read within half a bin of its root's peak, the rate over the samples \
+           its Hann spans",
     build: |g| Representation::Pitch {
         max_notes: g.peaks,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
