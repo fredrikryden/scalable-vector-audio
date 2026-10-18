@@ -18,7 +18,7 @@ pub fn hz_at_cam(cam: f64) -> f64 {
     (10f64.powf(cam / 21.4) - 1.0) * 1000.0 / 4.37
 }
 
-/// 1 to 40 Cam is 51 Hz to 16.4 kHz.
+/// 1 to 40 Cam is 26 Hz to 16.7 kHz.
 pub const FIRST_CAM: f64 = 1.0;
 pub const BAND_COUNT: usize = 40;
 
