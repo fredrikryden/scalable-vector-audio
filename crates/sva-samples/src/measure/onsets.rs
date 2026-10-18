@@ -56,7 +56,11 @@ fn spectral_frames(planes: &[&[f64]], sample_rate: f64, start_secs: f64) -> Vec<
             let end = (start + frame_len).min(len);
             let mags = planes
                 .iter()
-                .map(|p| magnitudes(&p[start..end], sample_rate, Some(FRAME_SECS)).0)
+                .map(|p| {
+                    let mut frame = p[start..end].to_vec();
+                    frame.resize(frame_len, 0.0);
+                    magnitudes(&frame, sample_rate, Some(FRAME_SECS)).0
+                })
                 .collect();
             SpectralFrame {
                 t_secs: start_secs + start as f64 / sample_rate,

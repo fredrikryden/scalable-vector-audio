@@ -1,6 +1,6 @@
 // Concern: states what the discrete spectrum owes tones of known content | Non-concern: the FFT itself (src/fft.rs), the ERB bank (measure_bands.rs) | IO: (samples) -> asserted Hz and dB
 
-use sva_samples::measure::spectrum::{analyze, db, third_octave_edges};
+use sva_samples::measure::spectrum::{analyze, db, magnitudes, third_octave_edges};
 
 const RATE: f64 = 44_100.0;
 
@@ -102,4 +102,56 @@ fn a_bands_level_is_the_energy_of_the_partials_inside_it() {
     for band in s.bands.iter().filter(|b| b.hi_hz <= 500.0) {
         assert!(band.db < holding.db - 40.0, "well below it: {band:?}");
     }
+}
+
+/// Each bin of samples shorter than their frame is their transform under a Hann of their length.
+#[test]
+fn a_frame_longer_than_its_samples_windows_the_samples_alone() {
+    let samples = tone(261.6256, 0.05, 0.8);
+    let (mags, bin_hz, frame, _) = magnitudes(&samples, RATE, None);
+    assert_eq!((samples.len(), frame), (2205, 4096));
+    let span = samples.len() as f64;
+    for k in [10, 24, 25, 40, 300] {
+        let w = std::f64::consts::TAU * k as f64 / frame as f64;
+        let (re, im) = samples
+            .iter()
+            .enumerate()
+            .fold((0.0, 0.0), |(re, im), (n, x)| {
+                let hann = 0.5 - 0.5 * (std::f64::consts::TAU * n as f64 / span).cos();
+                let n = n as f64;
+                (re + x * hann * (w * n).cos(), im - x * hann * (w * n).sin())
+            });
+        let wanted = 4.0 / span * re.hypot(im);
+        assert!(
+            (mags[k] - wanted).abs() <= 1e-12 * (1.0 + wanted),
+            "bin {k} ({} Hz): {} against {wanted}",
+            k as f64 * bin_hz,
+            mags[k]
+        );
+    }
+}
+
+/// A short sine reads at its level and place, its sidelobes no peaks.
+#[test]
+fn a_short_sine_reads_at_its_level_with_no_sidelobe_peaks() {
+    let s = analyze(&[&tone(261.6256, 0.05, 0.5)[..]], RATE, 8, None);
+    let [only] = s.peaks.as_slice() else {
+        panic!("one sine, one peak: {:?}", s.peaks);
+    };
+    assert!((only.hz - 261.6256).abs() < 0.5, "{only:?}");
+    assert!((only.db - db(0.5)).abs() < 0.5, "{only:?}");
+}
+
+/// Under `db`'s floor peaks still rank by amplitude.
+#[test]
+fn peaks_under_the_floor_rank_by_amplitude() {
+    let quiet = tone(1000.0, 8192.0 / RATE, 1e-9);
+    let louder = tone(3000.0, 8192.0 / RATE, 3e-9);
+    let mixed: Vec<f64> = quiet.iter().zip(&louder).map(|(a, b)| a + b).collect();
+    let s = analyze(&[&mixed[..]], RATE, 2, None);
+    let [first, second] = s.peaks.as_slice() else {
+        panic!("two partials, two peaks: {:?}", s.peaks);
+    };
+    assert!((first.hz - 3000.0).abs() < s.resolution_hz, "{first:?}");
+    assert!((second.hz - 1000.0).abs() < s.resolution_hz, "{second:?}");
 }

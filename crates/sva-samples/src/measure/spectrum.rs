@@ -1,6 +1,7 @@
 // Concern: resolves every channel's samples into magnitudes, third-octave bands and peaks | Non-concern: naming a peak as a note (pitch.rs), choosing the window | IO: (planes, sample rate) -> Spectrum
 
 use crate::fft::fft;
+pub use crate::measure::peaks::{Peak, db, peaks};
 
 const MAX_FRAME: usize = 8192;
 const MIN_FRAME: usize = 64;
@@ -16,18 +17,11 @@ pub fn pinned_frame(secs: f64, sample_rate: f64) -> usize {
     }
     (asked as usize).next_power_of_two().max(MIN_FRAME)
 }
-const FLOOR_DB: f64 = -160.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Band {
     pub lo_hz: f64,
     pub hi_hz: f64,
-    pub db: f64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Peak {
-    pub hz: f64,
     pub db: f64,
 }
 
@@ -49,7 +43,13 @@ pub fn analyze(
     max_peaks: usize,
     frame_secs: Option<f64>,
 ) -> Spectrum {
-    let (mags, bin_hz, frame_size, frames) = magnitudes_of(planes, sample_rate, frame_secs);
+    let Framed {
+        mags,
+        bin_hz,
+        frame_size,
+        frames,
+        spanned,
+    } = magnitudes_of(planes, sample_rate, frame_secs);
     let power: Vec<f64> = mags.iter().map(|m| m * m).collect();
     let total: f64 = power.iter().sum();
 
@@ -84,26 +84,32 @@ pub fn analyze(
         centroid_hz,
         rolloff85_hz,
         bands: bands(&power, bin_hz, sample_rate),
-        peaks: peaks(&mags, bin_hz, max_peaks),
+        peaks: crate::measure::peaks::resolved(&mags, bin_hz, spanned, max_peaks),
     }
 }
 
 /// Welch-averaged, Hann-windowed magnitudes normalized so a full-scale sine reads 1.0 at its
 /// own bin. Without `frame_secs` the size follows the WINDOW, so one node's two windows land
-/// on two bin grids and cannot be compared.
+/// on two bin grids and cannot be compared. A Hann spans samples under a frame.
 pub fn magnitudes(
     samples: &[f64],
     sample_rate: f64,
     frame_secs: Option<f64>,
 ) -> (Vec<f64>, f64, usize, usize) {
-    magnitudes_of(&[samples], sample_rate, frame_secs)
+    let f = magnitudes_of(&[samples], sample_rate, frame_secs);
+    (f.mags, f.bin_hz, f.frame_size, f.frames)
 }
 
-pub fn magnitudes_of(
-    planes: &[&[f64]],
-    sample_rate: f64,
-    frame_secs: Option<f64>,
-) -> (Vec<f64>, f64, usize, usize) {
+/// `spanned`: the samples the Hann covers.
+pub struct Framed {
+    pub mags: Vec<f64>,
+    pub bin_hz: f64,
+    pub frame_size: usize,
+    pub frames: usize,
+    pub spanned: usize,
+}
+
+pub fn magnitudes_of(planes: &[&[f64]], sample_rate: f64, frame_secs: Option<f64>) -> Framed {
     let len = crate::measure::held(planes);
     let frame_size = match frame_secs {
         Some(secs) => pinned_frame(secs, sample_rate).min(MAX_PINNED_FRAME),
@@ -111,7 +117,8 @@ pub fn magnitudes_of(
     };
     let hop = frame_size / 2;
     let bins = frame_size / 2 + 1;
-    let window = crate::stft::hann_periodic(frame_size);
+    let spanned = len.clamp(1, frame_size);
+    let window = crate::stft::hann_periodic(spanned);
 
     let mut acc = vec![0f64; bins];
     let mut frames = 0usize;
@@ -120,9 +127,8 @@ pub fn magnitudes_of(
         for samples in planes {
             let mut re = vec![0f64; frame_size];
             let mut im = vec![0f64; frame_size];
-            for n in 0..frame_size {
-                let s = samples.get(start + n).copied().unwrap_or(0.0);
-                re[n] = s * window[n];
+            for (n, w) in window.iter().enumerate() {
+                re[n] = samples.get(start + n).copied().unwrap_or(0.0) * w;
             }
             fft(&mut re, &mut im);
             for (k, a) in acc.iter_mut().enumerate() {
@@ -136,17 +142,14 @@ pub fn magnitudes_of(
         }
     }
 
-    let scale = 4.0 / frame_size as f64;
+    let scale = 4.0 / spanned as f64;
     let averaged = (frames * planes.len()) as f64;
-    let mags = acc.iter().map(|p| (p / averaged).sqrt() * scale).collect();
-    (mags, sample_rate / frame_size as f64, frame_size, frames)
-}
-
-pub fn db(amplitude: f64) -> f64 {
-    if amplitude <= 0.0 {
-        FLOOR_DB
-    } else {
-        (20.0 * amplitude.log10()).max(FLOOR_DB)
+    Framed {
+        mags: acc.iter().map(|p| (p / averaged).sqrt() * scale).collect(),
+        bin_hz: sample_rate / frame_size as f64,
+        frame_size,
+        frames,
+        spanned,
     }
 }
 
@@ -183,29 +186,4 @@ fn bands(power: &[f64], bin_hz: f64, sample_rate: f64) -> Vec<Band> {
         });
     }
     out
-}
-
-/// Local maxima, parabolically interpolated so a peak between two bins reports its real
-/// frequency instead of the nearest bin's.
-pub fn peaks(mags: &[f64], bin_hz: f64, max_peaks: usize) -> Vec<Peak> {
-    let mut found: Vec<Peak> = Vec::new();
-    for k in 1..mags.len().saturating_sub(1) {
-        if mags[k] <= mags[k - 1] || mags[k] < mags[k + 1] || mags[k] <= 0.0 {
-            continue;
-        }
-        let (a, b, c) = (mags[k - 1], mags[k], mags[k + 1]);
-        let denom = a - 2.0 * b + c;
-        let delta = if denom.abs() > f64::EPSILON {
-            (0.5 * (a - c) / denom).clamp(-0.5, 0.5)
-        } else {
-            0.0
-        };
-        found.push(Peak {
-            hz: (k as f64 + delta) * bin_hz,
-            db: db(b - 0.25 * (a - c) * delta),
-        });
-    }
-    found.sort_by(|x, y| y.db.total_cmp(&x.db));
-    found.truncate(max_peaks);
-    found
 }

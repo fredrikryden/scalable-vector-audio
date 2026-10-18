@@ -1,6 +1,7 @@
 // Concern: names each frame's spectral peaks as notes and flags likely harmonics | Non-concern: computing the spectrum (spectrum.rs), chord or key identity | IO: (planes, sample rate) -> frames
 
-use crate::measure::spectrum::{Peak, magnitudes_of, peaks};
+use crate::measure::peaks::{Peak, resolved};
+use crate::measure::spectrum::magnitudes_of;
 use crate::measure::stiff::{fit, stretch};
 
 const NAMES: [&str; 12] = [
@@ -44,8 +45,8 @@ pub fn track(
                 .iter()
                 .map(|p| &p[from..len.min(from + stride)])
                 .collect();
-            let (mags, bin_hz, ..) = magnitudes_of(&chunk, sample_rate, None);
-            let found = peaks(&mags, bin_hz, max_notes * 4);
+            let framed = magnitudes_of(&chunk, sample_rate, None);
+            let found = resolved(&framed.mags, framed.bin_hz, framed.spanned, max_notes * 4);
             let resolution_hz = sample_rate / chunk[0].len().max(1) as f64;
             PitchFrame {
                 t_secs: start_secs + (n * stride) as f64 / sample_rate,

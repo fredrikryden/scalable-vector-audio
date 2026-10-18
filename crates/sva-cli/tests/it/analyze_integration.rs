@@ -474,13 +474,12 @@ fn a_missing_wav_is_not_found() {
     assert_eq!(refused.exit_code(), 24);
 }
 
-/// Breathy voiced speech rendered by voice research, its fundamental often weaker than its
-/// octave, with the F0 that research logged for each file. Each speech frame's fundamental is
-/// the note heading its longest harmonic series; over the file their median lands within two
-/// semitones (12 %) of that F0, not an octave up.
+/// Breathy voiced speech whose fundamental is often weaker than its octave, against the median
+/// F0 its node files write over its voiced frames (Praat and YIN agree to 5 %). Each frame's
+/// fundamental heads its longest series; their median lands within 12 %, not an octave up.
 #[test]
 fn breathy_speech_reads_its_fundamental_not_its_octave() {
-    for (name, known) in [("phrase", 223.0), ("millennials", 233.0), ("dont", 261.0)] {
+    for (name, known) in [("phrase", 240.0), ("millennials", 240.0), ("dont", 245.0)] {
         let path = fixture(&format!("voice/{name}.wav"));
         let reading = Representation::Pitch {
             max_notes: 16,

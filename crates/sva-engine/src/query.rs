@@ -189,7 +189,11 @@ static SPECTRUM: Reading = Reading {
     takes: &[Arg::Peaks, Arg::Frame],
     reads: Reads::Either,
     help: "its lines, or its spectrum averaged over every frame and, power per bin, every \
-           channel",
+           channel; off samples a Hann spans the samples a frame holds, zero past them, and, \
+           loudest first, a local maximum is no peak where its bin holds no more than the \
+           peaks kept can leak there, each bounded by Harris's (1978) Hann sidelobe bound \
+           1/(pi m (m^2 - 1)) at m bins, its sinusoid taken anywhere within half a bin of its \
+           own: a bound where the frame is stationary sinusoids at the kept peaks",
     build: |g| Representation::Spectrum {
         max_peaks: g.peaks,
         frame_secs: g.frame,
@@ -237,8 +241,8 @@ static PITCH: Reading = Reading {
     takes: &[Arg::Peaks, Arg::Frame],
     reads: Reads::Either,
     help: "the notes it holds, per frame off samples, every channel's power per bin averaged; \
-           off samples a series' fundamental is read within half the frame's resolution of \
-           its root's peak",
+           off samples its peaks are picked as `spectrum` picks them, and a series' \
+           fundamental is read within half the frame's resolution of its root's peak",
     build: |g| Representation::Pitch {
         max_notes: g.peaks,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),

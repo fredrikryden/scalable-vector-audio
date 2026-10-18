@@ -1,6 +1,6 @@
 // Concern: states what naming a peak owes a tone and its partials | Non-concern: finding the peaks (measure_spectrum.rs) | IO: (peaks or samples) -> asserted notes
 
-use sva_samples::measure::pitch::{name_peaks, track};
+use sva_samples::measure::pitch::{PitchFrame, name_peaks, track};
 use sva_samples::measure::spectrum::Peak;
 
 use crate::helpers::partials::stiff_partial;
@@ -201,8 +201,7 @@ fn exact_heads(partials: &[(f64, f64)]) -> Vec<String> {
     heads
 }
 
-/// Each 50 ms frame's notes heading a series within 12 dB of its loudest.
-fn measured_heads(partials: &[(f64, f64)]) -> Vec<Vec<String>> {
+fn measured(partials: &[(f64, f64)]) -> Vec<PitchFrame> {
     let rate = 44100.0;
     let tone: Vec<f64> = (0..(rate * 0.6) as usize)
         .map(|n| {
@@ -215,6 +214,11 @@ fn measured_heads(partials: &[(f64, f64)]) -> Vec<Vec<String>> {
         })
         .collect();
     track(&[&tone[..]], rate, 0.0, 0.05, 16)
+}
+
+/// Each 50 ms frame's notes heading a series within 12 dB of its loudest.
+fn measured_heads(partials: &[(f64, f64)]) -> Vec<Vec<String>> {
+    measured(partials)
         .into_iter()
         .map(|frame| {
             let loudest = frame.notes.iter().map(|n| n.db).fold(f64::MIN, f64::max);
@@ -269,6 +273,35 @@ fn a_fundamental_pulled_off_by_its_neighbour_still_heads_its_partials() {
         );
         for partial in ["G5", "C6", "E6", "G6", "As6", "C7"] {
             assert!(!heads.contains(&partial.to_string()), "{heads:?}");
+        }
+    }
+}
+
+/// C4 between Ab3 and Eb4, each over two bins away: every frame reads each where it is, a
+/// neighbour's sidelobes moving it under a hertz.
+#[test]
+fn a_measured_fundamental_holds_its_pitch_between_resolvable_neighbours() {
+    let fundamentals = [261.6256, 207.6523, 311.127];
+    let chord = [
+        string(fundamentals[0], 1.5e-4, 1.0),
+        string(fundamentals[1], 1.5e-4, 0.8),
+        string(fundamentals[2], 1.5e-4, 0.8),
+    ]
+    .concat();
+    for frame in measured(&chord) {
+        for f0 in fundamentals.map(|f| stiff_partial(f, 1.5e-4, 1)) {
+            let nearest = frame
+                .notes
+                .iter()
+                .map(|n| n.hz)
+                .min_by(|a, b| (a - f0).abs().total_cmp(&(b - f0).abs()))
+                .expect("notes");
+            assert!(
+                (nearest - f0).abs() < 1.5,
+                "at {} s {f0} Hz reads {nearest}: {:?}",
+                frame.t_secs,
+                frame.notes
+            );
         }
     }
 }

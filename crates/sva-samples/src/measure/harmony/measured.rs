@@ -1,14 +1,15 @@
-// Concern: the partials of samples, a Hann frame centred on each instant, leakage peaks left out | Non-concern: picking peaks (spectrum.rs) | IO: (planes, rate, start, hop) -> moments, framing
+// Concern: the partials of samples, a Hann frame centred on each instant, leakage peaks left out | Non-concern: picking peaks (peaks.rs) | IO: (planes, rate, start, hop) -> moments, framing
 
 use super::{Framing, Moment, Partial, Window};
-use crate::measure::spectrum::{magnitudes_of, peaks, pinned_frame};
+use crate::measure::peaks::{kernel, leakage, peaks};
+use crate::measure::spectrum::{magnitudes_of, pinned_frame};
 
 pub const WINDOW_SECS: f64 = 0.05;
 
 pub const METHOD: &str = "measured: a Hann frame of `window.size` samples of each channel \
                           centred on each instant, zero past its ends, their power per bin \
                           averaged over the channels; its local \
-                          maxima picked as `spectrum` picks peaks, refined by the two-bin Hann \
+                          maxima, each refined by the two-bin Hann \
                           interpolation of Grandke, T. (1983), IEEE Trans. Instrum. Meas. 32(2) \
                           350-355, exact for a lone sinusoid; a peak no louder than the Hann \
                           kernel's bound 1/(pi m (m^2 - 1)) at m bins (Harris, F. J. (1978), \
@@ -18,27 +19,6 @@ pub const METHOD: &str = "measured: a Hann frame of `window.size` samples of eac
                           partials, at their estimated levels, leak into it: they hold where the \
                           frame is stationary sinusoids at the kept partials, and are a point \
                           for a lone one";
-
-/// The bound METHOD states; within a bin of the peak, the peak itself.
-fn leakage(m: f64) -> f64 {
-    match m > 1.0 {
-        true => (1.0 / (std::f64::consts::PI * m * (m * m - 1.0))).min(1.0),
-        false => 1.0,
-    }
-}
-
-/// The Hann kernel at an offset of `d` bins, |d| <= 1, against its peak.
-fn kernel(d: f64) -> f64 {
-    let d = d.abs();
-    match d {
-        0.0 => 1.0,
-        _ if d >= 1.0 => 0.5,
-        _ => {
-            let x = std::f64::consts::PI * d;
-            x.sin() / (x * (1.0 - d * d))
-        }
-    }
-}
 
 fn offset(a: f64) -> f64 {
     match a.is_finite() {
@@ -135,7 +115,8 @@ pub fn moments(
             })
             .collect();
         let frames: Vec<&[f64]> = frames.iter().map(Vec::as_slice).collect();
-        let (mags, bin_hz, ..) = magnitudes_of(&frames, sample_rate, Some(WINDOW_SECS));
+        let framed = magnitudes_of(&frames, sample_rate, Some(WINDOW_SECS));
+        let (mags, bin_hz) = (framed.mags, framed.bin_hz);
         let mut kept: Vec<Peaked> = Vec::new();
         for peak in peaks(&mags, bin_hz, usize::MAX) {
             let found = refined(&mags, bin_hz, peak.hz);
