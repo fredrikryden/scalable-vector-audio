@@ -1,6 +1,6 @@
 // Concern: proves written text and printed text name one expression, units and precedence included | Non-concern: what an expression denotes (sva-formula) | IO: (text) -> a Diag or the text printed back
 
-use sva_ast::{DiagCode, parse_expr, render_expr};
+use sva_ast::{DiagCode, Expr, Literal, parse_expr, render_expr};
 
 fn round_trip(src: &str) -> String {
     render_expr(&parse_expr(src).expect("text that parses"))
@@ -85,6 +85,19 @@ fn a_negative_shift_round_trips() {
             parse_expr(&printed).unwrap(),
             parse_expr(src).unwrap(),
             "{src} printed as {printed}"
+        );
+    }
+}
+
+/// 2^(11/12) sits by a rounding tie, where `powf` and `exp2` round apart.
+#[test]
+fn a_pitch_unit_reads_the_same_bits_in_every_build() {
+    let eleven_twelfths = std::hint::black_box(11.0f64 / 12.0).exp2();
+    for src in ["1100ct", "11st"] {
+        assert_eq!(
+            parse_expr(src).unwrap(),
+            Expr::Lit(Literal::Num(eleven_twelfths)),
+            "{src}"
         );
     }
 }

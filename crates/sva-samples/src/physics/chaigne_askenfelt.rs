@@ -142,7 +142,7 @@ fn unison_frequencies(f0: f64, detune: f64, unison_count: usize, cents: &[f64]) 
     placed
         .iter()
         .zip(cents)
-        .map(|(&f, &c)| f * 2f64.powf(c / 1200.0))
+        .map(|(&f, &c)| f * (c / 1200.0).exp2())
         .collect()
 }
 

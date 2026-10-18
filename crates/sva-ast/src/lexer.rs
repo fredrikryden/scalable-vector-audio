@@ -18,11 +18,12 @@ pub enum LogUnit {
 }
 
 impl LogUnit {
+    /// `exp2`, never `2f64.powf`, which only an optimised build rewrites to `exp2`.
     pub fn resolve(self, written: f64) -> f64 {
         match self {
             LogUnit::Decibels => 10f64.powf(written / 20.0),
-            LogUnit::Cents => 2f64.powf(written / 1200.0),
-            LogUnit::Semitones => 2f64.powf(written / 12.0),
+            LogUnit::Cents => (written / 1200.0).exp2(),
+            LogUnit::Semitones => (written / 12.0).exp2(),
         }
     }
 }
