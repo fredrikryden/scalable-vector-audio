@@ -8,7 +8,7 @@ use sva_core::CliError;
 /// exists before a file lands in it. Every body stays a closed form until its own layer's
 /// written `sample()`, and each equation's comment says why it is written that way rather
 /// than the way that costs orders of magnitude more; a score is JSON and carries none.
-pub const FILES: [(&str, &str); 13] = [
+pub const FILES: [(&str, &str); 14] = [
     (
         "variables/bpm",
         r"; Models: the pulse every `b` literal is measured against | Neglects: the meter, which variables/meter states | IO: () -> beats per minute | Tags: tempo
@@ -23,14 +23,19 @@ pub const FILES: [(&str, &str); 13] = [
     ),
     (
         "variables/key",
-        r"; Models: the tonic every score degree and `st` offset is measured from, and the scale a degree counts in, so transposing is editing the note and changing mode the `scale` line | Neglects: the notes themselves, which the scores under score/ place | IO: () -> hertz | Tags: key, scale
-scale = @../scales/major
+        r"; Models: the tonic every score degree and `st` offset is measured from, so transposing is editing this note | Neglects: the scale a degree counts in, which variables/scale names | IO: () -> hertz | Tags: key
 C3
 ",
     ),
     (
+        "variables/scale",
+        r"; Models: the scale every `deg` counts in, a ref to one file of cents under scales/, so changing mode is editing this ref | Neglects: the tonic, which variables/key holds | IO: () -> a scale | Tags: scale
+@../scales/major
+",
+    ),
+    (
         "scales/major",
-        r"; Models: the major scale, one row per degree above the tonic in cents, the last row the octave it repeats at | Neglects: which tonic, which variables/key names | IO: () -> cents per degree | Tags: scale, major
+        r"; Models: the major scale, one row per degree above the tonic in cents, the last row the octave it repeats at | Neglects: which tonic, which variables/key holds | IO: () -> cents per degree | Tags: scale, major
 200
 400
 500
@@ -42,7 +47,7 @@ C3
     ),
     (
         "scales/minor",
-        r"; Models: the natural minor scale, one row per degree above the tonic in cents, the last row the octave it repeats at | Neglects: which tonic, which variables/key names | IO: () -> cents per degree | Tags: scale, minor
+        r"; Models: the natural minor scale, one row per degree above the tonic in cents, the last row the octave it repeats at | Neglects: which tonic, which variables/key holds | IO: () -> cents per degree | Tags: scale, minor
 200
 300
 500
@@ -138,15 +143,15 @@ pub const NEXT: [(&str, &str); 9] = [
     ),
     (
         "sva-cli trace score/phrase",
-        "a score: one line per note, its sound shifted to `at`, each `deg` counted in the key's scale",
+        "a score: one line per note, its sound shifted to `at`, each `deg` counted in variables/scale from variables/key",
     ),
     (
         "sva-cli render 'sample(@voice/tone)' --representation spectrum(peaks=3)",
         "the three harmonics the lowpass leaves, measured off its samples",
     ),
     (
-        "sva-cli render 'sample(@score/chord)' --representation spectrum(peaks=9)",
-        "the triad follows variables/key: its note transposes, its `scale` line changes mode",
+        "sva-cli render 'sample(@score/chord)' --representation spectrum(peaks=9) --set variables/scale=@../scales/minor",
+        "the triad in minor without editing a file; `--set variables/key=D3` transposes it",
     ),
     (
         "sva-cli render '@perc/hat' --representation atoms",

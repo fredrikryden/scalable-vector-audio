@@ -100,12 +100,11 @@ fn a_bar_offset_that_lands_on_the_grid_reads_a_sampled_ref() {
         &[
             ("grid", "sample(sin(2*pi*220*t))\n"),
             ("node", "@grid(t - 1b)*0.5\n"),
+            ("variables/bpm", "120\n"),
+            ("variables/meter", "4/4\n"),
         ],
     );
-    g.resolve_bar_spans(sva_ast::PerBar {
-        seconds: 2.0,
-        per: 1.0,
-    });
+    g.lower_reserved(None).expect("a tempo");
     let held = render(
         &g,
         "node",

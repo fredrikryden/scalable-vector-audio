@@ -1,7 +1,7 @@
 // Concern: proves a placed read shares its node's one value: computed once, zero-skipped, folded, snapped | Non-concern: what a value holds | IO: (a composition) -> evaluated segments, onsets
 
 use crate::fixtures::{Now, graph_of, next};
-use sva_ast::{Graph, PerBar};
+use sva_ast::Graph;
 use sva_engine::{
     Extent, Outcome, Range, RenderConfig, Stream, StreamConfig, Tier, identity, render,
 };
@@ -22,12 +22,16 @@ fn once(evaluated: &[Extent]) -> Option<Extent> {
     Some(Extent::new(held[0].start, end))
 }
 
-fn at_tempo(name: &str, files: &[(&str, &str)], seconds_per_bar: f64) -> Graph {
-    let mut g = graph_of(name, files);
-    g.resolve_bar_spans(PerBar {
-        seconds: seconds_per_bar,
-        per: 1.0,
-    });
+/// `files` at `bpm`, `beats` to the bar, every bar lowered to seconds.
+fn at_tempo(name: &str, files: &[(&str, &str)], (bpm, beats): (f64, u32)) -> Graph {
+    let (bpm, meter) = (format!("{bpm}\n"), format!("{beats}/4\n"));
+    let mut files = files.to_vec();
+    files.extend([
+        ("variables/bpm", bpm.as_str()),
+        ("variables/meter", meter.as_str()),
+    ]);
+    let mut g = graph_of(name, &files);
+    g.lower_reserved(None).expect("a tempo");
     g
 }
 
@@ -52,7 +56,7 @@ fn a_note_read_at_three_placements_is_computed_once_at_either_tempo() {
                 if fast { 0.5 } else { 0.3 },
             ),
         ] {
-            let g = at_tempo("placement", &[("n", note), ("song", song)], bar);
+            let g = at_tempo("placement", &[("n", note), ("song", song)], (bpm, 4));
             let held =
                 render(&g, "song", RenderConfig::at(RATE), &Tier::default()).expect("a song");
             let n = held.id("n").expect("the note");
@@ -193,7 +197,7 @@ fn every_onset_lands_within_half_a_sample_and_the_tempo_never_drifts() {
         bars.iter()
             .map(|(name, body)| (name.as_str(), body.as_str())),
     );
-    let g = at_tempo("snapped", &files, beat);
+    let g = at_tempo("snapped", &files, (128.0, 1));
     let mut onsets = Vec::new();
     streamed(&g, "@song", rate, 180, &mut |start, plane| {
         onsets.extend(
@@ -224,7 +228,7 @@ fn no_identity_or_body_holds_a_reads_shift() {
         ("near", "@n(t - 3ms)\n"),
         ("far", "@n(t - 3b)\n"),
     ];
-    let g = at_tempo("placed", &files, 2.0);
+    let g = at_tempo("placed", &files, (120.0, 4));
     let of = |root: &str| {
         let typing = sva_engine::types(&g, root).expect("a law");
         let n = typing.id("n").expect("the note");

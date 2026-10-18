@@ -161,6 +161,7 @@ struct Options {
     signal: Option<JsValue>,
     store_max_bytes: Option<u64>,
     threads: Option<NonZeroUsize>,
+    set: Vec<(String, String)>,
 }
 
 /// `keys` are the options this call reads; any other is refused by name.
@@ -205,6 +206,7 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                     .ok_or_else(|| refuse("`live` is not a boolean".into(), "pass true or false"))?
             }
             "readings" => held.readings = names(&key, &value)?,
+            "set" => held.set = texts(&key, &value)?,
             "at" => held.at = Some(placed(&text(&key, &value)?)?),
             "out" if value.is_null() => held.out = Out::Dropped,
             "signal" if js_sys::Reflect::has(&value, &"aborted".into()).unwrap_or(false) => {
@@ -244,6 +246,30 @@ fn names(key: &str, value: &JsValue) -> Result<Vec<String>, JsValue> {
                     "pass an array of strings",
                 )
             })
+        })
+        .collect()
+}
+
+/// `{ "variables/key": "G3" }`: each path a reserved variable, each value its text.
+fn texts(key: &str, value: &JsValue) -> Result<Vec<(String, String)>, JsValue> {
+    let object = value.dyn_ref::<js_sys::Object>().ok_or_else(|| {
+        refuse(
+            format!("`{key}` is not an object"),
+            "pass an object of texts, as { \"variables/key\": \"G3\" }",
+        )
+    })?;
+    js_sys::Object::entries(object)
+        .iter()
+        .map(|entry| {
+            let pair = js_sys::Array::from(&entry);
+            let path = pair.get(0).as_string().unwrap_or_default();
+            let text = pair.get(1).as_string().ok_or_else(|| {
+                refuse(
+                    format!("`{key}`'s `{path}` is not a string"),
+                    "pass each variable's text as a string, as its file would hold it",
+                )
+            })?;
+            Ok((path, text))
         })
         .collect()
 }
@@ -429,11 +455,10 @@ impl Composition {
         self.inner.0.borrow_mut().insert(path, text);
     }
 
-    /// `target` as `sva-cli render` takes it, `@piano([0, 2b], f0=C4)`; `representations`
-    /// what `representations()` answers, each a call as `--representation` writes it.
-    /// `options`: `rate`, `bits`, `until`, `volatile`, `out: null` (no samples), `threads`
-    /// (as `open` takes it), and `signal`: aborted, it throws an `AbortError` before its next
-    /// block.
+    /// `target` and `representations` as `sva-cli render` takes them. `options`: `rate`,
+    /// `bits`, `until`, `volatile`, `out: null` (no samples), `threads` (as `open` takes it),
+    /// `set` (`--set`, as `{ "variables/key": "G3" }`), and `signal`: aborted, it throws an
+    /// `AbortError` before its next block.
     pub async fn render(
         &self,
         target: &str,
@@ -441,7 +466,7 @@ impl Composition {
         options: JsValue,
     ) -> Result<Rendering, JsValue> {
         let keys = [
-            "rate", "bits", "until", "volatile", "out", "signal", "threads",
+            "rate", "bits", "until", "volatile", "out", "signal", "threads", "set",
         ];
         let options = options_of(&options, &keys)?;
         let out = options.out;
@@ -463,6 +488,7 @@ impl Composition {
             ));
         }
         let signal = options.signal.map(Signal);
+        let source = sva_core::overlaid(&self.inner, &options.set).map_err(|e| thrown(&e))?;
         let job = Job {
             until: options.until.as_deref(),
             rate: options.rate,
@@ -474,7 +500,7 @@ impl Composition {
                 .as_ref()
                 .map_or(&Never, |signal| signal as &dyn Abandon),
             threads: Some(threads::limit(options.threads.or(self.threads))),
-            ..Job::over(&self.inner, target)
+            ..Job::over(&source, target)
         };
         let mut session = self.session.take();
         let inner = execute_over(job, &*self.tier, &mut session).await;

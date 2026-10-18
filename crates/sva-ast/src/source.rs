@@ -1,4 +1,4 @@
-// Concern: declares where a composition's node texts come from, and holds one in memory | Non-concern: reading a directory (dir.rs), what a text MEANS (graph.rs) | IO: (path) -> node text
+// Concern: where a composition's node texts come from, one in memory, texts laid over one | Non-concern: reading a directory (dir.rs), what a text MEANS (graph.rs) | IO: (path) -> node text
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -107,6 +107,48 @@ impl Source for Composition {
 
     fn name(&self) -> String {
         self.name.clone().unwrap_or_else(|| UNNAMED.to_string())
+    }
+}
+
+/// `under` with some nodes' texts replaced, as a render that sets a variable reads it; each
+/// replaced text is read as the file it stands for would be.
+pub struct Overlay<'a> {
+    under: &'a dyn Source,
+    over: BTreeMap<String, String>,
+}
+
+impl<'a> Overlay<'a> {
+    pub fn new(under: &'a dyn Source, over: BTreeMap<String, String>) -> Overlay<'a> {
+        Overlay { under, over }
+    }
+}
+
+impl Source for Overlay<'_> {
+    fn paths(&self) -> Result<Listing, String> {
+        let mut listing = self.under.paths()?;
+        let added = self.over.keys().filter(|p| !listing.found.contains(p));
+        let added: Vec<String> = added.cloned().collect();
+        listing.found.extend(added);
+        listing.found.sort();
+        Ok(listing)
+    }
+
+    fn get(&self, path: &str) -> Result<Option<Cow<'_, str>>, String> {
+        match self.over.get(path) {
+            Some(text) => Ok(Some(Cow::Borrowed(text.as_str()))),
+            None => self.under.get(path),
+        }
+    }
+
+    fn generation(&self, path: &str) -> Option<u64> {
+        match self.over.contains_key(path) {
+            true => None,
+            false => self.under.generation(path),
+        }
+    }
+
+    fn name(&self) -> String {
+        self.under.name()
     }
 }
 

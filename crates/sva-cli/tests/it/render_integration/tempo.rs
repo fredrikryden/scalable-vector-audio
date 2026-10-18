@@ -11,7 +11,7 @@ use sva_engine::Tier;
 #[test]
 fn a_bpm_change_re_renders_bar_resolved_timing_and_nothing_else() {
     let dir = scratch("bpm-cache");
-    put(&dir, "meter", "4/4\n");
+    put(&dir, "variables/meter", "4/4\n");
     put(
         &dir,
         "kick",
@@ -39,11 +39,11 @@ fn a_bpm_change_re_renders_bar_resolved_timing_and_nothing_else() {
         .expect("the target renders")
     };
     let job = || at("@master([0, 3s])");
-    put(&dir, "bpm", "120\n");
+    put(&dir, "variables/bpm", "120\n");
     let fast = job();
     let fast_tone = at("@tone([0, 3s])");
     let fast_pattern = at("@pattern-1b([0, 3s])");
-    put(&dir, "bpm", "100\n");
+    put(&dir, "variables/bpm", "100\n");
     let slow = job();
     let slow_tone = at("@tone([0, 3s])");
     let slow_pattern = at("@pattern-1b([0, 3s])");
@@ -69,7 +69,7 @@ fn a_bar_literal_needs_a_tempo_and_reaches_a_probe_expression_too() {
     put(&dir, "master", "crop(@tone(t - 0.5b), 0s, 2b)\n");
     put(&dir, "tone", "sin(2*pi*A4*t)\n");
     assert!(
-        matches!(probe(&dir, "@master"), Err(CliError::BadTempo(_))),
+        bad_tempo(probe(&dir, "@master")),
         "a bar literal with no bpm/meter must refuse"
     );
 
@@ -91,12 +91,19 @@ fn a_bar_literal_needs_a_tempo_and_reaches_a_probe_expression_too() {
     );
 }
 
-/// Globals belong in `variables/`; the root spelling is transitional and loses to it.
+/// A tempo is read from `variables/` alone: a `bpm` at the root is a node like any other.
 #[test]
-fn tempo_comes_from_variables_before_the_composition_root() {
+fn tempo_comes_from_variables_alone() {
     let dir = scratch("variables");
     put(&dir, "master", "concat(@loop-2b)\n");
     put(&dir, "loop-2b", "sin(2*pi*220*t)\n");
+    put(&dir, "bpm", "240\n");
+    put(&dir, "meter", "4/4\n");
+    assert!(
+        bad_tempo(probe(&dir, "@master")),
+        "no tempo under variables/"
+    );
+
     put(&dir, "variables/bpm", "120\n");
     put(&dir, "variables/meter", "4/4\n");
     assert_eq!(
@@ -104,22 +111,19 @@ fn tempo_comes_from_variables_before_the_composition_root() {
         4.0,
         "two bars at 120"
     );
-
-    put(&dir, "bpm", "240\n");
-    put(&dir, "meter", "4/4\n");
-    assert_eq!(
-        secs(&probe(&dir, "@master").unwrap()),
-        4.0,
-        "variables/ wins while both spellings are present"
-    );
 }
 
 #[test]
 fn bpm_present_without_meter_is_a_clear_bad_tempo_error() {
     let dir = scratch("partial-tempo");
     put(&dir, "master", "sin(2*pi*220*t)\n");
-    put(&dir, "bpm", "120\n");
-    assert!(matches!(probe(&dir, "@master"), Err(CliError::BadTempo(_))));
+    put(&dir, "variables/bpm", "120\n");
+    assert!(bad_tempo(probe(&dir, "@master")));
+}
+
+fn bad_tempo<T>(answered: Result<T, CliError>) -> bool {
+    matches!(answered, Err(CliError::Refusals(refused))
+        if refused.iter().all(|r| r.code == sva_ast::DiagCode::BadTempo))
 }
 
 /// A bar at 128 bpm is 82687.5 samples at 44.1 kHz and exactly 90000 at 48 kHz.
@@ -140,4 +144,44 @@ fn a_bar_at_128_bpm_lands_on_a_sample_only_at_the_rate_that_divides_it() {
         assert_eq!(bar.fract() == 0.0, exact, "{hz} Hz puts a bar at {bar}");
         assert_eq!(plane(&rendered, PROBE).len(), bar.round() as usize);
     }
+}
+
+/// `--set` replaces a reserved variable for one render, and the composition's files are
+/// left as they were.
+#[test]
+fn a_render_sets_the_tempo_without_editing_a_file() {
+    let dir = scratch("set-tempo");
+    put(&dir, "master", "crop(sin(2*pi*220*t), 0s, 2b)\n");
+    put(&dir, "variables/bpm", "120\n");
+    put(&dir, "variables/meter", "4/4\n");
+    let end = |sets: &[&str]| {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_sva-cli"));
+        command.current_dir(&dir).args([
+            "render",
+            "@master",
+            "--representation",
+            "loudness",
+            "--cache",
+            "none",
+        ]);
+        for set in sets {
+            command.args(["--set", set]);
+        }
+        let out = command.output().expect("the binary runs");
+        let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+        let at = printed.find("\"end_secs\": ").expect("an interval") + 12;
+        let digits = printed[at..].split([' ', '}']).next().expect("a number");
+        digits.parse::<f64>().expect("seconds")
+    };
+    assert_eq!(end(&[]), 4.0, "2 bars at 120 bpm");
+    assert_eq!(end(&["variables/bpm=60"]), 8.0, "2 bars at 60 bpm");
+    assert_eq!(
+        end(&["variables/meter=3/4"]),
+        3.0,
+        "2 bars of 3/4 at 120 bpm"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("variables/bpm")).unwrap(),
+        "120\n"
+    );
 }

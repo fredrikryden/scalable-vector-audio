@@ -127,3 +127,55 @@ fn an_edit_takes_in_a_node_a_held_node_newly_reads() {
     let span = at as usize..at as usize + 64;
     assert_eq!(played, whole.plane(0)[span].to_vec());
 }
+
+/// Each next block of `stream` after an edit, beside the same samples of a fresh render of
+/// the edited source.
+fn edited(stream: &RefCell<Stream>, held: &Composition) -> (Vec<f64>, Vec<f64>) {
+    now(sva_core::edit(stream, held, "@master", &Tier::default())).expect("an edit");
+    let at = stream.borrow().position();
+    let block = stream.borrow_mut().read(at, 64).expect("a block");
+    let played = block.expect("samples").plane(0).to_vec();
+    let job = Job::over(held, "@master([0, 1s])");
+    let rendered = sva_core::execute(job, &Tier::default()).expect("a render");
+    let whole = rendered
+        .render
+        .output(rendered.render.root)
+        .expect("the root");
+    (
+        played,
+        whole.plane(0)[at as usize..at as usize + 64].to_vec(),
+    )
+}
+
+/// An edit to a reserved variable lowers again every held node that reads it, though no
+/// node's own text changed, and a value set back is followed back.
+#[test]
+fn an_edit_to_a_reserved_variable_retunes_and_retimes_what_the_stream_holds() {
+    let mut held = Composition::new();
+    held.insert("variables/bpm", "120\n");
+    held.insert("variables/meter", "4/4\n");
+    held.insert("variables/key", "C4\n");
+    held.insert("variables/scale", "@../scales/major\n");
+    held.insert("scales/major", "200\n400\n500\n700\n900\n1100\n1200\n");
+    held.insert("scales/minor", "200\n300\n500\n700\n800\n1000\n1200\n");
+    held.insert("lead", "0.1*sin(2*pi*deg(3)*t)\n");
+    held.insert("a-0.001b", "0.05*sin(2*pi*330*t)\n");
+    held.insert("b-0.001b", "0.05*sin(2*pi*495*t)\n");
+    held.insert("arranged", "concat(@a-0.001b, @b-0.001b)\n");
+    held.insert("master", "crop(@lead(t - 0.001b) + @arranged, 0s, 1s)\n");
+    let job = Job::over(&held, "@master");
+    let stream = now(sva_core::stream(&job, (64, None), &Tier::default())).expect("a stream");
+    let stream = RefCell::new(stream);
+    stream.borrow_mut().read(0, 64).expect("a block");
+    for (path, text) in [
+        ("variables/scale", "@../scales/minor\n"),
+        ("variables/scale", "@../scales/major\n"),
+        ("variables/key", "A3\n"),
+        ("scales/major", "200\n300\n500\n700\n900\n1100\n1200\n"),
+        ("variables/bpm", "60\n"),
+    ] {
+        held.insert(path, text);
+        let (played, rendered) = edited(&stream, &held);
+        assert_eq!(played, rendered, "after {path} = {text:?}");
+    }
+}

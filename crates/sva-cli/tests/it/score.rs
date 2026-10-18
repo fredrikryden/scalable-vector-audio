@@ -1,14 +1,15 @@
-// Concern: proves a score's degrees sound in the tonic and scale `variables/key` names, and refusals name the line | Non-concern: a score's JSON (sva-ast) | IO: (a key, a scale) -> its lines
+// Concern: proves a score's degrees sound in variables/key and variables/scale, written or set, and refusals name the line | Non-concern: a score's JSON (sva-ast) | IO: (a key, a scale) -> its lines
 use std::path::PathBuf;
 
 use crate::helpers::{put, scratch};
-use sva_core::{CliError, PROBE, probe};
-use sva_engine::{Output, Representation};
+use sva_core::{CliError, Job, PROBE, execute, overlaid, probe};
+use sva_engine::{Output, Representation, Tier};
 
 const SCORE: &str = "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 1}\n\
                      {\"at\": \"0.5b\", \"node\": \"@voice\", \"deg\": 3}\n";
 
-fn composition(name: &str, key: &str, score: &str) -> PathBuf {
+/// `tonic` in the scale file `scales/<scale>`.
+fn composition(name: &str, (tonic, scale): (&str, &str), score: &str) -> PathBuf {
     let dir = scratch(&format!("score-{name}"));
     let doc = |models: &str| {
         format!("; Models: {models} | Neglects: dynamics | IO: none -> x | Tags: t\n")
@@ -22,7 +23,12 @@ fn composition(name: &str, key: &str, score: &str) -> PathBuf {
     put(
         &dir,
         "variables/key",
-        &format!("{}{key}\n", doc("the tonic")),
+        &format!("{}{tonic}\n", doc("the tonic")),
+    );
+    put(
+        &dir,
+        "variables/scale",
+        &format!("{}@../scales/{scale}\n", doc("the scale")),
     );
     put(
         &dir,
@@ -43,15 +49,26 @@ fn composition(name: &str, key: &str, score: &str) -> PathBuf {
     dir
 }
 
-fn lines(name: &str, key: &str) -> Vec<f64> {
-    let dir = composition(name, key, SCORE);
-    let rendered = probe(&dir, "@phrase([0, 1s])").unwrap_or_else(|e| panic!("{key}: {e}"));
+fn lines(name: &str, key: (&str, &str)) -> Vec<f64> {
+    set_lines(&composition(name, key, SCORE), &[])
+}
+
+/// The phrase's lines with each of `sets` read in place of its variable's file.
+fn set_lines(dir: &std::path::Path, sets: &[(&str, &str)]) -> Vec<f64> {
+    let sets: Vec<(String, String)> = sets
+        .iter()
+        .map(|(path, text)| (path.to_string(), text.to_string()))
+        .collect();
+    let files = sva_ast::Dir::at(dir);
+    let source = overlaid(&files, &sets).unwrap_or_else(|e| panic!("{sets:?}: {e}"));
+    let rendered = execute(Job::over(&source, "@phrase([0, 1s])"), &Tier::default())
+        .unwrap_or_else(|e| panic!("{sets:?}: {e}"));
     let Output::Lines(lines) = rendered
         .answer(PROBE, Representation::Lines)
-        .unwrap_or_else(|e| panic!("{key}: {e}"))
+        .unwrap_or_else(|e| panic!("{sets:?}: {e}"))
         .value
     else {
-        panic!("{key}: expected a line list");
+        panic!("{sets:?}: expected a line list");
     };
     let mut hz: Vec<f64> = lines
         .iter()
@@ -64,29 +81,57 @@ fn lines(name: &str, key: &str) -> Vec<f64> {
 }
 
 #[test]
-fn the_key_transposes_a_score_and_its_scale_line_changes_mode() {
-    let major = lines("d3-major", "scale = @../scales/major\nD3");
+fn the_key_transposes_a_score_and_the_scale_changes_mode() {
+    let major = lines("d3-major", ("D3", "major"));
     assert_eq!(major.len(), 2, "two degrees, two lines: {major:?}");
     let third = |hz: &[f64]| 1200.0 * (hz[1] / hz[0]).log2();
     assert!((third(&major) - 400.0).abs() < 1e-9, "{major:?}");
 
-    let up = lines("a3-major", "scale = @../scales/major\nA3");
+    let up = lines("a3-major", ("A3", "major"));
     let fifth = 2f64.powf(7.0 / 12.0);
     assert!(
         (up[0] / major[0] - fifth).abs() < 1e-12,
         "{up:?} against {major:?}"
     );
 
-    let minor = lines("d3-minor", "scale = @../scales/minor\nD3");
+    let minor = lines("d3-minor", ("D3", "minor"));
     assert!((minor[0] - major[0]).abs() < 1e-9, "the tonic stays");
     assert!((third(&minor) - 300.0).abs() < 1e-9, "{minor:?}");
+}
+
+/// A variable set for one render is read as its file would be: the same lines, bit for bit,
+/// as a composition whose file holds that text.
+#[test]
+fn a_set_variable_renders_as_a_file_holding_its_text_would() {
+    let dir = composition("d3-major-set", ("D3", "major"), SCORE);
+    assert_eq!(
+        set_lines(&dir, &[("variables/key", "A3")]),
+        lines("a3-held", ("A3", "major"))
+    );
+    assert_eq!(
+        set_lines(&dir, &[("variables/scale", "@../scales/minor")]),
+        lines("d3-minor-held", ("D3", "minor"))
+    );
+    let files = sva_ast::Dir::at(&dir);
+    for sets in [
+        vec![("voice".to_string(), "1".to_string())],
+        vec![
+            ("variables/key".to_string(), "A3".to_string()),
+            ("variables/key".to_string(), "B3".to_string()),
+        ],
+    ] {
+        assert!(
+            matches!(overlaid(&files, &sets), Err(CliError::Usage { .. })),
+            "{sets:?}"
+        );
+    }
 }
 
 #[test]
 fn a_refusal_names_the_score_line() {
     let bad = "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 1}\n\
                {\"at\": \"0.5b\", \"node\": \"@voice\", \"cutoff\": 900}\n";
-    let dir = composition("unread-key", "scale = @../scales/major\nD3", bad);
+    let dir = composition("unread-key", ("D3", "major"), bad);
     let Err(CliError::Refusals(refused)) = probe(&dir, "@phrase([0, 1s])") else {
         panic!("a key the sound does not read refuses");
     };

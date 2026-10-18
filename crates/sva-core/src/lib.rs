@@ -9,8 +9,8 @@ mod lint_code;
 mod outline;
 mod output;
 mod query;
+mod set;
 mod target;
-mod tempo;
 mod until;
 
 pub use answer::{
@@ -26,8 +26,9 @@ pub use query::{
     Asked, Call, Destination, RETIRED, asked, asked_all, call, calls, is_wav, retired, seconds,
     wav_path,
 };
+pub use set::{overlaid, set};
+pub use sva_ast::RESERVED_VARIABLES;
 pub use target::{Edge, Target, target};
-pub use tempo::{Tempo, refuse_unresolved_bars, resolved as tempo};
 pub use until::until;
 
 use std::cell::RefCell;
@@ -134,7 +135,7 @@ fn settle(job: &Job) -> Result<(Graph, RenderConfig), CliError> {
     })?;
     define_probe(&mut graph, parsed)?;
     let rate = job.rate.unwrap_or(DEFAULT_SAMPLE_RATE);
-    let per_bar = graph.seconds_per_bar();
+    let per_bar = graph.tempo().map(|tempo| tempo.seconds_per_bar());
     let range = match interval {
         None => Range::default(),
         Some((start, end)) => Range {
@@ -376,10 +377,10 @@ fn streamed(
     let roots = roots_of(source, &expr)?;
     let roots: Vec<&str> = roots.iter().map(String::as_str).collect();
     let mut delta = sva_ast::load_beside(source, &roots, held).map_err(CliError::Refusals)?;
-    delta.lower_scores(Some(held)).map_err(CliError::Refusals)?;
-    if let Some(per_bar) = held.per_bar() {
-        delta.resolve_bar_spans(per_bar);
-    }
+    delta
+        .lower_reserved(Some(held))
+        .map_err(CliError::Refusals)?;
+    delta.check_scores(Some(held)).map_err(CliError::Refusals)?;
     delta
         .desugar_arrangement_beside(held)
         .map_err(CliError::Refusals)?;
@@ -391,13 +392,12 @@ fn streamed(
     })?;
     let defined = delta
         .define_arranged_beside(held, PROBE, parsed)
-        .map_err(|r| CliError::Refusals(vec![r]))?;
+        .map_err(CliError::Refusals)?;
     if !defined {
         return Err(CliError::BadProbe(format!(
             "this composition already has a node named `{PROBE}`"
         )));
     }
-    tempo::refuse_unresolved_bars(&delta)?;
     let expr = delta
         .expr(PROBE)
         .cloned()
@@ -498,33 +498,27 @@ fn reads_as_a_value(text: &str) -> bool {
 fn define_probe(graph: &mut Graph, expr: sva_ast::Expr) -> Result<(), CliError> {
     let defined = graph
         .define_arranged(PROBE, expr)
-        .map_err(|r| CliError::Refusals(vec![r]))?;
+        .map_err(CliError::Refusals)?;
     if !defined {
         return Err(CliError::BadProbe(format!(
             "this composition already has a node named `{PROBE}`"
         )));
     }
-    tempo::refuse_unresolved_bars(graph)
+    Ok(())
 }
 
 pub fn settled(loaded: Result<Graph, Vec<Refusal>>) -> Result<Graph, CliError> {
     let mut graph = loaded.map_err(CliError::Refusals)?;
-    graph.lower_scores(None).map_err(CliError::Refusals)?;
-    tempo::resolve(&mut graph)?;
+    graph.lower_reserved(None).map_err(CliError::Refusals)?;
+    graph.check_scores(None).map_err(CliError::Refusals)?;
     graph.desugar_arrangement().map_err(CliError::Refusals)?;
     Ok(graph)
 }
 
-/// Read by name rather than through a ref.
-pub const RESERVED_VARIABLES: [&str; 3] = ["bpm", "meter", "key"];
-
 /// A node path the source answers for is a node; anything else is math, and its reads are
 /// roots. Only a node path is asked of the source: math is never looked up as a file.
 pub fn roots_of(source: &dyn Source, target: &str) -> Result<Vec<String>, CliError> {
-    let mut roots: Vec<String> = RESERVED_VARIABLES
-        .iter()
-        .flat_map(|n| [(*n).to_string(), format!("{}/{n}", sva_ast::VARIABLES)])
-        .collect();
+    let mut roots: Vec<String> = RESERVED_VARIABLES.map(sva_ast::variable).to_vec();
     let held = |path: &str| -> Result<bool, CliError> {
         Ok(sva_ast::whole_ref_path(path) && source.get(path).map_err(CliError::Io)?.is_some())
     };

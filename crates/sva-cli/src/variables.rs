@@ -1,4 +1,4 @@
-// Concern: what the reserved `variables/key` node must hold | Non-concern: the tempo variables (sva-core), the rest of the lint pass (lint.rs) | IO: (&Graph) -> Vec<Finding>
+// Concern: what the reserved `variables/key` node must hold | Non-concern: lowering what reads it (sva-ast reserved.rs), the rest of the lint pass (lint.rs) | IO: (&Graph) -> Vec<Finding>
 
 use sva_ast::{Binds, Expr, Graph, Literal, children};
 use sva_core::{LintCode, Severity};

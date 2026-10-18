@@ -10,6 +10,7 @@ use crate::expr::{
 use crate::filename::{FileSpan, SpanUnit};
 use crate::ingest::{Data, base_name, parse_file};
 use crate::refusal::Refusal;
+use crate::reserved::{Values, variable};
 use crate::skipped::{Skip, Skipped};
 use crate::source::Source;
 
@@ -22,7 +23,9 @@ pub struct Graph {
     nodes: BTreeMap<String, Arc<Defined>>,
     data: HashMap<String, Data>,
     spans: HashMap<String, Option<FileSpan>>,
-    per_bar: Option<PerBar>,
+    /// The reserved variables each node's own text reads, and the values they were lowered to.
+    reserved: HashMap<String, Vec<&'static str>>,
+    lowered: HashMap<String, Values>,
     skipped: Vec<Skipped>,
     /// Each node's text as its source answered it, or as a defined one prints.
     texts: HashMap<String, String>,
@@ -45,49 +48,13 @@ pub struct Held {
     generation: Option<u64>,
     span: Option<FileSpan>,
     data: Option<Data>,
+    reserved: Vec<&'static str>,
+    lowered: Option<Values>,
 }
 
 impl Held {
     pub fn body(&self) -> &Expr {
         &self.defined.body
-    }
-}
-
-fn has_bar_literal(e: &Expr) -> bool {
-    match e {
-        Expr::Lit(Literal::Bars(_)) => true,
-        _ => children(e, Binds::Substitute)
-            .into_iter()
-            .any(has_bar_literal),
-    }
-}
-
-/// Seconds per bar as the quotient `beats * 60 / bpm`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PerBar {
-    pub seconds: f64,
-    pub per: f64,
-}
-
-impl PerBar {
-    pub fn secs(self) -> f64 {
-        self.seconds / self.per
-    }
-}
-
-fn resolve_bar_literals(e: &Expr, per_bar: PerBar) -> Expr {
-    let num = |v: f64| Box::new(Expr::Lit(Literal::Num(v)));
-    match e {
-        Expr::Lit(Literal::Bars(bars)) => Expr::Bin(
-            BinOp::Mul,
-            num(*bars),
-            Box::new(Expr::Bin(
-                BinOp::Div,
-                num(per_bar.seconds),
-                num(per_bar.per),
-            )),
-        ),
-        _ => map_children_ok(e, Binds::Substitute, |c| resolve_bar_literals(c, per_bar)),
     }
 }
 
@@ -162,19 +129,8 @@ impl Graph {
             .map_or(&[], |defined| defined.defaults.as_slice())
     }
 
-    /// A global by name, `variables/` first and the composition root second — where nothing
-    /// distinguishes a global from a signal, and which is transitional.
-    pub fn global(&self, name: &str) -> Option<&Expr> {
-        self.expr(&format!("{VARIABLES}/{name}"))
-            .or_else(|| self.expr(name))
-    }
-
     pub fn span(&self, path: &str) -> Option<FileSpan> {
         self.spans.get(path).copied().flatten()
-    }
-
-    pub(crate) fn data(&self, path: &str) -> Option<&Data> {
-        self.data.get(path)
     }
 
     /// The events a score file holds, `None` for every node an equation or a number writes.
@@ -193,21 +149,28 @@ impl Graph {
         }
     }
 
-    pub(crate) fn rewrite(&mut self, path: &str, body: Expr, defaults: Vec<(String, Expr)>) {
-        let defined = self.nodes.get_mut(path).expect("a node this graph holds");
-        *Arc::make_mut(defined) = Defined { body, defaults };
+    pub(crate) fn reserved_reads(&self, path: &str) -> &[&'static str] {
+        self.reserved.get(path).map_or(&[], Vec::as_slice)
     }
 
-    /// Whether `path`'s body, a default or its data reads `target` itself.
-    pub(crate) fn reads_directly(&self, path: &str, target: &str) -> bool {
-        self.reaching_from(path).iter().any(|read| read == target)
+    pub(crate) fn lowered_under(&self, path: &str) -> Option<&Values> {
+        self.lowered.get(path)
+    }
+
+    pub(crate) fn lower(&mut self, path: &str, defined: Defined, under: &Values) {
+        let held = self.nodes.get_mut(path).expect("a node this graph holds");
+        *Arc::make_mut(held) = defined;
+        self.lowered.insert(path.to_string(), under.clone());
     }
 
     /// `from`'s node at `path`, parsed again from its own text, before any pass rewrote it.
     pub(crate) fn reread(&mut self, path: &str, from: &Graph) -> Result<(), Refusal> {
         let mut held = from.held(path).expect("a node `from` holds");
-        let parsed = parse_file(path, &held.text)
-            .map_err(|d| Refusal::new(path, d.span, d.code, d.message))?;
+        let parsed =
+            parse_file(&held.text).map_err(|d| Refusal::new(path, d.span, d.code, d.message))?;
+        held.span = crate::filename::parse_filename(base_name(path)).1;
+        held.reserved = crate::reserved::reads(&parsed.expr, &parsed.defaults, held.span);
+        held.lowered = None;
         held.defined = Arc::new(Defined {
             body: parsed.expr,
             defaults: parsed.defaults,
@@ -217,47 +180,24 @@ impl Graph {
         Ok(())
     }
 
-    pub fn resolve_bar_spans(&mut self, per_bar: PerBar) {
-        let seconds_per_bar = per_bar.secs();
+    pub(crate) fn spans_in_seconds(&mut self, seconds_per_bar: f64) {
         for span in self.spans.values_mut().flatten() {
             if span.unit == SpanUnit::Bars {
                 span.amount *= seconds_per_bar;
                 span.unit = SpanUnit::Seconds;
             }
         }
-        self.per_bar = Some(per_bar);
-        for defined in self.nodes.values_mut() {
-            let defined = Arc::make_mut(defined);
-            defined.body = resolve_bar_literals(&defined.body, per_bar);
-            for value in &mut defined.defaults {
-                value.1 = resolve_bar_literals(&value.1, per_bar);
-            }
-        }
-    }
-
-    /// Nodes still holding a `b` literal — no tempo has been resolved against them, and the
-    /// engine is unit-free, so a caller refuses rather than picking a seconds-per-bar.
-    pub fn unresolved_bar_literals(&self) -> Vec<&str> {
-        self.nodes
-            .iter()
-            .filter(|(_, defined)| {
-                has_bar_literal(&defined.body)
-                    || defined.defaults.iter().any(|(_, v)| has_bar_literal(v))
-            })
-            .map(|(path, _)| path.as_str())
-            .collect()
     }
 
     pub fn paths(&self) -> impl Iterator<Item = &str> {
         self.nodes.keys().map(String::as_str)
     }
 
-    pub fn seconds_per_bar(&self) -> Option<f64> {
-        self.per_bar.map(PerBar::secs)
-    }
-
-    pub fn per_bar(&self) -> Option<PerBar> {
-        self.per_bar
+    /// What `variables/bpm` and `variables/meter` hold, where this composition declares them.
+    pub fn tempo(&self) -> Option<crate::reserved::Tempo> {
+        self.values(None)
+            .expect("a lowered graph's reserved variables hold values")
+            .tempo
     }
 
     /// Adds a node no file backs — an ad-hoc expression read in this graph's namespace.
@@ -271,12 +211,8 @@ impl Graph {
         true
     }
 
-    /// A node no file backs, its bar literals resolved here.
-    pub fn defining(&self, expr: Expr) -> Held {
-        let body = match self.per_bar {
-            Some(per_bar) => resolve_bar_literals(&expr, per_bar),
-            None => expr,
-        };
+    /// A node no file backs, its reads of reserved variables already lowered.
+    pub fn defining(&self, body: Expr) -> Held {
         Held {
             text: crate::print::render(&body),
             generation: None,
@@ -286,6 +222,8 @@ impl Graph {
             }),
             span: None,
             data: None,
+            reserved: Vec::new(),
+            lowered: None,
         }
     }
 
@@ -300,6 +238,8 @@ impl Graph {
             generation: self.generations.get(path).copied(),
             span: self.spans.get(path).copied().flatten(),
             data: self.data.get(path).cloned(),
+            reserved: self.reserved_reads(path).to_vec(),
+            lowered: self.lowered.get(path).cloned(),
         })
     }
 
@@ -318,6 +258,14 @@ impl Graph {
                     Some(data) => self.data.insert(path.to_string(), data),
                     None => self.data.remove(path),
                 };
+                match held.reserved.is_empty() {
+                    true => self.reserved.remove(path),
+                    false => self.reserved.insert(path.to_string(), held.reserved),
+                };
+                match held.lowered {
+                    Some(values) => self.lowered.insert(path.to_string(), values),
+                    None => self.lowered.remove(path),
+                };
             }
             None => {
                 self.nodes.remove(path);
@@ -325,6 +273,8 @@ impl Graph {
                 self.generations.remove(path);
                 self.spans.remove(path);
                 self.data.remove(path);
+                self.reserved.remove(path);
+                self.lowered.remove(path);
             }
         }
         before
@@ -345,7 +295,7 @@ impl Graph {
             && self.generations.get(path) == other.generations.get(path)
     }
 
-    /// Each node `path` reads directly, by its body or a default.
+    /// Each node `path` reads directly, by its body, a default or a reserved variable.
     fn reaching_from(&self, path: &str) -> Vec<String> {
         let Some(defined) = self.nodes.get(path) else {
             return Vec::new();
@@ -354,22 +304,15 @@ impl Graph {
         for (_, value) in &defined.defaults {
             out.extend(reads_of(path, value));
         }
-        out.extend(data_reads(path, self.data.get(path)));
+        out.extend(self.reserved_reads(path).iter().map(|name| variable(name)));
         out
     }
 
     pub fn reaching(&self, roots: &[String]) -> BTreeSet<String> {
         let (mut seen, mut open) = (BTreeSet::new(), roots.to_vec());
         while let Some(path) = open.pop() {
-            let Some(defined) = self.nodes.get(&path) else {
-                continue;
-            };
-            if seen.insert(path.clone()) {
-                open.extend(reads_of(&path, &defined.body));
-                for (_, value) in &defined.defaults {
-                    open.extend(reads_of(&path, value));
-                }
-                open.extend(data_reads(&path, self.data.get(&path)));
+            if self.defines(&path) && seen.insert(path.clone()) {
+                open.extend(self.reaching_from(&path));
             }
         }
         seen
@@ -388,8 +331,8 @@ impl Graph {
         lacking
     }
 
-    /// Expands every `repeat`/`concat` call into `crop` + shifted-ref + sum (FORMAT.md sugar).
-    /// Must run AFTER [`Self::resolve_bar_spans`]; a still-`Bars` span here is refused.
+    /// Expands every `repeat`/`concat` call into `crop` + shifted-ref + sum (FORMAT.md sugar),
+    /// each span already in seconds.
     pub fn desugar_arrangement(&mut self) -> Result<(), Vec<Refusal>> {
         self.desugared(None)
     }
@@ -425,14 +368,9 @@ impl Graph {
         Ok(())
     }
 
-    pub fn define_arranged(&mut self, path: &str, expr: Expr) -> Result<bool, Refusal> {
-        let arranged = self.rewrite_arrangement(path, &written(path, &expr)?, None)?;
-        let defined = self.define(path, arranged);
-        if defined && let Err(refused) = self.tune_defined(path, None) {
-            self.set(path, None);
-            return Err(refused);
-        }
-        Ok(defined)
+    /// A target defined at `path` as a file's node settles.
+    pub fn define_arranged(&mut self, path: &str, expr: Expr) -> Result<bool, Vec<Refusal>> {
+        self.arranged(None, path, expr)
     }
 
     /// The same, a span this graph lacks read in `beside`.
@@ -441,14 +379,33 @@ impl Graph {
         beside: &Graph,
         path: &str,
         expr: Expr,
-    ) -> Result<bool, Refusal> {
-        let arranged = self.rewrite_arrangement(path, &written(path, &expr)?, Some(beside))?;
-        let defined = self.define(path, arranged);
-        if defined && let Err(refused) = self.tune_defined(path, Some(beside)) {
-            self.set(path, None);
-            return Err(refused);
+    ) -> Result<bool, Vec<Refusal>> {
+        self.arranged(Some(beside), path, expr)
+    }
+
+    fn arranged(
+        &mut self,
+        beside: Option<&Graph>,
+        path: &str,
+        expr: Expr,
+    ) -> Result<bool, Vec<Refusal>> {
+        if self.defines(path) {
+            return Ok(false);
         }
-        Ok(defined)
+        let written = crate::series::written_out(&expr)
+            .map_err(|d| vec![Refusal::new(path, d.span, d.code, d.message)])?;
+        let mut defined = Defined {
+            body: written,
+            defaults: Vec::new(),
+        };
+        if !crate::reserved::reads(&defined.body, &[], None).is_empty() {
+            let values = self.values(beside)?;
+            defined = self.lowered(path, &defined, &values)?;
+        }
+        let arranged = self
+            .rewrite_arrangement(path, &defined.body, beside)
+            .map_err(|r| vec![r])?;
+        Ok(self.define(path, arranged))
     }
 
     fn rewrite_arrangement(
@@ -556,17 +513,13 @@ impl Graph {
             };
             let held = self.span(&target);
             let file_span = match held.or_else(|| beside?.span(&target)) {
-                Some(fs) if fs.unit == SpanUnit::Seconds => fs,
-                Some(_) => {
-                    return Err(Refusal::new(
-                        referencing,
-                        *ref_span,
-                        DiagCode::BadArrangementArg,
-                        format!(
-                            "`@{path}`'s span is still in bars — resolve_bar_spans must run \
-                             before desugar_arrangement"
-                        ),
-                    ));
+                Some(fs) => {
+                    assert_eq!(
+                        fs.unit,
+                        SpanUnit::Seconds,
+                        "lower_reserved puts bars in seconds"
+                    );
+                    fs
                 }
                 None => {
                     return Err(Refusal::new(
@@ -610,14 +563,6 @@ impl Graph {
             .into_iter()
             .reduce(|acc, t| Expr::Bin(BinOp::Add, Box::new(acc), Box::new(t)))
             .unwrap_or(Expr::Lit(Literal::Num(0.0))))
-    }
-}
-
-/// The key's scale line is a read no expression writes.
-fn data_reads(path: &str, data: Option<&Data>) -> Option<String> {
-    match data? {
-        Data::Key(line) => resolve_ref_path(path, &line.path),
-        _ => None,
     }
 }
 
@@ -731,6 +676,7 @@ struct Loading {
     skipped: Vec<Skipped>,
     texts: HashMap<String, String>,
     generations: HashMap<String, u64>,
+    reserved: HashMap<String, Vec<&'static str>>,
 }
 
 impl Loading {
@@ -746,6 +692,7 @@ impl Loading {
             skipped: Vec::new(),
             texts: HashMap::new(),
             generations: HashMap::new(),
+            reserved: HashMap::new(),
         }
     }
 
@@ -783,8 +730,12 @@ impl Loading {
         if let Some(at) = source.generation(path) {
             self.generations.insert(path.to_string(), at);
         }
-        match parse_file(path, &text) {
+        match parse_file(&text) {
             Ok(parsed) => {
+                let reads = crate::reserved::reads(&parsed.expr, &parsed.defaults, span);
+                if !reads.is_empty() {
+                    self.reserved.insert(path.to_string(), reads);
+                }
                 self.nodes.insert(path.to_string(), parsed.expr);
                 if !parsed.defaults.is_empty() {
                     self.defaults.insert(path.to_string(), parsed.defaults);
@@ -807,7 +758,8 @@ impl Loading {
             Some(expr) => reads_of(path, expr),
             None => Vec::new(),
         };
-        out.extend(data_reads(path, self.data.get(path)));
+        let reserved = self.reserved.get(path).into_iter().flatten();
+        out.extend(reserved.map(|name| variable(name)));
         out
     }
 
@@ -848,7 +800,8 @@ impl Loading {
             nodes: nodes.collect(),
             data: self.data,
             spans: self.spans,
-            per_bar: None,
+            reserved: self.reserved,
+            lowered: HashMap::new(),
             skipped: self.skipped,
             texts: self.texts,
             generations: self.generations,
@@ -878,13 +831,6 @@ pub fn resolve_ref_path(referencing: &str, ref_path: &str) -> Option<String> {
         }
     }
     Some(segments.join("/"))
-}
-
-/// A probe is parsed whole rather than as a file, so its sums are written out and its degrees
-/// keyed here.
-fn written(path: &str, expr: &Expr) -> Result<Expr, Refusal> {
-    let keyed = crate::tuning::keyed(expr, &crate::tuning::key_ref(path));
-    crate::series::written_out(&keyed).map_err(|d| Refusal::new(path, d.span, d.code, d.message))
 }
 
 fn above_root(referencing: &str, span: ByteSpan, ref_path: &str, root: &str) -> Refusal {
@@ -1093,7 +1039,6 @@ fn check_cycles(nodes: &BTreeMap<String, Expr>) -> Vec<Refusal> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse;
 
     /// The graph's own semantics have nothing to do with a filesystem, so they are stated over
     /// the in-memory form and a directory is tested where it is read (`fixtures.rs`).
@@ -1312,100 +1257,6 @@ mod tests {
         assert_eq!(ga.expr("kick"), gb.expr("kick"));
     }
 
-    /// A bar literal resolves in the same pass as a filename bar-span, so the two always agree
-    /// and the engine below stays unit-free.
-    #[test]
-    fn resolve_bar_spans_rewrites_bar_literals_everywhere_they_appear() {
-        let files: Vec<(&str, &str)> = vec![
-            ("kick", "sin(2*pi*50*t)\n"),
-            ("swung", "@kick(t - 0.02b)*0.9\n"),
-            ("tiled", "crop(@kick(t % 1b), 0s, 16b)\n"),
-            (
-                "phrase-1b",
-                "{\"at\": \"0b\", \"node\": \"@kick\"}\n{\"at\": \"0.01b\", \"node\": \"@kick\"}\n",
-            ),
-        ];
-        let mut g = load(&of(&files)).unwrap();
-
-        assert_eq!(
-            g.unresolved_bar_literals(),
-            vec!["phrase-1b", "swung", "tiled"]
-        );
-
-        g.resolve_bar_spans(PerBar {
-            seconds: 2.0,
-            per: 1.0,
-        });
-        assert!(g.unresolved_bar_literals().is_empty());
-        assert_eq!(
-            g.expr("swung"),
-            Some(&parse("@kick(t - 0.02*(2/1))*0.9").unwrap())
-        );
-        assert_eq!(
-            g.expr("tiled"),
-            Some(&parse("crop(@kick(t % (1*(2/1))), 0s, 16*(2/1))").unwrap())
-        );
-        assert_eq!(
-            g.expr("phrase-1b"),
-            Some(&parse("@kick + @kick(t - 0.01*(2/1))").unwrap()),
-            "a score's times resolve as every other bar literal does"
-        );
-    }
-
-    #[test]
-    fn a_global_is_read_from_variables_first_and_the_root_second() {
-        let files: Vec<(&str, &str)> = vec![
-            ("bpm", "120\n"),
-            ("variables/bpm", "140\n"),
-            ("meter", "4/4\n"),
-        ];
-        let g = load(&of(&files)).unwrap();
-
-        assert_eq!(g.global("bpm"), Some(&Expr::Lit(Literal::Num(140.0))));
-        assert_eq!(
-            g.global("meter"),
-            Some(&Expr::Lit(Literal::Str("4/4".to_string()))),
-            "the root spelling still answers while a composition has not moved"
-        );
-        assert_eq!(g.global("swing"), None);
-        assert!(
-            g.expr("variables/bpm").is_some(),
-            "a global is an ordinary node, referenceable as @variables/bpm"
-        );
-    }
-
-    #[test]
-    fn resolve_bar_spans_converts_only_bars_units_to_seconds() {
-        let files: Vec<(&str, &str)> = vec![
-            ("drums/kick", "sin(2*pi*50*t)\n"),
-            ("drums/pattern-2b", "@kick\n"),
-            ("drums/tail-1.5s", "@kick\n"),
-            ("drums/plain", "@kick\n"),
-        ];
-        let mut g = load(&of(&files)).unwrap();
-
-        g.resolve_bar_spans(PerBar {
-            seconds: 0.5,
-            per: 1.0,
-        });
-
-        assert_eq!(
-            g.span("drums/pattern-2b"),
-            Some(crate::filename::FileSpan {
-                amount: 1.0,
-                unit: crate::filename::SpanUnit::Seconds,
-            })
-        );
-        assert_eq!(
-            g.span("drums/tail-1.5s"),
-            Some(crate::filename::FileSpan {
-                amount: 1.5,
-                unit: crate::filename::SpanUnit::Seconds,
-            })
-        );
-        assert_eq!(g.span("drums/plain"), None);
-    }
-
     #[test]
     fn a_ref_resolves_relative_to_its_own_files_directory() {
         let files: Vec<(&str, &str)> = vec![
@@ -1476,10 +1327,7 @@ mod tests {
             ("track", "repeat(@loop-2s, 3)\n"),
         ];
         let mut g = load(&of(&files)).unwrap();
-        g.resolve_bar_spans(PerBar {
-            seconds: 1.0,
-            per: 1.0,
-        });
+        g.lower_reserved(None).unwrap();
         g.desugar_arrangement().unwrap();
 
         let expr = g.expr("track").unwrap().clone();
@@ -1507,10 +1355,7 @@ mod tests {
             ("track", "concat(@intro-3s, @drop-5s)\n"),
         ];
         let mut g = load(&of(&files)).unwrap();
-        g.resolve_bar_spans(PerBar {
-            seconds: 1.0,
-            per: 1.0,
-        });
+        g.lower_reserved(None).unwrap();
         g.desugar_arrangement().unwrap();
 
         let expr = g.expr("track").unwrap().clone();
@@ -1537,10 +1382,7 @@ mod tests {
             ("track", "repeat(@loop-1s, 2.5)\n"),
         ];
         let mut g = load(&of(&files)).unwrap();
-        g.resolve_bar_spans(PerBar {
-            seconds: 1.0,
-            per: 1.0,
-        });
+        g.lower_reserved(None).unwrap();
         let errs = g.desugar_arrangement().unwrap_err();
         assert!(errs.iter().any(|r| r.code == DiagCode::BadArrangementArg));
     }
@@ -1549,22 +1391,7 @@ mod tests {
     fn concat_with_a_non_ref_argument_is_refused_not_guessed() {
         let files: Vec<(&str, &str)> = vec![("track", "concat(1 + 2, 3)\n")];
         let mut g = load(&of(&files)).unwrap();
-        g.resolve_bar_spans(PerBar {
-            seconds: 1.0,
-            per: 1.0,
-        });
-        let errs = g.desugar_arrangement().unwrap_err();
-        assert!(errs.iter().any(|r| r.code == DiagCode::BadArrangementArg));
-    }
-
-    #[test]
-    fn concat_before_resolve_bar_spans_is_refused_not_guessed() {
-        let files: Vec<(&str, &str)> = vec![
-            ("loop-2b", "sin(2*pi*220*t)\n"),
-            ("track", "concat(@loop-2b, @loop-2b)\n"),
-        ];
-        let mut g = load(&of(&files)).unwrap();
-        // Deliberately not calling resolve_bar_spans: the span is still in Bars.
+        g.lower_reserved(None).unwrap();
         let errs = g.desugar_arrangement().unwrap_err();
         assert!(errs.iter().any(|r| r.code == DiagCode::BadArrangementArg));
     }
@@ -1577,10 +1404,7 @@ mod tests {
             ("track", "concat(@a-1s(t*2), @b-1s)\n"),
         ];
         let mut g = load(&of(&files)).unwrap();
-        g.resolve_bar_spans(PerBar {
-            seconds: 1.0,
-            per: 1.0,
-        });
+        g.lower_reserved(None).unwrap();
         let errs = g.desugar_arrangement().unwrap_err();
         assert!(errs.iter().any(|r| r.code == DiagCode::BadArrangementArg));
     }
@@ -1593,10 +1417,7 @@ mod tests {
             ("concatenated", "concat()\n"),
         ];
         let mut g = load(&of(&files)).unwrap();
-        g.resolve_bar_spans(PerBar {
-            seconds: 1.0,
-            per: 1.0,
-        });
+        g.lower_reserved(None).unwrap();
         g.desugar_arrangement().unwrap();
 
         assert_eq!(

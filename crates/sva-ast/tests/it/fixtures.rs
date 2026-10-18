@@ -25,8 +25,8 @@ fn fixture(name: &str) -> std::path::PathBuf {
 fn valid_composition_resolves_every_ref() {
     let g = parse_composition(&fixture("valid")).expect("valid fixture should resolve");
     for path in [
-        "bpm",
-        "meter",
+        "variables/bpm",
+        "variables/meter",
         "master",
         "bass",
         "lead-dry",

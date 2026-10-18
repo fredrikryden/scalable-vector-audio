@@ -4,7 +4,7 @@ use sva_ast::{Composition, free_parameters, load, parse_file};
 
 /// One node's text, with no node beside it.
 fn alone(text: &str) -> Vec<String> {
-    let parsed = parse_file("tone", text).unwrap_or_else(|d| panic!("{text}: {}", d.message));
+    let parsed = parse_file(text).unwrap_or_else(|d| panic!("{text}: {}", d.message));
     free_parameters(&parsed.expr, &parsed.defaults, &[], |_| false)
 }
 
@@ -56,7 +56,7 @@ fn a_parameter_read_by_index_or_called_at_a_time_is_a_parameter() {
 
 #[test]
 fn a_name_the_caller_binds_is_bound_and_its_default_line_is_not_read() {
-    let parsed = parse_file("tone", "f0 = base*2\namp*sin(f0*t)\n").expect("parses");
+    let parsed = parse_file("f0 = base*2\namp*sin(f0*t)\n").expect("parses");
     let free = |given: &[&str]| free_parameters(&parsed.expr, &parsed.defaults, given, |_| false);
     assert_eq!(free(&[]), ["amp", "base"]);
     assert_eq!(free(&["amp", "f0"]), [] as [&str; 0]);

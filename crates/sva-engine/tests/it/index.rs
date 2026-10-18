@@ -1,7 +1,7 @@
 // Concern: proves an index read reads the sample its integer names, whole or streamed | Non-concern: a read at an instant (refs.rs) | IO: (a composition) -> samples or a refusal
 
 use crate::fixtures::{Now, graph_of, next};
-use sva_ast::{Graph, PerBar};
+use sva_ast::Graph;
 use sva_engine::{Range, RenderConfig, Stream, StreamConfig, Tier, render};
 
 const RATE: u32 = 8_000;
@@ -46,11 +46,10 @@ fn streamed(g: &Graph, target: &str, block: usize, samples: usize) -> Vec<f64> {
 }
 
 fn at_128_bpm(name: &str, files: &[(&str, &str)]) -> Graph {
-    let mut g = graph_of(name, files);
-    g.resolve_bar_spans(PerBar {
-        seconds: 240.0,
-        per: 128.0,
-    });
+    let mut files = files.to_vec();
+    files.extend([("variables/bpm", "128\n"), ("variables/meter", "4/4\n")]);
+    let mut g = graph_of(name, &files);
+    g.lower_reserved(None).expect("a tempo");
     g
 }
 

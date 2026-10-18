@@ -83,9 +83,9 @@ listing N items is N events, event i taking item i of each list and a single val
 ```
 
 `deg(n)`, in a score or any equation, is the tonic in `variables/key` times degree `n`'s ratio in
-the scale its `scale = @../scales/minor` line names; `"deg": 5` is `"f0": "deg(5)"`. Editing the
-key's note transposes every score; its `scale` line changes mode. A value is constant: what moves
-is an automation lane, as `cutoff=20khz*pow(0.02, @auto/riser(t))`. Place one as `@bass(t - 8b)`.
+the scale `variables/scale` names, as `@../scales/minor`; `"deg": 5` is `"f0": "deg(5)"`. Editing
+the key transposes every score and editing the scale changes mode, live too. A value is constant:
+what moves is an automation lane, as `cutoff=20khz*pow(0.02, @auto/riser(t))`. Place one as `@bass(t - 8b)`.
 
 ## Literals and waveforms
 
@@ -126,7 +126,7 @@ float over the two seconds `master`'s crop holds. `'@master([0, 1s])'` names an 
 rendered whole; with none, a render ends where `master`'s support does, or earlier where
 `master` is proven under -120 dBFS for good, as the label's `pruned` states. `--until
 'envelope(t) < -60db'` stops at the first frame under -60 dB. `ledger` prints rms, peak and
-clipped per node.
+clipped per node. `--set variables/key=G3 --set variables/bpm=140` renders in G3 at 140 bpm.
 
 Every reading says whether it is `exact` or `measured`, under which profile and at which
 rate. `--rate` is the one rate a render samples at: the target is read at its instants, and
@@ -137,7 +137,7 @@ discrete loop or solver steps on the grid its reader asks for, and refuses a tim
 
 `sva-cli builtins` prints every builtin with its arity and named arguments, the unit suffixes
 and the note-name grammar; a name outside that closed vocabulary does not parse. `sva-cli new
-my-song` writes thirteen files with two scores, two scales and a noise, and nine commands to run.
+my-song` writes fourteen files with two scores, two scales and a noise, and nine commands to run.
 
 `sva-wasm` runs the same compositions in a browser: `npm install @scalable-vector-audio/sva-wasm`.
 It needs a cross-origin isolated page. Call `await startThreads(n)` once, in a worker, and each

@@ -82,6 +82,7 @@ pub(super) fn render_args(rest: &[String]) -> Result<Command, CliError> {
     let mut flags = Flags::default();
     let (mut until, mut rate, mut bits, mut threads) = (None, None, None, None);
     let mut cache = CacheAt::Platform;
+    let mut sets = Vec::new();
     while let Some(flag) = it.next() {
         if flags.read(flag, &mut it)? {
             continue;
@@ -91,6 +92,7 @@ pub(super) fn render_args(rest: &[String]) -> Result<Command, CliError> {
             "--rate" => rate = Some(hertz(&value(&mut it, "--rate")?)?),
             "--bits" => bits = Some(whole(&value(&mut it, "--bits")?, "--bits")?),
             "--threads" => threads = Some(count(&value(&mut it, "--threads")?)?),
+            "--set" => sets.push(sva_core::set(&value(&mut it, "--set")?)?),
             "--cache" => {
                 cache = match value(&mut it, "--cache")?.as_str() {
                     "none" => CacheAt::Off,
@@ -124,6 +126,7 @@ pub(super) fn render_args(rest: &[String]) -> Result<Command, CliError> {
         asked,
         confirm: flags.confirm,
         cache,
+        sets,
     })))
 }
 

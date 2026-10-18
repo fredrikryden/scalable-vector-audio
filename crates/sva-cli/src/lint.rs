@@ -5,7 +5,7 @@ use std::path::Path;
 use sva_ast::parse_doc_comment;
 use sva_ast::{Graph, Source, ref_spans};
 use sva_core::{CliError, Job, LintCode, LintViolation, Severity, lint_diagnostic};
-use sva_core::{Diagnostic, prepared, refuse_unresolved_bars, settled};
+use sva_core::{Diagnostic, prepared, settled};
 
 /// These ride a `success` envelope; a refusal raises [`sva_core::CliError::LintRefused`].
 pub struct Finding {
@@ -49,7 +49,6 @@ pub fn lint(dir: &Path, target: Option<&str>) -> Result<LintReport, CliError> {
 /// Every entry point is typed, which types every file it reaches; one that no render can take
 /// whole is left to the render that refuses it. A lint violation refuses before a type does.
 fn lint_files(source: &dyn Source, graph: Graph) -> Result<LintReport, CliError> {
-    refuse_unresolved_bars(&graph)?;
     let violations = lint_violations(source, &graph);
     if violations.is_empty() {
         for root in crate::trace::entry_points(&graph) {
@@ -98,7 +97,6 @@ fn lint_reaching(source: &dyn Source, target: &str) -> Result<LintReport, CliErr
     let held = sva_core::roots_of(source, &expr)?;
     let roots: Vec<&str> = held.iter().map(String::as_str).collect();
     let graph = settled(sva_ast::load_reaching(source, &roots))?;
-    refuse_unresolved_bars(&graph)?;
     let violations = lint_violations(source, &graph);
     let mut interval = None;
     if violations.is_empty() {

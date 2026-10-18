@@ -3,7 +3,7 @@
 use sva_ast::{DiagCode, parse_expr, parse_file, render_expr};
 
 fn body(text: &str) -> Result<String, DiagCode> {
-    parse_file("bank", text)
+    parse_file(text)
         .map(|p| render_expr(&p.expr))
         .map_err(|d| d.code)
 }

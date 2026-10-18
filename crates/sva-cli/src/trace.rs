@@ -4,8 +4,8 @@ use std::path::Path;
 
 use std::collections::BTreeSet;
 
-use sva_ast::{Binds, Expr, Graph, Literal, children, resolve_ref_path};
-use sva_core::{CliError, PROBE, define_probe_for, prepared, refuse_unresolved_bars};
+use sva_ast::{Binds, Expr, Graph, children, resolve_ref_path};
+use sva_core::{CliError, PROBE, define_probe_for, prepared};
 use sva_engine::{EngineError, Traced};
 
 pub struct Traceable {
@@ -26,7 +26,6 @@ pub fn trace(dir: &Path, target: &str) -> Result<Traceable, CliError> {
     };
     let target = target.as_str();
     let mut graph = prepared(&sva_ast::Dir::at(dir))?;
-    refuse_unresolved_bars(&graph)?;
 
     let mut roots = entry_points(&graph);
     if graph.defines(target)
@@ -47,9 +46,10 @@ pub fn trace(dir: &Path, target: &str) -> Result<Traceable, CliError> {
             *expr = summary(score);
         }
     }
+    let tempo = graph.tempo();
     Ok(Traceable {
-        bpm: number(graph.global("bpm")),
-        meter: text(graph.global("meter")),
+        bpm: tempo.as_ref().map(|tempo| tempo.bpm),
+        meter: tempo.map(|tempo| tempo.meter),
         traced,
     })
 }
@@ -79,20 +79,6 @@ fn probe(graph: &mut Graph, text: &str) -> Result<Traced, CliError> {
     sva_engine::trace(graph, &roots, PROBE).map_err(CliError::Engine)
 }
 
-fn number(e: Option<&Expr>) -> Option<f64> {
-    match e {
-        Some(Expr::Lit(Literal::Num(v))) => Some(*v),
-        _ => None,
-    }
-}
-
-fn text(e: Option<&Expr>) -> Option<String> {
-    match e {
-        Some(Expr::Lit(Literal::Str(v))) => Some(v.clone()),
-        _ => None,
-    }
-}
-
 fn referenced(graph: &Graph) -> BTreeSet<String> {
     let mut reached: BTreeSet<String> = BTreeSet::new();
     for path in graph.paths() {
@@ -117,7 +103,9 @@ pub(crate) fn entry_points(graph: &Graph) -> Vec<String> {
 }
 
 pub(crate) fn reserved_variable(path: &str) -> bool {
-    sva_core::RESERVED_VARIABLES.contains(&path.rsplit('/').next().unwrap_or(path))
+    sva_core::RESERVED_VARIABLES
+        .iter()
+        .any(|name| sva_ast::variable(name) == path)
 }
 
 fn collect_refs(from: &str, expr: &Expr, out: &mut BTreeSet<String>) {

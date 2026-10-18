@@ -59,14 +59,14 @@ SCORES:
       "vel": [0.8, 0.5, 0.6], "len": ["1b", "0.5b", "1b"]}}
   and a list of `at` is a run of one node, its items in order.
   `deg(n)` is the tonic in `variables/key` times degree n's ratio in the scale
-  its `scale = @../scales/<name>` line names, in a score value or in any
-  equation. A chromatic note is a degree times a ratio and an octave is a
-  factor of 2: "f0": "deg(7)*1st" raises the seventh, "f0": "deg(5)/2" is the
-  fifth an octave down, and both follow every edit of the key or its scale. A
-  scale file holds one row per degree in cents above the tonic, ascending, the
-  last the period it repeats at: `scales/major` is 200 400 500 700 900 1100
-  1200. Editing `variables/key`'s note transposes every score and editing its
-  `scale` line changes mode. By convention a sound's `vel` runs 0..1 and its
+  `variables/scale` names, in a score value or in any equation. A chromatic
+  note is a degree times a ratio and an octave is a factor of 2: "f0":
+  "deg(7)*1st" raises the seventh, "f0": "deg(5)/2" is the fifth an octave
+  down, and both follow every edit of the key or its scale. A scale file holds
+  one row per degree in cents above the tonic, ascending, the last the period
+  it repeats at: `scales/major` is 200 400 500 700 900 1100 1200. Editing
+  `variables/key`'s note transposes every score and editing `variables/scale`
+  changes mode. By convention a sound's `vel` runs 0..1 and its
   mix level is a constant in its own equation, so a score's dynamics survive a
   change of mix. A value reading `t` or a `@ref`, a field the node does not
   read, a parameter it reads that nothing binds, and a `deg` with no scale
@@ -85,10 +85,26 @@ SCORES:
   An fx throw is the same lane gating a send: `@fx/echo(t, x=sample(@lead) *
   @auto/throw(t))`.
 
+RESERVED VARIABLES:
+  Four nodes under `variables/` are reserved: a ref reads one like any node,
+  and a bar or a degree reads one by name:
+    variables/bpm     a number, the beats per minute: 120
+    variables/meter   beats per bar over the note: 4/4
+    variables/key     the tonic `deg` counts from, a note or hertz: C3
+    variables/scale   a ref to the scale file `deg` counts in: @../scales/major
+  A `b` literal or a file's `-2b` span reads bpm and meter; a `deg(n)` reads key
+  and scale. Before anything renders, each read is replaced by its value, by one
+  pass for all four: a bar becomes `n*(beats*60/bpm)` seconds and `deg(n)`
+  becomes `@variables/key` times degree n's ratio, the tonic still a ref. A
+  read with no value to replace it refuses as `bad-tempo` or `bad-scale`, as
+  does a variable holding no such value, such as bpm without meter. A stream's
+  edit to a variable, or to the scale file it names, replaces every read of it
+  again. A node elsewhere named `bpm` is an ordinary node.
+
 RENDER:
   sva-cli render '<expression>' --representation <list> [--until '<condition>']
                  [--bits <n>] [--rate <hz>] [--threads <n>] [--cache <path|none>]
-                 [--confirm]
+                 [--set <variables/name>=<text>]... [--confirm]
 
   Renders one expression, in the grammar a node file's body uses, and prints one
   reading per representation under `data.representations`. `@path` reads a node
@@ -177,6 +193,14 @@ RENDER:
   `sp` count or `self[idx(t) - 1]` means one sample at whatever rate is asked.
   `rand` draws once per step, keyed by that step's index; a key between steps
   reads the step nearest it, ties to even.
+
+  `--set variables/<name>=<text>` renders as if that reserved variable's file
+  held `<text>`, and writes no file: `--set variables/key=G3` transposes every
+  degree to G3, `--set variables/scale=@../scales/minor` changes mode (the ref
+  is written from `variables/`, as the file holds it), `--set
+  variables/bpm=140` moves every bar. It may repeat, once per variable: a
+  variable set twice refuses as `render.set_twice`, and a path that is no
+  reserved variable as `render.set_unreserved`.
 
   `--threads <n>` (default: every core the machine reports) is the most
   threads a render computes on; `1` computes every value in turn on one.
@@ -340,6 +364,8 @@ EXAMPLES:
     --until 'envelope(t) < -60db and t > 1s' --representation samples=/tmp/note.wav
   sva-cli render 'sample(@chord/home)' --representation 'spectrum(peaks=8)' --rate 48000
   sva-cli render 'sample(@voice/note([0, 2s], f0=C4))' --representation pitch
+  sva-cli render '@master' --set variables/key=G3 --set variables/bpm=140 \
+    --representation samples=/tmp/song1-g.wav
   sva-cli render '@master' \
     --representation 'samples(buffer=100ms)=alsa:default,loudness'
   sva-cli lint
@@ -422,6 +448,8 @@ DEFAULTS:
                        `~/.cache/sva`, holding at most {store_gb} GB; `none` keeps
                        no store. A store that fails fails no render: it answers
                        as without one, warned why in `diagnostics`.
+  --set <path>=<text>  a reserved variable read as `<text>` for this render.
+                       Default none: each is read off its file.
   --confirm            replaces a destination that already holds a file. Without
                        it a path already taken refuses as `conflict` and nothing
                        is written.

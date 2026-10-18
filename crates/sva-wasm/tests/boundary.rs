@@ -184,6 +184,36 @@ fn a_representation_crosses_as_the_object_the_cli_puts_under_data() {
     );
 }
 
+/// `set` reads a reserved variable as the text it names, as `sva-cli render --set` does.
+#[wasm_bindgen_test]
+fn a_render_sets_a_reserved_variable_without_inserting_it() {
+    let keyed = |tonic: &str| {
+        let mut held = Composition::new(None);
+        held.insert("variables/key", &format!("{tonic}\n"));
+        held.insert("variables/scale", "@../scales/major\n");
+        held.insert("scales/major", "200\n400\n500\n700\n900\n1100\n1200\n");
+        held.insert("voice", "sin(2*pi*deg(3)*t)\n");
+        held
+    };
+    let set = js_sys::Object::new();
+    js_sys::Reflect::set(&set, &"variables/key".into(), &"A4".into())
+        .unwrap_or_else(|_| unreachable!("an object takes a key"));
+    let target = "@voice([0, 0.1s])";
+    let samples = Some(vec!["samples".to_string()]);
+    let set = keyed("A3")
+        .rendered(target, samples.clone(), options(&[("set", set.into())]))
+        .unwrap_or_else(|e| unreachable!("a set renders: {}", as_text(&field(&e, "refusal"))));
+    let written = keyed("A4")
+        .rendered(target, samples, options(&[]))
+        .unwrap_or_else(|_| unreachable!("a key renders"));
+    assert_eq!(plane(&set), plane(&written));
+    let unreserved = js_sys::Object::new();
+    js_sys::Reflect::set(&unreserved, &"voice".into(), &"1".into())
+        .unwrap_or_else(|_| unreachable!("an object takes a key"));
+    let refused = keyed("A3").rendered(target, None, options(&[("set", unreserved.into())]));
+    assert!(refused.is_err(), "only a reserved variable is set");
+}
+
 /// Every name the CLI answers is a name this surface recognizes. Some of them
 /// refuse on a mono closed form — a stereo image needs two components — but none is unknown here.
 #[wasm_bindgen_test]

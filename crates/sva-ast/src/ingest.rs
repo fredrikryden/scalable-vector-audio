@@ -1,28 +1,16 @@
 // Concern: classifies one file's raw content and parses it to an Expr | Non-concern: walking the directory, resolving refs (graph.rs) | IO: (path, content) -> Expr or a Diag
 
 use crate::diag::{ByteSpan, Diag, DiagCode};
-use crate::expr::{Address, Arg, Binds, Expr, Literal, SERIES, children};
+use crate::expr::{Arg, Binds, Expr, Literal, SERIES, children};
 use crate::parser::parse;
 use crate::scale::{Scale, is_scale, parse_scale};
 use crate::score::{Score, is_score, parse_score};
-use crate::tuning::{key_ref, keyed};
-
-/// The one node whose `scale` line names the scale every score degree is counted in.
-pub const KEY: &str = "variables/key";
 
 /// What a file holds beside the expression every other pass reads.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Data {
     Score(Score),
     Scale(Scale),
-    Key(ScaleLine),
-}
-
-/// `scale = @../scales/minor` above the tonic, `path` as written.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ScaleLine {
-    pub path: String,
-    pub span: ByteSpan,
 }
 
 #[derive(Debug)]
@@ -34,12 +22,11 @@ pub struct Parsed {
 
 /// A leading `<name> = <expr>` line states what a caller that says nothing about `<name>` gets.
 /// Everything after the last one is the body, read exactly as a file with no defaults is.
-pub fn parse_file(path: &str, content: &str) -> Result<Parsed, Diag> {
+pub fn parse_file(content: &str) -> Result<Parsed, Diag> {
     if is_score(content) {
         let score = parse_score(content)?;
-        let expr = keyed(&score.lowered(), &key_ref(path));
         return Ok(Parsed {
-            expr,
+            expr: score.lowered(),
             data: Some(Data::Score(score)),
             defaults: Vec::new(),
         });
@@ -48,11 +35,7 @@ pub fn parse_file(path: &str, content: &str) -> Result<Parsed, Diag> {
     let split = default_rows(&rows);
     let (heads, _) = rows.split_at(split);
     let body_at = rows.get(split).map_or(content.len(), |(at, _)| *at);
-    let mut defaults = read_defaults(heads)?;
-    let scale_line = match path == KEY {
-        true => scale_line(&mut defaults, body_at)?,
-        false => None,
-    };
+    let defaults = read_defaults(heads)?;
 
     let mut parsed = parse_body(&content[body_at..]).map_err(|d| shift(d, body_at))?;
     parsed.expr = crate::series::written_out(&parsed.expr).map_err(|d| shift(d, body_at))?;
@@ -75,40 +58,8 @@ pub fn parse_file(path: &str, content: &str) -> Result<Parsed, Diag> {
             ));
         }
     }
-    let key = key_ref(path);
-    parsed.expr = keyed(&parsed.expr, &key);
-    parsed.defaults = defaults
-        .iter()
-        .map(|(name, value)| (name.clone(), keyed(value, &key)))
-        .collect();
-    parsed.data = parsed.data.or(scale_line.map(Data::Key));
+    parsed.defaults = defaults;
     Ok(parsed)
-}
-
-/// The key's `scale` line is no parameter of the tonic, so it leaves the defaults.
-fn scale_line(
-    defaults: &mut Vec<(String, Expr)>,
-    body_at: usize,
-) -> Result<Option<ScaleLine>, Diag> {
-    let Some(at) = defaults.iter().position(|(name, _)| name == "scale") else {
-        return Ok(None);
-    };
-    match defaults.remove(at).1 {
-        Expr::Ref {
-            path,
-            arg,
-            binds,
-            address: Address::Time,
-            span,
-        } if binds.is_empty() && *arg == Expr::Var("t".to_string()) => {
-            Ok(Some(ScaleLine { path, span }))
-        }
-        _ => Err(Diag::new(
-            DiagCode::BadDefault,
-            ByteSpan::new(0, body_at),
-            format!("`{KEY}`'s `scale` line names a scale file, as `scale = @../scales/major`"),
-        )),
-    }
 }
 
 /// The byte the body starts at: past the comment and default lines that lead a node's text.
@@ -355,7 +306,7 @@ mod tests {
 
     #[test]
     fn plain_number_files_are_literals() {
-        let p = parse_file("bpm", "120\n").unwrap();
+        let p = parse_file("120\n").unwrap();
         assert_eq!(p.expr, Expr::Lit(Literal::Num(120.0)));
         assert!(p.data.is_none());
     }
@@ -363,7 +314,7 @@ mod tests {
     #[test]
     fn bare_token_files_are_string_literals_not_expressions() {
         assert_eq!(
-            parse_file("meter", "4/4\n").unwrap().expr,
+            parse_file("4/4\n").unwrap().expr,
             Expr::Lit(Literal::Str("4/4".to_string()))
         );
     }
@@ -371,28 +322,28 @@ mod tests {
     #[test]
     fn a_file_holding_one_identifier_is_that_identifier_not_a_string() {
         assert_eq!(
-            parse_file("root", "C4\n").unwrap().expr,
+            parse_file("C4\n").unwrap().expr,
             Expr::Var("C4".to_string())
         );
         assert_eq!(
-            parse_file("gain", "pi\n").unwrap().expr,
+            parse_file("pi\n").unwrap().expr,
             Expr::Var("pi".to_string())
         );
     }
 
     #[test]
     fn single_line_expression_files_parse_as_expressions() {
-        let p = parse_file("kick", "sin(2*pi*50*t) * exp(-t*30)\n").unwrap();
+        let p = parse_file("sin(2*pi*50*t) * exp(-t*30)\n").unwrap();
         assert!(matches!(p.expr, Expr::Bin(..)));
         assert!(p.data.is_none());
     }
 
     #[test]
     fn a_body_over_many_lines_refuses_located_unless_every_row_is_a_number() {
-        let err = parse_file("pattern", "; lane\n@kick\n@snare\n").unwrap_err();
+        let err = parse_file("; lane\n@kick\n@snare\n").unwrap_err();
         assert_eq!(err.code, DiagCode::MultilineBody);
         assert_eq!(err.span, ByteSpan::at(13));
-        let scale = parse_file("scales/x", "; a scale\n200\n400 ; the third\n\n1200\n").unwrap();
+        let scale = parse_file("; a scale\n200\n400 ; the third\n\n1200\n").unwrap();
         let Some(Data::Scale(scale)) = scale.data else {
             panic!("rows of numbers are a scale")
         };
@@ -401,63 +352,47 @@ mod tests {
 
     #[test]
     fn a_first_line_opening_with_a_brace_is_a_score() {
-        let p = parse_file("score/bass", "\n{\"at\": \"0b\", \"node\": \"@../bass\"}\n").unwrap();
+        let p = parse_file("\n{\"at\": \"0b\", \"node\": \"@../bass\"}\n").unwrap();
         assert!(matches!(p.data, Some(Data::Score(_))));
         assert!(matches!(p.expr, Expr::Ref { ref path, .. } if path == "../bass"));
     }
 
     #[test]
-    fn only_the_key_lifts_a_scale_line_out_of_its_defaults() {
-        let text = "scale = @../scales/minor\nA1\n";
-        let key = parse_file(KEY, text).unwrap();
-        assert!(key.defaults.is_empty());
-        assert!(matches!(key.data, Some(Data::Key(ref line)) if line.path == "../scales/minor"));
-        assert_eq!(
-            parse_file("tonic", text).unwrap_err().code,
-            DiagCode::BadDefault
-        );
-        let not_a_ref = parse_file(KEY, "scale = 3\nA1\n").unwrap_err();
-        assert!(not_a_ref.message.contains("scale file"));
-    }
-
-    #[test]
     fn html_content_refuses_as_not_a_node() {
         let html = "<!DOCTYPE html>\n<html>\n<head></head>\n<body>bench output</body>\n</html>\n";
-        let err = parse_file("bench", html).unwrap_err();
+        let err = parse_file(html).unwrap_err();
         assert_eq!(err.code, DiagCode::NotNodeContent);
         assert!(err.message.contains("HTML"));
     }
 
     #[test]
     fn comment_lines_count_as_no_expression_line() {
-        let p = parse_file("kick", "; the body\nsin(2*pi*50*t)\n").unwrap();
-        assert_eq!(p.expr, parse_file("kick", "sin(2*pi*50*t)\n").unwrap().expr);
+        let p = parse_file("; the body\nsin(2*pi*50*t)\n").unwrap();
+        assert_eq!(p.expr, parse_file("sin(2*pi*50*t)\n").unwrap().expr);
     }
 
     #[test]
     fn a_header_comment_leaves_every_scalar_shape_alone() {
         let header = "; Concern: the time signature | Non-concern: the tempo | IO: none\n";
         assert_eq!(
-            parse_file("meter", &format!("{header}4/4\n")).unwrap().expr,
+            parse_file(&format!("{header}4/4\n")).unwrap().expr,
             Expr::Lit(Literal::Str("4/4".to_string()))
         );
         assert_eq!(
-            parse_file("bpm", &format!("{header}120\n")).unwrap().expr,
+            parse_file(&format!("{header}120\n")).unwrap().expr,
             Expr::Lit(Literal::Num(120.0))
         );
         assert_eq!(
-            parse_file("root", &format!("{header}C4\n")).unwrap().expr,
+            parse_file(&format!("{header}C4\n")).unwrap().expr,
             Expr::Var("C4".to_string())
         );
         assert_eq!(
-            parse_file("meter", "4/4 ; four on the floor\n")
-                .unwrap()
-                .expr,
+            parse_file("4/4 ; four on the floor\n").unwrap().expr,
             Expr::Lit(Literal::Str("4/4".to_string())),
             "a trailing comment is stripped too"
         );
         assert_eq!(
-            parse_file("gain", "; only a comment\n").unwrap().expr,
+            parse_file("; only a comment\n").unwrap().expr,
             Expr::Lit(Literal::Str(String::new())),
             "a file with no code is empty, not malformed"
         );
@@ -465,28 +400,28 @@ mod tests {
 
     #[test]
     fn blank_lines_around_an_expression_leave_it_one_expression() {
-        let plain = parse_file("tone", "sin(2*pi*220*t)\n").unwrap();
+        let plain = parse_file("sin(2*pi*220*t)\n").unwrap();
         for padded in [
             "sin(2*pi*220*t)\n\n",
             "sin(2*pi*220*t)\n\n\n",
             "\nsin(2*pi*220*t)\n",
         ] {
-            let p = parse_file("tone", padded).unwrap();
+            let p = parse_file(padded).unwrap();
             assert_eq!(p.expr, plain.expr, "{padded:?}");
         }
-        let defaulted = parse_file("tone", "f = 220\n\nsin(2*pi*f*t)\n").unwrap();
+        let defaulted = parse_file("f = 220\n\nsin(2*pi*f*t)\n").unwrap();
         assert_eq!(
             defaulted.expr,
-            parse_file("tone", "f = 220\nsin(2*pi*f*t)\n").unwrap().expr
+            parse_file("f = 220\nsin(2*pi*f*t)\n").unwrap().expr
         );
         assert_eq!(
-            parse_file("bpm", "120\n\n").unwrap().expr,
+            parse_file("120\n\n").unwrap().expr,
             Expr::Lit(Literal::Num(120.0))
         );
     }
 
     #[test]
     fn malformed_expression_syntax_refuses() {
-        assert!(parse_file("lead", "sin(\n").is_err());
+        assert!(parse_file("sin(\n").is_err());
     }
 }

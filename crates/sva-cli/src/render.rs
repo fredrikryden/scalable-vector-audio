@@ -40,7 +40,8 @@ fn answered(
     tier: &Tier<Directory>,
     warnings: &mut Vec<Diagnostic>,
 ) -> Result<String, CliError> {
-    let source = sva_ast::Dir::at(dir);
+    let files = sva_ast::Dir::at(dir);
+    let source = sva_core::overlaid(&files, &args.sets)?;
     let logs = std::env::var("SVA_LOG").is_ok_and(|level| level == "debug");
     let hearing = hearing(args)?;
     let job = Job {

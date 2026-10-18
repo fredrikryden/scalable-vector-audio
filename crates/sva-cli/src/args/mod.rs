@@ -23,6 +23,8 @@ pub struct RenderArgs {
     /// The caller said a destination that already holds a file may be replaced.
     pub confirm: bool,
     pub cache: CacheAt,
+    /// Reserved variables read as these texts instead of their files'.
+    pub sets: Vec<(String, String)>,
 }
 
 /// Where a render's persistent store lives.

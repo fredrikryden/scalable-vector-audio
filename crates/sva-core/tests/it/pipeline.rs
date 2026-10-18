@@ -137,8 +137,8 @@ fn the_roots_of_a_target_are_what_its_math_reads() {
     };
     assert!(holds("@kick*0.5", "kick"), "argv math pulls what it reads");
     assert!(
-        holds("sin(t)", "bpm"),
-        "and every reserved variable, which no ref walk reaches"
+        holds("sin(t)", "variables/bpm"),
+        "and every reserved variable, which an interval or `--until` may read"
     );
 }
 
@@ -172,36 +172,40 @@ fn an_expression_of_any_length_is_math_and_never_a_path() {
 #[test]
 fn a_bar_span_is_settled_by_a_whole_tempo_pair_and_by_nothing_less() {
     let whole = composition(&[
-        ("bpm", "120\n"),
-        ("meter", "4/4\n"),
+        ("variables/bpm", "120\n"),
+        ("variables/meter", "4/4\n"),
         ("hit-1b", "sin(2*pi*220*t)\n"),
         ("master", "@hit-1b\n"),
     ]);
     let graph = prepared(&whole).expect("a tempo settles the span");
-    assert_eq!(graph.seconds_per_bar(), Some(2.0), "four beats at 120 bpm");
+    assert_eq!(
+        graph.tempo().map(|tempo| tempo.seconds_per_bar()),
+        Some(2.0),
+        "four beats at 120 bpm"
+    );
 
     for half in [
         composition(&[
-            ("bpm", "120\n"),
+            ("variables/bpm", "120\n"),
             ("hit-1b", "sin(t)\n"),
             ("master", "@hit-1b\n"),
         ]),
         composition(&[
-            ("meter", "4/4\n"),
+            ("variables/meter", "4/4\n"),
             ("hit-1b", "sin(t)\n"),
             ("master", "@hit-1b\n"),
         ]),
         composition(&[
-            ("bpm", "0\n"),
-            ("meter", "4/4\n"),
+            ("variables/bpm", "0\n"),
+            ("variables/meter", "4/4\n"),
             ("hit-1b", "sin(t)\n"),
             ("master", "@hit-1b\n"),
         ]),
     ] {
-        assert!(
-            matches!(prepared(&half), Err(CliError::BadTempo(_))),
-            "half a tempo settles nothing"
-        );
+        let Err(CliError::Refusals(refused)) = prepared(&half) else {
+            panic!("half a tempo settles nothing");
+        };
+        assert_eq!(refused[0].code, sva_ast::DiagCode::BadTempo);
     }
 }
 
