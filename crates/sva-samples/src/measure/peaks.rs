@@ -1,6 +1,6 @@
 // Concern: picks a Hann spectrum's peaks, those louder peaks' sidelobes cannot explain | Non-concern: computing the spectrum (spectrum.rs), naming a peak (pitch.rs) | IO: (magnitudes, span) -> peaks
 
-const FLOOR_DB: f64 = -160.0;
+pub const FLOOR_DB: f64 = -160.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Peak {

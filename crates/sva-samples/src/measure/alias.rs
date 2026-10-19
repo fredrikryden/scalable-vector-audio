@@ -1,6 +1,7 @@
 // Concern: scores a render against the same one oversampled, as ASR and per-band NMR | Non-concern: producing either render, the plain spectrum (spectrum.rs) | IO: (base, high, k, sr, start) -> Alias
 
 use crate::fft::fft;
+use crate::measure::peaks::FLOOR_DB;
 use crate::measure::spectrum::{db, starts};
 use crate::stft::hann_periodic as hann;
 
@@ -145,7 +146,7 @@ pub fn measure_alias(
         let ratio = nmr_of(&s, &e, &edges);
         nmr_sum += ratio;
         scored += 1;
-        let frame_db = 10.0 * ratio.max(f64::MIN_POSITIVE).log10();
+        let frame_db = power_db(ratio);
         if frame_db > nmr_peak {
             nmr_peak = frame_db;
             peak_at = start_secs + start as f64 / sample_rate;
@@ -157,7 +158,7 @@ pub fn measure_alias(
     } else {
         0.0
     };
-    let nmr_db = 10.0 * mean.max(f64::MIN_POSITIVE).log10();
+    let nmr_db = power_db(mean);
     Ok(Alias {
         oversample,
         sample_rate,
@@ -165,10 +166,7 @@ pub fn measure_alias(
         frames,
         scored_frames: scored,
         playback_db_spl: PLAYBACK_DB_SPL,
-        asr_db: 10.0
-            * (err_total / sig_total.max(f64::MIN_POSITIVE))
-                .max(f64::MIN_POSITIVE)
-                .log10(),
+        asr_db: power_db(err_total / sig_total.max(f64::MIN_POSITIVE)),
         nmr_db,
         nmr_peak_db: if scored > 0 { nmr_peak } else { nmr_db },
         peak_at_secs: peak_at,
@@ -176,6 +174,14 @@ pub fn measure_alias(
         instances: 0,
         bands: bands(&sig_bands, &err_bands, &edges, frames.max(1)),
     })
+}
+
+/// A power ratio in dB on the floor every level here stops at.
+fn power_db(ratio: f64) -> f64 {
+    match ratio > 0.0 {
+        true => (10.0 * ratio.log10()).max(FLOOR_DB),
+        false => FLOOR_DB,
+    }
 }
 
 fn transform(x: &[f64], start: usize, window: &[f64], stride: usize) -> (Vec<f64>, Vec<f64>) {
@@ -270,7 +276,7 @@ fn bands(signal: &[f64], alias: &[f64], edges: &[f64], frames: usize) -> Vec<Ali
                 hi_hz: edges[j + 1],
                 signal_db: db(mean[j].sqrt()),
                 alias_db: db(a.sqrt()),
-                nmr_db: 10.0 * (a / masked[j]).max(f64::MIN_POSITIVE).log10(),
+                nmr_db: power_db(a / masked[j]),
             }
         })
         .collect()

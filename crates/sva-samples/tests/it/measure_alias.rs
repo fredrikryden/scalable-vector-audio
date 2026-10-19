@@ -29,6 +29,22 @@ fn a_signal_that_survives_the_rate_change_measures_no_alias() {
     assert!(m.scored_frames > 0);
 }
 
+/// No alias over no signal is a ratio of zeros: every dB stops at the floor `alias_db` and
+/// `signal_db` stop at, not at the smallest double's.
+#[test]
+fn silence_reads_every_ratio_at_the_level_floor() {
+    let (n, k) = (4096, 4);
+    let m = measure_alias(&vec![0.0; n], &vec![0.0; n * k], k, 44100.0, 0.0).expect("a frame");
+    assert_eq!(
+        (m.asr_db, m.nmr_db, m.nmr_peak_db),
+        (-160.0, -160.0, -160.0)
+    );
+    for band in &m.bands {
+        let held = [band.signal_db, band.alias_db, band.nmr_db];
+        assert_eq!(held, [-160.0; 3], "{band:?}");
+    }
+}
+
 /// A 6 kHz saw has one harmonic under Nyquist; the rest folded down.
 #[test]
 fn a_folded_harmonic_reads_as_audible_alias() {
