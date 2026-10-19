@@ -103,7 +103,7 @@ fn plane(of: &Rendering) -> Vec<f32> {
 }
 
 fn readings(of: &Rendering) -> JsValue {
-    of.representations().unwrap_or_else(|e| {
+    of.representations(JsValue::UNDEFINED).unwrap_or_else(|e| {
         unreachable!("representations answer: {}", as_text(&field(&e, "refusal")))
     })
 }
@@ -182,6 +182,38 @@ fn a_representation_crosses_as_the_object_the_cli_puts_under_data() {
         Some(true),
         "and it says so rather than reading as the whole"
     );
+
+    let whole = one
+        .representations(every_value())
+        .unwrap_or_else(|e| unreachable!("`limit: null` answers: {}", as_text(&e)));
+    let values = field(
+        &items(
+            &field(
+                &field(&field(&whole, "representations"), "samples"),
+                "value",
+            ),
+            "components",
+        )
+        .get(0),
+        "values",
+    );
+    assert_eq!(
+        js_sys::Array::from(&field(&values, "items")).length(),
+        8000,
+        "`limit: null` holds every value"
+    );
+    assert_eq!(
+        field(&field(&values, "pagination"), "has_more").as_bool(),
+        Some(false)
+    );
+}
+
+/// `{ limit: null }`: every value of every array, as a reading written to a file holds.
+fn every_value() -> JsValue {
+    let held = js_sys::Object::new();
+    js_sys::Reflect::set(&held, &"limit".into(), &JsValue::NULL)
+        .unwrap_or_else(|_| unreachable!("an object takes a key"));
+    held.into()
 }
 
 /// PCM a page holds is read as `sva-cli analyze` reads a file: the same `data` object, the
@@ -203,6 +235,7 @@ fn pcm_a_page_holds_is_analyzed_as_the_cli_analyzes_a_file() {
         8000,
         channels(&[&tone, &tone]),
         asked(&["envelope", "stereo"]),
+        JsValue::UNDEFINED,
     )
     .unwrap_or_else(|e| unreachable!("a tone analyzes: {}", as_text(&field(&e, "refusal"))));
     let spelled = as_text(&read);
@@ -212,13 +245,66 @@ fn pcm_a_page_holds_is_analyzed_as_the_cli_analyzes_a_file() {
     );
     assert_eq!(field(&read, "sample_rate").as_f64(), Some(8000.0));
 
-    let graph = sva_wasm::analyze("crop.wav", 8000, channels(&[&tone]), asked(&["ledger"]));
+    // Three seconds: more band values than stdout's cap.
+    let long: Vec<f32> = tone.iter().copied().cycle().take(24000).collect();
+    let bands = |options: JsValue| {
+        let read = sva_wasm::analyze(
+            "crop.wav",
+            8000,
+            channels(&[&long]),
+            asked(&["bands"]),
+            options,
+        )
+        .unwrap_or_else(|e| unreachable!("a tone's bands: {}", as_text(&field(&e, "refusal"))));
+        let value = field(&field(&field(&read, "representations"), "bands"), "value");
+        let rms = field(&items(&value, "bands").get(0), "rms");
+        let paging = field(&rms, "pagination");
+        let held = js_sys::Array::from(&field(&rms, "items")).length();
+        (
+            field(&paging, "has_more").as_bool(),
+            f64::from(held),
+            field(&paging, "count").as_f64(),
+        )
+    };
+    let (more, held, count) = bands(JsValue::UNDEFINED);
+    assert_eq!(
+        (more, held),
+        (Some(true), 4096.0),
+        "capped as stdout caps, of {count:?}"
+    );
+    let (more, held, count) = bands(every_value());
+    assert_eq!(
+        (more, Some(held)),
+        (Some(false), count),
+        "`limit: null` reads every value"
+    );
+
+    let zero = js_sys::Object::new();
+    js_sys::Reflect::set(&zero, &"limit".into(), &JsValue::from(0))
+        .unwrap_or_else(|_| unreachable!("an object takes a key"));
+    let none = sva_wasm::analyze(
+        "crop.wav",
+        8000,
+        channels(&[&tone]),
+        asked(&["bands"]),
+        zero.into(),
+    );
+    refused_as(none.err(), "wasm.bad_argument");
+
+    let graph = sva_wasm::analyze(
+        "crop.wav",
+        8000,
+        channels(&[&tone]),
+        asked(&["ledger"]),
+        JsValue::UNDEFINED,
+    );
     refused_as(graph.err(), "query.not_analyzable");
     let uneven = sva_wasm::analyze(
         "crop.wav",
         8000,
         channels(&[&tone, &tone[..10]]),
         asked(&["envelope"]),
+        JsValue::UNDEFINED,
     );
     refused_as(uneven.err(), "wasm.bad_argument");
 }
@@ -385,7 +471,7 @@ fn every_representation_name_the_cli_answers_crosses_and_the_removed_ones_refuse
             Some(vec![name.to_string()]),
             options(&[]),
         );
-        if let Err(refused) = asked.and_then(|one| one.representations()) {
+        if let Err(refused) = asked.and_then(|one| one.representations(JsValue::UNDEFINED)) {
             let spelled = as_text(&field(&refused, "refusal"));
             assert!(
                 !spelled.contains("unknown representation"),
@@ -1655,7 +1741,10 @@ fn a_sampled_ref_read_measures_what_the_plain_read_refuses_and_shares_its_memory
     let plain = held
         .rendered("@n([0, 1s])", pitch(), options(&[]))
         .unwrap_or_else(|e| unreachable!("it renders: {}", as_text(&e)));
-    refused_as(plain.representations().err(), "cast.left_algebra");
+    refused_as(
+        plain.representations(JsValue::UNDEFINED).err(),
+        "cast.left_algebra",
+    );
 
     let sampled = held
         .rendered(

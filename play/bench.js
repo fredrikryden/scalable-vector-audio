@@ -1,12 +1,31 @@
-// Concern: opens or records a sound, plays and crops it, reads the crop with sva-wasm in a worker | Non-concern: the layout (bench.html), the readings (sva-wasm) | IO: (a file or a share) -> a .txt
+// Concern: opens or records a sound, plays and crops it, reads the crop with sva-wasm in a worker | Non-concern: the layout (bench.html), the readings (sva-wasm) | IO: (a file or a share) -> a .json.gz
 
 import { capture } from "./capture.js";
 import { clamped, panned, pinched, revealed, showing, visible, zoomed } from "./view.js";
 
 const RATE = 48000;
 const WASM = "./node_modules/@scalable-vector-audio/sva-wasm/sva_wasm.js";
-/** Their answer is the samples themselves, which JSON caps at 4096 values. */
+/** Their answer is the samples themselves, the crop the page already holds. */
 const RAW = new Set(["samples", "derivative"]);
+/** A download's statement of how it prints what the crop's samples measured. */
+const PRINTED = "every non-integer under `representations`, measured off the crop's samples, is the shortest decimal within 2^-24 (5.97e-8) relative of the value computed, f32's precision; integers, values outside f32's normal range, every bound and error figure (a key naming bounds, error or eps) and everything else are as computed";
+/** Rounding to nearest can shrink a bound, so a bound is printed as proven. */
+const BOUND = /bounds|error|eps/;
+
+/** `v` as `PRINTED` says. Nine significant digits are always within the bound, so the loop ends by then. */
+function f32(v) {
+  if (Number.isInteger(v) || !(Math.abs(v) >= 2 ** -126 && Math.abs(v) <= 3.4e38)) return v;
+  for (let digits = 1; ; digits++) {
+    const near = Number(v.toPrecision(digits));
+    if (Math.abs(near - v) <= 2 ** -24 * Math.abs(v)) return near;
+  }
+}
+
+const printed = (value) =>
+  typeof value === "number" ? f32(value)
+  : Array.isArray(value) ? value.map(printed)
+  : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, BOUND.test(k) ? v : printed(v)]))
+  : value;
 
 if (typeof document === "undefined") worker();
 else page();
@@ -19,7 +38,7 @@ async function worker() {
     for (const call of calls) {
       const started = performance.now();
       try {
-        const data = analyze(target, RATE, channels, [call]);
+        const data = analyze(target, RATE, channels, [call], { limit: null });
         postMessage({ run, call, data, ms: performance.now() - started });
       } catch (error) {
         postMessage({ run, call, refusal: error.refusal ?? String(error), message: error.refusal ? `${error.name}: ${error.message}` : String(error), ms: performance.now() - started });
@@ -611,18 +630,22 @@ function page() {
     const readings = {};
     for (const call of state.asked.filter((c) => !left.has(c))) {
       const held = state.results.get(call);
-      readings[call] = held.refusal ? { refusal: held.refusal } : held.data;
+      readings[call] = held.refusal ? { refusal: held.refusal } : { ...held.data, representations: printed(held.data.representations) };
     }
     const output = {
+      printed: PRINTED,
       file: state.file,
       decoded: { sample_rate: RATE, channels: state.audio.numberOfChannels, by: state.by },
       crop: { start_secs: secs(state.crop.start), end_secs: secs(state.crop.end), samples: state.crop.end - state.crop.start },
       readings,
     };
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([JSON.stringify(output)], { type: "text/plain" }));
-    link.download = `${state.file.replace(/\.[^.]*$/, "")}-${fixed(secs(state.crop.start))}-${fixed(secs(state.crop.end))}s${pruned ? "-pruned" : ""}.txt`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(link.href), 0);
+    const gzipped = new Blob([JSON.stringify(output)]).stream().pipeThrough(new CompressionStream("gzip"));
+    new Response(gzipped).blob().then((bytes) => {
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob([bytes], { type: "application/gzip" }));
+      link.download = `${state.file.replace(/\.[^.]*$/, "")}-${fixed(secs(state.crop.start))}-${fixed(secs(state.crop.end))}s${pruned ? "-pruned" : ""}.json.gz`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 0);
+    }, failed);
   }
 }

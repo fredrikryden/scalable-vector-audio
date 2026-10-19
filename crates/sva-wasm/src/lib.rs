@@ -164,6 +164,17 @@ struct Options {
     store_max_bytes: Option<u64>,
     threads: Option<NonZeroUsize>,
     set: Vec<(String, String)>,
+    limit: Limit,
+}
+
+/// Values per array: stdout's cap, another, or every one (`limit: null`).
+#[derive(Clone, Copy)]
+struct Limit(Option<usize>);
+
+impl Default for Limit {
+    fn default() -> Self {
+        Limit(Some(SAMPLE_LIMIT))
+    }
 }
 
 /// `keys` are the options this call reads; any other is refused by name.
@@ -200,6 +211,17 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                         "pass 1 to compute on one thread, or more",
                     )
                 })?)
+            }
+            "limit" if value.is_null() => held.limit = Limit(None),
+            "limit" => {
+                let cap = whole::<usize>(&key, &value)?;
+                if cap == 0 {
+                    return Err(refuse(
+                        "`limit` is 0".into(),
+                        "pass how many values each array holds, or `limit: null` for every value",
+                    ));
+                }
+                held.limit = Limit(Some(cap))
             }
             "until" => held.until = Some(text(&key, &value)?),
             "live" => {
@@ -685,13 +707,14 @@ impl Rendering {
     }
 
     /// The object `sva-cli render` puts under `data`, one reading per representation asked,
-    /// arrays capped as it caps.
-    pub fn representations(&self) -> Result<JsValue, JsValue> {
-        answered(&self.inner, &self.asked)
+    /// arrays capped as it caps unless `options.limit` says otherwise.
+    pub fn representations(&self, options: JsValue) -> Result<JsValue, JsValue> {
+        let options = options_of(&options, &["limit"])?;
+        answered(&self.inner, &self.asked, options.limit)
     }
 }
 
-fn answered(rendered: &Rendered, asked: &[Asked]) -> Result<JsValue, JsValue> {
+fn answered(rendered: &Rendered, asked: &[Asked], limit: Limit) -> Result<JsValue, JsValue> {
     let mut answers = Vec::with_capacity(asked.len());
     for asked in asked {
         let answer = rendered.answered(asked).map_err(|e| thrown(&e))?;
@@ -716,7 +739,7 @@ fn answered(rendered: &Rendered, asked: &[Asked]) -> Result<JsValue, JsValue> {
         written: &[],
         played: None,
         answers: &answers,
-        limit: Some(SAMPLE_LIMIT),
+        limit: limit.0,
     }))
 }
 

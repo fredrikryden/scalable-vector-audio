@@ -1,21 +1,24 @@
 // Concern: reads PCM a page holds as `sva-cli analyze` reads a file | Non-concern: decoding audio (the page), taking a reading (sva-core) | IO: (target, rate, Float32Arrays, readings) -> `data`
 
-use sva_core::{Printed, Report, SAMPLE_LIMIT, analyzed, query_data};
+use sva_core::{Printed, Report, analyzed, query_data};
 use sva_engine::{Buffer, PSYCHOACOUSTIC_V1};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
 
-use crate::{parse, refuse, representations_of, thrown};
+use crate::{options_of, parse, refuse, representations_of, thrown};
 
 /// The object `sva-cli analyze` puts under `data` for these channels at `rate`, refusing as
-/// it refuses.
+/// it refuses. `options.limit`: how many values each array holds, or `null` for every
+/// value, as a reading `sva-cli` writes to a file.
 #[wasm_bindgen]
 pub fn analyze(
     target: &str,
     rate: u32,
     channels: js_sys::Array,
     representations: Vec<String>,
+    options: JsValue,
 ) -> Result<JsValue, JsValue> {
+    let options = options_of(&options, &["limit"])?;
     if rate == 0 {
         return Err(refuse(
             "a rate of 0 Hz places no sample".to_string(),
@@ -73,6 +76,6 @@ pub fn analyze(
         written: &[],
         played: None,
         answers: &answers,
-        limit: Some(SAMPLE_LIMIT),
+        limit: options.limit.0,
     }))
 }
