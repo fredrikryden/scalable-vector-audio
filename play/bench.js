@@ -1,6 +1,7 @@
 // Concern: opens or records a sound, plays and crops it, reads the crop with sva-wasm in a worker | Non-concern: the layout (bench.html), the readings (sva-wasm) | IO: (a file or a share) -> a .txt
 
 import { capture } from "./capture.js";
+import { clamped, panned, pinched, revealed, showing, visible, zoomed } from "./view.js";
 
 const RATE = 48000;
 const WASM = "./node_modules/@scalable-vector-audio/sva-wasm/sva_wasm.js";
@@ -33,7 +34,7 @@ async function worker() {
 function page() {
   const $ = (id) => document.getElementById(id);
   const canvas = $("wave");
-  const state = { run: 0, audio: null, file: "", by: "", start: 0, end: 0, peaks: null, readings: null, results: new Map(), asked: null, crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
+  const state = { selection: matchMedia("(pointer: coarse)").matches ? null : { start: 0, end: 0 }, run: 0, audio: null, file: "", by: "", peaks: null, readings: null, results: new Map(), asked: null, crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
   let context = null;
 
   function failed(error) {
@@ -65,7 +66,8 @@ function page() {
 
   function enabled() {
     const running = document.body.dataset.state === "running";
-    $("run").disabled = !(state.readings && state.audio && state.end > state.start) || running;
+    const [start, end] = state.audio ? cropped() : [0, 0];
+    $("run").disabled = !(state.readings && state.audio && end > start) || running;
     for (const id of ["play", "start", "length"]) $(id).disabled = !state.audio;
   }
 
@@ -77,10 +79,15 @@ function page() {
   const GRAIN = 0.08;
   const GRAIN_EVERY = 0.06;
 
+  // Mouse: the crop is the selection. Touch: no selection; the crop is the visible span, as in a phone's video trimmer.
+  const framed = () => state.selection === null;
+  const cropped = () => (framed() ? visible(state.view) : [state.selection.start, state.selection.end]);
+
   function selectionShown() {
-    $("start").value = fixed(secs(state.start));
-    $("length").value = fixed(secs(state.end - state.start));
-    $("readings").classList.toggle("stale", Boolean(state.crop) && (state.crop.start !== state.start || state.crop.end !== state.end));
+    const [start, end] = cropped();
+    $("start").value = fixed(secs(start));
+    $("length").value = fixed(secs(end - start));
+    $("readings").classList.toggle("stale", Boolean(state.crop) && (state.crop.start !== start || state.crop.end !== end));
     enabled();
   }
 
@@ -108,9 +115,14 @@ function page() {
 
   const xOf = (sample) => ((sample - state.view.from) / state.view.span) * canvas.width;
 
-  function viewed(from, span) {
-    state.view = { from: clamp(from, 0, state.audio.length - span), span };
+  // The one writer of state.view. With touch the view is the crop, so changing it stops what was playing of the old one.
+  function viewed(next) {
+    state.view = clamped(next, state.audio.length, 1);
     state.peaks = null;
+    if (framed()) {
+      stopped();
+      selectionShown();
+    }
     drawn();
   }
 
@@ -141,7 +153,7 @@ function page() {
     g.clearRect(0, 0, width, height);
     ruled(g, top, color);
     g.fillStyle = color("--line");
-    g.fillRect(xOf(state.start), top, Math.max(0, xOf(state.end) - xOf(state.start)), wave);
+    if (!framed()) g.fillRect(xOf(state.selection.start), top, Math.max(0, xOf(state.selection.end) - xOf(state.selection.start)), wave);
     const [played, upTo] = state.playing ? [xOf(state.playing.at), xOf(state.playing.now)] : [0, 0];
     const ink = color("--ink");
     const mark = color("--mark");
@@ -152,7 +164,7 @@ function page() {
       g.fillRect(x, high, 1, Math.max(1, low - high));
     }
     g.fillStyle = color("--mark");
-    for (const at of state.end > state.start ? [state.start, state.end] : [state.start]) {
+    for (const at of framed() ? [] : state.selection.end > state.selection.start ? [state.selection.start, state.selection.end] : [state.selection.start]) {
       const x = Math.min(width - 2 * devicePixelRatio, xOf(at));
       g.fillRect(x, top, 2 * devicePixelRatio, wave);
     }
@@ -181,15 +193,17 @@ function page() {
     g.fillText(text, left + 4 * devicePixelRatio, top + 2 * devicePixelRatio);
   }
 
-  /** Moves the playhead each frame; when it runs off the right of the view, the view pages after it. */
+  /** Moves the playhead each frame; with a mouse, when it runs off the right of the view, the view pages after it. */
+  let tick = 0;
   function ticked() {
+    cancelAnimationFrame(tick);
     if (!state.playing) return;
     const was = state.playing.now;
     const end = state.view.from + state.view.span;
     state.playing.now = Math.min(state.playing.to, state.playing.at + (context.currentTime - state.playing.from) * RATE);
-    if (was <= end && state.playing.now > end) viewed(state.playing.now, state.view.span);
+    if (!framed() && was <= end && state.playing.now > end) viewed({ from: state.playing.now, span: state.view.span });
     else drawn();
-    requestAnimationFrame(ticked);
+    tick = requestAnimationFrame(ticked);
   }
 
   new ResizeObserver(() => {
@@ -206,10 +220,11 @@ function page() {
 
   /** The selection edge within a few pixels of the pointer, if the selection is not empty. */
   const edgeAt = (event) => {
-    if (state.end === state.start) return null;
+    if (framed() || state.selection.end === state.selection.start) return null;
+    const { start, end } = state.selection;
     const x = (event.clientX - canvas.getBoundingClientRect().left) * devicePixelRatio;
     const near = (sample) => Math.abs(xOf(sample) - x) <= 6 * devicePixelRatio;
-    return near(state.start) ? "start" : near(state.end) ? "end" : null;
+    return near(start) ? "start" : near(end) ? "end" : null;
   };
 
   const onRuler = (event) => event.clientY - canvas.getBoundingClientRect().top < RULER;
@@ -229,10 +244,69 @@ function page() {
     state.scrub.next = t + GRAIN_EVERY;
   }
 
+  /** The pointer type of the last press on the canvas picks the model; each takes over the other's crop as its own. */
+  function framing(touch) {
+    if (touch === framed()) return;
+    if (touch) {
+      const { start, end } = state.selection;
+      state.selection = null;
+      if (end > start) return viewed(showing(start, end));
+    } else {
+      const [start, end] = visible(state.view);
+      state.selection = { start, end };
+    }
+    selectionShown();
+    drawn();
+  }
+
+  // Touch: one finger pans, two pinch, a flick coasts; every move is one pure step from the gesture's starting view.
+  const touches = new Map();
+  let gesture = null;
+  let coast = null;
+  function fingers() {
+    const box = canvas.getBoundingClientRect();
+    const xs = [...touches.values()].map((x) => (x - box.left) / box.width);
+    return { centre: xs.reduce((sum, x) => sum + x, 0) / xs.length, apart: xs.length > 1 ? Math.abs(xs[0] - xs[1]) : 0 };
+  }
+  function grasped() {
+    const { centre, apart } = fingers();
+    gesture = { view: state.view, centre, apart, moves: [[performance.now(), centre]] };
+  }
+  function pulled() {
+    const { centre, apart } = fingers();
+    viewed(pinched(gesture.view, gesture.apart, apart, gesture.centre, centre));
+    gesture.moves = [...gesture.moves.slice(-4), [performance.now(), centre]];
+  }
+  /** A flick keeps panning at the release speed, in widths per ms, and slows to rest; a finger held still does not coast. */
+  function coasted() {
+    const moves = gesture.moves;
+    if (moves.length < 2 || performance.now() - moves.at(-1)[0] > 50) return;
+    const [[t0, centre0], [t1, centre1]] = [moves[0], moves.at(-1)];
+    if (!(t1 > t0)) return;
+    let speed = -(centre1 - centre0) / (t1 - t0);
+    let last = performance.now();
+    const resting = () => Math.abs(speed) * 16 * canvas.clientWidth < 1;
+    const step = (now) => {
+      viewed(panned(state.view, speed * (now - last)));
+      speed *= 0.95 ** ((now - last) / 16);
+      last = now;
+      coast = resting() ? null : requestAnimationFrame(step);
+    };
+    if (!resting()) coast = requestAnimationFrame(step);
+  }
+
   // The ruler scrubs and seeks; below it a click places the cursor, a drag selects, a drag at an edge moves that edge.
   canvas.addEventListener("pointerdown", (event) => {
     if (!state.audio || event.button !== 0) return;
     canvas.setPointerCapture(event.pointerId);
+    framing(event.pointerType === "touch");
+    cancelAnimationFrame(coast);
+    coast = null;
+    if (framed() && (touches.size || !onRuler(event))) {
+      stopped();
+      touches.set(event.pointerId, event.clientX);
+      return grasped();
+    }
     if (onRuler(event)) {
       stopped();
       state.scrub = { at: sampleAt(event), next: 0 };
@@ -240,14 +314,19 @@ function page() {
       return drawn();
     }
     const edge = edgeAt(event);
-    state.anchor = edge === "start" ? state.end : edge === "end" ? state.start : sampleAt(event);
+    state.anchor = edge === "start" ? state.selection.end : edge === "end" ? state.selection.start : sampleAt(event);
     moved(event);
   });
   canvas.addEventListener("pointermove", (event) => {
     if (!state.audio) return;
-    state.hover = { at: sampleAt(event), ruler: onRuler(event) };
+    if (touches.has(event.pointerId)) {
+      touches.set(event.pointerId, event.clientX);
+      return pulled();
+    }
+    if (event.pointerType === "touch" && !state.scrub) return;
+    state.hover = event.pointerType === "touch" ? null : { at: sampleAt(event), ruler: onRuler(event) };
     if (state.scrub) {
-      state.scrub.at = state.hover.at;
+      state.scrub.at = sampleAt(event);
       grained();
     } else if (state.anchor !== null) return moved(event);
     else canvas.style.cursor = state.hover.ruler ? "pointer" : edgeAt(event) ? "ew-resize" : "text";
@@ -258,20 +337,24 @@ function page() {
     drawn();
   });
   for (const type of ["pointerup", "pointercancel"]) {
-    canvas.addEventListener(type, () => {
+    canvas.addEventListener(type, (event) => {
+      if (touches.delete(event.pointerId)) {
+        if (touches.size) return grasped();
+        if (type === "pointerup") coasted();
+        return (gesture = null);
+      }
       state.anchor = null;
       if (!state.scrub) return;
       const { at } = state.scrub;
       state.scrub = null;
-      if (type === "pointerup") playing(at, state.audio.length);
+      if (type === "pointerup") playing(at, framed() ? cropped()[1] : state.audio.length);
       else drawn();
     });
   }
 
   function moved(event) {
     const at = sampleAt(event);
-    state.start = Math.min(at, state.anchor);
-    state.end = Math.max(at, state.anchor);
+    state.selection = { start: Math.min(at, state.anchor), end: Math.max(at, state.anchor) };
     stopped();
     selectionShown();
     drawn();
@@ -281,33 +364,31 @@ function page() {
   canvas.addEventListener("wheel", (event) => {
     if (!state.audio) return;
     const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientWidth : 1;
-    const { from, span } = state.view;
     if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
       const box = canvas.getBoundingClientRect();
-      const at = from + clamp((event.clientX - box.left) / box.width, 0, 1) * span;
-      const next = clamp(span * Math.exp(event.deltaY * unit * 0.002), Math.min(canvas.width, state.audio.length), state.audio.length);
-      viewed(at - ((at - from) * next) / span, next);
+      viewed(zoomed(state.view, clamp((event.clientX - box.left) / box.width, 0, 1), Math.exp(event.deltaY * unit * 0.002)));
     } else if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
       event.preventDefault();
-      viewed(from + ((event.deltaX || event.deltaY) * unit * span) / canvas.clientWidth, span);
+      viewed(panned(state.view, ((event.deltaX || event.deltaY) * unit) / canvas.clientWidth));
     }
   }, { passive: false });
 
   /** Typed times in seconds: a new start keeps the length, as Audacity's Start and Length fields do. */
   function typed(start, length) {
     const samples = Math.min(Math.round(length * RATE), state.audio.length);
-    state.start = clamp(Math.round(start * RATE), 0, state.audio.length - samples);
-    state.end = state.start + samples;
+    if (framed()) return viewed(showing(Math.round(start * RATE), Math.round(start * RATE) + samples));
+    const first = clamp(Math.round(start * RATE), 0, state.audio.length - samples);
+    state.selection = { start: first, end: first + samples };
     stopped();
     selectionShown();
-    const { from, span } = state.view;
-    if (state.start < from || state.end > from + span) viewed(state.start - Math.max(0, span - samples) / 2, span);
-    else drawn();
+    viewed(revealed(state.view, first, first + samples));
   }
   const read = (id, held) => (Number.isFinite(parseFloat($(id).value)) ? Math.max(0, parseFloat($(id).value)) : held);
-  $("start").addEventListener("change", () => typed(read("start", secs(state.start)), secs(state.end - state.start)));
-  $("length").addEventListener("change", () => typed(secs(state.start), read("length", secs(state.end - state.start))));
+  const typedStart = () => cropped()[0];
+  const typedLength = () => cropped()[1] - cropped()[0];
+  $("start").addEventListener("change", () => typed(read("start", secs(typedStart())), secs(typedLength())));
+  $("length").addEventListener("change", () => typed(secs(typedStart()), read("length", secs(typedLength()))));
 
   function stopped() {
     if (!state.playing) return;
@@ -335,7 +416,11 @@ function page() {
   }
 
   /** Plays the selection, or from the cursor to the end when nothing is selected. */
-  const played = () => (state.playing ? stopped() : playing(state.start, state.end > state.start ? state.end : state.audio.length));
+  const played = () => {
+    if (state.playing) return stopped();
+    const [start, end] = cropped();
+    playing(start, end > start ? end : state.audio.length);
+  };
 
   $("play").addEventListener("click", played);
   const typing = (event) => event.target.closest?.("input, textarea, select");
@@ -360,16 +445,20 @@ function page() {
   });
   $("file").addEventListener("change", () => $("file").files[0] && opened($("file").files[0]));
 
+  // Each open takes a ticket; a decode that finishes after a later open or recording has loaded is dropped.
+  let opening = 0;
   async function opened(file) {
     stopped();
+    const ticket = ++opening;
     context ??= new AudioContext({ sampleRate: RATE });
     let audio;
     try {
       audio = await context.decodeAudioData(await file.arrayBuffer());
     } catch (error) {
-      return loaded(file.name, null, "", `${file.name} does not decode in this browser: ${error.message}`);
+      if (ticket === opening) loaded(file.name, null, "", `${file.name} does not decode in this browser: ${error.message}`);
+      return;
     }
-    loaded(file.name, audio, "decodeAudioData, which resamples to the AudioContext's rate; the file's own rate is not read");
+    if (ticket === opening) loaded(file.name, audio, "decodeAudioData, which resamples to the AudioContext's rate; the file's own rate is not read");
   }
 
   // Null when idle, "asking" while the picker is open, then the capture until it is stopped. Opening a file waits for it.
@@ -395,6 +484,7 @@ function page() {
     }
     $("record").textContent = "Stop";
     const planes = await recording.done;
+    opening += 1;
     recording = null;
     $("file").disabled = false;
     $("record").textContent = "Record";
@@ -406,9 +496,9 @@ function page() {
     const audio = new AudioBuffer({ numberOfChannels: planes.length, length: planes[0].length, sampleRate: RATE });
     planes.forEach((plane, c) => audio.copyToChannel(plane, c));
     loaded(name, audio, "getDisplayMedia's audio track, recorded as PCM at the AudioContext's rate");
-    [state.start, state.end] = span;
+    if (!framed()) state.selection = { start: span[0], end: span[1] };
+    viewed(showing(...span));
     selectionShown();
-    viewed(state.start, state.end - state.start);
   });
 
   // Strip silence: audible is above TRIM_DB under the peak (Audacity's old Truncate Silence default) and FLOOR_DB.
@@ -436,7 +526,10 @@ function page() {
     const fatal = document.body.dataset.state === "failed";
     if (!fatal) $("failure").textContent = failure;
     state.run += 1;
-    Object.assign(state, { audio, file, by, crop: null, start: 0, end: 0, view: { from: 0, span: audio?.length ?? 1 }, peaks: null, results: new Map(), asked: null });
+    cancelAnimationFrame(coast);
+    coast = null;
+    Object.assign(state, { audio, file, by, crop: null, selection: framed() ? null : { start: 0, end: 0 }, peaks: null, results: new Map(), asked: null });
+    if (audio) viewed({ from: 0, span: Infinity });
     $("download").disabled = true;
     shown();
     canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
@@ -448,12 +541,13 @@ function page() {
 
   $("run").addEventListener("click", () => {
     stopped();
-    const length = secs(state.end - state.start);
+    const [start, end] = cropped();
+    const length = secs(end - start);
     state.asked = state.readings.map((r) => (r.window ? `${r.name}(window=${length}s)` : r.name));
     state.results = new Map();
     state.run += 1;
-    state.crop = { start: state.start, end: state.end };
-    const channels = Array.from({ length: state.audio.numberOfChannels }, (_, c) => state.audio.getChannelData(c).slice(state.start, state.end));
+    state.crop = { start, end };
+    const channels = Array.from({ length: state.audio.numberOfChannels }, (_, c) => state.audio.getChannelData(c).slice(start, end));
     document.body.dataset.state = "running";
     $("download").disabled = true;
     enabled();
