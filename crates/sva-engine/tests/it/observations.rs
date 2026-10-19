@@ -918,10 +918,20 @@ fn loudness_at_a_rate_under_the_k_weighting_names_the_least_rate() {
     assert!(said.contains("3363.94 Hz"), "{said}");
 }
 
-/// A render at 30 Hz places no ERB band: periodicity and modulation refuse, naming the rate.
+/// A render at 30 Hz places no ERB band: periodicity, modulation and self_similarity refuse,
+/// naming the rate, rather than one reading an empty band view.
 #[test]
 fn band_readings_at_a_rate_under_every_band_name_the_least_rate() {
     for asked in [
+        Representation::SelfSimilarity {
+            frame_secs: 0.5,
+            cell_secs: 0.5,
+            smooth_secs: 2.0,
+            window_secs: 4.0,
+            floor_db: -40.0,
+            listed: 16,
+            curve: false,
+        },
         Representation::Periodicity {
             frame_secs: 0.5,
             window_secs: 4.0,

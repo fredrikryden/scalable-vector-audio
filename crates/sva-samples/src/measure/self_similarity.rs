@@ -115,6 +115,10 @@ pub struct TooManyCells {
 /// the band envelopes at `band_hz`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Unfit {
+    RateUnderBands {
+        rate_hz: f64,
+        least_hz: f64,
+    },
     TooManyCells(TooManyCells),
     CellUnderBandStep {
         cell_secs: f64,
@@ -215,6 +219,12 @@ pub fn measure(
     start_secs: f64,
     asked: Asked,
 ) -> Result<SelfSimilarity, Unfit> {
+    if bands::centres(sample_rate).is_empty() {
+        return Err(Unfit::RateUnderBands {
+            rate_hz: sample_rate,
+            least_hz: bands::least_rate_hz(),
+        });
+    }
     let held = crate::measure::held(planes);
     let frame_hop = ((asked.hop_secs * sample_rate).round() as usize).max(1);
     let per_cell = ((asked.cell_secs * sample_rate / frame_hop as f64).round() as usize).max(1);

@@ -375,16 +375,9 @@ fn unread(
 ) -> EngineError {
     let reading = representation.name();
     let (code, message, help) = match why {
-        sliding::Unread::RateUnderBands { rate_hz, least_hz } => (
-            "read.rate_under_bands",
-            format!(
-                "`{reading}` reads ERB bands, and {rate_hz} Hz samples place none: the first \
-                 band's centre stands at {:.2} Hz, over {} of the rate",
-                least_hz * bands::HIGHEST_CENTRE_OF_RATE,
-                bands::HIGHEST_CENTRE_OF_RATE
-            ),
-            faster((least_hz * 100.0).ceil() / 100.0),
-        ),
+        sliding::Unread::RateUnderBands { rate_hz, least_hz } => {
+            under_bands(reading, rate_hz, least_hz, faster)
+        }
         sliding::Unread::WindowUnderTwoPeriods {
             window_secs,
             least_secs,
@@ -425,6 +418,25 @@ fn unread(
         location: Located::at(name, None),
         help,
     })
+}
+
+/// `faster` says how to hand a reading of ERB bands samples at the least rate that places one.
+fn under_bands(
+    reading: &str,
+    rate_hz: f64,
+    least_hz: f64,
+    faster: impl Fn(f64) -> String,
+) -> (&'static str, String, String) {
+    (
+        "read.rate_under_bands",
+        format!(
+            "`{reading}` reads ERB bands, and {rate_hz} Hz samples place none: the first band's \
+             centre stands at {:.2} Hz, over {} of the rate",
+            least_hz * bands::HIGHEST_CENTRE_OF_RATE,
+            bands::HIGHEST_CENTRE_OF_RATE
+        ),
+        faster((least_hz * 100.0).ceil() / 100.0),
+    )
 }
 
 /// Names the least rate and, through `faster`, how to hand it samples at one.
@@ -490,10 +502,18 @@ fn under_order(
     })
 }
 
-/// Names the cell or window that fits and, through `shorter`, how to hand it a target that
-/// short.
-fn unfit(name: &str, why: self_similarity::Unfit, shorter: impl Fn(f64) -> String) -> EngineError {
+/// Names the rate, cell or window that fits and, through `shorter` and `faster`, how to hand
+/// it a target that short or samples that fast.
+fn unfit(
+    name: &str,
+    why: self_similarity::Unfit,
+    shorter: impl Fn(f64) -> String,
+    faster: impl Fn(f64) -> String,
+) -> EngineError {
     let (code, message, help) = match why {
+        self_similarity::Unfit::RateUnderBands { rate_hz, least_hz } => {
+            under_bands("self_similarity", rate_hz, least_hz, faster)
+        }
         self_similarity::Unfit::TooManyCells(held) => (
             "read.too_many_cells",
             format!(
@@ -873,12 +893,17 @@ fn measured(
                         "render an interval of at least {secs}s, as `@x([0, {secs}s])` writes one"
                     )
                 }),
-                NoReading::Unfit(why) => unfit(render.tys.name(node), why, |secs| {
-                    format!(
-                        "render an interval of at most {secs}s, as `@x([0, {secs}s])` \
+                NoReading::Unfit(why) => unfit(
+                    render.tys.name(node),
+                    why,
+                    |secs| {
+                        format!(
+                            "render an interval of at most {secs}s, as `@x([0, {secs}s])` \
                              writes one"
-                    )
-                }),
+                        )
+                    },
+                    |hz| format!("render at a rate over {hz} Hz, as `--rate 48000` asks"),
+                ),
             });
         }
     })
@@ -1280,9 +1305,12 @@ pub fn answer_buffer(
             |secs| format!("analyze a file holding at least {secs}s"),
             |hz| format!("analyze a file sampled over {hz} Hz"),
         ),
-        NoReading::Unfit(why) => unfit(name, why, |secs| {
-            format!("analyze a file holding at most {secs}s")
-        }),
+        NoReading::Unfit(why) => unfit(
+            name,
+            why,
+            |secs| format!("analyze a file holding at most {secs}s"),
+            |hz| format!("analyze a file sampled over {hz} Hz"),
+        ),
         NoReading::RateUnder(held) => rate_under(name, held, |hz| {
             format!("analyze a file sampled over {hz} Hz")
         }),
