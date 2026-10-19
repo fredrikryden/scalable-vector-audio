@@ -354,6 +354,24 @@ impl ValueGraph {
         moved.fold(0.0, f64::max)
     }
 
+    /// Every recording read at another rate than its own, once per pair of rates.
+    pub(crate) fn resampled(&self, tys: &crate::typing::Typing) -> Vec<sva_samples::Resampled> {
+        let mut out: Vec<sva_samples::Resampled> = Vec::new();
+        for (_, value) in self.values.iter() {
+            let Some(crate::typing::Value::Recorded(recording)) =
+                value.node.map(|id| tys.value(id))
+            else {
+                continue;
+            };
+            let to = value.grid.sr().round() as u32;
+            let held = sva_samples::Resampled::of(recording.rate, to);
+            if recording.rate != to && !out.contains(&held) {
+                out.push(held);
+            }
+        }
+        out
+    }
+
     pub(crate) fn of(&self, node: NodeId) -> Option<usize> {
         self.nodes.get(&node).copied()
     }

@@ -198,6 +198,10 @@ impl<'a> Supports<'a> {
             Value::Op { name, args } => self.operation(name, args, grid, &|arg| self.of(arg)),
             Value::SelfAt { .. } => Extent::NOWHERE,
             Value::Noise(_) => Extent::EVERYWHERE,
+            Value::Recorded(recording) => {
+                let secs = recording.frames() as f64 / f64::from(recording.rate);
+                Extent::new(0, past(grid, secs))
+            }
             Value::Read {
                 source,
                 at: When::Step(step),
@@ -1062,6 +1066,19 @@ fn moved(support: Extent, count: f64) -> Extent {
     let start = support.shifted(early).start;
     let end = support.shifted(late).end;
     Extent::new(start, end)
+}
+
+fn past(grid: Grid, secs: f64) -> i64 {
+    let Some(mut n) = grid.step_at(secs, Round::Ceil) else {
+        return i64::MAX;
+    };
+    while n > 0 && grid.instant(n - 1) >= secs {
+        n -= 1;
+    }
+    while grid.instant(n) < secs {
+        n += 1;
+    }
+    n
 }
 
 #[cfg(test)]

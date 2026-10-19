@@ -679,6 +679,10 @@ fn stamp(held: &mut Render) {
         rate: held.config.rate,
         moved: held.value_graph.as_ref().map(ValueGraph::moved),
         cutting_below_silence_threshold: Some(cutting),
+        resampled: held
+            .value_graph
+            .as_ref()
+            .map_or_else(Vec::new, |graph| graph.resampled(&held.tys)),
         ..label
     };
     held.labels.insert(root, label);

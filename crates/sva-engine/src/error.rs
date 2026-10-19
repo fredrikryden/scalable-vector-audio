@@ -230,7 +230,7 @@ impl std::error::Error for EngineError {}
 
 /// Every code a judgment in this engine can refuse under, with what trips it. The prefix
 /// says which judgment refused, per FORMAT 16.
-pub static REGISTRY: [(&str, &str); 101] = [
+pub static REGISTRY: [(&str, &str); 104] = [
     (
         "type.no_overload",
         "a builtin applied to operand types no row names",
@@ -598,5 +598,17 @@ pub static REGISTRY: [(&str, &str); 101] = [
     (
         "render.abandoned",
         "a render its caller let go before it ended",
+    ),
+    (
+        "grammar.unresolved_path",
+        "a path no front end resolved to a recording",
+    ),
+    (
+        "grammar.recording_outside_sample",
+        "a recording read anywhere but as `sample`'s argument",
+    ),
+    (
+        "type.recording_width",
+        "a recording read in `f`, or of no channel or more than the widest value holds",
     ),
 ];

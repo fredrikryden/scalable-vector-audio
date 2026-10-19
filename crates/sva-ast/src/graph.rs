@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::diag::{ByteSpan, DiagCode};
 use crate::expr::{Binds, Expr, children, map_children_ok};
 use crate::filename::FileSpan;
-use crate::ingest::{Data, base_name, parse_file, parse_score_file};
+use crate::ingest::{Data, Parsed, base_name, parse_file, parse_score_file};
 use crate::refusal::Refusal;
 use crate::reserved::{Values, variable};
 use crate::score::EXTENSION;
@@ -503,6 +503,18 @@ pub fn load_beside(
     loading.finish(Some(base))
 }
 
+/// A body or default reading `sample("<path>")` holds the recording the source answers for.
+fn recorded(mut parsed: Parsed, source: &dyn Source) -> Result<Parsed, crate::diag::Diag> {
+    let unheld = |e: crate::recording::Unheld| {
+        crate::diag::Diag::new(DiagCode::MissingRecording, ByteSpan::at(0), e.message())
+    };
+    parsed.expr = crate::recording::resolve_recordings(&parsed.expr, source).map_err(unheld)?;
+    for (_, value) in &mut parsed.defaults {
+        *value = crate::recording::resolve_recordings(value, source).map_err(unheld)?;
+    }
+    Ok(parsed)
+}
+
 fn generation(source: &dyn Source, path: &str) -> Option<u64> {
     source
         .generation(path)
@@ -601,7 +613,7 @@ impl Loading {
         }
         let parsed = match score {
             true => parse_score_file(path, &text),
-            false => parse_file(&text),
+            false => parse_file(&text).and_then(|parsed| recorded(parsed, source)),
         };
         match parsed {
             Ok(parsed) => {

@@ -21,6 +21,7 @@ use std::cell::{Cell, RefCell};
 use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use sva_core::{
     Asked, CliError, Diagnostic, Job, Out, Printed, Rendered, Report, Representation, SAMPLE_LIMIT,
@@ -165,6 +166,10 @@ struct Options {
     threads: Option<NonZeroUsize>,
     set: Vec<(String, String)>,
     limit: Limit,
+    max_renders: Option<usize>,
+    step_tol: Option<f64>,
+    cost_tol: Option<f64>,
+    progress: Option<js_sys::Function>,
 }
 
 /// Values per array: stdout's cap, another, or every one (`limit: null`).
@@ -224,6 +229,28 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                 held.limit = Limit(Some(cap))
             }
             "until" => held.until = Some(text(&key, &value)?),
+            "max_renders" => held.max_renders = Some(whole(&key, &value)?),
+            "step_tol" | "cost_tol" => {
+                let tol = value.as_f64().filter(|v| v.is_finite() && *v >= 0.0);
+                let tol = tol.ok_or_else(|| {
+                    refuse(
+                        format!("`{key}` is no number at or above 0"),
+                        "pass a number",
+                    )
+                })?;
+                match key.as_str() {
+                    "step_tol" => held.step_tol = Some(tol),
+                    _ => held.cost_tol = Some(tol),
+                }
+            }
+            "progress" => {
+                held.progress = Some(value.dyn_into::<js_sys::Function>().map_err(|_| {
+                    refuse(
+                        "`progress` is no function".into(),
+                        "pass a function of one line",
+                    )
+                })?)
+            }
             "live" => {
                 held.live = value
                     .as_bool()
@@ -363,6 +390,10 @@ impl sva_ast::Source for Live {
     fn name(&self) -> String {
         self.0.borrow().name()
     }
+
+    fn recording(&self, path: &str) -> Result<Option<Arc<sva_ast::Recording>>, String> {
+        self.0.borrow().recording(path)
+    }
 }
 
 #[wasm_bindgen]
@@ -477,6 +508,98 @@ impl Composition {
 
     pub fn insert(&mut self, path: &str, text: &str) {
         self.inner.0.borrow_mut().insert(path, text);
+    }
+
+    /// What `sample("<path>")` reads: one decoded Float32Array per channel, at `rate`.
+    #[wasm_bindgen(js_name = insertRecording)]
+    pub fn insert_recording(
+        &mut self,
+        path: &str,
+        rate: u32,
+        channels: js_sys::Array,
+    ) -> Result<(), JsValue> {
+        if rate == 0 {
+            return Err(refuse(
+                "a rate of 0 Hz places no sample".to_string(),
+                "pass the rate the channels were decoded at, as `AudioBuffer.sampleRate`",
+            ));
+        }
+        let planes = analyze::planes_of(channels)?;
+        self.inner
+            .0
+            .borrow_mut()
+            .insert_recording(path, rate, planes);
+        Ok(())
+    }
+
+    /// `sva-cli solve`'s envelope; `options` as its flags, `signal` and `progress(line)`.
+    pub async fn solve(
+        &self,
+        cost: &str,
+        vary: Vec<String>,
+        options: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let keys = [
+            "max_renders",
+            "step_tol",
+            "cost_tol",
+            "set",
+            "rate",
+            "threads",
+            "signal",
+            "progress",
+        ];
+        let options = options_of(&options, &keys)?;
+        let cost = sva_core::solve::cost(cost).map_err(|e| thrown(&e))?;
+        let vary = vary
+            .iter()
+            .map(|one| sva_core::solve::vary(one))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| thrown(&e))?;
+        let stops = sva_core::solve::Stops {
+            max_renders: options
+                .max_renders
+                .unwrap_or(sva_core::solve::DEFAULT_MAX_RENDERS),
+            step_tol: options
+                .step_tol
+                .unwrap_or(sva_core::solve::DEFAULT_STEP_TOL),
+            cost_tol: options
+                .cost_tol
+                .unwrap_or(sva_core::solve::DEFAULT_COST_TOL),
+        };
+        let problem = sva_core::solve::Problem {
+            source: &self.inner,
+            cost,
+            vary: vary.clone(),
+            sets: options.set.clone(),
+            rate: options.rate,
+            threads: Some(threads::limit(options.threads.or(self.threads))),
+            stops,
+        };
+        let signal = options.signal.map(Signal);
+        let abandon = signal
+            .as_ref()
+            .map_or(&Never as &dyn Abandon, |signal| signal as &dyn Abandon);
+        let mut heard = |point: &sva_core::solve::Point| {
+            if let Some(progress) = &options.progress {
+                let line = sva_core::solve::point_json(point);
+                let _ = progress.call1(&JsValue::NULL, &parse(&line).unwrap_or(line.into()));
+            }
+        };
+        let solved = sva_core::solve::solve(&problem, &*self.tier, &mut heard, abandon)
+            .await
+            .map_err(|e| thrown(&e))?;
+        let found = sva_core::solve::findings(&solved, &vary);
+        let data = sva_core::solve::solved_data(&solved, &vary, "");
+        if solved.stopped_by == sva_core::solve::Stopped::Cancelled {
+            let message = "the solve was aborted; `refusal.data` holds the best so far";
+            let error = JsErr::new(message);
+            error.set_name("AbortError");
+            let envelope = sva_core::error_envelope_with("cancelled", message, &data, &found);
+            error.set_refusal(parse(&envelope)?);
+            return Err(error.into());
+        }
+        parse(&sva_core::success_envelope(&data, &found))
     }
 
     /// `target` and `representations` as `sva-cli render` takes them. `options`: `rate`,

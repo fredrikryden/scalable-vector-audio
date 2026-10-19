@@ -566,6 +566,8 @@ impl Reader<'_> {
             detail,
             moved,
             cutting_below_silence_threshold,
+            // A render states what it resampled from its own graph, never from a stored value.
+            resampled: Vec::new(),
         })
     }
 

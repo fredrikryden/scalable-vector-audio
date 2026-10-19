@@ -202,6 +202,19 @@ impl Lowering<'_> {
                 let secs = exact.map_or_else(|| grid.steps_f64(*n), Q::to_f64);
                 Ok(Piece::ClosedForm(Body::Const(C64::real(secs))))
             }
+            Literal::Path(path) => Err(self.refused(
+                "grammar.unresolved_path",
+                format!("`\"{path}\"` was never resolved to a recording"),
+                "read a path only as `sample(\"<path>\")` in a composition a front end loads",
+            )),
+            Literal::Recorded(recording) => Err(self.refused(
+                "grammar.recording_outside_sample",
+                format!(
+                    "`\"{}\"` is a recording, read only as `sample`'s argument",
+                    recording.path
+                ),
+                "write `sample(\"<path>\")`",
+            )),
             Literal::Str(s) => match sva_ast::note_hz(s) {
                 Some(hz) => Ok(Piece::ClosedForm(Body::Const(C64::real(hz)))),
                 None => Err(self.refused(
@@ -816,7 +829,7 @@ fn widens_with_self(
         Value::Solver { varying, .. } => varying
             .iter()
             .any(|(_, a)| widens_with_self(typing, *a, seen)),
-        Value::ClosedForm(_) | Value::Noise(_) => false,
+        Value::ClosedForm(_) | Value::Noise(_) | Value::Recorded(_) => false,
     }
 }
 

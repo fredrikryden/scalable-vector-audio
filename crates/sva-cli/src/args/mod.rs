@@ -5,8 +5,11 @@ use std::path::PathBuf;
 use sva_core::{Asked, CliError};
 
 mod reading;
+mod solve;
 
 use reading::{analyze_args, render_args};
+pub use solve::SolveArgs;
+use solve::solve_args;
 
 #[derive(Debug, PartialEq)]
 pub struct RenderArgs {
@@ -49,6 +52,7 @@ pub enum Command {
     Help,
     Render(Box<RenderArgs>),
     Analyze(Box<AnalyzeArgs>),
+    Solve(Box<SolveArgs>),
     /// One expression, as render's target; `None` lints every file under its own rules.
     Lint {
         target: Option<String>,
@@ -121,6 +125,7 @@ pub fn parse_args(argv: &[String]) -> Result<Command, CliError> {
     match subcommand {
         "render" => render_args(rest),
         "analyze" => analyze_args(rest),
+        "solve" => solve_args(rest),
         "lint" => lint_args(rest),
         "trace" => trace_args(rest),
         "builtins" => builtins_args(rest),

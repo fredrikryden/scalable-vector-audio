@@ -71,7 +71,13 @@ pub(super) fn render_args(rest: &[String]) -> Result<Command, CliError> {
             "--until" => until = Some(value(&mut it, "--until")?),
             "--rate" => rate = Some(hertz(&value(&mut it, "--rate")?)?),
             "--bits" => bits = Some(whole(&value(&mut it, "--bits")?, "--bits")?),
-            "--threads" => threads = Some(count(&value(&mut it, "--threads")?)?),
+            "--threads" => {
+                threads = Some(count(
+                    &value(&mut it, "--threads")?,
+                    "--threads",
+                    "threads",
+                )?)
+            }
             "--set" => sets.push(sva_core::set(&value(&mut it, "--set")?)?),
             "--cache" => {
                 cache = match value(&mut it, "--cache")?.as_str() {
@@ -181,7 +187,7 @@ fn lexical(path: &Path) -> PathBuf {
     out
 }
 
-fn hertz(raw: &str) -> Result<u32, CliError> {
+pub(super) fn hertz(raw: &str) -> Result<u32, CliError> {
     match raw.parse::<u32>() {
         Ok(hz) if hz > 0 => Ok(hz),
         _ => Err(CliError::usage(
@@ -191,11 +197,11 @@ fn hertz(raw: &str) -> Result<u32, CliError> {
     }
 }
 
-fn count(raw: &str) -> Result<NonZeroUsize, CliError> {
+pub(super) fn count(raw: &str, flag: &str, of: &str) -> Result<NonZeroUsize, CliError> {
     raw.parse::<NonZeroUsize>().map_err(|_| {
         CliError::usage(
             "cli.bad_value",
-            format!("--threads needs a whole number of threads above zero, got `{raw}`"),
+            format!("{flag} needs a whole number of {of} above zero, got `{raw}`"),
         )
     })
 }

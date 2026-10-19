@@ -55,12 +55,13 @@ pub use sva_formula::{C64, Codomain, Held, Line, NodeId, SpectralSum, Ty, Var};
 pub use sva_samples::measure::{
     bands, harmony, modulation, periodicity, pitch, self_similarity, sliding, spectrum,
 };
+pub use sva_samples::resample;
 pub use sva_samples::{
     Alias, AliasBand, BAND_COUNT, BandCrest, BandTrack, Bands, Buffer, Crest,
     CuttingBelowSilenceThreshold, Detail, EnvelopeFrame, Extent, FormantFrame, Frames,
     LEAST_PRUNE_DB, Label, LedgerEntry, Loudness, LoudnessFrame, MAX_PINNED_FRAME, Onsets,
-    PSYCHOACOUSTIC_V1, PitchFrame, Profile, Prune, PrunedBand, PrunedBands, Rule, SignalKind,
-    Source, Spectrum, StereoFrame, StereoImage, measure_alias, pinned_frame,
+    PSYCHOACOUSTIC_V1, PitchFrame, Profile, Prune, PrunedBand, PrunedBands, Resampled, Rule,
+    SignalKind, Source, Spectrum, StereoFrame, StereoImage, measure_alias, pinned_frame,
 };
 pub use threads::default_threads;
 pub use trace::{Traced, Up, trace};

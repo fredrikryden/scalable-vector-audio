@@ -2,6 +2,9 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use crate::recording::Recording;
 
 /// An `unreadable` path holds no text, so `get` is never asked for it — only reported.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -34,6 +37,10 @@ pub trait Source {
     fn name(&self) -> String {
         UNNAMED.to_string()
     }
+
+    fn recording(&self, _path: &str) -> Result<Option<Arc<Recording>>, String> {
+        Ok(None)
+    }
 }
 
 const UNNAMED: &str = "this composition";
@@ -43,6 +50,7 @@ const UNNAMED: &str = "this composition";
 #[derive(Clone, Debug, Default)]
 pub struct Composition {
     nodes: BTreeMap<String, (String, u64)>,
+    recordings: BTreeMap<String, Arc<Recording>>,
     edits: u64,
     name: Option<String>,
 }
@@ -56,6 +64,23 @@ impl Composition {
         self.edits += 1;
         self.nodes.insert(path.into(), (text.into(), self.edits));
         self
+    }
+
+    pub fn insert_recording(&mut self, path: impl Into<String>, rate: u32, planes: Vec<Vec<f32>>) {
+        let path = path.into();
+        self.edits += 1;
+        let read = format!("\"{path}\"");
+        for (text, at) in self.nodes.values_mut() {
+            if text.contains(&read) {
+                *at = self.edits;
+            }
+        }
+        let recording = Recording {
+            path: path.clone(),
+            rate,
+            planes: Arc::new(planes),
+        };
+        self.recordings.insert(path, Arc::new(recording));
     }
 
     pub fn named(mut self, name: impl Into<String>) -> Composition {
@@ -76,7 +101,7 @@ impl PartialEq for Composition {
     fn eq(&self, other: &Composition) -> bool {
         let texts = self.nodes.iter().map(|(p, (t, _))| (p, t));
         let theirs = other.nodes.iter().map(|(p, (t, _))| (p, t));
-        self.name == other.name && texts.eq(theirs)
+        self.name == other.name && texts.eq(theirs) && self.recordings == other.recordings
     }
 }
 
@@ -107,6 +132,10 @@ impl Source for Composition {
 
     fn name(&self) -> String {
         self.name.clone().unwrap_or_else(|| UNNAMED.to_string())
+    }
+
+    fn recording(&self, path: &str) -> Result<Option<Arc<Recording>>, String> {
+        Ok(self.recordings.get(path).cloned())
     }
 }
 
@@ -149,6 +178,10 @@ impl Source for Overlay<'_> {
 
     fn name(&self) -> String {
         self.under.name()
+    }
+
+    fn recording(&self, path: &str) -> Result<Option<Arc<Recording>>, String> {
+        self.under.recording(path)
     }
 }
 

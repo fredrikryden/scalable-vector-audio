@@ -36,6 +36,8 @@ pub enum TokenKind {
     Log(f64, LogUnit),
     Ident(String),
     Ref(String),
+    /// A path, the grammar's one string, written in double quotes with no escapes.
+    Str(String),
     Plus,
     Minus,
     Star,
@@ -65,6 +67,15 @@ pub fn strip_line_comment(line: &str) -> &str {
         Some(at) => &line[..at],
         None => line,
     }
+}
+
+fn unclosed_path(start: usize, end: usize) -> Diag {
+    Diag::new(
+        DiagCode::UnexpectedChar,
+        ByteSpan::new(start, end),
+        "a path opened with `\"` is never closed on its line; write it whole, as \
+         `sample(\"ref.wav\")`",
+    )
 }
 
 pub fn tokenize(src: &str) -> Result<Vec<Token>, Diag> {
@@ -124,6 +135,21 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Diag> {
                 span: ByteSpan::new(start, next),
             });
             i = next;
+            continue;
+        }
+
+        if c == b'"' {
+            let Some(close) = src[i + 1..].find(['"', '\n']).map(|at| i + 1 + at) else {
+                return Err(unclosed_path(start, b.len()));
+            };
+            if b[close] != b'"' {
+                return Err(unclosed_path(start, close));
+            }
+            out.push(Token {
+                kind: TokenKind::Str(src[i + 1..close].to_string()),
+                span: ByteSpan::new(start, close + 1),
+            });
+            i = close + 1;
             continue;
         }
 

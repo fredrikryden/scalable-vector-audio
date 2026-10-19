@@ -214,6 +214,13 @@ pub(super) fn formula(
                 }
             }
         }
+        (Formula::Recorded(recorded), _) => {
+            for k in 0..len {
+                for c in 0..w {
+                    out[k * w + c] = recorded.at(c, time(k, c));
+                }
+            }
+        }
         (Formula::Drawn { seed, rate }, _) => {
             for k in 0..len {
                 for c in 0..w {

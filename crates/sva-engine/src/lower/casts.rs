@@ -2,9 +2,9 @@
 
 use std::f64::consts::TAU;
 
-use sva_ast::{Arg, ByteSpan, Expr};
+use sva_ast::{Arg, ByteSpan, Expr, Literal};
 use sva_formula::filter::{Shape, design};
-use sva_formula::{Body, C64, Held, NodeId, Rational, Var};
+use sva_formula::{Body, C64, Held, NodeId, Rational, Ty, Var};
 
 use crate::cast::{Cast, Mismatch};
 use crate::error::EngineError;
@@ -26,6 +26,9 @@ impl Lowering<'_> {
         let Some(Arg::Pos(x)) = args.first() else {
             return Err(EngineError::BadArity(cast.name().to_string()));
         };
+        if let (Cast::Sample, Expr::Lit(Literal::Recorded(recording))) = (cast, x) {
+            return self.recorded(recording, span, var);
+        }
         let inner = match cast {
             Cast::Fourier => Var::T,
             Cast::IFourier => Var::F,
@@ -50,6 +53,35 @@ impl Lowering<'_> {
             true => Piece::ClosedForm(Body::Node(id)),
             false => Piece::Value(id),
         })
+    }
+
+    /// One component per channel, as `join` makes them, read on the grid this node steps on.
+    fn recorded(
+        &mut self,
+        recording: &std::sync::Arc<sva_ast::Recording>,
+        span: ByteSpan,
+        var: Var,
+    ) -> Result<Piece, EngineError> {
+        let width = recording.planes.len();
+        if var != Var::T || width == 0 || width > crate::MAX_WIDTH {
+            return Err(self.refused_at(
+                "type.recording_width",
+                format!(
+                    "`sample(\"{}\")` is a recording of {width} channel(s); it is read in `t` \
+                     and holds 1 to {} channels",
+                    recording.path,
+                    crate::MAX_WIDTH
+                ),
+                "read it in time, from a file of at most that many channels",
+                Some(span),
+            ));
+        }
+        let ty = Ty {
+            width: width as u8,
+            ..Ty::discrete(Held::Sampled, sva_formula::Codomain::Real)
+        };
+        let value = Value::Recorded(std::sync::Arc::clone(recording));
+        Ok(Piece::Value(self.register(value, ty, var)))
     }
 
     /// A retyping cast that refused names the atom that left A, which only normalizing the

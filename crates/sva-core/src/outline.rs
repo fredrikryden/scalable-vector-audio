@@ -344,6 +344,8 @@ fn literal(l: &Literal) -> String {
         Literal::Bars(v) => ("bars", num(*v)),
         Literal::Samples(v) => ("samples", num(*v)),
         Literal::Str(s) => ("text", format!("\"{}\"", escape(s))),
+        Literal::Path(path) => ("path", format!("\"{}\"", escape(path))),
+        Literal::Recorded(recording) => ("path", format!("\"{}\"", escape(&recording.path))),
     };
     format!("\"unit\": \"{unit}\", \"value\": {value}")
 }

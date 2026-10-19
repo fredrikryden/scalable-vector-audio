@@ -26,7 +26,7 @@ pub fn render(args: &RenderArgs) -> Result<String, CliError> {
         refuse_replacing(dest, args.confirm)?;
     }
     let mut warnings = Vec::new();
-    let tier = crate::store::opened(&args.cache, &mut warnings)?;
+    let tier = crate::store::opened(&args.cache, &mut warnings, crate::store::On::Persist)?;
     let answered = answered(args, &dir, &target, tier, &mut warnings);
     crate::store::persisted(tier, &mut warnings);
     answered.map(|data| success_envelope(&data, &warnings))
@@ -40,7 +40,7 @@ fn answered(
     tier: &Tier<Directory>,
     warnings: &mut Vec<Diagnostic>,
 ) -> Result<String, CliError> {
-    let files = sva_ast::Dir::at(dir);
+    let files = crate::heard::Heard::at(dir)?;
     let source = sva_core::overlaid(&files, &args.sets)?;
     let logs = std::env::var("SVA_LOG").is_ok_and(|level| level == "debug");
     let hearing = hearing(args)?;

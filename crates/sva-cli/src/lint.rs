@@ -41,7 +41,7 @@ pub struct LintReport {
 /// With no target, every file's own rules and every entry point's types; with one, those of
 /// each file it reaches and the interval a render of it reads.
 pub fn lint(dir: &Path, target: Option<&str>) -> Result<LintReport, CliError> {
-    let source = sva_ast::Dir::at(dir);
+    let source = crate::heard::Heard::at(dir)?;
     match target {
         None => lint_files(&source, prepared(&source)?),
         Some(target) => lint_reaching(&source, target),

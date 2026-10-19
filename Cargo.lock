@@ -358,6 +358,7 @@ name = "sva-cli"
 version = "0.14.19"
 dependencies = [
  "hound",
+ "serde_json",
  "signal-hook",
  "sva-ast",
  "sva-core",

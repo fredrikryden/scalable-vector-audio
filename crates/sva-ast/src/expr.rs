@@ -40,6 +40,8 @@ pub enum Literal {
     Bars(f64),
     Samples(f64),
     Str(String),
+    Path(String),
+    Recorded(std::sync::Arc<crate::recording::Recording>),
 }
 
 impl PartialEq for Literal {
@@ -48,7 +50,8 @@ impl PartialEq for Literal {
             (Literal::Num(a), Literal::Num(b))
             | (Literal::Bars(a), Literal::Bars(b))
             | (Literal::Samples(a), Literal::Samples(b)) => a.to_bits() == b.to_bits(),
-            (Literal::Str(a), Literal::Str(b)) => a == b,
+            (Literal::Str(a), Literal::Str(b)) | (Literal::Path(a), Literal::Path(b)) => a == b,
+            (Literal::Recorded(a), Literal::Recorded(b)) => a == b,
             _ => false,
         }
     }

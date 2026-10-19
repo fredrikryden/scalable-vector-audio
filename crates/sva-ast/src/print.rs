@@ -34,6 +34,8 @@ fn write(e: &Expr, outer: u8, time: bool) -> String {
         Expr::Lit(Literal::Bars(n)) => format!("{n}b"),
         Expr::Lit(Literal::Samples(n)) => format!("{n}sp"),
         Expr::Lit(Literal::Str(s)) => s.clone(),
+        Expr::Lit(Literal::Path(path)) => format!("\"{path}\""),
+        Expr::Lit(Literal::Recorded(recording)) => format!("\"{}\"", recording.path),
         Expr::Var(name) => name.clone(),
         Expr::Bin(op, l, r) => {
             let p = precedence(*op);

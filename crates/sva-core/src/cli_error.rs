@@ -76,6 +76,12 @@ fn engine_error_span(e: &EngineError) -> Option<(usize, usize)> {
     Some((span.start, span.end - span.start))
 }
 
+/// A recording no file answers for is a path the caller named that nothing holds.
+fn misses_a_recording(rs: &[Refusal]) -> bool {
+    rs.iter()
+        .any(|r| r.code == sva_ast::DiagCode::MissingRecording)
+}
+
 fn names_no_node(e: &EngineError) -> bool {
     matches!(
         e,
@@ -87,6 +93,7 @@ impl CliError {
     pub fn exit_code(&self) -> u8 {
         match self {
             CliError::Engine(e) if names_no_node(e) => 24,
+            CliError::Refusals(rs) if misses_a_recording(rs) => 24,
             CliError::Usage { .. }
             | CliError::Refusals(_)
             | CliError::Engine(_)
@@ -102,6 +109,7 @@ impl CliError {
     pub fn code(&self) -> &'static str {
         match self {
             CliError::Engine(e) if names_no_node(e) => "not_found",
+            CliError::Refusals(rs) if misses_a_recording(rs) => "not_found",
             CliError::Usage { .. }
             | CliError::Refusals(_)
             | CliError::Engine(_)

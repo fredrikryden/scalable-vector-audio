@@ -426,12 +426,14 @@ pub enum Formula {
     Rows(Arc<Rows>),
     Written(Box<Written>),
     Drawn { seed: u64, rate: u32 },
+    Recorded(Arc<crate::resample::Recorded>),
 }
 
 impl PartialEq for Formula {
     fn eq(&self, other: &Formula) -> bool {
         match (self, other) {
             (Formula::Rows(a), Formula::Rows(b)) => Arc::ptr_eq(a, b),
+            (Formula::Recorded(a), Formula::Recorded(b)) => Arc::ptr_eq(a, b),
             (Formula::Written(a), Formula::Written(b)) => a == b,
             (Formula::Drawn { seed, rate }, Formula::Drawn { seed: s, rate: r }) => {
                 (seed, rate) == (s, r)

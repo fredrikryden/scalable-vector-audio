@@ -38,6 +38,8 @@ pub enum Value {
         site: Origin,
     },
     Noise(u64),
+    /// A front end's decoded file, read on the grid it was lowered for.
+    Recorded(std::sync::Arc<sva_ast::Recording>),
     /// The signal and its three arguments, each a node of its own.
     Filter {
         shape: Shape,
@@ -230,7 +232,7 @@ impl Typing {
                 x, cutoff, q, gain, ..
             } => vec![*x, *cutoff, *q, *gain],
             Value::Solver { varying, .. } => varying.iter().map(|(_, a)| *a).collect(),
-            Value::SelfAt { .. } | Value::Noise(_) => Vec::new(),
+            Value::SelfAt { .. } | Value::Noise(_) | Value::Recorded(_) => Vec::new(),
         }
     }
 

@@ -11,6 +11,7 @@ mod outline;
 mod output;
 mod query;
 mod set;
+pub mod solve;
 mod song;
 mod target;
 mod until;
@@ -18,13 +19,15 @@ mod until;
 pub use analyze::{analyzable, analyzed};
 pub use answer::{
     Played, Printed, Report, SAMPLE_LIMIT, answer_json, counters_json, engine_stats_json,
-    label_json, query_data, stats_json, stream_stats_json, value_json, work_json,
+    label_json, query_data, resampled_json, stats_json, stream_stats_json, value_json, work_json,
 };
 pub use builtins::{Builtins, Callable, Crossing, builtins, builtins_data};
 pub use cli_error::{CliError, LintViolation, lint_diagnostic, warning_diagnostic};
 pub use lint_code::LintCode;
 pub use outline::{events_data, outline_data, song_data};
-pub use output::{Diagnostic, Severity, diagnostics_json, error_envelope, success_envelope};
+pub use output::{
+    Diagnostic, Severity, diagnostics_json, error_envelope, error_envelope_with, success_envelope,
+};
 pub use query::{
     Asked, Call, Destination, RETIRED, asked, asked_all, call, calls, is_wav, retired, seconds,
     wav_path,
@@ -150,6 +153,8 @@ fn settle(job: &Job) -> Result<(Graph, RenderConfig, Song), CliError> {
             job.target, d.message
         ))
     })?;
+    let parsed = sva_ast::resolve_recordings(&parsed, job.source)
+        .map_err(|unheld| CliError::NotFound(unheld.message()))?;
     define_probe(&mut graph, parsed)?;
     let rate = job.rate.unwrap_or(DEFAULT_SAMPLE_RATE);
     let per_bar = graph.tempo().map(|tempo| tempo.seconds_per_bar());

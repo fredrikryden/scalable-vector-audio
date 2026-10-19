@@ -7,6 +7,7 @@ mod composition;
 mod destination;
 mod device;
 mod directory;
+mod heard;
 mod help;
 mod lint;
 mod new;
@@ -14,21 +15,28 @@ mod output;
 mod panic;
 mod rates;
 mod render;
+mod solve;
 mod store;
 mod terminal;
 mod trace;
 mod variables;
 mod wav;
 
-pub use args::{AnalyzeArgs, CacheAt, Command, Format, RenderArgs, parse_args};
+pub use args::{AnalyzeArgs, CacheAt, Command, Format, RenderArgs, SolveArgs, parse_args};
 pub use composition::{composition, located};
 pub use destination::{Framing, refuse_inside, write as write_destination};
 pub use help::help_text;
+
+/// The composition at `dir`, its `sample("<path>")` reads decoded off the files they name.
+pub fn heard(dir: std::path::PathBuf) -> Result<impl sva_ast::Source, CliError> {
+    heard::Heard::at(dir)
+}
 pub use lint::{Finding, LintReport, lint};
 pub use new::{FILES, NEXT, Scaffolded, scaffold};
 pub use output::{help_data, lint_data, new_data, trace_data, version_data};
 pub use panic::{Stopped, caught, stopped};
 pub use render::{analyze, render};
+pub use solve::solve;
 pub use sva_core::{
     Builtins, Callable, CliError, builtins, builtins_data, cwd, error_envelope, success_envelope,
 };

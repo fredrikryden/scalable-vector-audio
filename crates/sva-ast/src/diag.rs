@@ -48,6 +48,9 @@ pub enum DiagCode {
     NotNodeContent,
     NonIntegerIndex,
     UnwrittenSeries,
+    MisplacedPath,
+    MissingRecording,
+    ReprOutsideSolve,
 }
 
 impl DiagCode {
@@ -77,6 +80,9 @@ impl DiagCode {
         DiagCode::NotNodeContent,
         DiagCode::NonIntegerIndex,
         DiagCode::UnwrittenSeries,
+        DiagCode::MisplacedPath,
+        DiagCode::MissingRecording,
+        DiagCode::ReprOutsideSolve,
     ];
 
     pub fn code_str(self) -> &'static str {
@@ -105,6 +111,9 @@ impl DiagCode {
             DiagCode::NotNodeContent => "not-node-content",
             DiagCode::NonIntegerIndex => "non-integer-index",
             DiagCode::UnwrittenSeries => "unwritten-series",
+            DiagCode::MisplacedPath => "misplaced-path",
+            DiagCode::MissingRecording => "missing-recording",
+            DiagCode::ReprOutsideSolve => "repr-outside-solve",
         }
     }
 }

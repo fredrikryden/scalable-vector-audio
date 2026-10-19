@@ -148,3 +148,23 @@ pub fn error_envelope(code: &str, message: &str, diagnostics: &[Diagnostic]) -> 
         meta()
     )
 }
+
+/// A failure that still answers what it reached, as a solve stopped or refused a write does.
+pub fn error_envelope_with(
+    code: &str,
+    message: &str,
+    data: &str,
+    diagnostics: &[Diagnostic],
+) -> String {
+    let fields = data
+        .strip_suffix('}')
+        .expect("every data builder answers one JSON object");
+    format!(
+        "{{\n  \"status\": \"error\",\n  \"error\": {{ \"code\": \"{}\", \"message\": \"{}\", \"details\": {} }},\n  \"data\": {fields},\n  \"diagnostics\": {}\n  }},\n  \"meta\": {}\n}}",
+        escape(code),
+        escape(message),
+        details_json(diagnostics),
+        diagnostics_json(diagnostics),
+        meta()
+    )
+}

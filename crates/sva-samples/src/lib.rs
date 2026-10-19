@@ -13,6 +13,7 @@ pub mod machine;
 pub mod measure;
 pub mod physics;
 pub mod profile;
+pub mod resample;
 pub mod stft;
 
 pub use biquad::Coeffs;
@@ -53,4 +54,5 @@ pub use measure::spectrum::{
 pub use measure::stereo::{StereoFrame, StereoImage};
 pub use physics::{Params, Solver, site};
 pub use profile::{PSYCHOACOUSTIC_V1, Profile};
+pub use resample::{Recorded, Resampled};
 pub use sva_formula::Shape;

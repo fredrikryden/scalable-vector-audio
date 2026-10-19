@@ -25,7 +25,7 @@ pub fn trace(dir: &Path, target: &str) -> Result<Traceable, CliError> {
         _ => target.to_string(),
     };
     let target = target.as_str();
-    let mut graph = prepared(&sva_ast::Dir::at(dir))?;
+    let mut graph = prepared(&crate::heard::Heard::at(dir)?)?;
 
     let mut roots = entry_points(&graph);
     sung_together(&mut graph, &roots)?;

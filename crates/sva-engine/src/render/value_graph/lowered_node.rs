@@ -110,6 +110,11 @@ impl Build<'_> {
             Value::Read { source, at, .. } => self.read(source, at),
             Value::SelfAt { at } => self.own(at),
             Value::Noise(seed) => Ok(NodeRenderer::Noise(seed)),
+            Value::Recorded(recording) => Ok(NodeRenderer::Formula {
+                formula: recorded(&recording, self.grid),
+                width: recording.planes.len(),
+                time: Box::new(NodeRenderer::Time),
+            }),
             Value::Solver { .. } if id != self.owner => {
                 Ok(self.slot(Source::Node(id), Map::shift(0)))
             }
@@ -594,6 +599,14 @@ fn addends(tys: &Typing, args: &[NodeId], apart: &dyn Fn(NodeId) -> bool) -> Vec
     out
 }
 
+fn recorded(recording: &sva_ast::Recording, grid: Grid) -> Formula {
+    Formula::Recorded(Arc::new(sva_samples::Recorded::new(
+        Arc::clone(&recording.planes),
+        recording.rate,
+        grid.sr().round() as u32,
+    )))
+}
+
 fn binary(op: Fold) -> Binary {
     match op {
         Fold::Max => Binary::Max,
@@ -615,6 +628,7 @@ fn warped(
         return Ok(None);
     }
     let form = match tys.value(source) {
+        Value::Recorded(recording) => return Ok(Some(recorded(recording, grid))),
         Value::Noise(seed) => {
             return Ok(Some(Formula::Drawn {
                 seed: *seed,

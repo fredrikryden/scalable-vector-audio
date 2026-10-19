@@ -98,6 +98,8 @@ pub struct Label {
     /// The most seconds a read was moved to land on a whole sample.
     pub moved: Option<f64>,
     pub cutting_below_silence_threshold: Option<CuttingBelowSilenceThreshold>,
+    /// Each recording a render read at another rate than its own.
+    pub resampled: Vec<crate::resample::Resampled>,
 }
 
 impl Label {
@@ -111,6 +113,7 @@ impl Label {
             },
             moved: None,
             cutting_below_silence_threshold: None,
+            resampled: Vec::new(),
         }
     }
 
@@ -122,6 +125,7 @@ impl Label {
             detail,
             moved: None,
             cutting_below_silence_threshold: None,
+            resampled: Vec::new(),
         }
     }
 

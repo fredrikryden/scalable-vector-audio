@@ -1004,8 +1004,9 @@ pub fn label_json(label: &Label) -> String {
         .as_ref()
         .map_or(NONE.to_string(), cutting_below_silence_threshold_json);
     let rest = format!(
-        ", \"moved_s\": {}, \"pruned\": {cutting}",
-        maybe(label.moved)
+        ", \"moved_s\": {}, \"pruned\": {cutting}, \"resampled\": {}",
+        maybe(label.moved),
+        list(&label.resampled, resampled_json)
     );
     format!(
         "{{ \"source\": \"{}\", \"profile\": \"{}\", \"rate\": {}, \"rule\": \"{}\"{detail}{rest} }}",
@@ -1016,6 +1017,20 @@ pub fn label_json(label: &Label) -> String {
         escape(label.profile),
         label.rate,
         escape(label.rule().as_str())
+    )
+}
+
+/// A recording read at another rate: the bound its windowed sinc holds the passband to.
+pub fn resampled_json(r: &sva_engine::Resampled) -> String {
+    format!(
+        "{{ \"from_hz\": {}, \"to_hz\": {}, \"passband_hz\": {}, \"stopband_hz\": {}, \
+         \"ripple_db\": {}, \"stopband_db\": {} }}",
+        r.from_hz,
+        r.to_hz,
+        num(r.passband_hz),
+        num(r.stopband_hz),
+        num(r.ripple_db),
+        num(r.stopband_db)
     )
 }
 

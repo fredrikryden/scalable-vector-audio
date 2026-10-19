@@ -133,6 +133,15 @@ pub(crate) fn shape(
             sink.text("noise");
             sink.word(*seed);
         }
+        Value::Recorded(recording) => {
+            sink.text("recorded");
+            sink.word(u64::from(recording.rate));
+            sink.word(recording.planes.len() as u64);
+            for plane in recording.planes.iter() {
+                sink.word(plane.len() as u64);
+                plane.iter().for_each(|v| sink.word(u64::from(v.to_bits())));
+            }
+        }
         Value::Solver { params, varying } => {
             let mut read = Vec::with_capacity(varying.len());
             for (key, arg) in varying {

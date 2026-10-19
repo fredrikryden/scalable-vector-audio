@@ -7,8 +7,8 @@ use sva_core::Diagnostic;
 use sva_cli::{
     CliError, Command, Finding, Format, NAME, VERSION, analyze, builtins, builtins_data, caught,
     colored, composition, cwd, diagnostics_text, error_envelope, help_data, help_text, lint,
-    lint_data, located, new_data, parse_args, render, scaffold, stopped, success_envelope, trace,
-    trace_data, version_data,
+    lint_data, located, new_data, parse_args, render, scaffold, solve, stopped, success_envelope,
+    trace, trace_data, version_data,
 };
 
 /// Parsing, lowering and dropping a node's expression all recurse to its depth, which `sum`
@@ -28,7 +28,7 @@ fn outline(text: &str) -> Result<String, CliError> {
             })
         });
     let data = match score {
-        Some(_) => sva_core::song_data(&sva_ast::Dir::at(composition()?), text)?,
+        Some(_) => sva_core::song_data(&sva_cli::heard(composition()?)?, text)?,
         None => sva_core::outline_data(text)?,
     };
     Ok(success_envelope(&data, &[]))
@@ -58,6 +58,13 @@ fn run() -> ExitCode {
         Ok(Command::Help) => Ok(success_envelope(&help_data(&help_text()), &[])),
         Ok(Command::Render(args)) => render(&args),
         Ok(Command::Analyze(args)) => analyze(&args),
+        Ok(Command::Solve(args)) => match solve(&args) {
+            Ok((json, code)) => {
+                println!("{json}");
+                return ExitCode::from(code);
+            }
+            Err(e) => Err(e),
+        },
         Ok(Command::Lint { target, format }) => lint_composition(target.as_deref(), format),
         Ok(Command::Trace { target }) => trace_node(&target),
         Ok(Command::Builtins) => Ok(success_envelope(&builtins_data(&builtins()), &[])),

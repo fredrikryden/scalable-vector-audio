@@ -184,6 +184,18 @@ impl<'t> Parser<'t> {
     /// `.name(args)` after a primary is sugar for `name(primary, args)` — desugared here so
     /// the tree only ever holds plain nested `Call`s (per FORMAT.md).
     fn try_chain_dot(&mut self, receiver: Expr, from: usize) -> Result<Expr, Diag> {
+        if let Expr::Var(name) = &receiver
+            && name == "repr"
+            && matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Dot))
+        {
+            return Err(Diag::new(
+                DiagCode::ReprOutsideSolve,
+                self.peek().map_or_else(|| self.eof_span(), |t| t.span),
+                "`repr.` reads a representation, which only a `sva-cli solve` cost takes, as \
+                 `sva-cli solve 'norm(repr.bands(@a) - repr.bands(sample(\"ref.wav\")))' \
+                 --vary gain=0..2`; a node renders, and `sva-cli render` reads it",
+            ));
+        }
         let mut lhs = receiver;
         while matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Dot)) {
             self.advance();
@@ -263,6 +275,24 @@ impl<'t> Parser<'t> {
                 ))
             }
             TokenKind::Plus => self.parse_expr(PREFIX_BP),
+            TokenKind::Str(path) => {
+                let sampled = self.pos >= 3
+                    && self.tokens[self.pos - 2].kind == TokenKind::LParen
+                    && self.tokens[self.pos - 3].kind == TokenKind::Ident("sample".to_string())
+                    && matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RParen));
+                if !sampled {
+                    return Err(Diag::new(
+                        DiagCode::MisplacedPath,
+                        span,
+                        format!(
+                            "`\"{path}\"` is a path, which only `sample` reads, as its one \
+                             argument: `sample(\"{path}\")`"
+                        ),
+                    ));
+                }
+                self.mark(from, None);
+                Ok(Expr::Lit(Literal::Path(path.clone())))
+            }
             TokenKind::LParen => {
                 let inner = self.parse_expr(0)?;
                 match self.peek().map(|t| &t.kind) {

@@ -1,6 +1,8 @@
 // Concern: the `--help` page, each flag's default printed from its own constant | Non-concern: parsing those flags (args/), the JSON a subcommand answers (output.rs) | IO: () -> the page
 
 use sva_core::DEFAULT_STORE_BYTES;
+use sva_core::solve;
+use sva_engine::resample;
 use sva_engine::{
     DEFAULT_BAND_FLOOR_DB, DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB,
     DEFAULT_FRAME_SECS, DEFAULT_LEDGER_DEPTH, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS,
@@ -16,16 +18,25 @@ pub fn help_text() -> String {
     let store_gb = DEFAULT_STORE_BYTES >> 30;
     let representations = representations();
     let (min_frame, max_frame) = (spectrum::MIN_FRAME, spectrum::MAX_FRAME);
+    let rules = solve_rules();
+    let floor = solve::FLOOR_DB;
+    let (max_renders, step_tol, cost_tol) = (
+        solve::DEFAULT_MAX_RENDERS,
+        solve::DEFAULT_STEP_TOL,
+        solve::DEFAULT_COST_TOL,
+    );
+    let (passband, stopband) = (resample::PASSBAND, resample::STOPBAND);
+    let bound = format!("{} dB", 20.0 * resample::BOUND.log10());
     format!(
         r#"USAGE:
-  sva-cli (render | analyze | lint | trace | builtins | outline | new) [arguments]
+  sva-cli (render | analyze | solve | lint | trace | builtins | outline | new) [arguments]
 
 DESCRIPTION:
   A composition is a directory of node files, each one closed-form expression in
   `t` or `f` on one line, or a score placing notes in time. sva-cli reads that
   composition and prints what it is and what it sounds like, as JSON on stdout.
-  `render`, `lint` and `trace` read the current directory; `new` writes beside it
-  and `analyze` reads a file.
+  `render`, `solve`, `lint` and `trace` read the current directory; `new` writes
+  beside it and `analyze` reads a file. `solve` fits variables to a reference.
 
 SCORES:
   A score is a `.jsonl` file: JSON Lines, one object per line, sorted by `at`;
@@ -145,6 +156,18 @@ RENDER:
   crop reaches before it, and its end is open. Inside an expression a window is
   a `crop`. A target that samples its one ref read, `sample(@piano4([0, 2b],
   f0=C4))`, reads that ref's interval and binds and the same node values.
+
+  `sample("<path>")` is a recording: a `.wav` file, relative to the directory
+  sva-cli runs in or absolute; keep it outside the composition, where it would
+  be read as a node. It is the file's samples at the render's rate, one
+  component per channel as `join` makes them, silent outside the file's span. At
+  its own rate every sample passes unchanged. At another a cos^16-windowed sinc
+  reads it: a tone up to {passband} of the lower rate reads within {bound} of
+  itself, and one from {stopband} of it at most {bound} of its level, a bound
+  proven for the kernel that the label states under `resampled` beside the rate
+  it came from. The path is the language's one string, in double quotes and
+  only as `sample`'s one argument; one naming no file refuses as `not_found`. A
+  store keys a recording by its samples and rate, never its path.
 
   Every node is computed over its support met with what reads it, and nowhere
   else: outside its support a node is exactly zero. A closed interval renders
@@ -322,6 +345,80 @@ REPRESENTATIONS:
 
 {representations}
 
+SOLVE:
+  sva-cli solve '<cost>' --vary <name>=<lo>..<hi>[/<step>][,log]...
+                [--max-renders <n>] [--step-tol <x>] [--cost-tol <x>]
+                [--set <name>=<text>]... [--rate <hz>] [--threads <n>]
+                [--cache <path|none>] [--write [--confirm]]
+
+  Fits variables under `variables/` so the targets a cost reads match a
+  reference, and prints the values it found. It edits no file unless `--write
+  --confirm` says so.
+
+  The cost is one expression typing to one number. Its leaves are
+  `repr.<reading>(<target>, <args>)`: `<reading>` spelled as `--representation`
+  spells it, `<target>` any render target with its interval as render writes
+  one, `<args>` the reading's own: `repr.pitch(@lead([0, 2s], f0=C4),
+  frame=50ms)`. Every leaf is measured off its target's samples, as `analyze`
+  reads a file, so a recording and a render are read alike. Two leaves of one
+  reading with one set of arguments subtract to a residual vector:
+{rules}
+  A level is floored at {floor} dB before it subtracts. A residual inside both
+  sides' stated bounds counts as zero; of these readings only `onsets` states
+  one. Then `norm(v)` (the root of the sum of squares), `sum(v)`, `max(v)`,
+  `abs(x)` (each value's magnitude), `dot([w1, w2, ...], v)` (one literal weight
+  per value), numbers, `+`, `-`, `*` and `/` make one number. A reading left
+  unsubtracted, a vector left unreduced and a leaf of any other reading refuse
+  before anything renders. `repr.` is legal only here; in a node it refuses as
+  `repr-outside-solve`.
+
+  `--vary <name>=<lo>..<hi>[/<step>][,log]`, once per variable, names a file
+  `variables/<name>` holding one number and the box it moves in, both bounds in
+  one unit: none, `hz`, `khz`, `s`, `ms`, `db`, `ct` or `st`. The search starts
+  at the file's value read in that unit (`0.5` is `-6.02db` under `db` bounds).
+  `/<step>` is the first step and the grid values land on, counted from `<lo>`;
+  without it the first step is a quarter of the bounds' span. `,log` moves it on
+  a log scale, where `/<step>` is the ratio a step multiplies by, a bare number
+  above 1, as `/1.25`. A name with no file, a file holding no number in that
+  unit, and a variable no target of the cost reads each refuse before the first
+  render. `--set <name>=<text>` holds a variable at `<text>`, as render takes
+  it; a name both set and varied refuses.
+
+  The search is a deterministic compass search: from its best point it renders
+  each variable one step up and one down, in the order the `--vary`s are
+  written, and moves to the best of them that improves; where none does, every
+  step halves. A point already rendered is not rendered again. One render
+  renders every target of the cost once, through render's own path, and takes
+  every reading. A target no variable reaches, such as the reference, is read
+  back from the store on every render after its first, and `trace` shows it
+  computing no samples. A solve stops `converged` once every step is under
+  `--step-tol` of its first step or the cost is at most `--cost-tol`, `budget`
+  after `--max-renders` renders, and `cancelled` on SIGINT or SIGTERM. The
+  budget is a result, warned as `solve.budget`, not an error. Each render
+  prints one JSON line on stderr:
+    {{"render": 3, "values": {{"gain": "0.4"}}, "cost": 1.25, "best": 0.98}}
+
+  `--write` writes each fitted value to its `variables/` file, its comment line
+  kept. A file it would change refuses as `conflict` unless `--confirm` is
+  written too; that refusal still carries the fit, and `would_write`, nothing
+  written. A cancelled solve writes nothing.
+
+  Its `data`:
+    {{"cost_expression": "...", "values": {{"gain": {{"value": 0.5, "text": "0.5",
+      "unit": "", "start": "0.3", "on_bound": false}}}}, "cost": {{"total": 0.09,
+      "terms": {{"items": [{{"term": "norm(...)", "value": 0.08}}], ...}}}},
+      "renders": 49, "stopped_by": "converged", "resampled": {{"items": []}},
+      "trace": {{"items": [{{"render": 1, "values": {{"gain": {{"value": 0.3,
+      "text": "0.3"}}}}, "cost": 52.1, "computed_samples": {{"@tone": 44100,
+      "sample(\"../ref.wav\")": 44101}}}}]}}}}
+  `values` is the best point, each `text` as `--set` and a file take it; `cost`
+  its total and each top-level `+` or `-` term's signed share; `trace` every
+  render in order. A value `on_bound` sat on a bound, warned as
+  `solve.on_bound`: widen it, or the model lacks what the reference holds.
+  `--write` adds `written`, each path with its `from` and `to`. Stopped by a
+  signal, the answer is the error `cancelled`, exit 130, its `data` the best so
+  far.
+
 ANALYZE:
   sva-cli analyze <file.wav> --representation <list> [--confirm]
 
@@ -436,6 +533,12 @@ EXAMPLES:
     --representation samples=/tmp/song1-g.wav
   sva-cli render '@master' \
     --representation 'samples(buffer=100ms)=alsa:default,loudness'
+  sva-cli solve 'norm(repr.bands(@master([0, 4s])) - repr.bands(sample("../ref.wav")))
+    + 0.5*norm(repr.loudness(@master([0, 4s])) - repr.loudness(sample("../ref.wav")))' \\
+    --vary gain=0..2/0.25 --vary cutoff=200hz..8000hz/1.25,log --rate 48000
+  sva-cli solve 'sum(abs(repr.onsets(@score/song([0, 8s]))
+    - repr.onsets(sample("/tmp/take.wav"))))' \\
+    --vary bpm=100..140/2 --set key=D3 --max-renders 60 --write --confirm
   sva-cli lint
   sva-cli lint '@master'
   sva-cli trace score/phrase
@@ -528,8 +631,14 @@ DEFAULTS:
                        `~/.cache/sva`, holding at most {store_gb} GB; `none` keeps
                        no store. A store that fails fails no render: it answers
                        as without one, warned why in `diagnostics`.
-  --set <name>=<text>  a variable read as `<text>` for this render.
-                       Default none: each is read off its file.
+  --set <name>=<text>  a variable read as `<text>` for this render, or held for
+                       a solve. Default none: each is read off its file.
+  --max-renders <n>    the most renders a solve takes. Default {max_renders}.
+  --step-tol <x>       the fraction of each variable's first step under which a
+                       solve's search stops. Default {step_tol}.
+  --cost-tol <x>       the cost at or under which a solve stops. Default {cost_tol}.
+  --write              a solve writes its fitted values to their `variables/`
+                       files, with `--confirm`. Default off.
   --confirm            replaces a destination that already holds a file. Without
                        it a path already taken refuses as `conflict` and nothing
                        is written.
@@ -555,9 +664,11 @@ EXIT CODES:
   1  internal_error (a destination could not be written)
   3  validation_error (bad arguments, a composition that failed to parse, or a
      render the engine refused)
-  4  conflict (a name `new` would overwrite, or a destination already holding a
-     file, without `--confirm`)
-  24 not_found (a `.wav` file, or a node this composition does not define)
+  4  conflict (a name `new` would overwrite, a destination already holding a
+     file, or a variable file `solve --write` would change, without `--confirm`)
+  24 not_found (a `.wav` file, a `sample("<path>")` naming no file, or a node
+     this composition does not define)
+  130 cancelled (a solve stopped by SIGINT or SIGTERM, `data` the best so far)
 
 VERB ALIASES:
   validate = lint, list = builtins, create = new, show = trace, from the `cli`
@@ -567,6 +678,25 @@ VERB ALIASES:
 SEE ALSO:
   sva-cli --version    Show version information"#
     )
+}
+
+/// One line per reading a cost subtracts, off the table the subtraction itself keeps.
+fn solve_rules() -> String {
+    let mut out = Vec::new();
+    for (name, rule) in solve::RULES {
+        let mut line = format!("    {name:<10}");
+        for word in rule.split(' ') {
+            if line.len() + 1 + word.len() > 80 {
+                out.push(line);
+                line = " ".repeat(15);
+            } else {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+        out.push(line);
+    }
+    out.join("\n")
 }
 
 /// One entry per reading, off the one table: its call, what it answers off, and its line.
