@@ -18,6 +18,11 @@ pub fn pinned_frame(secs: f64, sample_rate: f64) -> usize {
     (asked as usize).next_power_of_two().max(MIN_FRAME)
 }
 
+/// An unpinned spectrum's frame over `len` samples.
+pub fn fitted_frame(len: usize) -> usize {
+    len.next_power_of_two().clamp(MIN_FRAME, MAX_FRAME)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Band {
     pub lo_hz: f64,
@@ -129,7 +134,7 @@ pub fn magnitudes_of(planes: &[&[f64]], sample_rate: f64, frame_secs: Option<f64
     let len = crate::measure::held(planes);
     let frame_size = match frame_secs {
         Some(secs) => pinned_frame(secs, sample_rate).min(MAX_PINNED_FRAME),
-        None => len.next_power_of_two().clamp(MIN_FRAME, MAX_FRAME),
+        None => fitted_frame(len),
     };
     let bins = frame_size / 2 + 1;
     let spanned = len.clamp(1, frame_size);

@@ -49,7 +49,8 @@ pub use measure::loudness::{Loudness, LoudnessFrame, PEAK_NOTE, RateUnderWeighti
 pub use measure::onsets::{IoiBucket, Onset, Onsets};
 pub use measure::pitch::{Note, PitchFrame};
 pub use measure::spectrum::{
-    Band, MAX_PINNED_FRAME, Peak, Spectrum, db, magnitudes, pinned_frame, third_octave_edges,
+    Band, MAX_PINNED_FRAME, Peak, Spectrum, db, fitted_frame, magnitudes, pinned_frame,
+    third_octave_edges,
 };
 pub use measure::stereo::{StereoFrame, StereoImage};
 pub use physics::{Params, Solver, site};

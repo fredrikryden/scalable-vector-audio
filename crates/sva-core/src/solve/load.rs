@@ -4,11 +4,12 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 use sva_ast::Source;
+use sva_engine::fitted_frame;
 
 use super::cost::{Cost, From, Held, Leaf, Load, Step};
 use crate::cli_error::CliError;
 use crate::decode::{reading, shape};
-use crate::query::{Call, asked};
+use crate::query::{Call, Spelled, Taken, asked};
 use crate::{Job, planned};
 
 /// Where `load_json` finds a file's text: in the CLI, relative to the directory it runs in.
@@ -252,7 +253,7 @@ fn decoded(
         .zip(answer.get("args").and_then(Value::as_object))
     else {
         return Err(refused(
-            "solve.argless_load",
+            "solve.load_without_args",
             format!(
                 "{here} holds `{name}` with no `representation` and `args`, what it was read \
                  with, so its arguments cannot be checked; it was printed before readings \
@@ -274,54 +275,6 @@ fn decoded(
     let (render, _, per_bar) = planned(&job)?;
     let rate = render.config.rate;
     let profile = render.config.profile.name;
-    let mut written = Vec::with_capacity(theirs_args.len());
-    for (key, value) in theirs_args {
-        match value {
-            Value::String(text) => written.push((key.clone(), text.clone())),
-            Value::Null => {}
-            other => {
-                return Err(refused(
-                    "solve.bad_reading",
-                    format!(
-                        "{here} holds `{name}` with `args.{key}` {}; an argument is a string as \
-                         `--representation` spells it, or null",
-                        shape(other)
-                    ),
-                ));
-            }
-        }
-    }
-    let theirs = asked(&Call {
-        name: name.clone(),
-        args: written,
-        dest: None,
-    })
-    .and_then(|one| one.args(rate, None, true))
-    .map_err(|e| {
-        refused(
-            "solve.bad_reading",
-            format!("{here} holds `{name}` with `args` its reading refuses: {e}"),
-        )
-    })?;
-    let ours = leaf.asked.args(rate, per_bar, true)?;
-    let representation = leaf.asked.representation(rate, per_bar)?;
-    let spelled = |v: &Option<String>| {
-        v.as_deref()
-            .map_or("none".to_string(), |v| format!("`{v}`"))
-    };
-    for ((key, theirs), (_, ours)) in theirs.iter().zip(&ours) {
-        if theirs != ours {
-            return Err(mismatched(
-                here,
-                leaf,
-                format!(
-                    "its `{key}` is {}, and the leaf's is {}",
-                    spelled(theirs),
-                    spelled(ours)
-                ),
-            ));
-        }
-    }
     if field("source").and_then(Value::as_str) != Some("measured") {
         return Err(mismatched(
             here,
@@ -386,12 +339,64 @@ fn decoded(
             ),
         ));
     }
+    let taken = Taken::Measured {
+        fitted_frame: render.range.map(|r| fitted_frame(r.len())),
+    };
+    let mut written = Vec::with_capacity(theirs_args.len());
+    for (key, value) in theirs_args {
+        match value {
+            Value::String(text) => written.push((key.clone(), text.clone())),
+            Value::Number(n) => written.push((key.clone(), n.to_string())),
+            Value::Null => {}
+            other => {
+                return Err(refused(
+                    "solve.bad_reading",
+                    format!(
+                        "{here} holds `{name}` with `args.{key}` {}; an argument is a number or a \
+                         string as `--representation` spells it, or null",
+                        shape(other)
+                    ),
+                ));
+            }
+        }
+    }
+    let theirs = asked(&Call {
+        name: name.clone(),
+        args: written,
+        dest: None,
+    })
+    .and_then(|one| one.args(rate, None, taken))
+    .map_err(|e| {
+        refused(
+            "solve.bad_reading",
+            format!("{here} holds `{name}` with `args` its reading refuses: {e}"),
+        )
+    })?;
+    let ours = leaf.asked.args(rate, per_bar, taken)?;
+    let spelled = |v: &Option<Spelled>| {
+        v.as_ref()
+            .map_or("none".to_string(), |v| format!("`{}`", v.text()))
+    };
+    for ((key, theirs), (_, ours)) in theirs.iter().zip(&ours) {
+        if theirs != ours {
+            return Err(mismatched(
+                here,
+                leaf,
+                format!(
+                    "its `{key}` is {}, and the leaf's is {}",
+                    spelled(theirs),
+                    spelled(ours)
+                ),
+            ));
+        }
+    }
     let Some(inner) = answer.get("value") else {
         return Err(refused(
             "solve.bad_reading",
             format!("{here} holds `{name}` with no `value`"),
         ));
     };
+    let representation = leaf.asked.representation(rate, per_bar)?;
     let path = format!("representations.{name}.value");
     reading(representation, inner, &path)
         .map_err(|why| refused("solve.bad_reading", format!("{here}: {why}")))

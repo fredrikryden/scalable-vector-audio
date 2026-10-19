@@ -211,13 +211,13 @@ fn load_json_reads_a_reading_a_weight_or_refuses_under_its_code() {
     short["data"]["representations"]["envelope"]["value"]["pagination"]["has_more"] =
         Value::Bool(true);
     std::fs::write(root.join("short.json"), short.to_string()).expect("written");
-    let mut argless = held.clone();
-    let read = argless["data"]["representations"]["envelope"]
+    let mut without_args = held.clone();
+    let read = without_args["data"]["representations"]["envelope"]
         .as_object_mut()
         .expect("an object");
     read.remove("representation");
     read.remove("args");
-    std::fs::write(root.join("argless.json"), argless.to_string()).expect("written");
+    std::fs::write(root.join("without_args.json"), without_args.to_string()).expect("written");
     std::fs::write(root.join("w.json"), r#"{"w": 2, "ws": [1, 0.5]}"#).expect("written");
     std::fs::write(root.join("x.json.gz"), [0x1f, 0x8b, 8, 0]).expect("written");
 
@@ -278,9 +278,9 @@ fn load_json_reads_a_reading_a_weight_or_refuses_under_its_code() {
         ),
         (against("short.json", ".data"), &[], "solve.cut_short", 3),
         (
-            against("argless.json", ".data"),
+            against("without_args.json", ".data"),
             &[],
-            "solve.argless_load",
+            "solve.load_without_args",
             3,
         ),
         (

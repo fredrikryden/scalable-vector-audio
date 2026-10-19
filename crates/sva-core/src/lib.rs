@@ -30,8 +30,8 @@ pub use output::{
     Diagnostic, Severity, diagnostics_json, error_envelope, error_envelope_with, success_envelope,
 };
 pub use query::{
-    Asked, Call, Destination, RETIRED, asked, asked_all, call, calls, is_wav, retired, seconds,
-    wav_path,
+    Asked, Call, Destination, RETIRED, Spelled, Taken, asked, asked_all, call, calls, is_wav,
+    retired, seconds, wav_path,
 };
 pub use set::{overlaid, set};
 pub use song::{as_lane, sung};

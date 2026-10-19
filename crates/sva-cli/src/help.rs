@@ -145,13 +145,15 @@ RENDER:
   reading per representation under `data.representations`. `@path` reads a node
   from the current directory and `@/abs/path` one anywhere; there is no default
   target. Every reading states what it was read with: `representation`, its
-  name, and `args`, every argument it takes spelled as `--representation`
-  takes it, each default written out (`pitch` alone prints `"peaks": "16",
-  "frame": "50ms"`), null where the reading holds no value for one
-  (`spectrum`'s unwritten frame, sized to the range), so its `args` written
-  back as `name(key=value, ...)`, nulls left out, ask the same reading. It
-  states its `source` (exact or measured), the conformance profile it ran
-  under, and its rate; `analyze` prints the same.
+  name, and `args`, every argument it takes as it used it, a plain number as a
+  number and the rest as `--representation` spells them (`pitch` alone prints
+  `"peaks": 16, "frame": "50ms"`), a default written out and a `spectrum`
+  frame left to fit the range as the frame it fitted. Null is an argument that
+  did not apply: a frame read exactly off the math, `modulation`'s unwritten
+  `bpm`, `bands`' `floor` unpruned, `samples`' `buffer` with no device. Its
+  `args` written back as `name(key=value, ...)`, nulls left out, ask the same
+  reading. It states its `source` (exact or measured), the conformance profile
+  it ran under, and its rate; `analyze` prints the same.
 
   The target's own ref may read an interval: `@piano4([0, 2b], f0=C4,
   vel=0.5, release=1s)`, where `release` is the instrument's own parameter. Its ends are the language's literals (`s`, `ms`, `b`,

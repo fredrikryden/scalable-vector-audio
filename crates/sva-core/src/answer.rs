@@ -24,7 +24,7 @@ use sva_engine::sliding::Stats;
 
 use crate::cli_error::CliError;
 use crate::json::{NONE, capped, escape, latest, list, num};
-use crate::query::Asked;
+use crate::query::{Asked, Spelled, Taken};
 
 /// Past this a caller reading stdout wants a later interval start, not a wall of JSON.
 pub const SAMPLE_LIMIT: usize = 4096;
@@ -945,9 +945,11 @@ pub fn answer_json(printed: &Printed, limit: Option<usize>) -> String {
         .args
         .iter()
         .map(|(key, value)| {
-            let value = value
-                .as_ref()
-                .map_or_else(|| NONE.to_string(), |v| format!("\"{}\"", escape(v)));
+            let value = match value {
+                None => NONE.to_string(),
+                Some(Spelled::Number(n)) => n.clone(),
+                Some(Spelled::Text(t)) => format!("\"{}\"", escape(t)),
+            };
             format!("\"{key}\": {value}")
         })
         .collect::<Vec<_>>()
@@ -1267,7 +1269,7 @@ pub struct Printed {
     pub name: String,
     /// Every argument the reading takes as `Asked::args` spells it, so a reading read back
     /// states what it was read with.
-    pub args: Vec<(&'static str, Option<String>)>,
+    pub args: Vec<(&'static str, Option<Spelled>)>,
     pub answer: Answer,
     /// `ledger(skim=1)`: each row's level alone.
     pub skim: bool,
@@ -1281,9 +1283,16 @@ impl Printed {
         rate: u32,
         seconds_per_bar: Option<f64>,
     ) -> Result<Printed, CliError> {
+        let taken = match (answer.source, &answer.value) {
+            (Source::Exact, _) => Taken::Exact,
+            (Source::Measured, Output::Spectrum(s)) => Taken::Measured {
+                fitted_frame: Some(s.frame_size),
+            },
+            (Source::Measured, _) => Taken::Measured { fitted_frame: None },
+        };
         Ok(Printed {
             name: asked.name.clone(),
-            args: asked.args(rate, seconds_per_bar, answer.source == Source::Measured)?,
+            args: asked.args(rate, seconds_per_bar, taken)?,
             answer,
             skim: asked.skim,
         })

@@ -201,31 +201,43 @@ impl Asked {
     }
 
     /// Every argument the reading takes, in its table's order, as `--representation` spells
-    /// it, each default written out. `None` where the reading holds no value for one:
-    /// `spectrum`'s unwritten frame, `envelope`'s where exact, `modulation`'s unwritten
-    /// `bpm`, `bands`' unpruned `floor`, `samples`' `buffer` with no device.
+    /// it, each as the reading used it: a default written out, an unwritten `spectrum`
+    /// frame the one fitted to the range. `None` where none applies: a frame read exactly,
+    /// `modulation`'s unwritten `bpm`, `bands`' unpruned `floor`, `samples`' `buffer` with no
+    /// device.
     pub fn args(
         &self,
         rate: u32,
         seconds_per_bar: Option<f64>,
-        measured: bool,
-    ) -> Result<Vec<(&'static str, Option<String>)>, CliError> {
+        taken: Taken,
+    ) -> Result<Vec<(&'static str, Option<Spelled>)>, CliError> {
         use Representation as R;
-        let count = |n: usize| Some(n.to_string());
-        let secs = |s: f64| Some(spelled_secs(s));
-        let db = |d: f64| Some(format!("{d}db"));
-        let switch = |on: bool| Some(if on { "1" } else { "0" }.to_string());
+        let count = |n: usize| Some(Spelled::Number(n.to_string()));
+        let secs = |s: f64| Some(Spelled::Text(spelled_secs(s)));
+        let db = |d: f64| Some(Spelled::Text(format!("{d}db")));
+        let switch = |on: bool| Some(Spelled::Number(u8::from(on).to_string()));
+        let text = |t: &str| Some(Spelled::Text(t.to_string()));
+        let frame = |written: Option<f64>, unwritten: Option<f64>| match taken {
+            Taken::Exact => written.and_then(secs),
+            Taken::Measured { .. } => written.or(unwritten).and_then(secs),
+        };
         let mut held = match self.representation(rate, seconds_per_bar)? {
             R::Spectrum {
                 max_peaks,
                 frame_secs,
-            } => vec![
-                (Arg::Peaks, count(max_peaks)),
-                (Arg::Frame, frame_secs.and_then(secs)),
-            ],
+            } => {
+                let fitted = match taken {
+                    Taken::Measured { fitted_frame } => fitted_frame,
+                    Taken::Exact => None,
+                };
+                let fitted = fitted.map(|samples| samples as f64 / f64::from(rate));
+                vec![
+                    (Arg::Peaks, count(max_peaks)),
+                    (Arg::Frame, frame(frame_secs, fitted)),
+                ]
+            }
             R::Envelope { frame_secs } => {
-                let frame = frame_secs.or(measured.then_some(DEFAULT_FRAME_SECS));
-                vec![(Arg::Frame, frame.and_then(secs))]
+                vec![(Arg::Frame, frame(frame_secs, Some(DEFAULT_FRAME_SECS)))]
             }
             R::Ledger { depth } => vec![(Arg::Depth, count(depth))],
             R::Pitch {
@@ -240,11 +252,13 @@ impl Asked {
             R::Bands { prune } => vec![
                 (
                     Arg::Prune,
-                    Some(prune.map_or("0".to_string(), |p| format!("{}db", p.eps_db))),
+                    Some(prune.map_or(Spelled::Number("0".to_string()), |p| {
+                        Spelled::Text(format!("{}db", p.eps_db))
+                    })),
                 ),
                 (Arg::Floor, prune.and_then(|p| db(p.floor_db))),
             ],
-            R::Alias { oversample } => vec![(Arg::Oversample, Some(oversample.to_string()))],
+            R::Alias { oversample } => vec![(Arg::Oversample, count(oversample as usize))],
             R::Harmony {
                 reading,
                 frame_secs,
@@ -252,7 +266,7 @@ impl Asked {
             } => {
                 let own = match reading {
                     Harmonic::Dissonance { max_pairs } => Some((Arg::Pairs, count(max_pairs))),
-                    Harmonic::VoiceLeading { norm } => Some((Arg::Norm, Some(norm.key().into()))),
+                    Harmonic::VoiceLeading { norm } => Some((Arg::Norm, text(norm.key()))),
                     Harmonic::TonalDistance | Harmonic::Inharmonicity => None,
                 };
                 let shared = [(Arg::Frame, secs(frame_secs)), (Arg::Floor, db(floor_db))];
@@ -274,7 +288,7 @@ impl Asked {
             } => vec![
                 (Arg::Frame, secs(frame_secs)),
                 (Arg::Window, secs(window_secs)),
-                (Arg::Bpm, bpm.map(|b| b.to_string())),
+                (Arg::Bpm, bpm.map(|b| Spelled::Number(b.to_string()))),
             ],
             R::SelfSimilarity {
                 frame_secs,
@@ -310,7 +324,10 @@ impl Asked {
         held.extend([
             (Arg::Brief, switch(self.brief)),
             (Arg::Skim, switch(self.skim)),
-            (Arg::Node, self.node.as_ref().map(|n| format!("@{n}"))),
+            (
+                Arg::Node,
+                self.node.as_ref().and_then(|n| text(&format!("@{n}"))),
+            ),
             (Arg::Buffer, buffer),
         ]);
         Ok(self
@@ -604,6 +621,30 @@ fn time(raw: &str, key: &str) -> Result<Time, CliError> {
             written: raw.to_string(),
         }),
         false => Err(bad(format!("`{raw}` is not over zero"))),
+    }
+}
+
+/// How a reading was taken, which decides what an argument it left unwritten took.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Taken {
+    /// Off the written math: no frame applies.
+    Exact,
+    /// Off samples; `fitted_frame` the samples an unpinned `spectrum` frame held.
+    Measured { fitted_frame: Option<usize> },
+}
+
+/// One argument's value as `--representation` takes it: a plain number, or text, `50ms`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Spelled {
+    Number(String),
+    Text(String),
+}
+
+impl Spelled {
+    pub fn text(&self) -> &str {
+        match self {
+            Spelled::Number(t) | Spelled::Text(t) => t,
+        }
     }
 }
 

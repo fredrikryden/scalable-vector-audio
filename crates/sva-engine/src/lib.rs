@@ -61,8 +61,8 @@ pub use sva_samples::{
     CuttingBelowSilenceThreshold, Detail, EnvelopeFrame, Extent, FormantFrame, Frames, IoiBucket,
     LEAST_PRUNE_DB, Label, LedgerEntry, Loudness, LoudnessFrame, MAX_PINNED_FRAME, Note, Onset,
     Onsets, PEAK_NOTE, PSYCHOACOUSTIC_V1, PitchFrame, Profile, Prune, PrunedBand, PrunedBands,
-    Resampled, Rule, SignalKind, Source, Spectrum, StereoFrame, StereoImage, measure_alias,
-    pinned_frame,
+    Resampled, Rule, SignalKind, Source, Spectrum, StereoFrame, StereoImage, fitted_frame,
+    measure_alias, pinned_frame,
 };
 pub use threads::default_threads;
 pub use trace::{Traced, Up, trace};
