@@ -296,7 +296,8 @@ RENDER:
 
   `ledger` prints one row per node under the target. A row's `share` is the
   part of its reader's own energy that row accounts for, so one reader's refs
-  sum to 1; a ref no addend isolates, such as one factor of a product, prints
+  sum to 1; a ref no addend isolates, such as one factor of a product, and
+  every row under a silent reader, which has no energy to share out, print
   `null`. A ref carrying a share reads as the addend it gave its reader, its
   `rms`, `peak` and `clipped` too: in `2*@a`, `a`'s row is `a` doubled, and in
   `@a - @a` it is silence. Each ref carrying a share is collapsed once on its

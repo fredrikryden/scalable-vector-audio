@@ -75,6 +75,23 @@ fn no_tempo_fixture_skips_the_bridge_and_still_renders() {
     assert_eq!(entry(&rendered, PROBE).share, Some(1.0));
 }
 
+/// `@a - @a` is silence, and its rows are parts of no whole: a share of zero energy would
+/// read as a ref accounting for none of something, and the reader's refs would sum to 0.
+#[test]
+fn every_share_under_a_silent_reader_is_null() {
+    let dir = scratch("silent-reader");
+    put(&dir, "a", "sin(2*pi*440*t)\n");
+    put(&dir, "master", "@a - @a\n");
+    let rendered = master(&dir).expect("a cancelled pair renders");
+    let rows = crate::helpers::ledger(&rendered, PROBE);
+    let a = rows
+        .iter()
+        .find(|e| e.node == "a")
+        .expect("`a` is in the ledger");
+    assert_eq!(a.share, None, "{rows:?}");
+    assert_eq!(entry(&rendered, PROBE).share, None, "{rows:?}");
+}
+
 #[test]
 fn a_ledger_envelope_names_its_target_window_and_every_node_under_it() {
     let rendered = master(&fixture("basic")).unwrap();

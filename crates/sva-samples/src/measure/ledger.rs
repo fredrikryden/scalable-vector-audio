@@ -59,7 +59,8 @@ pub struct LedgerEntry {
     pub min: f64,
     pub max: f64,
     /// The part of its reader's own energy this node accounts for, so one reader's refs add
-    /// to one over a sum. `None` for a non-audio kind, and for a ref no addend isolates.
+    /// to one over a sum. `None` for a non-audio kind, a ref no addend isolates, and under a
+    /// silent reader.
     pub share: Option<f64>,
     /// A sample outside [-1, 1], the full scale a `.wav` destination clamps to, so a peak of
     /// exactly 1.0 is not clipped.
@@ -199,8 +200,9 @@ impl Tally {
                 };
                 // Over a sum the parts are the whole: one reader's refs add to exactly one.
                 let share = || match (row.reader, sums.energy > 0.0) {
-                    (Some(_), true) => sums.product / sums.energy,
-                    _ => 0.0,
+                    (Some(_), true) => Some(sums.product / sums.energy),
+                    (Some(_), false) => None,
+                    (None, _) => Some(0.0),
                 };
                 out.push(LedgerEntry {
                     node: row.node.clone(),
@@ -211,7 +213,7 @@ impl Tally {
                     peak: sums.peak,
                     min: sums.min,
                     max: sums.max,
-                    share: (gated && row.attributed).then(share),
+                    share: (gated && row.attributed).then(share).flatten(),
                     clipped: gated.then_some(sums.peak > 1.0),
                 });
             }
