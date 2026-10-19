@@ -6,8 +6,8 @@ use sva_ast::SpanUnit;
 use sva_ast::score::{Field, Kind, Reading as Folding, Refused, evaluate};
 use sva_engine::harmony::voice_leading::Norm;
 use sva_engine::{
-    Arg, DEFAULT_BUFFER_SECS, DEFAULT_PRUNE_DB, Given, LEAST_PRUNE_DB, MAX_PINNED_FRAME, READINGS,
-    Reading, Representation, pinned_frame,
+    Arg, DEFAULT_BUFFER_SECS, DEFAULT_FRAME_SECS, DEFAULT_PRUNE_DB, Given, Harmonic,
+    LEAST_PRUNE_DB, MAX_PINNED_FRAME, READINGS, Reading, Representation, pinned_frame,
 };
 
 use crate::cli_error::CliError;
@@ -46,11 +46,9 @@ const MOST_SAMPLES: f64 = 9_007_199_254_740_992.0;
 
 /// A call resolved to the reading it names and the arguments only a front end reads. Its
 /// times stay as written until a render says what a bar lasts.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Asked {
     pub name: String,
-    /// The call as written, its arguments and no destination: `pitch(frame=50ms)`.
-    pub written: String,
     given: Given,
     times: Vec<(Arg, Time)>,
     pub dest: Option<Destination>,
@@ -60,21 +58,6 @@ pub struct Asked {
     pub brief: bool,
     /// `ledger(skim=1)`: each row's level alone.
     pub skim: bool,
-}
-
-/// `written` only reports the call; it takes no part in comparing two.
-impl PartialEq for Asked {
-    fn eq(&self, other: &Asked) -> bool {
-        (&self.name, &self.given, &self.times, &self.dest, &self.node)
-            == (
-                &other.name,
-                &other.given,
-                &other.times,
-                &other.dest,
-                &other.node,
-            )
-            && (self.brief, self.skim) == (other.brief, other.skim)
-    }
 }
 
 pub fn is_wav(path: &Path) -> bool {
@@ -211,6 +194,141 @@ impl Asked {
         rate: u32,
         seconds_per_bar: Option<f64>,
     ) -> Result<Representation, CliError> {
+        let given = self.resolved(rate, seconds_per_bar)?;
+        let representation = self.reading().representation(&given);
+        pinned(representation, rate)?;
+        Ok(representation)
+    }
+
+    /// Every argument the reading takes, in its table's order, as `--representation` spells
+    /// it, each default written out. `None` where the reading holds no value for one:
+    /// `spectrum`'s unwritten frame, `envelope`'s where exact, `modulation`'s unwritten
+    /// `bpm`, `bands`' unpruned `floor`, `samples`' `buffer` with no device.
+    pub fn args(
+        &self,
+        rate: u32,
+        seconds_per_bar: Option<f64>,
+        measured: bool,
+    ) -> Result<Vec<(&'static str, Option<String>)>, CliError> {
+        use Representation as R;
+        let count = |n: usize| Some(n.to_string());
+        let secs = |s: f64| Some(spelled_secs(s));
+        let db = |d: f64| Some(format!("{d}db"));
+        let switch = |on: bool| Some(if on { "1" } else { "0" }.to_string());
+        let mut held = match self.representation(rate, seconds_per_bar)? {
+            R::Spectrum {
+                max_peaks,
+                frame_secs,
+            } => vec![
+                (Arg::Peaks, count(max_peaks)),
+                (Arg::Frame, frame_secs.and_then(secs)),
+            ],
+            R::Envelope { frame_secs } => {
+                let frame = frame_secs.or(measured.then_some(DEFAULT_FRAME_SECS));
+                vec![(Arg::Frame, frame.and_then(secs))]
+            }
+            R::Ledger { depth } => vec![(Arg::Depth, count(depth))],
+            R::Pitch {
+                max_notes: peaks,
+                frame_secs,
+            }
+            | R::Formants {
+                max_formants: peaks,
+                frame_secs,
+            } => vec![(Arg::Peaks, count(peaks)), (Arg::Frame, secs(frame_secs))],
+            R::Stereo { frame_secs } => vec![(Arg::Frame, secs(frame_secs))],
+            R::Bands { prune } => vec![
+                (
+                    Arg::Prune,
+                    Some(prune.map_or("0".to_string(), |p| format!("{}db", p.eps_db))),
+                ),
+                (Arg::Floor, prune.and_then(|p| db(p.floor_db))),
+            ],
+            R::Alias { oversample } => vec![(Arg::Oversample, Some(oversample.to_string()))],
+            R::Harmony {
+                reading,
+                frame_secs,
+                floor_db,
+            } => {
+                let own = match reading {
+                    Harmonic::Dissonance { max_pairs } => Some((Arg::Pairs, count(max_pairs))),
+                    Harmonic::VoiceLeading { norm } => Some((Arg::Norm, Some(norm.key().into()))),
+                    Harmonic::TonalDistance | Harmonic::Inharmonicity => None,
+                };
+                let shared = [(Arg::Frame, secs(frame_secs)), (Arg::Floor, db(floor_db))];
+                shared.into_iter().chain(own).collect()
+            }
+            R::Periodicity {
+                frame_secs,
+                window_secs,
+                curve,
+            } => vec![
+                (Arg::Frame, secs(frame_secs)),
+                (Arg::Window, secs(window_secs)),
+                (Arg::Curve, switch(curve)),
+            ],
+            R::Modulation {
+                frame_secs,
+                window_secs,
+                bpm,
+            } => vec![
+                (Arg::Frame, secs(frame_secs)),
+                (Arg::Window, secs(window_secs)),
+                (Arg::Bpm, bpm.map(|b| b.to_string())),
+            ],
+            R::SelfSimilarity {
+                frame_secs,
+                cell_secs,
+                smooth_secs,
+                window_secs,
+                floor_db,
+                listed,
+                curve,
+            } => vec![
+                (Arg::Frame, secs(frame_secs)),
+                (Arg::Cell, secs(cell_secs)),
+                (Arg::Smooth, secs(smooth_secs)),
+                (Arg::Window, secs(window_secs)),
+                (Arg::Floor, db(floor_db)),
+                (Arg::Peaks, count(listed)),
+                (Arg::Curve, switch(curve)),
+            ],
+            R::Lines
+            | R::Atoms
+            | R::Derivative
+            | R::Samples
+            | R::Crest
+            | R::Loudness
+            | R::Onsets
+            | R::Bindings
+            | R::Arguments => Vec::new(),
+        };
+        let buffer = match &self.dest {
+            Some(Destination::Alsa { buffer_secs, .. }) => secs(*buffer_secs),
+            _ => None,
+        };
+        held.extend([
+            (Arg::Brief, switch(self.brief)),
+            (Arg::Skim, switch(self.skim)),
+            (Arg::Node, self.node.as_ref().map(|n| format!("@{n}"))),
+            (Arg::Buffer, buffer),
+        ]);
+        Ok(self
+            .reading()
+            .takes
+            .iter()
+            .map(|arg| {
+                let (_, value) = held
+                    .iter()
+                    .find(|(one, _)| one == arg)
+                    .expect("a reading holds every argument it takes");
+                (arg.key(), value.clone())
+            })
+            .collect())
+    }
+
+    /// The arguments at `rate`, every time in seconds.
+    fn resolved(&self, rate: u32, seconds_per_bar: Option<f64>) -> Result<Given, CliError> {
         let mut given = self.given;
         for (arg, time) in &self.times {
             let secs = match (time.unit, seconds_per_bar) {
@@ -260,9 +378,7 @@ impl Asked {
                 _ => unreachable!("only a time argument is held as a time"),
             }
         }
-        let representation = self.reading().representation(&given);
-        pinned(representation, rate)?;
-        Ok(representation)
+        Ok(given)
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -333,16 +449,8 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
             format!("`{name}` reads one instance's {name}; name it, as `{name}(node=@voice)`"),
         ));
     }
-    let written = match call.args.is_empty() {
-        true => name.to_string(),
-        false => {
-            let args: Vec<String> = call.args.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            format!("{name}({})", args.join(", "))
-        }
-    };
     Ok(Asked {
         name: call.name.clone(),
-        written,
         given,
         times,
         dest: destination(name, call.dest.as_deref(), buffer)?,
@@ -496,6 +604,16 @@ fn time(raw: &str, key: &str) -> Result<Time, CliError> {
             written: raw.to_string(),
         }),
         false => Err(bad(format!("`{raw}` is not over zero"))),
+    }
+}
+
+/// Seconds as a time argument reads them: under a second in `ms` where that is exact,
+/// `50ms`, else in `s`, `4s`.
+fn spelled_secs(secs: f64) -> String {
+    let ms = secs * 1000.0;
+    match secs < 1.0 && ms / 1000.0 == secs {
+        true => format!("{ms}ms"),
+        false => format!("{secs}s"),
     }
 }
 

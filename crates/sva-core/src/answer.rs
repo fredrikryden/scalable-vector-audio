@@ -22,7 +22,9 @@ use sva_engine::pitch as pitch_names;
 use sva_engine::self_similarity::{self, SelfSimilarity};
 use sva_engine::sliding::Stats;
 
+use crate::cli_error::CliError;
 use crate::json::{NONE, capped, escape, latest, list, num};
+use crate::query::Asked;
 
 /// Past this a caller reading stdout wants a later interval start, not a wall of JSON.
 pub const SAMPLE_LIMIT: usize = 4096;
@@ -937,11 +939,27 @@ fn line_json(l: &sva_engine::Line) -> String {
 /// Every answer says which reading ran, under which profile, and at what rate.
 /// A reading that truncated a series names what it left out, so the kept list is never read
 /// as the whole of it.
-pub fn answer_json(answer: &Answer, asked: &str, limit: Option<usize>, skim: bool) -> String {
+pub fn answer_json(printed: &Printed, limit: Option<usize>) -> String {
+    let answer = &printed.answer;
+    let args = printed
+        .args
+        .iter()
+        .map(|(key, value)| {
+            let value = value
+                .as_ref()
+                .map_or_else(|| NONE.to_string(), |v| format!("\"{}\"", escape(v)));
+            format!("\"{key}\": {value}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let args = match args.is_empty() {
+        true => "{}".to_string(),
+        false => format!("{{ {args} }}"),
+    };
     format!(
-        "{{ \"asked\": \"{}\", \"source\": \"{}\", \"profile\": \"{}\", \"rate\": {}, \"value\": {}, \
-         \"dropped\": {}, \"tail_db\": {} }}",
-        escape(asked),
+        "{{ \"representation\": \"{}\", \"args\": {args}, \"source\": \"{}\", \"profile\": \"{}\", \
+         \"rate\": {}, \"value\": {}, \"dropped\": {}, \"tail_db\": {} }}",
+        escape(&printed.name),
         match answer.source {
             Source::Exact => "exact",
             Source::Measured => "measured",
@@ -950,7 +968,7 @@ pub fn answer_json(answer: &Answer, asked: &str, limit: Option<usize>, skim: boo
         answer
             .rate
             .map_or_else(|| NONE.to_string(), |r| r.to_string()),
-        value_json(&answer.value, limit, skim),
+        value_json(&answer.value, limit, printed.skim),
         list(&answer.dropped, line_json),
         maybe(answer.tail_db)
     )
@@ -1247,11 +1265,29 @@ fn boot_json(boot: &Boot) -> String {
 /// One answer as a report prints it.
 pub struct Printed {
     pub name: String,
-    /// The call it was asked as, `pitch(frame=50ms)`, so a reading read back names its own.
-    pub asked: String,
+    /// Every argument the reading takes as `Asked::args` spells it, so a reading read back
+    /// states what it was read with.
+    pub args: Vec<(&'static str, Option<String>)>,
     pub answer: Answer,
     /// `ledger(skim=1)`: each row's level alone.
     pub skim: bool,
+}
+
+impl Printed {
+    /// `answer` to `asked`, its arguments at `rate`, bars in `seconds_per_bar`.
+    pub fn of(
+        asked: &Asked,
+        answer: Answer,
+        rate: u32,
+        seconds_per_bar: Option<f64>,
+    ) -> Result<Printed, CliError> {
+        Ok(Printed {
+            name: asked.name.clone(),
+            args: asked.args(rate, seconds_per_bar, answer.source == Source::Measured)?,
+            answer,
+            skim: asked.skim,
+        })
+    }
 }
 
 /// What a render answered with, and where anything too big for the object went instead.
@@ -1329,7 +1365,7 @@ pub fn query_data(report: &Report) -> String {
             format!(
                 "\"{}\": {}",
                 escape(&printed.name),
-                answer_json(&printed.answer, &printed.asked, report.limit, printed.skim)
+                answer_json(printed, report.limit)
             )
         })
         .collect::<Vec<_>>()

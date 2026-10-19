@@ -4,9 +4,9 @@ import init, { Composition, outline, readings, subscribe } from "@scalable-vecto
 import { decode } from "./payload.mjs";
 
 const $ = (id) => document.getElementById(id);
-/** Each engine call by its id: what this page asked, when, and every report the hook made of it. */
+/** Each engine call by its id: what this page requested, when, and every report the hook made of it. */
 const calls = new Map();
-let asking = null;
+let requesting = null;
 let totals = null;
 let boots = [];
 
@@ -44,20 +44,20 @@ function heard(stats) {
   totals = stats.totals;
   const call = stats.call;
   if (!call) return;
-  if (!calls.has(call.id)) calls.set(call.id, { asked: asking?.asked, started: asking?.started ?? performance.now(), reports: [] });
+  if (!calls.has(call.id)) calls.set(call.id, { request: requesting?.request, started: requesting?.started ?? performance.now(), reports: [] });
   const held = calls.get(call.id);
   held.reports.push({ at: performance.now() - held.started, call });
-  if (call.phase !== "done") said(`Call ${call.id} (${held.asked}): ${call.phase}, ${call.samples} samples`);
+  if (call.phase !== "done") said(`Call ${call.id} (${held.request}): ${call.phase}, ${call.samples} samples`);
 }
 
 /** One render asking one representation; the signal lets the page paint between blocks. */
-async function rendered(composition, target, asked, options = {}) {
-  asking = { asked, started: performance.now() };
+async function rendered(composition, target, request, options = {}) {
+  requesting = { request, started: performance.now() };
   try {
-    return await composition.render(target, [asked], { ...options, signal: new AbortController().signal });
+    return await composition.render(target, [request], { ...options, signal: new AbortController().signal });
   } finally {
-    for (const held of calls.values()) if (held.asked === asked && held.ms === undefined) held.ms = performance.now() - held.started;
-    asking = null;
+    for (const held of calls.values()) if (held.request === request && held.ms === undefined) held.ms = performance.now() - held.started;
+    requesting = null;
   }
 }
 
@@ -282,9 +282,9 @@ function callsShown() {
   const body = [...calls.entries()].map(([id, held]) => {
     const last = held.reports.at(-1)?.call ?? {};
     const l = last.lookups ?? {};
-    return [id, last.kind, held.asked, last.phase, held.ms ?? null, last.samples, last.total_samples, last.planned_samples, last.computed_samples, last.cached_samples, `${l.hit ?? 0}/${l.miss ?? 0}/${l.new ?? 0}/${l.reused ?? 0}/${l.prefix ?? 0}`, typing(last), held.reports.length];
+    return [id, last.kind, held.request, last.phase, held.ms ?? null, last.samples, last.total_samples, last.planned_samples, last.computed_samples, last.cached_samples, `${l.hit ?? 0}/${l.miss ?? 0}/${l.new ?? 0}/${l.reused ?? 0}/${l.prefix ?? 0}`, typing(last), held.reports.length];
   });
-  rows($("calls"), ["id", "kind", "asked", "phase", "ms", "samples", "total_samples", "planned_samples", "computed_samples", "cached_samples", "hit/miss/new/reused/prefix lookups", "typed/nodes of instances", "reports"], body);
+  rows($("calls"), ["id", "kind", "request", "phase", "ms", "samples", "total_samples", "planned_samples", "computed_samples", "cached_samples", "hit/miss/new/reused/prefix lookups", "typed/nodes of instances", "reports"], body);
 }
 
 function timelineShown(id) {
@@ -314,21 +314,21 @@ async function readingsShown(composition, example) {
     const asks = reading.takes.includes("node")
       ? Object.keys(example.nodes).map((name) => `${reading.name}(node=@${name})`)
       : [reading.name];
-    for (const asked of asks) {
-      said(`Reading ${asked}.`);
+    for (const request of asks) {
+      said(`Reading ${request}.`);
       const started = performance.now();
       let answer;
       try {
-        const done = await rendered(composition, example.target, asked, { out: null });
+        const done = await rendered(composition, example.target, request, { out: null });
         answer = json(Object.values(done.representations().representations)[0]);
         done.free();
       } catch (error) {
         answer = element("pre", described(error), "bad");
       }
-      body.push([asked, reading.reads, reading.help, performance.now() - started, answer]);
+      body.push([request, reading.reads, reading.help, performance.now() - started, answer]);
     }
   }
-  rows($("readings"), ["asked", "reads", "help", "ms", "answer"], body);
+  rows($("readings"), ["call", "reads", "help", "ms", "answer"], body);
 }
 
 async function main() {

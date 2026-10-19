@@ -820,12 +820,13 @@ fn answered(rendered: &Rendered, asked: &[Asked], limit: Limit) -> Result<JsValu
     let mut answers = Vec::with_capacity(asked.len());
     for asked in asked {
         let answer = rendered.answered(asked).map_err(|e| thrown(&e))?;
-        answers.push(Printed {
-            name: asked.name.clone(),
-            asked: asked.written.clone(),
+        let printed = Printed::of(
+            asked,
             answer,
-            skim: asked.skim,
-        });
+            rendered.config.rate,
+            rendered.seconds_per_bar(),
+        );
+        answers.push(printed.map_err(|e| thrown(&e))?);
     }
     let rate = rendered.config.rate;
     let interval = rendered

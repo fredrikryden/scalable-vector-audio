@@ -81,10 +81,14 @@ impl Rendered {
         Ok(answer)
     }
 
+    /// What a bar lasts in this render's tempo; `None` where it has none.
+    pub fn seconds_per_bar(&self) -> Option<f64> {
+        self.graph.tempo().map(|tempo| tempo.seconds_per_bar())
+    }
+
     /// `asked`'s reading, its bars in this render's tempo.
     pub fn answered(&self, asked: &Asked) -> Result<Answer, CliError> {
-        let per_bar = self.graph.tempo().map(|tempo| tempo.seconds_per_bar());
-        let representation = asked.representation(self.config.rate, per_bar)?;
+        let representation = asked.representation(self.config.rate, self.seconds_per_bar())?;
         self.answer(
             asked.node.as_deref().unwrap_or(&self.target),
             representation,

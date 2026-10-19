@@ -144,9 +144,14 @@ RENDER:
   Renders one expression, in the grammar a node file's body uses, and prints one
   reading per representation under `data.representations`. `@path` reads a node
   from the current directory and `@/abs/path` one anywhere; there is no default
-  target. Every reading states the call it was asked as (`asked`, as
-  `pitch(frame=50ms)`), its `source` (exact or measured), the conformance
-  profile it ran under, and its rate; `analyze` prints the same.
+  target. Every reading states what it was read with: `representation`, its
+  name, and `args`, every argument it takes spelled as `--representation`
+  takes it, each default written out (`pitch` alone prints `"peaks": "16",
+  "frame": "50ms"`), null where the reading holds no value for one
+  (`spectrum`'s unwritten frame, sized to the range), so its `args` written
+  back as `name(key=value, ...)`, nulls left out, ask the same reading. It
+  states its `source` (exact or measured), the conformance profile it ran
+  under, and its rate; `analyze` prints the same.
 
   The target's own ref may read an interval: `@piano4([0, 2b], f0=C4,
   vel=0.5, release=1s)`, where `release` is the instrument's own parameter. Its ends are the language's literals (`s`, `ms`, `b`,
@@ -387,11 +392,14 @@ SOLVE:
   `data` (the object holding `interval` and `representations`): from a bench
   download `.readings['<call>']`, from `analyze ref.wav --representation
   bands=ref.json` the path `.data`. The leaf's reading reads it, and refuses
-  before the first render where its kind, its arguments (each reading prints
-  the call it was asked as, `asked`), its rate, its profile or its interval's
-  length differ from what the leaf renders, or where a list in it was cut
-  short (`has_more: true`; a reading written to a file is whole). Each file is
-  read once per solve.
+  before the first render where its kind, its arguments, its rate, its
+  profile or its interval's length differ from what the leaf renders, or
+  where a list in it was cut short (`has_more: true`; a reading written to a
+  file is whole). Its arguments are its `args`, compared one by one with the
+  leaf's, each resolved at the solve's rate, so `frame=0.05` matches
+  `frame=50ms`; a mismatch names the argument and both values, and a reading
+  with no `representation` and `args` refuses. Each file is read once per
+  solve.
 
   `@fits/<name>` reads the cost from the file `fits/<name>` of the
   composition, written as a node is: an annotation line `; Models: ... |
@@ -457,7 +465,8 @@ ANALYZE:
   Runs the same readings over a whole external `.wav` at its own rate, never
   resampled. Only the readings a buffer answers alone apply, each listed under
   REPRESENTATIONS as `measured` or `exact off a closed form, measured off
-  samples`; the rest need the graph behind it.
+  samples`; the rest need the graph behind it. Each reading states its
+  `representation` and `args` as `render`'s do, a time in seconds.
 
 LINT:
   sva-cli lint ['<expression>'] [--format <json|text>]

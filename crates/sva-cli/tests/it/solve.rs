@@ -182,9 +182,9 @@ fn refuses(dir: &Path, argv: &[&str], code: &str, exit: i32) -> Value {
     answer
 }
 
-/// `analyze` prints each reading's call as `asked`; `load_json` reads that `data` back as the
-/// reading its leaf subtracts, a number or numbers as weights, and each mismatch refuses
-/// under its own code before anything renders.
+/// `analyze` prints each reading's `representation` and every one of its `args`; `load_json`
+/// reads that `data` back as the reading its leaf subtracts, a number or numbers as weights,
+/// and each mismatch refuses under its own code before anything renders.
 #[test]
 fn load_json_reads_a_reading_a_weight_or_refuses_under_its_code() {
     let (dir, reference) = composition("solve-load-json");
@@ -199,20 +199,25 @@ fn load_json_reads_a_reading_a_weight_or_refuses_under_its_code() {
     );
     let held: Value =
         serde_json::from_slice(&std::fs::read(&analyzed).expect("written")).expect("JSON");
+    let envelope = at(&held, &["data", "representations", "envelope"]);
     assert_eq!(
-        at(&held, &["data", "representations", "envelope", "asked"]),
-        "envelope(frame=50ms)"
+        (&envelope["representation"], &envelope["args"]),
+        (
+            &Value::from("envelope"),
+            &serde_json::json!({ "frame": "50ms" })
+        )
     );
     let mut short = held.clone();
     short["data"]["representations"]["envelope"]["value"]["pagination"]["has_more"] =
         Value::Bool(true);
     std::fs::write(root.join("short.json"), short.to_string()).expect("written");
-    let mut unasked = held.clone();
-    unasked["data"]["representations"]["envelope"]
+    let mut argless = held.clone();
+    let read = argless["data"]["representations"]["envelope"]
         .as_object_mut()
-        .expect("an object")
-        .remove("asked");
-    std::fs::write(root.join("unasked.json"), unasked.to_string()).expect("written");
+        .expect("an object");
+    read.remove("representation");
+    read.remove("args");
+    std::fs::write(root.join("argless.json"), argless.to_string()).expect("written");
     std::fs::write(root.join("w.json"), r#"{"w": 2, "ws": [1, 0.5]}"#).expect("written");
     std::fs::write(root.join("x.json.gz"), [0x1f, 0x8b, 8, 0]).expect("written");
 
@@ -273,9 +278,9 @@ fn load_json_reads_a_reading_a_weight_or_refuses_under_its_code() {
         ),
         (against("short.json", ".data"), &[], "solve.cut_short", 3),
         (
-            against("unasked.json", ".data"),
+            against("argless.json", ".data"),
             &[],
-            "solve.unasked_load",
+            "solve.argless_load",
             3,
         ),
         (

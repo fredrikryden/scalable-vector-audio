@@ -920,12 +920,11 @@ impl Building {
                     Some(r) => format!("<recording at {} Hz>", r.rate),
                     None => target.clone(),
                 };
-                let probe = asked(&self::call(&call)?)?;
-                let args = probe
-                    .written
-                    .strip_prefix(probe.name.as_str())
-                    .unwrap_or("");
-                let args = args.trim_start_matches('(').trim_end_matches(')');
+                let probe = self::call(&call)?;
+                asked(&probe)?;
+                let args: Vec<String> =
+                    probe.args.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                let args = args.join(", ");
                 let written = match args.is_empty() {
                     true => format!("repr.{}({shown})", probe.name),
                     false => format!("repr.{}({shown}, {args})", probe.name),

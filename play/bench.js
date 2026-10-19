@@ -30,7 +30,7 @@ const printed = (value) =>
 if (typeof document === "undefined") worker();
 else page();
 
-/** The same file run as a module worker: loads sva-wasm, names the readings, answers each call asked. */
+/** The same file run as a module worker: loads sva-wasm, names the readings, answers each call. */
 async function worker() {
   const { default: init, analyze, readings } = await import(WASM);
   await init();
@@ -53,7 +53,7 @@ async function worker() {
 function page() {
   const $ = (id) => document.getElementById(id);
   const canvas = $("wave");
-  const state = { selection: matchMedia("(pointer: coarse)").matches ? null : { start: 0, end: 0 }, run: 0, audio: null, file: "", by: "", peaks: null, readings: null, results: new Map(), asked: null, pruned: new Map(), crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
+  const state = { selection: matchMedia("(pointer: coarse)").matches ? null : { start: 0, end: 0 }, run: 0, audio: null, file: "", by: "", peaks: null, readings: null, results: new Map(), calls: null, pruned: new Map(), crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
   let context = null;
 
   function failed(error) {
@@ -547,7 +547,7 @@ function page() {
     state.run += 1;
     cancelAnimationFrame(coast);
     coast = null;
-    Object.assign(state, { audio, file, by, crop: null, selection: framed() ? null : { start: 0, end: 0 }, peaks: null, results: new Map(), asked: null });
+    Object.assign(state, { audio, file, by, crop: null, selection: framed() ? null : { start: 0, end: 0 }, peaks: null, results: new Map(), calls: null });
     if (audio) viewed({ from: 0, span: Infinity });
     $("download").disabled = true;
     shown();
@@ -563,13 +563,13 @@ function page() {
     const [start, end] = cropped();
     const length = secs(end - start);
     const call = (r, args) => (args.length ? `${r.name}(${args.join(", ")})` : r.name);
-    state.asked = [];
+    state.calls = [];
     state.pruned = new Map();
     for (const r of state.readings) {
       const args = r.window ? [`window=${length}s`] : [];
-      state.asked.push(call(r, args));
+      state.calls.push(call(r, args));
       if (r.prune) {
-        state.asked.push(call(r, [...args, "prune=1"]));
+        state.calls.push(call(r, [...args, "prune=1"]));
         state.pruned.set(call(r, args), call(r, [...args, "prune=1"]));
       }
     }
@@ -582,7 +582,7 @@ function page() {
     enabled();
     shown();
     selectionShown();
-    analyst.postMessage({ run: state.run, target: targetOf(), channels, calls: state.asked }, channels.map((c) => c.buffer));
+    analyst.postMessage({ run: state.run, target: targetOf(), channels, calls: state.calls }, channels.map((c) => c.buffer));
   });
 
   const targetOf = () => `${state.file}([${secs(state.crop.start)}s, ${secs(state.crop.end)}s])`;
@@ -590,15 +590,15 @@ function page() {
   function shown() {
     const table = $("readings");
     table.replaceChildren();
-    if (!state.asked) return;
+    if (!state.calls) return;
     const top = table.insertRow();
-    for (const [name, numeric] of [["asked", false], ["ms", true], ["answer", false]]) {
+    for (const [name, numeric] of [["call", false], ["ms", true], ["answer", false]]) {
       const th = document.createElement("th");
       th.textContent = name;
       if (numeric) th.className = "n";
       top.append(th);
     }
-    for (const call of state.asked) {
+    for (const call of state.calls) {
       const held = state.results.get(call);
       const row = table.insertRow();
       row.insertCell().textContent = call;
@@ -628,7 +628,7 @@ function page() {
   function saved(pruned) {
     const left = new Set(pruned ? state.pruned.keys() : state.pruned.values());
     const readings = {};
-    for (const call of state.asked.filter((c) => !left.has(c))) {
+    for (const call of state.calls.filter((c) => !left.has(c))) {
       const held = state.results.get(call);
       readings[call] = held.refusal ? { refusal: held.refusal } : { ...held.data, representations: printed(held.data.representations) };
     }

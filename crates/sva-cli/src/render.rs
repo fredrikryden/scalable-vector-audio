@@ -95,7 +95,8 @@ fn answered(
             false => answer,
         });
     }
-    let (answers, written) = routed(&kept, taken, &framing)?;
+    let tempo = (rate, rendered.seconds_per_bar());
+    let (answers, written) = routed(&kept, taken, tempo, &framing)?;
 
     Ok(query_data(&Report {
         target: &args.target,
@@ -141,17 +142,13 @@ type Routed<'a> = (Vec<Printed>, Vec<(String, &'a Path)>);
 fn routed<'a>(
     asked: &[&'a Asked],
     taken: Vec<Answer>,
+    (rate, seconds_per_bar): (u32, Option<f64>),
     framing: &Framing,
 ) -> Result<Routed<'a>, CliError> {
     let mut answers = Vec::new();
     let mut written = Vec::new();
     for (one, answer) in asked.iter().zip(taken) {
-        let printed = Printed {
-            name: one.name.clone(),
-            asked: one.written.clone(),
-            answer,
-            skim: one.skim,
-        };
+        let printed = Printed::of(one, answer, rate, seconds_per_bar)?;
         match &one.dest {
             None => answers.push(printed),
             Some(Destination::File(dest)) => {
@@ -215,7 +212,8 @@ pub fn analyze(args: &AnalyzeArgs) -> Result<String, CliError> {
     };
 
     let taken = analyzed(&target, &buffer, &args.asked)?;
-    let (answers, written) = routed(&args.asked.iter().collect::<Vec<_>>(), taken, &framing)?;
+    let asked: Vec<&Asked> = args.asked.iter().collect();
+    let (answers, written) = routed(&asked, taken, (rate, None), &framing)?;
     Ok(success_envelope(
         &query_data(&Report {
             target: &target,

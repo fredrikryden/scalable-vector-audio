@@ -95,7 +95,7 @@ fn every_share_under_a_silent_reader_is_null() {
 #[test]
 fn a_ledger_envelope_names_its_target_window_and_every_node_under_it() {
     let rendered = master(&fixture("basic")).unwrap();
-    let json = json_of(&rendered, "ledger", Representation::Ledger { depth: 8 });
+    let json = json_of(&rendered, "ledger(depth=8)");
 
     assert!(json.contains("\"status\": \"success\""));
     assert!(json.contains("\"target\": \"@master([0, 1s])\""));
@@ -136,7 +136,7 @@ fn every_answer_names_its_source_profile_and_rate() {
     assert_eq!(measured.source, Source::Measured);
     assert_eq!(measured.rate, Some(44_100));
 
-    let json = json_of(&rendered, "lines", Representation::Lines);
+    let json = json_of(&rendered, "lines");
     assert!(json.contains("\"source\": \"exact\""));
     assert!(json.contains("\"profile\": \"psychoacoustic-v1\""));
     assert!(json.contains("\"rate\": null"));
@@ -149,13 +149,13 @@ fn atoms_a_derivative_and_an_envelope_print_each_term_with_its_channel_and_frequ
     let dir = scratch("derivative-terms");
     put(&dir, "x", "join(sin(2*pi*100*t), 0.5*sin(2*pi*200*t))\n");
     let rendered = probe(&dir, "@x([0, 1s])").expect("a closed form");
-    let json = json_of(&rendered, "atoms", Representation::Atoms);
+    let json = json_of(&rendered, "atoms");
     for (channel, amp, hz) in [(0, "0.5", "100"), (1, "0.25", "200")] {
         let wanted =
             format!("\"channel\": {channel}, \"sketch\": \"{amp} x an exponential\", \"hz\": {hz}");
         assert!(json.contains(&wanted), "{wanted}: {json}");
     }
-    let json = json_of(&rendered, "derivative", Representation::Derivative);
+    let json = json_of(&rendered, "derivative");
     let slope = |channel: usize, hz: &str, re: f64| {
         format!(
             "\"channel\": {channel}, \"sketch\": \"{re} x an exponential\", \"hz\": {hz}, \"re\": {re}"
@@ -168,11 +168,7 @@ fn atoms_a_derivative_and_an_envelope_print_each_term_with_its_channel_and_frequ
     ] {
         assert!(json.contains(&wanted), "{wanted}: {json}");
     }
-    let json = json_of(
-        &rendered,
-        "envelope",
-        Representation::Envelope { frame_secs: None },
-    );
+    let json = json_of(&rendered, "envelope");
     for (channel, squared) in [(0, "1"), (1, "0.25")] {
         let wanted = format!(
             "\"channel\": {channel}, \"sketch\": \"{squared} x an amplitude\", \"hz\": 0, \"re\": {squared}"
@@ -196,7 +192,7 @@ fn atoms_print_each_window_in_seconds_and_null_where_unbounded() {
     );
     put(&dir, "x", "0.1*sin(2*pi*50*t) + @voice(t - 1s, f0=330hz)\n");
     let rendered = probe(&dir, "@x([0, 2s])").expect("a closed form");
-    let json = json_of(&rendered, "atoms", Representation::Atoms);
+    let json = json_of(&rendered, "atoms");
     let items: Vec<&str> = json
         .split("{ \"channel\": 0, \"sketch\": ")
         .skip(1)
@@ -259,7 +255,7 @@ fn a_probe_naming_a_missing_node_or_a_broken_expression_refuses() {
 #[test]
 fn a_bands_rendering_reports_every_bands_own_impulse_floor_beside_it() {
     let rendered = master(&fixture("basic")).unwrap();
-    let json = json_of(&rendered, "bands", Representation::Bands { prune: None });
+    let json = json_of(&rendered, "bands");
     for field in [
         "\"rate_hz\"",
         "\"centre_hz\"",
@@ -370,7 +366,7 @@ fn a_width_conflict_refuses_the_whole_render_as_a_located_diagnostic() {
 #[test]
 fn a_loudness_rendering_names_its_peak_as_a_sample_peak() {
     let rendered = master(&fixture("basic")).unwrap();
-    let json = json_of(&rendered, "loudness", Representation::Loudness);
+    let json = json_of(&rendered, "loudness");
     assert!(json.contains("\"integrated_lufs\""), "{json}");
     assert!(json.contains("\"range_lu\""));
     assert!(json.contains("\"sample_peak_dbfs\""));
@@ -384,7 +380,7 @@ fn a_loudness_rendering_names_its_peak_as_a_sample_peak() {
 #[test]
 fn a_crest_rendering_reports_the_spread_and_which_bands_it_counted() {
     let rendered = master(&fixture("basic")).unwrap();
-    let json = json_of(&rendered, "crest", Representation::Crest);
+    let json = json_of(&rendered, "crest");
     assert!(json.contains("\"spread_db\""), "{json}");
     assert!(json.contains("\"widest_band_hz\""));
     assert!(json.contains("\"tightest_band_hz\""));
@@ -605,7 +601,7 @@ fn a_missing_node_is_not_found() {
 fn every_absent_reading_is_null_never_a_missing_key() {
     let dir = fixture("basic");
     let rendered = master(&dir).expect("basic renders");
-    let json = json_of(&rendered, "ledger", Representation::Ledger { depth: 8 });
+    let json = json_of(&rendered, "ledger(depth=8)");
     assert!(
         json.contains("\"channel\": null"),
         "a mono row still names its channel: {json}"

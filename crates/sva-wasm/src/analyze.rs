@@ -67,16 +67,12 @@ pub fn analyze(
     let asked = representations_of(&representations)?;
     let buffer = Buffer::of_planes(rate, planes);
     let taken = analyzed(target, &buffer, &asked).map_err(|e| thrown(&e))?;
-    let answers: Vec<Printed> = asked
+    let answers = asked
         .iter()
         .zip(taken)
-        .map(|(one, answer)| Printed {
-            name: one.name.clone(),
-            asked: one.written.clone(),
-            answer,
-            skim: one.skim,
-        })
-        .collect();
+        .map(|(one, answer)| Printed::of(one, answer, rate, None))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| thrown(&e))?;
     parse(&query_data(&Report {
         target,
         rate,

@@ -86,14 +86,14 @@ pub fn entry(r: &Rendered, node: &str) -> LedgerEntry {
         .unwrap_or_else(|| panic!("{node} is not in its own ledger"))
 }
 
-pub fn json_of(r: &Rendered, name: &str, representation: Representation) -> String {
-    let answers = [Printed {
-        name: name.to_string(),
-        asked: name.to_string(),
-        answer: r.answer(&r.target, representation).unwrap(),
-        skim: false,
-    }];
+/// `call`'s reading of `r`, as `render` prints it.
+pub fn json_of(r: &Rendered, call: &str) -> String {
+    let [asked] = &asked(call)[..] else {
+        panic!("`{call}` is one call");
+    };
     let rate = r.config.rate;
+    let answer = r.answered(asked).unwrap();
+    let answers = [Printed::of(asked, answer, rate, r.seconds_per_bar()).unwrap()];
     let interval = r
         .render
         .range
@@ -113,6 +113,14 @@ pub fn json_of(r: &Rendered, name: &str, representation: Representation) -> Stri
         }),
         &[],
     )
+}
+
+/// `answer` printed as the reading `call` names, at `rate`.
+pub fn printed(call: &str, answer: sva_engine::Answer, rate: u32) -> Printed {
+    let [asked] = &asked(call)[..] else {
+        panic!("`{call}` is one call");
+    };
+    Printed::of(asked, answer, rate, None).expect("its arguments resolve")
 }
 
 /// The readings a comma list of calls names, as `--representation` reads it.

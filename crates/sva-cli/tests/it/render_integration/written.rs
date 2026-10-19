@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::helpers::{buffer, fixture, json_of, ledger, ledgered, put, scratch};
+use crate::helpers::{buffer, fixture, json_of, ledger, ledgered, printed, put, scratch};
 use sva_cli::{SampleEncoding, write_channels, write_wav};
 use sva_core::{PROBE, probe};
 use sva_engine::{Output, Representation};
@@ -38,7 +38,7 @@ fn a_stereo_composition_reports_a_channel_per_component_and_a_mono_one_reports_n
     );
     assert!(master[0].rms > master[1].rms, "p=0.3 sits left of centre");
 
-    let json = json_of(&rendered, "ledger", Representation::Ledger { depth: 8 });
+    let json = json_of(&rendered, "ledger(depth=8)");
     assert!(json.contains("\"node\": \"probe\", \"channel\": 0,"));
 }
 
@@ -106,12 +106,7 @@ fn a_json_destination_carries_every_sample_where_stdout_caps_them() {
     let answer = rendered.answer(PROBE, Representation::Samples).unwrap();
     let path: PathBuf = out.join("s.json");
     sva_cli::write_destination(
-        &sva_core::Printed {
-            name: "samples".to_string(),
-            asked: "samples".to_string(),
-            answer,
-            skim: false,
-        },
+        &printed("samples", answer, rendered.config.rate),
         &path,
         &sva_cli::Framing {
             target: "@master".to_string(),
@@ -190,12 +185,7 @@ fn a_non_audio_reading_at_a_wav_path_refuses_the_same_way_on_both_sides() {
         .answer(sva_core::PROBE, Representation::Lines)
         .expect("lines answers");
     let Err(as_a_library) = sva_cli::write_destination(
-        &sva_core::Printed {
-            name: "lines".to_string(),
-            asked: "lines".to_string(),
-            answer,
-            skim: false,
-        },
+        &printed("lines", answer, rendered.config.rate),
         Path::new("/tmp/out.wav"),
         &sva_cli::Framing {
             target: "@master".to_string(),

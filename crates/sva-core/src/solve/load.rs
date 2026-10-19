@@ -8,7 +8,7 @@ use sva_ast::Source;
 use super::cost::{Cost, From, Held, Leaf, Load, Step};
 use crate::cli_error::CliError;
 use crate::decode::{reading, shape};
-use crate::query::{asked, call};
+use crate::query::{Call, asked};
 use crate::{Job, planned};
 
 /// Where `load_json` finds a file's text: in the CLI, relative to the directory it runs in.
@@ -246,15 +246,27 @@ fn decoded(
         ));
     };
     let field = |key: &str| answer.get(key).or_else(|| value.get(key));
-    let Some(written) = answer.get("asked").and_then(Value::as_str) else {
+    let Some((theirs_name, theirs_args)) = answer
+        .get("representation")
+        .and_then(Value::as_str)
+        .zip(answer.get("args").and_then(Value::as_object))
+    else {
         return Err(refused(
-            "solve.unasked_load",
+            "solve.argless_load",
             format!(
-                "{here} names no `asked`, the call its `{name}` was read as, so its arguments \
-                 cannot be checked; it was printed before readings carried them: read it again"
+                "{here} holds `{name}` with no `representation` and `args`, what it was read \
+                 with, so its arguments cannot be checked; it was printed before readings \
+                 carried them: read it again"
             ),
         ));
     };
+    if theirs_name != name {
+        return Err(mismatched(
+            here,
+            leaf,
+            format!("it holds a `{theirs_name}` reading under `{name}`"),
+        ));
+    }
     let job = Job {
         rate: side.rate,
         ..Job::over(side.source, &leaf.target)
@@ -262,17 +274,53 @@ fn decoded(
     let (render, _, per_bar) = planned(&job)?;
     let rate = render.config.rate;
     let profile = render.config.profile.name;
-    let theirs = asked(&call(written)?)?.representation(rate, None)?;
+    let mut written = Vec::with_capacity(theirs_args.len());
+    for (key, value) in theirs_args {
+        match value {
+            Value::String(text) => written.push((key.clone(), text.clone())),
+            Value::Null => {}
+            other => {
+                return Err(refused(
+                    "solve.bad_reading",
+                    format!(
+                        "{here} holds `{name}` with `args.{key}` {}; an argument is a string as \
+                         `--representation` spells it, or null",
+                        shape(other)
+                    ),
+                ));
+            }
+        }
+    }
+    let theirs = asked(&Call {
+        name: name.clone(),
+        args: written,
+        dest: None,
+    })
+    .and_then(|one| one.args(rate, None, true))
+    .map_err(|e| {
+        refused(
+            "solve.bad_reading",
+            format!("{here} holds `{name}` with `args` its reading refuses: {e}"),
+        )
+    })?;
+    let ours = leaf.asked.args(rate, per_bar, true)?;
     let representation = leaf.asked.representation(rate, per_bar)?;
-    if theirs != representation {
-        return Err(mismatched(
-            here,
-            leaf,
-            format!(
-                "it was read as `{written}`, and the leaf asks `{}`",
-                leaf.asked.written
-            ),
-        ));
+    let spelled = |v: &Option<String>| {
+        v.as_deref()
+            .map_or("none".to_string(), |v| format!("`{v}`"))
+    };
+    for ((key, theirs), (_, ours)) in theirs.iter().zip(&ours) {
+        if theirs != ours {
+            return Err(mismatched(
+                here,
+                leaf,
+                format!(
+                    "its `{key}` is {}, and the leaf's is {}",
+                    spelled(theirs),
+                    spelled(ours)
+                ),
+            ));
+        }
     }
     if field("source").and_then(Value::as_str) != Some("measured") {
         return Err(mismatched(
