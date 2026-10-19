@@ -31,7 +31,7 @@ async function worker() {
 function page() {
   const $ = (id) => document.getElementById(id);
   const canvas = $("wave");
-  const state = { run: 0, audio: null, file: "", start: 0, end: 0, peaks: null, readings: null, results: new Map(), asked: null, playing: null, grabbed: null };
+  const state = { run: 0, audio: null, file: "", start: 0, end: 0, peaks: null, readings: null, results: new Map(), asked: null, playing: null, anchor: null, view: { from: 0, span: 1 } };
   let context = null;
 
   function said(text, bad = false) {
@@ -72,30 +72,33 @@ function page() {
 
   function enabled() {
     const running = document.body.dataset.state === "running";
-    $("run").disabled = !(state.readings && state.audio) || running;
-    $("play").disabled = !state.audio;
+    $("run").disabled = !(state.readings && state.audio && state.end > state.start) || running;
+    for (const id of ["play", "start", "length"]) $(id).disabled = !state.audio;
   }
 
   const secs = (samples) => samples / RATE;
   const fixed = (s) => s.toFixed(3);
+  const clamp = (v, low, high) => Math.min(high, Math.max(low, v));
+  const RULER = 18;
 
-  function cropShown() {
-    $("crop").textContent = `${fixed(secs(state.start))} s to ${fixed(secs(state.end))} s, ${fixed(secs(state.end - state.start))} s`;
+  function selectionShown() {
+    $("start").value = fixed(secs(state.start));
+    $("length").value = fixed(secs(state.end - state.start));
+    enabled();
   }
 
-  // Waveform: one min/max pair per canvas column over every channel.
+  // Waveform: one min/max pair per canvas column over every channel, for the samples in view.
   function measured() {
-    const width = Math.max(1, Math.round(canvas.clientWidth * devicePixelRatio));
-    canvas.width = width;
-    canvas.height = Math.round(canvas.clientHeight * devicePixelRatio);
+    const { from, span } = state.view;
+    const width = canvas.width;
     const planes = Array.from({ length: state.audio.numberOfChannels }, (_, c) => state.audio.getChannelData(c));
-    const per = state.audio.length / width;
+    const per = span / width;
     const peaks = new Float32Array(width * 2);
     for (let x = 0; x < width; x++) {
       let low = 0;
       let high = 0;
       for (const plane of planes) {
-        for (let i = Math.floor(x * per), end = Math.min(plane.length, Math.floor((x + 1) * per) + 1); i < end; i++) {
+        for (let i = Math.floor(from + x * per), end = Math.min(plane.length, Math.floor(from + (x + 1) * per) + 1); i < end; i++) {
           if (plane[i] < low) low = plane[i];
           if (plane[i] > high) high = plane[i];
         }
@@ -106,90 +109,180 @@ function page() {
     state.peaks = peaks;
   }
 
-  const xOf = (sample) => (sample / state.audio.length) * canvas.width;
+  const xOf = (sample) => ((sample - state.view.from) / state.view.span) * canvas.width;
+
+  function viewed(from, span) {
+    state.view = { from: clamp(from, 0, state.audio.length - span), span };
+    state.peaks = null;
+    drawn();
+  }
+
+  function ruled(g, height, color) {
+    const perPixel = secs(state.view.span) / canvas.clientWidth;
+    const step = [1, 2, 5].flatMap((m) => [-3, -2, -1, 0, 1, 2].map((e) => m * 10 ** e)).sort((a, b) => a - b).find((s) => s >= 70 * perPixel) ?? 100;
+    const digits = clamp(-Math.floor(Math.log10(step) + 1e-9), 0, 3);
+    g.fillStyle = color("--muted");
+    g.font = `${11 * devicePixelRatio}px system-ui, sans-serif`;
+    g.textBaseline = "top";
+    for (let t = Math.ceil(secs(state.view.from) / step) * step; t * RATE <= state.view.from + state.view.span; t += step) {
+      const x = Math.round(xOf(t * RATE));
+      g.fillRect(x, height - 5 * devicePixelRatio, devicePixelRatio, 5 * devicePixelRatio);
+      g.fillText(t.toFixed(digits), x + 3 * devicePixelRatio, 2 * devicePixelRatio);
+    }
+    g.fillRect(0, height - devicePixelRatio, canvas.width, devicePixelRatio);
+  }
 
   function drawn() {
     if (!state.audio) return;
+    if (!state.peaks) measured();
     const g = canvas.getContext("2d");
     const style = getComputedStyle(document.documentElement);
     const color = (name) => style.getPropertyValue(name).trim();
     const { width, height } = canvas;
+    const top = RULER * devicePixelRatio;
+    const wave = height - top;
     g.clearRect(0, 0, width, height);
+    ruled(g, top, color);
     g.fillStyle = color("--line");
-    g.fillRect(0, 0, xOf(state.start), height);
-    g.fillRect(xOf(state.end), 0, width - xOf(state.end), height);
+    g.fillRect(xOf(state.start), top, Math.max(0, xOf(state.end) - xOf(state.start)), wave);
     g.fillStyle = color("--ink");
     for (let x = 0; x < width; x++) {
-      const top = ((1 - state.peaks[2 * x + 1]) / 2) * height;
-      const bottom = ((1 - state.peaks[2 * x]) / 2) * height;
-      g.fillRect(x, top, 1, Math.max(1, bottom - top));
+      const high = top + ((1 - state.peaks[2 * x + 1]) / 2) * wave;
+      const low = top + ((1 - state.peaks[2 * x]) / 2) * wave;
+      g.fillRect(x, high, 1, Math.max(1, low - high));
     }
     g.fillStyle = color("--mark");
-    for (const at of [state.start, state.end]) {
+    for (const at of state.end > state.start ? [state.start, state.end] : [state.start]) {
       const x = Math.min(width - 2 * devicePixelRatio, xOf(at));
-      g.fillRect(x, 0, 2 * devicePixelRatio, height);
-      g.fillRect(x - 4 * devicePixelRatio, 0, 10 * devicePixelRatio, 10 * devicePixelRatio);
+      g.fillRect(x, top, 2 * devicePixelRatio, wave);
     }
-    if (state.playing) {
-      const at = state.start + (context.currentTime - state.playing.from) * RATE;
-      if (at < state.end) g.fillRect(xOf(at), 0, devicePixelRatio, height);
-      requestAnimationFrame(drawn);
-    }
+    if (state.playing) g.fillRect(xOf(state.playing.now), 0, devicePixelRatio, height);
+  }
+
+  /** Moves the playhead each frame; when it runs off the right of the view, the view pages after it. */
+  function ticked() {
+    if (!state.playing) return;
+    const was = state.playing.now;
+    const end = state.view.from + state.view.span;
+    state.playing.now = Math.min(state.playing.to, state.playing.at + (context.currentTime - state.playing.from) * RATE);
+    if (was <= end && state.playing.now > end) viewed(state.playing.now, state.view.span);
+    else drawn();
+    requestAnimationFrame(ticked);
   }
 
   new ResizeObserver(() => {
-    if (!state.audio) return;
-    measured();
+    canvas.width = Math.max(1, Math.round(canvas.clientWidth * devicePixelRatio));
+    canvas.height = Math.round(canvas.clientHeight * devicePixelRatio);
+    state.peaks = null;
     drawn();
   }).observe(canvas);
 
   const sampleAt = (event) => {
     const box = canvas.getBoundingClientRect();
-    return Math.round(Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)) * state.audio.length);
+    return Math.round(state.view.from + clamp((event.clientX - box.left) / box.width, 0, 1) * state.view.span);
   };
 
+  /** The selection edge within a few pixels of the pointer, if the selection is not empty. */
+  const edgeAt = (event) => {
+    if (state.end === state.start) return null;
+    const x = (event.clientX - canvas.getBoundingClientRect().left) * devicePixelRatio;
+    const near = (sample) => Math.abs(xOf(sample) - x) <= 6 * devicePixelRatio;
+    return near(state.start) ? "start" : near(state.end) ? "end" : null;
+  };
+
+  // Audacity's selection: a click places the cursor, a drag selects, a drag at an edge moves that edge.
   canvas.addEventListener("pointerdown", (event) => {
-    if (!state.audio) return;
-    const at = sampleAt(event);
-    state.grabbed = Math.abs(at - state.start) <= Math.abs(at - state.end) ? "start" : "end";
+    if (!state.audio || event.button !== 0) return;
+    // A click on the ruler plays from there to the end and leaves the selection, as a DAW's timeline does.
+    if (event.clientY - canvas.getBoundingClientRect().top < RULER) return playing(sampleAt(event), state.audio.length);
+    const edge = edgeAt(event);
+    state.anchor = edge === "start" ? state.end : edge === "end" ? state.start : sampleAt(event);
     canvas.setPointerCapture(event.pointerId);
     moved(event);
   });
-  canvas.addEventListener("pointermove", (event) => state.grabbed && moved(event));
-  canvas.addEventListener("pointerup", () => (state.grabbed = null));
+  canvas.addEventListener("pointermove", (event) => {
+    if (state.anchor !== null) moved(event);
+    else if (state.audio) canvas.style.cursor = event.clientY - canvas.getBoundingClientRect().top < RULER ? "pointer" : edgeAt(event) ? "ew-resize" : "text";
+  });
+  for (const type of ["pointerup", "pointercancel"]) canvas.addEventListener(type, () => (state.anchor = null));
 
   function moved(event) {
     const at = sampleAt(event);
-    if (state.grabbed === "start") state.start = Math.min(at, state.end - 1);
-    else state.end = Math.max(at, state.start + 1);
+    state.start = Math.min(at, state.anchor);
+    state.end = Math.max(at, state.anchor);
     stopped();
-    cropShown();
+    selectionShown();
     drawn();
   }
+
+  // Ctrl+scroll (or a pinch) zooms about the pointer; Shift+scroll or a sideways swipe scrolls.
+  canvas.addEventListener("wheel", (event) => {
+    if (!state.audio) return;
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientWidth : 1;
+    const { from, span } = state.view;
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      const box = canvas.getBoundingClientRect();
+      const at = from + clamp((event.clientX - box.left) / box.width, 0, 1) * span;
+      const next = clamp(span * Math.exp(event.deltaY * unit * 0.002), Math.min(canvas.width, state.audio.length), state.audio.length);
+      viewed(at - ((at - from) * next) / span, next);
+    } else if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+      event.preventDefault();
+      viewed(from + ((event.deltaX || event.deltaY) * unit * span) / canvas.clientWidth, span);
+    }
+  }, { passive: false });
+
+  /** Typed times in seconds: a new start keeps the length, as Audacity's Start and Length fields do. */
+  function typed(start, length) {
+    const samples = Math.min(Math.round(length * RATE), state.audio.length);
+    state.start = clamp(Math.round(start * RATE), 0, state.audio.length - samples);
+    state.end = state.start + samples;
+    stopped();
+    selectionShown();
+    const { from, span } = state.view;
+    if (state.start < from || state.end > from + span) viewed(state.start - Math.max(0, span - samples) / 2, span);
+    else drawn();
+  }
+  const read = (id, held) => (Number.isFinite(parseFloat($(id).value)) ? Math.max(0, parseFloat($(id).value)) : held);
+  $("start").addEventListener("change", () => typed(read("start", secs(state.start)), secs(state.end - state.start)));
+  $("length").addEventListener("change", () => typed(secs(state.start), read("length", secs(state.end - state.start))));
 
   function stopped() {
     if (!state.playing) return;
     state.playing.source.onended = null;
     state.playing.source.stop();
     state.playing = null;
-    $("play").textContent = "Play crop";
+    $("play").textContent = "Play";
   }
 
-  $("play").addEventListener("click", async () => {
-    if (state.playing) return stopped();
-    await context.resume();
+  // Started before the context resumes: its clock waits with the source, so the playhead stays in step.
+  function playing(at, to) {
+    stopped();
+    context.resume();
     const source = new AudioBufferSourceNode(context, { buffer: state.audio });
     source.connect(context.destination);
     source.onended = () => {
       state.playing = null;
-      $("play").textContent = "Play crop";
+      $("play").textContent = "Play";
       drawn();
     };
-    state.playing = { source, from: context.currentTime };
-    source.start(0, secs(state.start), secs(state.end - state.start));
+    state.playing = { source, from: context.currentTime, at, to, now: at };
+    source.start(0, secs(at), secs(to - at));
     $("play").textContent = "Stop";
-    drawn();
+    ticked();
+  }
+
+  /** Plays the selection, or from the cursor to the end when nothing is selected. */
+  const played = () => (state.playing ? stopped() : playing(state.start, state.end > state.start ? state.end : state.audio.length));
+
+  $("play").addEventListener("click", played);
+  const typing = (event) => event.target.closest?.("input, textarea, select");
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== " " || !state.audio || typing(event)) return;
+    event.preventDefault();
+    if (!event.repeat) played();
   });
+  document.addEventListener("keyup", (event) => event.key === " " && !typing(event) && event.preventDefault());
 
   const drop = $("drop");
   drop.addEventListener("dragover", (event) => {
@@ -212,12 +305,11 @@ function page() {
       return;
     }
     state.run += 1;
-    Object.assign(state, { file: file.name, start: 0, end: state.audio.length, results: new Map(), asked: null });
+    Object.assign(state, { file: file.name, start: 0, end: 0, view: { from: 0, span: state.audio.length }, peaks: null, results: new Map(), asked: null });
     drop.textContent = `${file.name}: ${state.audio.numberOfChannels} channels, ${fixed(state.audio.duration)} s. Drop another to replace it.`;
     $("download").disabled = true;
     shown();
-    measured();
-    cropShown();
+    selectionShown();
     drawn();
     said(state.readings ? "Ready." : "Loading sva-wasm.");
     document.body.dataset.state = state.readings ? "ready" : "loading";
