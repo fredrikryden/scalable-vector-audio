@@ -347,7 +347,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "sva-ast"
-version = "0.14.20"
+version = "0.14.21"
 dependencies = [
  "serde",
  "serde_json",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "sva-cli"
-version = "0.14.20"
+version = "0.14.21"
 dependencies = [
  "hound",
  "serde_json",
@@ -368,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "sva-core"
-version = "0.14.20"
+version = "0.14.21"
 dependencies = [
  "serde_json",
  "sva-ast",
@@ -378,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "sva-engine"
-version = "0.14.20"
+version = "0.14.21"
 dependencies = [
  "rayon",
  "sva-ast",
@@ -388,18 +388,18 @@ dependencies = [
 
 [[package]]
 name = "sva-formula"
-version = "0.14.20"
+version = "0.14.21"
 
 [[package]]
 name = "sva-samples"
-version = "0.14.20"
+version = "0.14.21"
 dependencies = [
  "sva-formula",
 ]
 
 [[package]]
 name = "sva-wasm"
-version = "0.14.20"
+version = "0.14.21"
 dependencies = [
  "js-sys",
  "serde_json",
