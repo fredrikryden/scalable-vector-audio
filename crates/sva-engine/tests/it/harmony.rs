@@ -116,6 +116,33 @@ fn a_windowed_dominant_resolves_to_its_tonic_by_the_smallest_voice_leading_and_t
     assert_eq!(tension, vec![Some(0), Some(2)]);
 }
 
+/// A 0.98 s render on a 0.05 s grid has its last instant at 0.95 s: the chord sounding there
+/// ends with the render, never a hop on at 1 s, exact and measured alike.
+#[test]
+fn the_last_chord_ends_at_the_renders_end() {
+    let leading = harmony(Harmonic::VoiceLeading { norm: Norm::L1 }, -40.0);
+    let steady = "0.3*cos(2*pi*C4*t) + 0.3*cos(2*pi*E4*t) + 0.3*cos(2*pi*G4*t)\n";
+    for (name, files) in [
+        ("short-exact", vec![("node", steady)]),
+        (
+            "short-measured",
+            vec![("chord", steady), ("node", "sample(@chord)\n")],
+        ),
+    ] {
+        let g = graph_of(name, &files);
+        let config = RenderConfig::seconds(44_100, 0.98).asking(vec![Ask {
+            node: "node".to_string(),
+            representation: leading,
+        }]);
+        let held = render(&g, "node", config, &Tier::default()).unwrap_or_else(|e| panic!("{e}"));
+        let Output::VoiceLeading(v) = read(&held, leading).value else {
+            panic!("voice_leading answers its chords")
+        };
+        let last = v.chords.last().expect("a chord sounds");
+        assert_eq!(last.end_secs, 0.98, "{name}: {:?}", v.chords);
+    }
+}
+
 /// A saw on 20 Hz under a floor that keeps all its thousand partials pairs past the cap.
 #[test]
 fn partials_pairing_past_the_cap_refuse_and_name_the_cap_and_the_floor() {

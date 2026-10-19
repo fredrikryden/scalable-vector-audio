@@ -12,7 +12,8 @@ pub const METHOD: &str = "per moment: the partials at or above the floor, named 
                           naming none ends one; a note whose partial's frequency bounds round \
                           to another note in any of its moments is listed as unresolved";
 
-/// `notes` are MIDI numbers, ascending, each once; `end_secs` is the next moment's instant;
+/// `notes` are MIDI numbers, ascending, each once; `end_secs` is the next moment's instant
+/// or the render's end;
 /// `unresolved` are those whose frequency bounds round to another note in some moment.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chord {
@@ -70,12 +71,12 @@ pub fn notes_at(moment: &Moment, floor_db: f64) -> (Vec<i64>, Vec<i64>) {
     (notes, unresolved)
 }
 
-pub fn segment(moments: &[Moment], hop_secs: f64, floor_db: f64) -> Vec<Chord> {
+pub fn segment(moments: &[Moment], hop_secs: f64, until_secs: f64, floor_db: f64) -> Vec<Chord> {
     let mut chords: Vec<Chord> = Vec::new();
     let mut open = false;
     for moment in moments {
         let (notes, unresolved) = notes_at(moment, floor_db);
-        let end_secs = moment.t_secs + hop_secs;
+        let end_secs = (moment.t_secs + hop_secs).min(until_secs);
         match chords.last_mut() {
             Some(last) if open && last.notes == notes => {
                 last.end_secs = end_secs;

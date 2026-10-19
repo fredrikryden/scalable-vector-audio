@@ -267,7 +267,7 @@ fn measured_partials_find_a_triads_tones_and_its_exact_roughness() {
             assert!(p.hz_bounds.0 <= p.hz && p.hz <= p.hz_bounds.1, "{p:?}");
         }
     }
-    let chords = segment(steady, framing.hop_secs, -40.0);
+    let chords = segment(steady, framing.hop_secs, f64::INFINITY, -40.0);
     assert_eq!(chords.len(), 1);
     assert_eq!(chords[0].notes, vec![60, 64, 67]);
     assert!(chords[0].unresolved.is_empty(), "{:?}", chords[0]);

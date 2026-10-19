@@ -214,8 +214,9 @@ fn exact(
             frame_secs,
             floor_db,
         } => {
-            let (moments, framing, listed) = exact_moments(render, node, sum, frame_secs)?;
-            let value = harmonic(reading, &moments, framing, floor_db)
+            let (moments, framing, listed, end_secs) =
+                exact_moments(render, node, sum, frame_secs)?;
+            let value = harmonic(reading, &moments, (framing, end_secs), floor_db)
                 .map_err(|held| crowded(render.tys.name(node), representation, held))?;
             (value, listed)
         }
@@ -233,7 +234,7 @@ fn exact_moments(
     node: sva_formula::NodeId,
     sum: &SpectralSum,
     frame_secs: f64,
-) -> Result<(Vec<Moment>, Framing, Listed), EngineError> {
+) -> Result<(Vec<Moment>, Framing, Listed, f64), EngineError> {
     let range = match (render.range, &render.unranged) {
         (Some(range), _) => range,
         (None, Some(refused)) => return Err(refused.clone()),
@@ -288,17 +289,19 @@ fn exact_moments(
         hop_secs: hop as f64 / rate,
         window: None,
     };
-    Ok((moments, framing, Listed::joined(each)))
+    let end_secs = range.end as f64 / rate;
+    Ok((moments, framing, Listed::joined(each), end_secs))
 }
 
-/// One harmonic reading off a curve of partials, whichever source took them.
+/// One harmonic reading off a curve of partials, whichever source took them, over a render
+/// ending at `end_secs`.
 fn harmonic(
     reading: Harmonic,
     moments: &[Moment],
-    framing: Framing,
+    (framing, end_secs): (Framing, f64),
     floor_db: f64,
 ) -> Result<Output, Crowded> {
-    let chords = || chords::segment(moments, framing.hop_secs, floor_db);
+    let chords = || chords::segment(moments, framing.hop_secs, end_secs, floor_db);
     Ok(match reading {
         Harmonic::Dissonance { max_pairs } => Output::Dissonance(Box::new(dissonance::measure(
             moments, framing, floor_db, max_pairs,
@@ -987,7 +990,9 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
             floor_db,
         } => {
             let (moments, framing) = framed::moments(&planes, sr, start, frame_secs);
-            harmonic(reading, &moments, framing, floor_db).map_err(NoReading::Crowded)?
+            let end_secs = buffer.end() as f64 / sr;
+            harmonic(reading, &moments, (framing, end_secs), floor_db)
+                .map_err(NoReading::Crowded)?
         }
         Representation::Periodicity {
             frame_secs,
