@@ -28,13 +28,13 @@ async function worker() {
     postMessage({ run, done: true });
   };
   const sampled = readings().filter((r) => (r.reads === "samples" || r.reads === "either") && !RAW.has(r.name));
-  postMessage({ readings: sampled.map((r) => ({ name: r.name, window: r.takes.includes("window") })) });
+  postMessage({ readings: sampled.map((r) => ({ name: r.name, window: r.takes.includes("window"), prune: r.takes.includes("prune") })) });
 }
 
 function page() {
   const $ = (id) => document.getElementById(id);
   const canvas = $("wave");
-  const state = { selection: matchMedia("(pointer: coarse)").matches ? null : { start: 0, end: 0 }, run: 0, audio: null, file: "", by: "", peaks: null, readings: null, results: new Map(), asked: null, crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
+  const state = { selection: matchMedia("(pointer: coarse)").matches ? null : { start: 0, end: 0 }, run: 0, audio: null, file: "", by: "", peaks: null, readings: null, results: new Map(), asked: null, pruned: new Map(), crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
   let context = null;
 
   function failed(error) {
@@ -543,7 +543,17 @@ function page() {
     stopped();
     const [start, end] = cropped();
     const length = secs(end - start);
-    state.asked = state.readings.map((r) => (r.window ? `${r.name}(window=${length}s)` : r.name));
+    const call = (r, args) => (args.length ? `${r.name}(${args.join(", ")})` : r.name);
+    state.asked = [];
+    state.pruned = new Map();
+    for (const r of state.readings) {
+      const args = r.window ? [`window=${length}s`] : [];
+      state.asked.push(call(r, args));
+      if (r.prune) {
+        state.asked.push(call(r, [...args, "prune=1"]));
+        state.pruned.set(call(r, args), call(r, [...args, "prune=1"]));
+      }
+    }
     state.results = new Map();
     state.run += 1;
     state.crop = { start, end };
@@ -586,8 +596,20 @@ function page() {
   }
 
   $("download").addEventListener("click", () => {
+    if (!state.pruned.size) return saved(false);
+    $("save").returnValue = "";
+    $("save").showModal();
+  });
+
+  $("save").addEventListener("close", () => {
+    if (["pruned", "full"].includes($("save").returnValue)) saved($("save").returnValue === "pruned");
+  });
+
+  // Each reading that prunes is saved once: its pruned call, or the full one it stands for.
+  function saved(pruned) {
+    const left = new Set(pruned ? state.pruned.keys() : state.pruned.values());
     const readings = {};
-    for (const call of state.asked) {
+    for (const call of state.asked.filter((c) => !left.has(c))) {
       const held = state.results.get(call);
       readings[call] = held.refusal ? { refusal: held.refusal } : held.data;
     }
@@ -599,8 +621,8 @@ function page() {
     };
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([JSON.stringify(output)], { type: "text/plain" }));
-    link.download = `${state.file.replace(/\.[^.]*$/, "")}-${fixed(secs(state.crop.start))}-${fixed(secs(state.crop.end))}s.txt`;
+    link.download = `${state.file.replace(/\.[^.]*$/, "")}-${fixed(secs(state.crop.start))}-${fixed(secs(state.crop.end))}s${pruned ? "-pruned" : ""}.txt`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 0);
-  });
+  }
 }
