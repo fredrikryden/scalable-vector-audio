@@ -1,4 +1,4 @@
-// Concern: freezes `solve`'s refusals, exit codes and envelope, and `sample("<path>")` | Non-concern: the search's path or render count, which no test pins | IO: (argv, a fixture copy) -> envelope, exit
+// Concern: freezes `solve`'s refusals, exits and envelope, `load_json`, `@fits/` and `sample("<path>")` | Non-concern: the search's path or render count | IO: (argv, a fixture copy) -> envelope, exit
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -13,6 +13,15 @@ fn sva(dir: &Path, args: &[&str]) -> Output {
         .args(args)
         .arg("--cache")
         .arg("none")
+        .output()
+        .expect("sva-cli runs")
+}
+
+/// A subcommand that keeps no store, so takes no `--cache`.
+fn storeless(dir: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_sva-cli"))
+        .current_dir(dir)
+        .args(args)
         .output()
         .expect("sva-cli runs")
 }
@@ -121,7 +130,7 @@ fn a_solve_answers_each_exit_and_each_mistake_its_code() {
         ),
         (
             vec!["render", "@reads-repr", "--representation", "loudness"],
-            "repr-outside-solve",
+            "engine.unbound_variable",
             3,
         ),
         (
@@ -139,17 +148,205 @@ fn a_solve_answers_each_exit_and_each_mistake_its_code() {
         ),
     ];
     for (argv, code, exit) in cases {
-        let out = sva(&dir, &argv);
-        let answer = json(&out);
-        assert_eq!(out.status.code(), Some(exit), "{argv:?}: {answer:?}");
-        if !code.is_empty() {
-            let codes = items(at(&answer, &["error", "details", "codes", "items"]));
-            assert!(
-                codes.iter().any(|c| c == code),
-                "{argv:?} refuses as `{code}`: {answer:?}"
-            );
-        }
+        refuses(&dir, &argv, code, exit);
     }
+    let answer = json(&sva(
+        &dir,
+        &["render", "@reads-repr", "--representation", "loudness"],
+    ));
+    let helps = items(at(&answer, &["data", "diagnostics", "items"]))
+        .iter()
+        .any(|d| {
+            d["help"]
+                .as_str()
+                .is_some_and(|h| h.contains("sva-cli solve"))
+        });
+    assert!(
+        helps,
+        "a node writing `repr.` is told only a cost takes it: {answer:?}"
+    );
+}
+
+/// `argv` exits `exit`, refusing as `code` where one is named; the envelope, for more.
+fn refuses(dir: &Path, argv: &[&str], code: &str, exit: i32) -> Value {
+    let out = sva(dir, argv);
+    let answer = json(&out);
+    assert_eq!(out.status.code(), Some(exit), "{argv:?}: {answer:?}");
+    if !code.is_empty() {
+        let codes = items(at(&answer, &["error", "details", "codes", "items"]));
+        assert!(
+            codes.iter().any(|c| c == code),
+            "{argv:?} refuses as `{code}`: {answer:?}"
+        );
+    }
+    answer
+}
+
+/// `analyze` prints each reading's call as `asked`; `load_json` reads that `data` back as the
+/// reading its leaf subtracts, a number or numbers as weights, and each mismatch refuses
+/// under its own code before anything renders.
+#[test]
+fn load_json_reads_a_reading_a_weight_or_refuses_under_its_code() {
+    let (dir, reference) = composition("solve-load-json");
+    let root = dir.parent().expect("a parent");
+    let analyzed = root.join("envelope.json");
+    let written = format!("envelope(frame=50ms)={}", analyzed.display());
+    let out = storeless(&dir, &["analyze", &reference, "--representation", &written]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let held: Value =
+        serde_json::from_slice(&std::fs::read(&analyzed).expect("written")).expect("JSON");
+    assert_eq!(
+        at(&held, &["data", "representations", "envelope", "asked"]),
+        "envelope(frame=50ms)"
+    );
+    let mut short = held.clone();
+    short["data"]["representations"]["envelope"]["value"]["pagination"]["has_more"] =
+        Value::Bool(true);
+    std::fs::write(root.join("short.json"), short.to_string()).expect("written");
+    let mut unasked = held.clone();
+    unasked["data"]["representations"]["envelope"]
+        .as_object_mut()
+        .expect("an object")
+        .remove("asked");
+    std::fs::write(root.join("unasked.json"), unasked.to_string()).expect("written");
+    std::fs::write(root.join("w.json"), r#"{"w": 2, "ws": [1, 0.5]}"#).expect("written");
+    std::fs::write(root.join("x.json.gz"), [0x1f, 0x8b, 8, 0]).expect("written");
+
+    let live = format!("repr.envelope(sample(\"{reference}\"), frame=50ms)");
+    let tick = "0*norm(repr.envelope(@tone) - repr.envelope(@tone))";
+    let against = |file: &str, path: &str| {
+        format!("norm({live} - load_json(\"../{file}\", \"{path}\")) + {tick}")
+    };
+    let answer = refuses(
+        &dir,
+        &[
+            "solve",
+            &format!(
+                "load_json(\"../w.json\", \".w\")*{} + dot(load_json(\"../w.json\", \".ws\"), [2, 4])",
+                against("envelope.json", ".data")
+            ),
+            "--vary",
+            "gain=0..1/0.5",
+            "--max-renders",
+            "1",
+        ],
+        "",
+        0,
+    );
+    let terms = items(at(&answer, &["data", "cost", "terms", "items"]));
+    assert_eq!(
+        terms[0]["value"], 0.0,
+        "a reading read back costs nothing: {answer:?}"
+    );
+    assert_eq!(terms[2]["value"], 4.0, "loaded weights weigh: {answer:?}");
+
+    let cases: [(String, &[&str], &str, i32); 9] = [
+        (against("nowhere.json", ".data"), &[], "io.no_such_path", 24),
+        (against("x.json.gz", ".data"), &[], "solve.bad_json", 3),
+        (
+            against("envelope.json", ".data | .x"),
+            &[],
+            "solve.bad_path",
+            3,
+        ),
+        (
+            against("envelope.json", ".dat"),
+            &[],
+            "solve.no_such_key",
+            3,
+        ),
+        (
+            format!("norm(load_json(\"../envelope.json\", \".data\")) + {tick}"),
+            &[],
+            "solve.unpaired_load",
+            3,
+        ),
+        (
+            against("envelope.json", ".data"),
+            &["--rate", "48000"],
+            "solve.mismatched_load",
+            3,
+        ),
+        (against("short.json", ".data"), &[], "solve.cut_short", 3),
+        (
+            against("unasked.json", ".data"),
+            &[],
+            "solve.unasked_load",
+            3,
+        ),
+        (
+            against("envelope.json", ".data.representations.envelope"),
+            &[],
+            "solve.bad_load",
+            3,
+        ),
+    ];
+    for (cost, extra, code, exit) in &cases {
+        let mut argv = vec!["solve", cost.as_str(), "--vary", "gain=0..1/0.5"];
+        argv.extend(extra.iter());
+        let out = sva(&dir, &argv);
+        assert!(out.stderr.is_empty(), "{cost}: refused before any render");
+        refuses(&dir, &argv, code, *exit);
+    }
+}
+
+/// `@fits/<name>` is the cost a file under `fits/` holds, over many lines; a typo refuses at
+/// its line in that file, a missing one as not found, and `lint` reads no node there.
+#[test]
+fn a_cost_file_is_read_from_fits_and_refuses_at_its_line() {
+    let (dir, reference) = composition("solve-fits");
+    std::fs::create_dir_all(dir.join("fits")).expect("a directory");
+    let head = "; Models: the tone against its reference | Neglects: all but level | IO: (gain) -> cost | Tags: fit\n";
+    put(
+        &dir,
+        "fits/tone",
+        &format!(
+            "{head}norm(repr.envelope(@tone)   ; the render\n  - repr.envelope(sample(\"{reference}\")))\n"
+        ),
+    );
+    put(
+        &dir,
+        "fits/typo",
+        &format!("{head}norm(repr.envelope(@tone)\n  - nrm(1))\n"),
+    );
+    refuses(
+        &dir,
+        &[
+            "solve",
+            "@fits/tone",
+            "--vary",
+            "gain=0..1/0.25",
+            "--max-renders",
+            "2",
+        ],
+        "",
+        0,
+    );
+    let answer = refuses(
+        &dir,
+        &["solve", "@fits/typo", "--vary", "gain=0..1/0.25"],
+        "solve.bad_cost",
+        3,
+    );
+    let location = at(&answer, &["data", "diagnostics", "items"])[0]["location"].clone();
+    assert_eq!(location["file"], "fits/typo", "{answer:?}");
+    assert_eq!(location["start"]["line"], 3, "{answer:?}");
+    refuses(
+        &dir,
+        &["solve", "@fits/none", "--vary", "gain=0..1/0.25"],
+        "io.no_such_path",
+        24,
+    );
+    let out = storeless(&dir, &["lint"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
 }
 
 /// The fields an agent reads off a solve: every variable's value and text, the cost's total

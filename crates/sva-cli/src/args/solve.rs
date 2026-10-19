@@ -5,13 +5,12 @@ use std::path::PathBuf;
 use super::reading::{count, hertz};
 use super::{CacheAt, Command, value};
 use sva_core::CliError;
-use sva_core::solve::{
-    Cost, DEFAULT_COST_TOL, DEFAULT_MAX_RENDERS, DEFAULT_STEP_TOL, Stops, Vary, cost, vary,
-};
+use sva_core::solve::{DEFAULT_COST_TOL, DEFAULT_MAX_RENDERS, DEFAULT_STEP_TOL, Stops, Vary, vary};
 
 #[derive(Debug, PartialEq)]
 pub struct SolveArgs {
-    pub cost: Cost,
+    /// The cost, or `@fits/<name>`: read once the composition is known.
+    pub cost: String,
     pub vary: Vec<Vary>,
     pub stops: Stops,
     pub sets: Vec<(String, String)>,
@@ -34,14 +33,14 @@ fn number(raw: &str, flag: &str, fits: impl Fn(f64) -> bool, says: &str) -> Resu
 
 pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
     let mut it = rest.iter();
-    let written = it.next().filter(|a| !a.starts_with("--")).ok_or_else(|| {
+    let cost = it.next().filter(|a| !a.starts_with("--")).ok_or_else(|| {
         CliError::usage(
             "cli.missing_argument",
             "solve needs a cost, as `sva-cli solve 'norm(repr.bands(@master) - \
-             repr.bands(sample(\"../ref.wav\")))' --vary gain=0..2`",
+             repr.bands(sample(\"../ref.wav\")))' --vary gain=0..2`, or a cost file, as \
+             `sva-cli solve @fits/lead --vary gain=0..2`",
         )
     })?;
-    let cost = cost(written)?;
     let mut stops = Stops {
         max_renders: DEFAULT_MAX_RENDERS,
         step_tol: DEFAULT_STEP_TOL,
@@ -106,7 +105,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
         ));
     }
     Ok(Command::Solve(Box::new(SolveArgs {
-        cost,
+        cost: cost.clone(),
         vary: vary_all,
         stops,
         sets,

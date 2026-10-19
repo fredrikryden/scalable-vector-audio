@@ -5,6 +5,7 @@
 //! `refusal` the envelope it would print.
 
 mod analyze;
+mod cost;
 mod describe;
 mod opfs;
 mod stats;
@@ -510,33 +511,13 @@ impl Composition {
         self.inner.0.borrow_mut().insert(path, text);
     }
 
-    /// What `sample("<path>")` reads: one decoded Float32Array per channel, at `rate`.
-    #[wasm_bindgen(js_name = insertRecording)]
-    pub fn insert_recording(
-        &mut self,
-        path: &str,
-        rate: u32,
-        channels: js_sys::Array,
-    ) -> Result<(), JsValue> {
-        if rate == 0 {
-            return Err(refuse(
-                "a rate of 0 Hz places no sample".to_string(),
-                "pass the rate the channels were decoded at, as `AudioBuffer.sampleRate`",
-            ));
-        }
-        let planes = analyze::planes_of(channels)?;
-        self.inner
-            .0
-            .borrow_mut()
-            .insert_recording(path, rate, planes);
-        Ok(())
-    }
-
-    /// `sva-cli solve`'s envelope; `options` as its flags, `signal` and `progress(line)`.
+    /// `sva-cli solve`'s envelope. `cost` is a `SolveCost` tree, every reference a value:
+    /// `{ norm: { sub: [{ repr: "bands", target: "@lead([0, 5s])" }, { value: data }] } }`.
+    /// `vary`: `SolveVary`s. `options` as the CLI's flags, `signal` and `progress(line)`.
     pub async fn solve(
         &self,
-        cost: &str,
-        vary: Vec<String>,
+        #[wasm_bindgen(unchecked_param_type = "SolveCost")] cost: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "SolveVary[]")] vary: js_sys::Array,
         options: JsValue,
     ) -> Result<JsValue, JsValue> {
         let keys = [
@@ -550,12 +531,9 @@ impl Composition {
             "progress",
         ];
         let options = options_of(&options, &keys)?;
-        let cost = sva_core::solve::cost(cost).map_err(|e| thrown(&e))?;
-        let vary = vary
-            .iter()
-            .map(|one| sva_core::solve::vary(one))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| thrown(&e))?;
+        let tree = cost::tree_of(&cost, "cost")?;
+        let cost = sva_core::solve::built(tree).map_err(|e| thrown(&e))?;
+        let vary = cost::vary_of(&vary)?;
         let stops = sva_core::solve::Stops {
             max_renders: options
                 .max_renders
@@ -569,6 +547,7 @@ impl Composition {
         };
         let problem = sva_core::solve::Problem {
             source: &self.inner,
+            texts: &sva_core::solve::NoFiles,
             cost,
             vary: vary.clone(),
             sets: options.set.clone(),
@@ -843,6 +822,7 @@ fn answered(rendered: &Rendered, asked: &[Asked], limit: Limit) -> Result<JsValu
         let answer = rendered.answered(asked).map_err(|e| thrown(&e))?;
         answers.push(Printed {
             name: asked.name.clone(),
+            asked: asked.written.clone(),
             answer,
             skim: asked.skim,
         });

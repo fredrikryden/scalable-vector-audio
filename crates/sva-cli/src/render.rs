@@ -148,6 +148,7 @@ fn routed<'a>(
     for (one, answer) in asked.iter().zip(taken) {
         let printed = Printed {
             name: one.name.clone(),
+            asked: one.written.clone(),
             answer,
             skim: one.skim,
         };

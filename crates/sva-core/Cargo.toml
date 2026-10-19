@@ -1,4 +1,4 @@
-# Concern: declares the package and its dependency on the document model and the renderer | Non-concern: the deny edges barring sva-cli/sva-wasm's reach into it (.annotated-tree.toml) | IO: none
+# Concern: declares the package and its dependencies: the document model, the renderer, JSON a cost loads | Non-concern: the deny edges barring sva-cli/sva-wasm (.annotated-tree.toml) | IO: none
 [package]
 name = "sva-core"
 description = "The parse -> tempo -> render pipeline shared by both front ends"
@@ -11,3 +11,4 @@ repository.workspace = true
 sva-ast = { workspace = true }
 sva-engine = { workspace = true }
 sva-formula = { workspace = true }
+serde_json = { workspace = true }

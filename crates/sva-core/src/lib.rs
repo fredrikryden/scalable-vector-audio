@@ -4,6 +4,7 @@ mod analyze;
 mod answer;
 mod builtins;
 mod cli_error;
+mod decode;
 pub mod encode;
 pub mod json;
 mod lint_code;
@@ -143,16 +144,20 @@ impl<'a> Job<'a> {
 fn settle(job: &Job) -> Result<(Graph, RenderConfig, Song), CliError> {
     let Target { expr, interval } = target(job.target)?;
     let roots = roots_of(job.source, &expr)?;
+    let hinted = |e| solve::hinted(e, job.source, Some(job.target));
     let mut graph = settled(sva_ast::load_reaching(
         job.source,
         &roots.iter().map(String::as_str).collect::<Vec<_>>(),
-    ))?;
-    let parsed = sva_ast::parse_expr(&expr).map_err(|d| {
-        CliError::BadProbe(format!(
-            "`{}` does not parse as an expression: {}",
-            job.target, d.message
-        ))
-    })?;
+    ))
+    .map_err(hinted)?;
+    let parsed = sva_ast::parse_expr(&expr)
+        .map_err(|d| {
+            CliError::BadProbe(format!(
+                "`{}` does not parse as an expression: {}",
+                job.target, d.message
+            ))
+        })
+        .map_err(hinted)?;
     let parsed = sva_ast::resolve_recordings(&parsed, job.source)
         .map_err(|unheld| CliError::NotFound(unheld.message()))?;
     define_probe(&mut graph, parsed)?;
@@ -287,10 +292,17 @@ fn rendered(
 
 /// The render a job would run, and the warnings its song earns.
 pub fn plan(job: &Job) -> Result<(sva_engine::Render, Vec<sva_ast::song::Warning>), CliError> {
+    let (planned, song, _) = planned(job)?;
+    Ok((planned, song.warnings().to_vec()))
+}
+
+/// The render a job would run, its song, and the seconds a bar of its tempo lasts.
+pub(crate) fn planned(job: &Job) -> Result<(sva_engine::Render, Song, Option<f64>), CliError> {
     let (graph, config, song) = settle(job)?;
+    let per_bar = graph.tempo().map(|tempo| tempo.seconds_per_bar());
     let planned = sva_engine::plan(&graph, PROBE, config);
     let planned = planned.map_err(|e| refused(&song, &graph, e, job.target))?;
-    Ok((planned, song.warnings().to_vec()))
+    Ok((planned, song, per_bar))
 }
 
 /// Every refusal typing the target reaches, and no render's; the warnings its song earns.
@@ -563,8 +575,37 @@ pub fn cwd() -> Result<std::path::PathBuf, CliError> {
         .map_err(|e| CliError::Io(format!("could not read the current directory: {e}")))
 }
 
+/// Every node `source` holds; a solve's `fits/` costs are no nodes, so the load never sees them.
 pub fn prepared(source: &dyn Source) -> Result<Graph, CliError> {
-    settled(sva_ast::load(source))
+    settled(sva_ast::load(&Unfitted(source))).map_err(|e| solve::hinted(e, source, None))
+}
+
+struct Unfitted<'a>(&'a dyn Source);
+
+impl Source for Unfitted<'_> {
+    fn paths(&self) -> Result<sva_ast::Listing, String> {
+        let fits = format!("{}/", solve::FITS);
+        let mut listing = self.0.paths()?;
+        listing.found.retain(|path| !path.starts_with(&fits));
+        listing.unreadable.retain(|path| !path.starts_with(&fits));
+        Ok(listing)
+    }
+
+    fn get(&self, path: &str) -> Result<Option<std::borrow::Cow<'_, str>>, String> {
+        self.0.get(path)
+    }
+
+    fn generation(&self, path: &str) -> Option<u64> {
+        self.0.generation(path)
+    }
+
+    fn name(&self) -> String {
+        self.0.name()
+    }
+
+    fn recording(&self, path: &str) -> Result<Option<std::sync::Arc<sva_ast::Recording>>, String> {
+        self.0.recording(path)
+    }
 }
 
 /// Argv math: `trace` and `lint` each refuse a target no node answers for here, under one

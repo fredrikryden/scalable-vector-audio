@@ -89,6 +89,7 @@ pub fn entry(r: &Rendered, node: &str) -> LedgerEntry {
 pub fn json_of(r: &Rendered, name: &str, representation: Representation) -> String {
     let answers = [Printed {
         name: name.to_string(),
+        asked: name.to_string(),
         answer: r.answer(&r.target, representation).unwrap(),
         skim: false,
     }];

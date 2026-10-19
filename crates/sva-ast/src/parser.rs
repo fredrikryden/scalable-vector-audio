@@ -184,18 +184,6 @@ impl<'t> Parser<'t> {
     /// `.name(args)` after a primary is sugar for `name(primary, args)` — desugared here so
     /// the tree only ever holds plain nested `Call`s (per FORMAT.md).
     fn try_chain_dot(&mut self, receiver: Expr, from: usize) -> Result<Expr, Diag> {
-        if let Expr::Var(name) = &receiver
-            && name == "repr"
-            && matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Dot))
-        {
-            return Err(Diag::new(
-                DiagCode::ReprOutsideSolve,
-                self.peek().map_or_else(|| self.eof_span(), |t| t.span),
-                "`repr.` reads a representation, which only a `sva-cli solve` cost takes, as \
-                 `sva-cli solve 'norm(repr.bands(@a) - repr.bands(sample(\"ref.wav\")))' \
-                 --vary gain=0..2`; a node renders, and `sva-cli render` reads it",
-            ));
-        }
         let mut lhs = receiver;
         while matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Dot)) {
             self.advance();

@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use sva_ast::variable;
 use sva_core::solve::{
-    Point, Problem, Solved, Stopped, Vary, findings, point_json, solve as solved, solved_data,
+    Point, Problem, Solved, Stopped, Vary, cost_of, findings, point_json, solve as solved,
+    solved_data,
 };
 use sva_core::{CliError, error_envelope_with, success_envelope};
 use sva_engine::Abandon;
@@ -36,7 +37,8 @@ pub fn solve(args: &SolveArgs) -> Result<(String, u8), CliError> {
     let tier = opened(&args.cache, &mut warnings, On::Flag(&stop))?;
     let problem = Problem {
         source: &heard,
-        cost: args.cost.clone(),
+        texts: &heard,
+        cost: cost_of(&heard, &args.cost)?,
         vary: args.vary.clone(),
         sets: args.sets.clone(),
         rate: args.rate,

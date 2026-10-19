@@ -50,7 +50,6 @@ pub enum DiagCode {
     UnwrittenSeries,
     MisplacedPath,
     MissingRecording,
-    ReprOutsideSolve,
 }
 
 impl DiagCode {
@@ -82,7 +81,6 @@ impl DiagCode {
         DiagCode::UnwrittenSeries,
         DiagCode::MisplacedPath,
         DiagCode::MissingRecording,
-        DiagCode::ReprOutsideSolve,
     ];
 
     pub fn code_str(self) -> &'static str {
@@ -113,7 +111,6 @@ impl DiagCode {
             DiagCode::UnwrittenSeries => "unwritten-series",
             DiagCode::MisplacedPath => "misplaced-path",
             DiagCode::MissingRecording => "missing-recording",
-            DiagCode::ReprOutsideSolve => "repr-outside-solve",
         }
     }
 }

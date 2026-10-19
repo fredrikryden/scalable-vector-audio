@@ -937,10 +937,11 @@ fn line_json(l: &sva_engine::Line) -> String {
 /// Every answer says which reading ran, under which profile, and at what rate.
 /// A reading that truncated a series names what it left out, so the kept list is never read
 /// as the whole of it.
-pub fn answer_json(answer: &Answer, limit: Option<usize>, skim: bool) -> String {
+pub fn answer_json(answer: &Answer, asked: &str, limit: Option<usize>, skim: bool) -> String {
     format!(
-        "{{ \"source\": \"{}\", \"profile\": \"{}\", \"rate\": {}, \"value\": {}, \
+        "{{ \"asked\": \"{}\", \"source\": \"{}\", \"profile\": \"{}\", \"rate\": {}, \"value\": {}, \
          \"dropped\": {}, \"tail_db\": {} }}",
+        escape(asked),
         match answer.source {
             Source::Exact => "exact",
             Source::Measured => "measured",
@@ -1246,6 +1247,8 @@ fn boot_json(boot: &Boot) -> String {
 /// One answer as a report prints it.
 pub struct Printed {
     pub name: String,
+    /// The call it was asked as, `pitch(frame=50ms)`, so a reading read back names its own.
+    pub asked: String,
     pub answer: Answer,
     /// `ledger(skim=1)`: each row's level alone.
     pub skim: bool,
@@ -1326,7 +1329,7 @@ pub fn query_data(report: &Report) -> String {
             format!(
                 "\"{}\": {}",
                 escape(&printed.name),
-                answer_json(&printed.answer, report.limit, printed.skim)
+                answer_json(&printed.answer, &printed.asked, report.limit, printed.skim)
             )
         })
         .collect::<Vec<_>>()

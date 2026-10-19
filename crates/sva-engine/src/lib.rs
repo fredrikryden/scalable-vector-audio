@@ -58,10 +58,11 @@ pub use sva_samples::measure::{
 pub use sva_samples::resample;
 pub use sva_samples::{
     Alias, AliasBand, BAND_COUNT, BandCrest, BandTrack, Bands, Buffer, Crest,
-    CuttingBelowSilenceThreshold, Detail, EnvelopeFrame, Extent, FormantFrame, Frames,
-    LEAST_PRUNE_DB, Label, LedgerEntry, Loudness, LoudnessFrame, MAX_PINNED_FRAME, Onsets,
-    PSYCHOACOUSTIC_V1, PitchFrame, Profile, Prune, PrunedBand, PrunedBands, Resampled, Rule,
-    SignalKind, Source, Spectrum, StereoFrame, StereoImage, measure_alias, pinned_frame,
+    CuttingBelowSilenceThreshold, Detail, EnvelopeFrame, Extent, FormantFrame, Frames, IoiBucket,
+    LEAST_PRUNE_DB, Label, LedgerEntry, Loudness, LoudnessFrame, MAX_PINNED_FRAME, Note, Onset,
+    Onsets, PEAK_NOTE, PSYCHOACOUSTIC_V1, PitchFrame, Profile, Prune, PrunedBand, PrunedBands,
+    Resampled, Rule, SignalKind, Source, Spectrum, StereoFrame, StereoImage, measure_alias,
+    pinned_frame,
 };
 pub use threads::default_threads;
 pub use trace::{Traced, Up, trace};

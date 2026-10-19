@@ -1,20 +1,27 @@
 // Concern: one solve, each point every cost target rendered through render's path and read | Non-concern: argv, signals, files (sva-cli) | IO: (Problem, Tier) -> Solved or CliError
 
 mod cost;
+mod load;
 mod residual;
 mod search;
 mod vary;
 
-pub use cost::{Cost, Leaf, REDUCERS, SUBTRACTS, cost};
+pub use cost::{
+    Cost, From, Held, LOAD_JSON, Leaf, Load, OPERATORS, Op, REDUCERS, REPR, SUBTRACTS, Target,
+    Tree, built, cost, takes,
+};
+pub use load::{NoFiles, Texts};
 pub use residual::{FLOOR_DB, MISSED_NOTE_CENTS, MISSED_ONSET_SECS, RULES};
 pub use search::{
     DEFAULT_COST_TOL, DEFAULT_MAX_RENDERS, DEFAULT_STEP_TOL, FIRST_STEP_OF_SPAN, Stopped, Stops,
 };
 pub use vary::{Precision, Vary, vary};
 
+use std::borrow::Cow;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
-use sva_ast::Source;
+use sva_ast::{Listing, Recording, Source};
 use sva_engine::{Abandon, Backend, EngineError, Output, Resampled, Session, Tier};
 
 use crate::cli_error::CliError;
@@ -22,11 +29,13 @@ use crate::json::{escape, list, num};
 use crate::output::{Diagnostic, Severity};
 use crate::query::{Asked, asked, call};
 use crate::{Job, execute_over, overlaid};
-use cost::{Node, Op};
+use cost::Node;
 use search::{Next, Search};
 
 pub struct Problem<'a> {
     pub source: &'a dyn Source,
+    /// Where each `load_json` file is read from.
+    pub texts: &'a dyn Texts,
     pub cost: Cost,
     pub vary: Vec<Vary>,
     /// Variables held at these texts throughout.
@@ -62,8 +71,117 @@ pub struct Solved {
     pub resampled: Vec<Resampled>,
 }
 
-/// Every check the cost and the variables need, before anything renders.
-pub fn checked(problem: &Problem) -> Result<Vec<f64>, CliError> {
+/// The help a node or a render target earns where it writes a cost's own leaf.
+pub const SOLVE_ONLY: &str = "`repr.<reading>(...)` and `load_json(...)` are leaves of a \
+     `sva-cli solve` cost, and only a cost takes them: write the cost on solve's command line \
+     or in `fits/<name>`, as `sva-cli solve @fits/<name> --vary ...`; a node renders, and \
+     `render --representation` reads it";
+
+/// Whether `text` calls `load_json` on a path ending at `byte`, which the node grammar
+/// refuses as a misplaced path.
+fn loads_at(text: &str, byte: usize) -> bool {
+    let before = text[..byte.min(text.len())].trim_end();
+    let before = before.strip_suffix('(').map(str::trim_end);
+    before.is_some_and(|b| b.ends_with(LOAD_JSON))
+}
+
+/// `refused` with [`SOLVE_ONLY`] beside it where a node or `target` wrote `load_json(...)`; an
+/// engine refusal of `repr` or `load_json` earns it where it becomes a diagnostic.
+pub(crate) fn hinted(refused: CliError, source: &dyn Source, target: Option<&str>) -> CliError {
+    let solve_only = match &refused {
+        CliError::Refusals(rs) => rs.iter().any(|r| {
+            r.code == sva_ast::DiagCode::MisplacedPath
+                && source
+                    .get(&r.at.path)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|text| loads_at(&text, r.at.span.start))
+        }),
+        CliError::BadProbe(_) => {
+            target.is_some_and(|t| t.match_indices('"').any(|(at, _)| loads_at(t, at)))
+        }
+        _ => false,
+    };
+    match solve_only {
+        true => CliError::Hinted {
+            error: Box::new(refused),
+            help: SOLVE_ONLY,
+        },
+        false => refused,
+    }
+}
+
+/// The directory of a composition a solve reads `@fits/<name>` costs from; no node lives in it.
+pub const FITS: &str = "fits";
+
+/// `@fits/<name>` is the cost that file of the composition holds; any other text is the cost.
+pub fn cost_of(source: &dyn Source, written: &str) -> Result<Cost, CliError> {
+    let named = written
+        .trim()
+        .strip_prefix('@')
+        .filter(|path| path.starts_with(&format!("{FITS}/")) && sva_ast::whole_ref_path(path));
+    let Some(path) = named else {
+        return cost::cost(written);
+    };
+    let text = source.get(path).map_err(CliError::Io)?.ok_or_else(|| {
+        CliError::NotFound(format!(
+            "`{written}` names no file `{path}` in {}; write the cost there, under an \
+             annotation line, as a node is written",
+            source.name()
+        ))
+    })?;
+    cost::cost_file(path, &text)
+}
+
+/// `under` beside the recordings the cost's leaves hold as values, each under its leaf's key.
+struct Recordings<'a> {
+    under: &'a dyn Source,
+    held: Vec<(String, Arc<Recording>)>,
+}
+
+impl Source for Recordings<'_> {
+    fn paths(&self) -> Result<Listing, String> {
+        self.under.paths()
+    }
+
+    fn get(&self, path: &str) -> Result<Option<Cow<'_, str>>, String> {
+        self.under.get(path)
+    }
+
+    fn generation(&self, path: &str) -> Option<u64> {
+        self.under.generation(path)
+    }
+
+    fn name(&self) -> String {
+        self.under.name()
+    }
+
+    fn recording(&self, path: &str) -> Result<Option<Arc<Recording>>, String> {
+        match self.held.iter().find(|(key, _)| key == path) {
+            Some((_, held)) => Ok(Some(Arc::clone(held))),
+            None => self.under.recording(path),
+        }
+    }
+}
+
+fn recorded<'a>(cost: &Cost, under: &'a dyn Source) -> Recordings<'a> {
+    let held = cost
+        .leaves
+        .iter()
+        .filter_map(|leaf| leaf.recording.clone())
+        .map(|held| (held.path.clone(), held))
+        .collect();
+    Recordings { under, held }
+}
+
+/// Every check the cost and the variables need, before anything renders: the variables' start
+/// values, and each load's value.
+pub fn checked(problem: &Problem) -> Result<(Vec<f64>, Vec<Held>), CliError> {
+    let base = recorded(&problem.cost, problem.source);
+    checked_over(problem, &base)
+}
+
+fn checked_over(problem: &Problem, base: &dyn Source) -> Result<(Vec<f64>, Vec<Held>), CliError> {
     for one in &problem.vary {
         if let Some((name, _)) = problem.sets.iter().find(|(n, _)| *n == one.name) {
             return Err(CliError::usage(
@@ -81,24 +199,39 @@ pub fn checked(problem: &Problem) -> Result<Vec<f64>, CliError> {
             ));
         }
     }
-    let held = overlaid(problem.source, &problem.sets)?;
+    let held = overlaid(base, &problem.sets)?;
     let start = problem
         .vary
         .iter()
         .map(|one| one.start(&held))
         .collect::<Result<Vec<_>, _>>()?;
     for one in &problem.vary {
-        reaches(problem, one)?;
+        reaches(problem, base, one)?;
     }
-    Ok(start)
+    let mut sets = problem.sets.clone();
+    sets.extend(
+        problem
+            .vary
+            .iter()
+            .zip(&start)
+            .map(|(one, v)| (one.name.clone(), one.text(*v, Precision::Shortest))),
+    );
+    let at_start = overlaid(base, &sets)?;
+    let side = load::Side {
+        source: &at_start,
+        rate: problem.rate,
+    };
+    let loads = load::loaded(&problem.cost, problem.texts, &side)?;
+    problem.cost.typed(Some(&loads))?;
+    Ok((start, loads))
 }
 
 /// A variable no target's value or interval moves with refuses: no render could fit it.
-fn reaches(problem: &Problem, one: &Vary) -> Result<(), CliError> {
+fn reaches(problem: &Problem, base: &dyn Source, one: &Vary) -> Result<(), CliError> {
     let planned = |value: f64| -> Result<Vec<String>, CliError> {
         let mut sets = problem.sets.clone();
         sets.push((one.name.clone(), one.text(value, Precision::Shortest)));
-        let source = overlaid(problem.source, &sets)?;
+        let source = overlaid(base, &sets)?;
         targets(&problem.cost)
             .iter()
             .map(|target| {
@@ -147,7 +280,8 @@ pub async fn solve<B: Backend>(
     heard: &mut dyn FnMut(&Point),
     abandon: &dyn Abandon,
 ) -> Result<Solved, CliError> {
-    let start = checked(problem)?;
+    let base = recorded(&problem.cost, problem.source);
+    let (start, loads) = checked_over(problem, &base)?;
     let mut search = Search::new(&problem.vary, &start, problem.stops);
     let targets = targets(&problem.cost);
     let mut sessions: Vec<Session> = targets.iter().map(|_| Session::default()).collect();
@@ -175,6 +309,8 @@ pub async fn solve<B: Backend>(
             .collect();
         let point = Rendering {
             problem,
+            base: &base,
+            loads: &loads,
             targets: &targets,
             samples: &samples,
             abandon,
@@ -238,6 +374,8 @@ pub async fn solve<B: Backend>(
 
 struct Rendering<'p, 'a> {
     problem: &'p Problem<'a>,
+    base: &'p dyn Source,
+    loads: &'p [Held],
     targets: &'p [String],
     samples: &'p Asked,
     abandon: &'p dyn Abandon,
@@ -257,7 +395,7 @@ impl Rendering<'_, '_> {
         let problem = self.problem;
         let mut sets = problem.sets.clone();
         sets.extend(written.iter().map(|(n, _, t)| (n.clone(), t.clone())));
-        let source = overlaid(problem.source, &sets)?;
+        let source = overlaid(self.base, &sets)?;
         let mut readings: Vec<Option<Output>> = vec![None; problem.cost.leaves.len()];
         let mut computed = Vec::new();
         for (target, session) in self.targets.iter().zip(sessions.iter_mut()) {
@@ -298,7 +436,7 @@ impl Rendering<'_, '_> {
             .collect();
         let mut terms = Vec::new();
         for term in &problem.cost.terms {
-            terms.push(term.sign * scalar(&value(&term.node, &readings)?));
+            terms.push(term.sign * scalar(&value(&term.node, &readings, self.loads)?));
         }
         Ok((terms.iter().sum(), terms, computed))
     }
@@ -327,25 +465,47 @@ fn lengths(a: usize, b: usize, what: &str) -> CliError {
     )
 }
 
-fn value(node: &Node, readings: &[Output]) -> Result<Value, CliError> {
+/// One side of a subtraction of readings: a leaf's, or the reading a load held.
+fn side<'r>(node: &Node, readings: &'r [Output], loads: &'r [Held]) -> Option<&'r Output> {
+    match node {
+        Node::Leaf(at) => Some(&readings[*at]),
+        Node::Loaded(at) => match &loads[*at] {
+            Held::Reading(reading) => Some(reading),
+            Held::Number(_) | Held::Vector(_) => None,
+        },
+        _ => None,
+    }
+}
+
+fn value(node: &Node, readings: &[Output], loads: &[Held]) -> Result<Value, CliError> {
+    let value = |node: &Node| value(node, readings, loads);
     Ok(match node {
         Node::Num(n) => Value::Scalar(*n),
         Node::Vector(v) => Value::Vector(v.clone()),
+        Node::Loaded(at) => match &loads[*at] {
+            Held::Number(n) => Value::Scalar(*n),
+            Held::Vector(v) => Value::Vector(v.clone()),
+            Held::Reading(_) => {
+                unreachable!("the cost typed every held reading into a subtraction")
+            }
+        },
         Node::Leaf(_) => unreachable!("the cost typed every leaf into a subtraction"),
-        Node::Neg(x) => match value(x, readings)? {
+        Node::Neg(x) => match value(x)? {
             Value::Scalar(s) => Value::Scalar(-s),
             Value::Vector(v) => Value::Vector(v.iter().map(|x| -x).collect()),
         },
-        Node::Bin(Op::Sub, a, b) if matches!((&**a, &**b), (Node::Leaf(_), Node::Leaf(_))) => {
-            let (Node::Leaf(x), Node::Leaf(y)) = (&**a, &**b) else {
+        Node::Bin(Op::Sub, a, b)
+            if side(a, readings, loads).is_some() && side(b, readings, loads).is_some() =>
+        {
+            let (Some(x), Some(y)) = (side(a, readings, loads), side(b, readings, loads)) else {
                 unreachable!("matched above");
             };
-            let vector = residual::residual(&readings[*x], &readings[*y])
-                .expect("the cost typed both leaves to one reading");
+            let vector =
+                residual::residual(x, y).expect("the cost typed both sides to one reading");
             Value::Vector(vector)
         }
         Node::Bin(op, a, b) => {
-            let (a, b) = (value(a, readings)?, value(b, readings)?);
+            let (a, b) = (value(a)?, value(b)?);
             let apply = |x: f64, y: f64| match op {
                 Op::Add => x + y,
                 Op::Sub => x - y,
@@ -369,10 +529,7 @@ fn value(node: &Node, readings: &[Output]) -> Result<Value, CliError> {
             }
         }
         Node::Reduce(name, args) => {
-            let args = args
-                .iter()
-                .map(|a| value(a, readings))
-                .collect::<Result<Vec<_>, _>>()?;
+            let args = args.iter().map(value).collect::<Result<Vec<_>, _>>()?;
             match (*name, args.as_slice()) {
                 ("abs", [Value::Scalar(x)]) => Value::Scalar(x.abs()),
                 ("abs", [Value::Vector(v)]) => Value::Vector(v.iter().map(|x| x.abs()).collect()),

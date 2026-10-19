@@ -108,6 +108,7 @@ fn a_json_destination_carries_every_sample_where_stdout_caps_them() {
     sva_cli::write_destination(
         &sva_core::Printed {
             name: "samples".to_string(),
+            asked: "samples".to_string(),
             answer,
             skim: false,
         },
@@ -191,6 +192,7 @@ fn a_non_audio_reading_at_a_wav_path_refuses_the_same_way_on_both_sides() {
     let Err(as_a_library) = sva_cli::write_destination(
         &sva_core::Printed {
             name: "lines".to_string(),
+            asked: "lines".to_string(),
             answer,
             skim: false,
         },

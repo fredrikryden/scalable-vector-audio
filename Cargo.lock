@@ -370,6 +370,7 @@ dependencies = [
 name = "sva-core"
 version = "0.14.20"
 dependencies = [
+ "serde_json",
  "sva-ast",
  "sva-engine",
  "sva-formula",
@@ -401,6 +402,7 @@ name = "sva-wasm"
 version = "0.14.20"
 dependencies = [
  "js-sys",
+ "serde_json",
  "sva-ast",
  "sva-core",
  "sva-engine",

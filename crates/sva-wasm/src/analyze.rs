@@ -72,6 +72,7 @@ pub fn analyze(
         .zip(taken)
         .map(|(one, answer)| Printed {
             name: one.name.clone(),
+            asked: one.written.clone(),
             answer,
             skim: one.skim,
         })

@@ -46,9 +46,11 @@ const MOST_SAMPLES: f64 = 9_007_199_254_740_992.0;
 
 /// A call resolved to the reading it names and the arguments only a front end reads. Its
 /// times stay as written until a render says what a bar lasts.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Asked {
     pub name: String,
+    /// The call as written, its arguments and no destination: `pitch(frame=50ms)`.
+    pub written: String,
     given: Given,
     times: Vec<(Arg, Time)>,
     pub dest: Option<Destination>,
@@ -58,6 +60,21 @@ pub struct Asked {
     pub brief: bool,
     /// `ledger(skim=1)`: each row's level alone.
     pub skim: bool,
+}
+
+/// `written` only reports the call; it takes no part in comparing two.
+impl PartialEq for Asked {
+    fn eq(&self, other: &Asked) -> bool {
+        (&self.name, &self.given, &self.times, &self.dest, &self.node)
+            == (
+                &other.name,
+                &other.given,
+                &other.times,
+                &other.dest,
+                &other.node,
+            )
+            && (self.brief, self.skim) == (other.brief, other.skim)
+    }
 }
 
 pub fn is_wav(path: &Path) -> bool {
@@ -316,8 +333,16 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
             format!("`{name}` reads one instance's {name}; name it, as `{name}(node=@voice)`"),
         ));
     }
+    let written = match call.args.is_empty() {
+        true => name.to_string(),
+        false => {
+            let args: Vec<String> = call.args.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            format!("{name}({})", args.join(", "))
+        }
+    };
     Ok(Asked {
         name: call.name.clone(),
+        written,
         given,
         times,
         dest: destination(name, call.dest.as_deref(), buffer)?,

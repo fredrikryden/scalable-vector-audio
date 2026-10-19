@@ -51,7 +51,7 @@ const SHORT_TERM_SECS: f64 = 3.0;
 
 const STEP_SECS: f64 = 0.1;
 
-const PEAK_NOTE: &str = "sample peak, not true peak: no oversampling exists here, so an inter-sample peak above \
+pub const PEAK_NOTE: &str = "sample peak, not true peak: no oversampling exists here, so an inter-sample peak above \
      this figure is not measured";
 
 #[derive(Clone, Copy, Debug, PartialEq)]

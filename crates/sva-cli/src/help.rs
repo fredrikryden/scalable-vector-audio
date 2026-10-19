@@ -144,8 +144,9 @@ RENDER:
   Renders one expression, in the grammar a node file's body uses, and prints one
   reading per representation under `data.representations`. `@path` reads a node
   from the current directory and `@/abs/path` one anywhere; there is no default
-  target. Every reading states its `source` (exact or measured), the
-  conformance profile it ran under, and its rate.
+  target. Every reading states the call it was asked as (`asked`, as
+  `pitch(frame=50ms)`), its `source` (exact or measured), the conformance
+  profile it ran under, and its rate; `analyze` prints the same.
 
   The target's own ref may read an interval: `@piano4([0, 2b], f0=C4,
   vel=0.5, release=1s)`, where `release` is the instrument's own parameter. Its ends are the language's literals (`s`, `ms`, `b`,
@@ -346,7 +347,7 @@ REPRESENTATIONS:
 {representations}
 
 SOLVE:
-  sva-cli solve '<cost>' --vary <name>=<lo>..<hi>[/<step>][,log]...
+  sva-cli solve ('<cost>' | @fits/<name>) --vary <name>=<lo>..<hi>[/<step>][,log]...
                 [--max-renders <n>] [--step-tol <x>] [--cost-tol <x>]
                 [--set <name>=<text>]... [--rate <hz>] [--threads <n>]
                 [--cache <path|none>] [--write [--confirm]]
@@ -364,13 +365,44 @@ SOLVE:
   reading with one set of arguments subtract to a residual vector:
 {rules}
   A level is floored at {floor} dB before it subtracts. A residual inside both
-  sides' stated bounds counts as zero; of these readings only `onsets` states
-  one. Then `norm(v)` (the root of the sum of squares), `sum(v)`, `max(v)`,
-  `abs(x)` (each value's magnitude), `dot([w1, w2, ...], v)` (one literal weight
-  per value), numbers, `+`, `-`, `*` and `/` make one number. A reading left
-  unsubtracted, a vector left unreduced and a leaf of any other reading refuse
-  before anything renders. `repr.` is legal only here; in a node it refuses as
-  `repr-outside-solve`.
+  sides' stated bounds counts as zero; of these readings only `onsets` and
+  pruned `bands` state one. Then `norm(v)` (the root of the sum of squares),
+  `sum(v)`, `max(v)`, `abs(x)` (each value's magnitude), `dot([w1, w2, ...], v)`
+  (one literal weight per value), numbers, `+`, `-`, `*` and `/` make one
+  number. A reading left unsubtracted, a vector left unreduced and a leaf of
+  any other reading refuse before anything renders. In a node, `repr` and
+  `load_json` are names the language does not know and refuse as any such
+  name does, with a help naming `solve`.
+
+  `load_json("<file>", "<jq path>")` is a leaf read off a JSON file instead of
+  a render: plain JSON, so a `.json.gz` is unpacked first (`gunzip -k`). The
+  path is relative to the directory sva-cli runs in, or absolute, as
+  `sample("<path>")`'s is. The jq path is steps only, none of jq's filters:
+  `.name`, `[3]`, and a key that is not a plain name in single quotes,
+  `['bands(prune=1)']`, so it needs no escaping in the cost's double quotes:
+  `load_json("../crop.json", ".readings['periodicity(window=5.08s)']")`. A
+  number there loads as a number and a list of numbers as a vector, both
+  usable as weights and in reducers. An object loads only as the other side of
+  a subtraction from a `repr.` leaf, and is a reading as `analyze` prints its
+  `data` (the object holding `interval` and `representations`): from a bench
+  download `.readings['<call>']`, from `analyze ref.wav --representation
+  bands=ref.json` the path `.data`. The leaf's reading reads it, and refuses
+  before the first render where its kind, its arguments (each reading prints
+  the call it was asked as, `asked`), its rate, its profile or its interval's
+  length differ from what the leaf renders, or where a list in it was cut
+  short (`has_more: true`; a reading written to a file is whole). Each file is
+  read once per solve.
+
+  `@fits/<name>` reads the cost from the file `fits/<name>` of the
+  composition, written as a node is: an annotation line `; Models: ... |
+  Neglects: ... | IO: ... | Tags: ...`, then the cost, over as many lines as
+  it needs, every `;` comment dropped. Its quotes need no shell escaping, and
+  a cost that does not parse refuses at its line and byte in that file. No
+  node lives under `fits/`, and `lint` reads nothing there. `--vary` and the
+  other flags stay on the command line:
+    ; Models: the lead's bands against the bench crop | Neglects: pitch | IO: (cutoff) -> cost | Tags: fit
+    norm(repr.bands(@lead([0, 5.083291666666667s]), prune=1)
+         - load_json("../crop.json", ".readings['bands(prune=1)']"))
 
   `--vary <name>=<lo>..<hi>[/<step>][,log]`, once per variable, names a file
   `variables/<name>` holding one number and the box it moves in, both bounds in
@@ -539,6 +571,9 @@ EXAMPLES:
   sva-cli solve 'sum(abs(repr.onsets(@score/song([0, 8s]))
     - repr.onsets(sample("/tmp/take.wav"))))' \
     --vary bpm=100..140/2 --set key=D3 --max-renders 60 --write --confirm
+  sva-cli solve 'norm(repr.pitch(@lead([0, 2s])) - load_json("../ref.json", ".data"))' \
+    --vary detune=-50ct..50ct/10ct
+  sva-cli solve @fits/lead --vary cutoff=200hz..8000hz/1.25,log --rate 48000
   sva-cli lint
   sva-cli lint '@master'
   sva-cli trace score/phrase
@@ -685,6 +720,10 @@ fn solve_rules() -> String {
     let mut out = Vec::new();
     for (name, rule) in solve::RULES {
         let mut line = format!("    {name:<10}");
+        if name.len() >= 10 {
+            out.push(line);
+            line = " ".repeat(14);
+        }
         for word in rule.split(' ') {
             if line.len() + 1 + word.len() > 80 {
                 out.push(line);

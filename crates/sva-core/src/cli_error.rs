@@ -40,6 +40,20 @@ pub enum CliError {
     },
     /// Every `LintViolation` the scan found, not just the first.
     LintRefused(Vec<LintViolation>),
+    /// `error`, its diagnostics helped by `help` in place of their own.
+    Hinted {
+        error: Box<CliError>,
+        help: &'static str,
+    },
+    /// An argument mistake inside a file: its code, and where in the file, from 1.
+    Located {
+        code: &'static str,
+        message: String,
+        file: String,
+        byte: usize,
+        line: usize,
+        column: usize,
+    },
 }
 
 impl CliError {
@@ -92,6 +106,7 @@ fn names_no_node(e: &EngineError) -> bool {
 impl CliError {
     pub fn exit_code(&self) -> u8 {
         match self {
+            CliError::Hinted { error, .. } => error.exit_code(),
             CliError::Engine(e) if names_no_node(e) => 24,
             CliError::Refusals(rs) if misses_a_recording(rs) => 24,
             CliError::Usage { .. }
@@ -99,7 +114,8 @@ impl CliError {
             | CliError::Engine(_)
             | CliError::BadTempo(_)
             | CliError::BadProbe(_)
-            | CliError::LintRefused(_) => 3,
+            | CliError::LintRefused(_)
+            | CliError::Located { .. } => 3,
             CliError::Conflict { .. } => 4,
             CliError::NotFound(_) => 24,
             CliError::Io(_) => 1,
@@ -108,6 +124,7 @@ impl CliError {
 
     pub fn code(&self) -> &'static str {
         match self {
+            CliError::Hinted { error, .. } => error.code(),
             CliError::Engine(e) if names_no_node(e) => "not_found",
             CliError::Refusals(rs) if misses_a_recording(rs) => "not_found",
             CliError::Usage { .. }
@@ -115,7 +132,8 @@ impl CliError {
             | CliError::Engine(_)
             | CliError::BadTempo(_)
             | CliError::BadProbe(_)
-            | CliError::LintRefused(_) => "validation_error",
+            | CliError::LintRefused(_)
+            | CliError::Located { .. } => "validation_error",
             CliError::Conflict { .. } => "conflict",
             CliError::NotFound(_) => "not_found",
             CliError::Io(_) => "internal_error",
@@ -124,7 +142,8 @@ impl CliError {
 
     pub fn message(&self) -> String {
         match self {
-            CliError::Usage { message, .. } => message.clone(),
+            CliError::Hinted { error, .. } => error.message(),
+            CliError::Usage { message, .. } | CliError::Located { message, .. } => message.clone(),
             CliError::Refusals(rs) => format!("{} refusal(s) parsing the composition", rs.len()),
             CliError::Engine(e) => e.to_string(),
             CliError::BadTempo(m) | CliError::BadProbe(m) | CliError::Io(m) => m.clone(),
@@ -140,6 +159,11 @@ impl CliError {
     /// Per-finding detail; empty only where the failure has no subject to locate it against.
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         match self {
+            CliError::Hinted { error, help } => error
+                .diagnostics()
+                .into_iter()
+                .map(|d| d.helped(*help))
+                .collect(),
             CliError::Refusals(rs) => rs
                 .iter()
                 .map(|r| {
@@ -174,6 +198,19 @@ impl CliError {
                 .iter()
                 .map(|v| lint_diagnostic(v.code, &v.subject, &v.message, v.severity, v.line))
                 .collect(),
+            CliError::Located {
+                code,
+                message,
+                file,
+                byte,
+                line,
+                column,
+            } => vec![
+                Diagnostic::new(*code, message.clone())
+                    .at(Some(file.clone()), Some((*byte, 0)))
+                    .placed(Some((*line, *column)))
+                    .helped("`sva-cli --help` states how a cost reads, under SOLVE"),
+            ],
             CliError::Io(_) => Vec::new(),
         }
     }
@@ -195,7 +232,24 @@ fn engine_diagnostic(e: &EngineError) -> Diagnostic {
         }
         other => Diagnostic::new(other.code(), other.to_string()),
     };
+    let held = match solve_only(e) {
+        true => held.helped(crate::solve::SOLVE_ONLY),
+        false => held,
+    };
     held.at(engine_error_path(e), engine_error_span(e))
+}
+
+/// A cost's leaf written where only a node's grammar reads: `repr` is no variable to it, and
+/// `load_json` no function.
+fn solve_only(e: &EngineError) -> bool {
+    match e {
+        EngineError::Binding {
+            fault: sva_engine::BindingFault::Unbound(_, name),
+            ..
+        } => name == "repr",
+        EngineError::UnknownBuiltin(name) => name == crate::solve::LOAD_JSON,
+        _ => false,
+    }
 }
 
 /// The one place a `lint` code becomes a diagnostic, so both of `lint`'s response paths

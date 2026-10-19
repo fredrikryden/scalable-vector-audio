@@ -50,7 +50,6 @@ const UNNAMED: &str = "this composition";
 #[derive(Clone, Debug, Default)]
 pub struct Composition {
     nodes: BTreeMap<String, (String, u64)>,
-    recordings: BTreeMap<String, Arc<Recording>>,
     edits: u64,
     name: Option<String>,
 }
@@ -64,23 +63,6 @@ impl Composition {
         self.edits += 1;
         self.nodes.insert(path.into(), (text.into(), self.edits));
         self
-    }
-
-    pub fn insert_recording(&mut self, path: impl Into<String>, rate: u32, planes: Vec<Vec<f32>>) {
-        let path = path.into();
-        self.edits += 1;
-        let read = format!("\"{path}\"");
-        for (text, at) in self.nodes.values_mut() {
-            if text.contains(&read) {
-                *at = self.edits;
-            }
-        }
-        let recording = Recording {
-            path: path.clone(),
-            rate,
-            planes: Arc::new(planes),
-        };
-        self.recordings.insert(path, Arc::new(recording));
     }
 
     pub fn named(mut self, name: impl Into<String>) -> Composition {
@@ -101,7 +83,7 @@ impl PartialEq for Composition {
     fn eq(&self, other: &Composition) -> bool {
         let texts = self.nodes.iter().map(|(p, (t, _))| (p, t));
         let theirs = other.nodes.iter().map(|(p, (t, _))| (p, t));
-        self.name == other.name && texts.eq(theirs) && self.recordings == other.recordings
+        self.name == other.name && texts.eq(theirs)
     }
 }
 
@@ -132,10 +114,6 @@ impl Source for Composition {
 
     fn name(&self) -> String {
         self.name.clone().unwrap_or_else(|| UNNAMED.to_string())
-    }
-
-    fn recording(&self, path: &str) -> Result<Option<Arc<Recording>>, String> {
-        Ok(self.recordings.get(path).cloned())
     }
 }
 
