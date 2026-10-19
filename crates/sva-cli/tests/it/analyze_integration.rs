@@ -215,6 +215,44 @@ fn a_two_channel_file_answers_a_stereo_image_a_mono_or_three_channel_one_cannot(
     );
 }
 
+/// At 8 kHz `formants` fits 10 poles off 11 lags, 1.375 ms: a frame or file holding fewer
+/// refuses, naming the 1.4 ms that holds them, rather than fitting the few it holds.
+#[test]
+fn formants_under_the_orders_lags_refuse_naming_the_least_frame_and_file() {
+    let rate = 8_000u32;
+    let refusal = |samples: &[f32], frame_secs: f64| {
+        let path = written("formants-under-order", rate, &[samples]);
+        answer_buffer(
+            "in.wav",
+            &decoded(&path),
+            Representation::Formants {
+                max_formants: 4,
+                frame_secs,
+            },
+            PSYCHOACOUSTIC_V1.name,
+        )
+        .expect_err("too few lags for the order")
+    };
+    let tone = tone(rate, 220.0, 0.1);
+
+    let frame = refusal(&tone, 0.001);
+    assert_eq!(frame.code(), "read.frame_under_order");
+    assert!(
+        frame
+            .to_string()
+            .contains("ask a frame of 0.0014s or longer, as `formants(frame=0.0014s)`"),
+        "{frame}"
+    );
+
+    let file = refusal(&tone[..10], 0.05);
+    assert_eq!(file.code(), "read.target_under_order");
+    assert!(
+        file.to_string()
+            .contains("analyze a file holding at least 0.0014s"),
+        "{file}"
+    );
+}
+
 /// A frame the transform cannot hold refuses on both paths rather than shrinking silently
 /// or overflowing the size it was asked for.
 #[test]

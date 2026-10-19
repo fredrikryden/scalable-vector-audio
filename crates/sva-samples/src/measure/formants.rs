@@ -30,6 +30,22 @@ pub fn default_order(sample_rate: f64) -> usize {
     (2.0 + sample_rate / 1000.0).clamp(2.0, MAX_ORDER as f64) as usize
 }
 
+/// A fit of `order` poles reads `order + 1` lags.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum UnderOrder {
+    Frame {
+        frame_secs: f64,
+        held: usize,
+        order: usize,
+        least_secs: f64,
+    },
+    Target {
+        held: usize,
+        order: usize,
+        least_secs: f64,
+    },
+}
+
 pub fn track(
     planes: &[&[f64]],
     sample_rate: f64,
@@ -37,10 +53,27 @@ pub fn track(
     frame_secs: f64,
     order: usize,
     max_formants: usize,
-) -> Vec<FormantFrame> {
+) -> Result<Vec<FormantFrame>, UnderOrder> {
     let stride = ((frame_secs * sample_rate).round() as usize).max(1);
     let len = crate::measure::held(planes);
-    (0..len)
+    let order = order.clamp(2, MAX_ORDER);
+    let least_secs = ((order + 1) as f64 / sample_rate * 1e4).ceil() / 1e4;
+    if stride <= order {
+        return Err(UnderOrder::Frame {
+            frame_secs,
+            held: stride,
+            order,
+            least_secs,
+        });
+    }
+    if len <= order {
+        return Err(UnderOrder::Target {
+            held: len,
+            order,
+            least_secs,
+        });
+    }
+    Ok((0..len)
         .step_by(stride)
         .enumerate()
         .map(|(n, from)| {
@@ -53,11 +86,12 @@ pub fn track(
                 ..analyze(&chunk, sample_rate, order, max_formants)
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Hamming, not Hann: a taper reaching zero throws the frame's edges away. Never
-/// pre-emphasised; `x - 0.97*x(t - 1sp)` is a composition's own to write.
+/// pre-emphasised; `x - 0.97*x(t - 1sp)` is a composition's own to write. Zero past a short
+/// frame's end.
 pub fn analyze(
     planes: &[&[f64]],
     sample_rate: f64,
@@ -65,7 +99,7 @@ pub fn analyze(
     max_formants: usize,
 ) -> FormantFrame {
     let len = crate::measure::held(planes);
-    let order = order.clamp(2, MAX_ORDER).min(len.saturating_sub(1));
+    let order = order.clamp(2, MAX_ORDER);
     let windowed: Vec<Vec<f64>> = planes
         .iter()
         .map(|frame| {
@@ -89,7 +123,7 @@ pub fn analyze(
             each.sum::<f64>() / (len * planes.len()) as f64
         }
     };
-    if order < 2 || energy <= 0.0 {
+    if energy <= 0.0 {
         return FormantFrame {
             t_secs: 0.0,
             order,

@@ -2,7 +2,7 @@
 
 use crate::helpers::drawn;
 use sva_samples::measure::formants::{
-    Formant, FormantFrame, MAX_ORDER, analyze, default_order, track,
+    Formant, FormantFrame, MAX_ORDER, UnderOrder, analyze, default_order, track,
 };
 
 /// A signal whose envelope is known by construction rather than by another measurement.
@@ -100,9 +100,36 @@ fn the_order_is_the_rule_of_thumb_unless_a_caller_says_otherwise() {
     assert_eq!(analyze(&[&x[..]], 16000.0, 400, 8).order, MAX_ORDER);
     assert_eq!(
         analyze(&[&x[..9][..]], 16000.0, 12, 8).order,
-        8,
-        "a short frame"
+        12,
+        "a short frame reads zero past its end, never a lower order"
     );
+}
+
+/// An order-12 fit reads 13 lags; a frame or a target holding fewer has no such fit, and the
+/// refusal names the least that does, 13/16000 s up to the next tenth of a millisecond.
+#[test]
+fn a_frame_or_target_under_the_orders_lags_refuses_naming_the_least() {
+    let sr = 16000.0;
+    let x = resonator(700.0, 90.0, sr, 512);
+    assert_eq!(
+        track(&[&x[..]], sr, 0.0, 0.0005, 12, 8),
+        Err(UnderOrder::Frame {
+            frame_secs: 0.0005,
+            held: 8,
+            order: 12,
+            least_secs: 0.0009,
+        })
+    );
+    assert_eq!(
+        track(&[&x[..12]], sr, 0.0, 0.05, 12, 8),
+        Err(UnderOrder::Target {
+            held: 12,
+            order: 12,
+            least_secs: 0.0009,
+        })
+    );
+    let held = track(&[&x[..13]], sr, 0.0, 0.05, 12, 8).expect("13 samples hold 13 lags");
+    assert_eq!(held[0].order, 12);
 }
 
 /// The whole reason this exists: a voiced signal's peaks are the glottal source's harmonics,
@@ -155,7 +182,7 @@ fn a_track_places_each_frame_in_time_and_follows_a_moving_resonance() {
     let sr = 16000.0;
     let mut x = resonator(500.0, 80.0, sr, 8000);
     x.extend(resonated(&noise(3.0, 8000), 1800.0, 80.0, sr));
-    let frames = track(&[&x[..]], sr, 0.25, 0.5, 4, 4);
+    let frames = track(&[&x[..]], sr, 0.25, 0.5, 4, 4).expect("frames over the order");
     assert_eq!(frames.len(), 2);
     assert_eq!(frames[0].t_secs, 0.25);
     assert_eq!(frames[1].t_secs, 0.75);

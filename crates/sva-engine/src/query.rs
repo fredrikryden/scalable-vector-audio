@@ -260,7 +260,9 @@ static FORMANTS: Reading = Reading {
     takes: &[Arg::Peaks, Arg::Frame],
     reads: Reads::Samples,
     help: "formant frequencies, bandwidths and levels per frame, the `peaks` lowest, off \
-           every channel's autocorrelation averaged",
+           every channel's autocorrelation averaged, an all-pole fit of 2 poles and 1 per kHz \
+           of rate, at most 64: a frame or target holding no more samples than its order \
+           refuses, and a tail frame reads zero past its end",
     build: |g| Representation::Formants {
         max_formants: g.peaks,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),

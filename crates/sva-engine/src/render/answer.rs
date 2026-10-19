@@ -446,6 +446,50 @@ fn rate_under(
     })
 }
 
+/// Names the least frame or target an all-pole fit of the order reads, `longer` how to hand
+/// it a target that long.
+fn under_order(
+    name: &str,
+    why: formants::UnderOrder,
+    longer: impl Fn(f64) -> String,
+) -> EngineError {
+    let (code, message, help) = match why {
+        formants::UnderOrder::Frame {
+            frame_secs,
+            held,
+            order,
+            least_secs,
+        } => (
+            "read.frame_under_order",
+            format!(
+                "a {frame_secs}s frame holds {held} samples, and an order-{order} all-pole fit \
+                 reads {} lags",
+                order + 1
+            ),
+            format!("ask a frame of {least_secs}s or longer, as `formants(frame={least_secs}s)`"),
+        ),
+        formants::UnderOrder::Target {
+            held,
+            order,
+            least_secs,
+        } => (
+            "read.target_under_order",
+            format!(
+                "the target holds {held} samples, and an order-{order} all-pole fit reads {} \
+                 lags",
+                order + 1
+            ),
+            longer(least_secs),
+        ),
+    };
+    EngineError::refused(Diagnostic {
+        code: code.to_string(),
+        message,
+        location: Located::at(name, None),
+        help,
+    })
+}
+
 /// Names the cell or window that fits and, through `shorter`, how to hand it a target that
 /// short.
 fn unfit(name: &str, why: self_similarity::Unfit, shorter: impl Fn(f64) -> String) -> EngineError {
@@ -824,6 +868,11 @@ fn measured(
                 NoReading::RateUnder(held) => rate_under(render.tys.name(node), held, |hz| {
                     format!("render at a rate over {hz} Hz, as `--rate 48000` asks")
                 }),
+                NoReading::UnderOrder(why) => under_order(render.tys.name(node), why, |secs| {
+                    format!(
+                        "render an interval of at least {secs}s, as `@x([0, {secs}s])` writes one"
+                    )
+                }),
                 NoReading::Unfit(why) => unfit(render.tys.name(node), why, |secs| {
                     format!(
                         "render an interval of at most {secs}s, as `@x([0, {secs}s])` \
@@ -845,6 +894,7 @@ pub enum NoReading {
     Unread(sliding::Unread),
     Unfit(self_similarity::Unfit),
     RateUnder(sva_samples::RateUnderWeighting),
+    UnderOrder(formants::UnderOrder),
 }
 
 /// Every reading a buffer answers on its own, with no graph behind it.
@@ -874,14 +924,17 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
         Representation::Formants {
             max_formants,
             frame_secs,
-        } => Output::Formants(formants::track(
-            &planes,
-            sr,
-            start,
-            frame_secs,
-            formants::default_order(sr),
-            max_formants,
-        )),
+        } => Output::Formants(
+            formants::track(
+                &planes,
+                sr,
+                start,
+                frame_secs,
+                formants::default_order(sr),
+                max_formants,
+            )
+            .map_err(NoReading::UnderOrder)?,
+        ),
         Representation::Stereo { frame_secs } => {
             if buffer.width() != 2 {
                 return Err(NoReading::WidthMismatch {
@@ -1232,6 +1285,9 @@ pub fn answer_buffer(
         }),
         NoReading::RateUnder(held) => rate_under(name, held, |hz| {
             format!("analyze a file sampled over {hz} Hz")
+        }),
+        NoReading::UnderOrder(why) => under_order(name, why, |secs| {
+            format!("analyze a file holding at least {secs}s")
         }),
     })?;
     Ok(Answer::whole(
