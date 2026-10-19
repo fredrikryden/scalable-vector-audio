@@ -432,6 +432,12 @@ impl Typing {
             return Ok(id);
         }
         let held = self.files.get(path).cloned().unwrap_or_default();
+        let file = path.split_once('(').map(|(file, _)| file);
+        let spelt = file.and_then(|file| self.files.get(file));
+        if let Some(ids) = spelt.filter(|_| held.is_empty()) {
+            let names = ids.iter().map(|id| self.name(*id).to_string()).collect();
+            return Err(EngineError::UnknownInstance(path.to_string(), names));
+        }
         crate::instantiate::sole(
             path,
             held.into_iter()

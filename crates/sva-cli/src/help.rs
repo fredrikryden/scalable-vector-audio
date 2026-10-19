@@ -507,7 +507,9 @@ DEFAULTS:
                        Default {DEFAULT_NOVELTY_WINDOW_SECS}.
   self_similarity(curve=<0|1>) `1` adds every cell's chroma and band levels and
                        each view's matrix. Default 0.
-  bindings(node=@<path>) the instance whose bindings are read; required.
+  bindings(node=@<path>) the instance whose bindings are read; required. An
+                       instance is named exactly as the render spells it; any
+                       other spelling refuses, listing its file's instances.
   samples(buffer=<t>)  how much an `alsa:` device holds ahead of what it plays,
                        in seconds. Default {DEFAULT_BUFFER_SECS}; only a device
                        has one.

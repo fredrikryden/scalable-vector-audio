@@ -133,6 +133,8 @@ pub enum EngineError {
         fault: BindingFault,
     },
     UnknownNode(String),
+    /// A written instance no instance of its file is spelt as; the second names every one.
+    UnknownInstance(String, Vec<String>),
     AmbiguousNode(String, Vec<String>),
     RefAboveRoot(String, String),
     UnknownBuiltin(String),
@@ -149,7 +151,7 @@ impl EngineError {
     pub fn code(&self) -> &str {
         match self {
             EngineError::Binding { fault, .. } => fault.code(),
-            EngineError::UnknownNode(_) => "engine.unknown_node",
+            EngineError::UnknownNode(_) | EngineError::UnknownInstance(..) => "engine.unknown_node",
             EngineError::AmbiguousNode(..) => "engine.ambiguous_node",
             EngineError::RefAboveRoot(..) => "engine.ref_above_root",
             EngineError::UnknownBuiltin(_) => "engine.unknown_builtin",
@@ -190,6 +192,16 @@ impl fmt::Display for EngineError {
         match self {
             EngineError::Binding { node, fault, .. } => write!(f, "`{node}`: {fault}"),
             EngineError::UnknownNode(p) => write!(f, "no such node: `{p}`"),
+            EngineError::UnknownInstance(p, names) => write!(
+                f,
+                "no such node: `{p}`; this render's instances of its file are named {}, a \
+                 reading names one exactly as listed",
+                names
+                    .iter()
+                    .map(|n| format!("`@{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             EngineError::AmbiguousNode(file, names) => write!(
                 f,
                 "`{file}` is a file with {} instances; name one: {}",

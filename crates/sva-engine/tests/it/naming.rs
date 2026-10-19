@@ -60,3 +60,43 @@ fn a_file_two_invocations_share_is_named_by_neither() {
     );
     assert!(held.node("master").is_ok(), "the root still answers");
 }
+
+/// An instance written in another spelling than its own still refuses, never resolving by
+/// guess, and names every instance of its file as a reading must spell it.
+#[test]
+fn an_instance_spelt_otherwise_refuses_naming_each_spelling_that_resolves() {
+    let g = graph_of(
+        "spelt",
+        &[
+            ("voice", "f0 = A4\ng = 1\nsin(2*pi*f0*t)*g\n"),
+            ("master", "@voice(t, g=0.5, f0=220)\n"),
+        ],
+    );
+    let held = render(
+        &g,
+        "master",
+        RenderConfig::seconds(44_100, 0.05),
+        &Tier::default(),
+    )
+    .expect("one voice");
+    for written in ["voice(g=0.5,f0=220)", "voice(f0=220)"] {
+        let refused = held.node(written).expect_err("no instance is spelt so");
+        assert_eq!(refused.code(), "engine.unknown_node");
+        let EngineError::UnknownInstance(asked, names) = &refused else {
+            panic!("{refused:?}")
+        };
+        assert_eq!(asked, written);
+        let [name] = names.as_slice() else {
+            panic!("one instance: {names:?}")
+        };
+        assert!(held.node(name).is_ok(), "`{name}` resolves as listed");
+        assert!(
+            refused.to_string().contains(&format!("`@{name}`")),
+            "{refused}"
+        );
+    }
+    assert!(
+        matches!(held.node("nobody(f0=1)"), Err(EngineError::UnknownNode(_))),
+        "a file with no instance has none to list"
+    );
+}

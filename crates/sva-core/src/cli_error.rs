@@ -61,6 +61,7 @@ fn engine_error_path(e: &EngineError) -> Option<String> {
     match e {
         EngineError::Binding { node, .. } => Some(node.clone()),
         EngineError::UnknownNode(p)
+        | EngineError::UnknownInstance(p, _)
         | EngineError::AmbiguousNode(p, _)
         | EngineError::RefAboveRoot(p, _) => Some(p.clone()),
         other => other.at().map(|at| at.node.clone()),
@@ -76,7 +77,10 @@ fn engine_error_span(e: &EngineError) -> Option<(usize, usize)> {
 }
 
 fn names_no_node(e: &EngineError) -> bool {
-    matches!(e, EngineError::UnknownNode(_))
+    matches!(
+        e,
+        EngineError::UnknownNode(_) | EngineError::UnknownInstance(..)
+    )
 }
 
 impl CliError {
