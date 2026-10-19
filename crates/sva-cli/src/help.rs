@@ -534,10 +534,10 @@ EXAMPLES:
   sva-cli render '@master' \
     --representation 'samples(buffer=100ms)=alsa:default,loudness'
   sva-cli solve 'norm(repr.bands(@master([0, 4s])) - repr.bands(sample("../ref.wav")))
-    + 0.5*norm(repr.loudness(@master([0, 4s])) - repr.loudness(sample("../ref.wav")))' \\
+    + 0.5*norm(repr.loudness(@master([0, 4s])) - repr.loudness(sample("../ref.wav")))' \
     --vary gain=0..2/0.25 --vary cutoff=200hz..8000hz/1.25,log --rate 48000
   sva-cli solve 'sum(abs(repr.onsets(@score/song([0, 8s]))
-    - repr.onsets(sample("/tmp/take.wav"))))' \\
+    - repr.onsets(sample("/tmp/take.wav"))))' \
     --vary bpm=100..140/2 --set key=D3 --max-renders 60 --write --confirm
   sva-cli lint
   sva-cli lint '@master'
