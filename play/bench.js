@@ -1,4 +1,6 @@
-// Concern: opens a recording, navigates, plays and crops it, reads the crop with sva-wasm in a worker | Non-concern: the layout (bench.html), the readings (sva-wasm) | IO: (an audio file) -> a .txt
+// Concern: opens or records a sound, plays and crops it, reads the crop with sva-wasm in a worker | Non-concern: the layout (bench.html), the readings (sva-wasm) | IO: (a file or a share) -> a .txt
+
+import { capture } from "./capture.js";
 
 const RATE = 48000;
 const WASM = "./node_modules/@scalable-vector-audio/sva-wasm/sva_wasm.js";
@@ -31,7 +33,7 @@ async function worker() {
 function page() {
   const $ = (id) => document.getElementById(id);
   const canvas = $("wave");
-  const state = { run: 0, audio: null, file: "", start: 0, end: 0, peaks: null, readings: null, results: new Map(), asked: null, crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
+  const state = { run: 0, audio: null, file: "", by: "", start: 0, end: 0, peaks: null, readings: null, results: new Map(), asked: null, crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
   let context = null;
 
   function failed(error) {
@@ -344,35 +346,95 @@ function page() {
   });
   document.addEventListener("keyup", (event) => event.key === " " && !typing(event) && event.preventDefault());
 
-  const drop = $("drop");
-  drop.addEventListener("dragover", (event) => {
+  document.addEventListener("dragover", (event) => {
     event.preventDefault();
-    drop.classList.add("over");
+    document.body.classList.add("over");
   });
-  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-  drop.addEventListener("drop", (event) => {
+  document.addEventListener("dragleave", (event) => event.relatedTarget === null && document.body.classList.remove("over"));
+  document.addEventListener("drop", (event) => {
     event.preventDefault();
-    drop.classList.remove("over");
-    if (!event.dataTransfer.files[0]) return;
+    document.body.classList.remove("over");
+    if (!event.dataTransfer.files[0] || recording !== null) return;
     $("file").files = event.dataTransfer.files;
     opened(event.dataTransfer.files[0]);
   });
   $("file").addEventListener("change", () => $("file").files[0] && opened($("file").files[0]));
 
-  // A file that does not decode leaves no recording open and says why; a failure of the page itself stays shown.
   async function opened(file) {
     stopped();
-    const fatal = document.body.dataset.state === "failed";
-    if (!fatal) $("failure").textContent = "";
     context ??= new AudioContext({ sampleRate: RATE });
-    let audio = null;
+    let audio;
     try {
       audio = await context.decodeAudioData(await file.arrayBuffer());
     } catch (error) {
-      if (!fatal) $("failure").textContent = `${file.name} does not decode in this browser: ${error.message}`;
+      return loaded(file.name, null, "", `${file.name} does not decode in this browser: ${error.message}`);
     }
+    loaded(file.name, audio, "decodeAudioData, which resamples to the AudioContext's rate; the file's own rate is not read");
+  }
+
+  // Null when idle, "asking" while the picker is open, then the capture until it is stopped. Opening a file waits for it.
+  let recording = null;
+  $("record").addEventListener("click", async () => {
+    if (recording === "asking") return;
+    if (recording) return recording.stop();
+    stopped();
+    context ??= new AudioContext({ sampleRate: RATE });
+    recording = "asking";
+    $("file").disabled = true;
+    if (document.body.dataset.state !== "failed") $("failure").textContent = "";
+    try {
+      recording = await capture(context);
+    } catch (error) {
+      recording = null;
+      $("file").disabled = false;
+      // A cancelled picker is the user's choice, not a failure.
+      if (error.name !== "NotAllowedError" && document.body.dataset.state !== "failed") $("failure").textContent = error.message;
+      return;
+    }
+    $("record").textContent = "Stop";
+    const planes = await recording.done;
+    recording = null;
+    $("file").disabled = false;
+    $("record").textContent = "Record";
+    $("file").value = "";
+    const name = `recording-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}`;
+    if (!planes[0]?.length) return loaded(name, null, "", "Nothing was recorded.");
+    const span = audible(planes);
+    if (!span) return loaded(name, null, "", `The recording is silent: nothing rose above ${FLOOR_DB} dBFS.`);
+    const audio = new AudioBuffer({ numberOfChannels: planes.length, length: planes[0].length, sampleRate: RATE });
+    planes.forEach((plane, c) => audio.copyToChannel(plane, c));
+    loaded(name, audio, "getDisplayMedia's audio track, recorded as PCM at the AudioContext's rate");
+    [state.start, state.end] = span;
+    selectionShown();
+    viewed(state.start, state.end - state.start);
+  });
+
+  // Strip silence: audible is above TRIM_DB under the peak (Audacity's old Truncate Silence default) and FLOOR_DB.
+  const TRIM_DB = -40;
+  const FLOOR_DB = -60;
+  const MARGIN = 0.01;
+  function audible(planes) {
+    const peak = Math.max(...planes.map((plane) => plane.reduce((high, v) => Math.max(high, Math.abs(v)), 0)));
+    const floor = Math.max(peak * 10 ** (TRIM_DB / 20), 10 ** (FLOOR_DB / 20));
+    let first = Infinity;
+    let last = -1;
+    for (const plane of planes) {
+      const at = plane.findIndex((v) => Math.abs(v) > floor);
+      if (at < 0) continue;
+      first = Math.min(first, at);
+      last = Math.max(last, plane.findLastIndex((v) => Math.abs(v) > floor));
+    }
+    if (last < 0) return null;
+    const margin = Math.round(MARGIN * RATE);
+    return [Math.max(0, first - margin), Math.min(planes[0].length, last + 1 + margin)];
+  }
+
+  // A sound that did not open leaves none open and says why; a failure of the page itself stays shown.
+  function loaded(file, audio, by, failure = "") {
+    const fatal = document.body.dataset.state === "failed";
+    if (!fatal) $("failure").textContent = failure;
     state.run += 1;
-    Object.assign(state, { audio, file: file.name, crop: null, start: 0, end: 0, view: { from: 0, span: audio?.length ?? 1 }, peaks: null, results: new Map(), asked: null });
+    Object.assign(state, { audio, file, by, crop: null, start: 0, end: 0, view: { from: 0, span: audio?.length ?? 1 }, peaks: null, results: new Map(), asked: null });
     $("download").disabled = true;
     shown();
     canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
@@ -435,7 +497,7 @@ function page() {
     }
     const output = {
       file: state.file,
-      decoded: { sample_rate: RATE, channels: state.audio.numberOfChannels, by: "decodeAudioData, which resamples to the AudioContext's rate; the file's own rate is not read" },
+      decoded: { sample_rate: RATE, channels: state.audio.numberOfChannels, by: state.by },
       crop: { start_secs: secs(state.crop.start), end_secs: secs(state.crop.end), samples: state.crop.end - state.crop.start },
       readings,
     };

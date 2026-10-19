@@ -366,7 +366,7 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/site/node_modules/@scalable-vector-audio"
-          cp play/index.html play/play.js play/payload.mjs play/bench.html play/bench.js "$RUNNER_TEMP/site/"
+          cp play/index.html play/play.js play/payload.mjs play/bench.html play/bench.js play/capture.js "$RUNNER_TEMP/site/"
           cp -r play/node_modules/@scalable-vector-audio/sva-wasm "$RUNNER_TEMP/site/node_modules/@scalable-vector-audio/"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
