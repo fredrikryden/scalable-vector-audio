@@ -374,6 +374,8 @@ function page() {
 
   // Null when idle, "asking" while the picker is open, then the capture until it is stopped. Opening a file waits for it.
   let recording = null;
+  // Mobile browsers and some embedded views have no screen sharing, so nothing there can record.
+  $("record").hidden = !navigator.mediaDevices?.getDisplayMedia;
   $("record").addEventListener("click", async () => {
     if (recording === "asking") return;
     if (recording) return recording.stop();
