@@ -1,4 +1,4 @@
-// Concern: decodes a dropped recording, crops and plays it, reads the crop with sva-wasm in a worker | Non-concern: the layout (bench.html), the readings (sva-wasm) | IO: (a dropped file) -> a .txt
+// Concern: opens a recording, navigates, plays and crops it, reads the crop with sva-wasm in a worker | Non-concern: the layout (bench.html), the readings (sva-wasm) | IO: (an audio file) -> a .txt
 
 const RATE = 48000;
 const WASM = "./node_modules/@scalable-vector-audio/sva-wasm/sva_wasm.js";
@@ -31,17 +31,12 @@ async function worker() {
 function page() {
   const $ = (id) => document.getElementById(id);
   const canvas = $("wave");
-  const state = { run: 0, audio: null, file: "", start: 0, end: 0, peaks: null, readings: null, results: new Map(), asked: null, playing: null, anchor: null, view: { from: 0, span: 1 } };
+  const state = { run: 0, audio: null, file: "", start: 0, end: 0, peaks: null, readings: null, results: new Map(), asked: null, crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
   let context = null;
-
-  function said(text, bad = false) {
-    $("status").textContent = text;
-    $("status").className = bad ? "bad" : "";
-  }
 
   function failed(error) {
     console.error(error);
-    said(String(error?.message ?? error), true);
+    $("failure").textContent = String(error?.message ?? error);
     document.body.dataset.state = "failed";
   }
 
@@ -54,19 +49,15 @@ function page() {
     if (data.run !== undefined && data.run !== state.run) return;
     if (data.readings) {
       state.readings = data.readings;
-      said(state.audio ? "Ready." : "Ready: drop an audio file.");
       document.body.dataset.state = "ready";
       enabled();
     } else if (data.done) {
-      const refused = [...state.results.values()].filter((r) => r.refusal).length;
-      said(`Read ${state.results.size} readings of the crop${refused ? `, ${refused} refused` : ""}.`);
       $("download").disabled = false;
       document.body.dataset.state = "done";
       enabled();
     } else {
       state.results.set(data.call, data);
       shown();
-      said(`Read ${state.results.size} of ${state.asked.length}: ${data.call}.`);
     }
   };
 
@@ -79,11 +70,15 @@ function page() {
   const secs = (samples) => samples / RATE;
   const fixed = (s) => s.toFixed(3);
   const clamp = (v, low, high) => Math.min(high, Math.max(low, v));
-  const RULER = 18;
+  const RULER = 24;
+  /** A scrub grain's length and the shortest gap between grains, in seconds. */
+  const GRAIN = 0.08;
+  const GRAIN_EVERY = 0.06;
 
   function selectionShown() {
     $("start").value = fixed(secs(state.start));
     $("length").value = fixed(secs(state.end - state.start));
+    $("readings").classList.toggle("stale", Boolean(state.crop) && (state.crop.start !== state.start || state.crop.end !== state.end));
     enabled();
   }
 
@@ -145,10 +140,13 @@ function page() {
     ruled(g, top, color);
     g.fillStyle = color("--line");
     g.fillRect(xOf(state.start), top, Math.max(0, xOf(state.end) - xOf(state.start)), wave);
-    g.fillStyle = color("--ink");
+    const [played, upTo] = state.playing ? [xOf(state.playing.at), xOf(state.playing.now)] : [0, 0];
+    const ink = color("--ink");
+    const mark = color("--mark");
     for (let x = 0; x < width; x++) {
       const high = top + ((1 - state.peaks[2 * x + 1]) / 2) * wave;
       const low = top + ((1 - state.peaks[2 * x]) / 2) * wave;
+      g.fillStyle = x >= played && x < upTo ? mark : ink;
       g.fillRect(x, high, 1, Math.max(1, low - high));
     }
     g.fillStyle = color("--mark");
@@ -156,7 +154,29 @@ function page() {
       const x = Math.min(width - 2 * devicePixelRatio, xOf(at));
       g.fillRect(x, top, 2 * devicePixelRatio, wave);
     }
-    if (state.playing) g.fillRect(xOf(state.playing.now), 0, devicePixelRatio, height);
+    const head = state.scrub?.at ?? state.playing?.now;
+    if (head !== undefined) g.fillRect(xOf(head), 0, devicePixelRatio, height);
+    if (state.hover !== null) hovered(g, top, color);
+  }
+
+  /** The pointer's time over the canvas, and on the ruler the span a click would seek across. */
+  function hovered(g, top, color) {
+    const x = Math.round(xOf(state.hover.at));
+    if (state.hover.ruler && state.playing && !state.scrub) {
+      g.fillStyle = color("--mark");
+      g.globalAlpha = 0.25;
+      g.fillRect(Math.min(x, xOf(state.playing.now)), 0, Math.abs(x - xOf(state.playing.now)), top);
+      g.globalAlpha = 1;
+    }
+    g.fillStyle = color("--muted");
+    g.fillRect(x, 0, devicePixelRatio, canvas.height);
+    const text = fixed(secs(state.hover.at));
+    const w = g.measureText(text).width + 8 * devicePixelRatio;
+    const left = x + w + 2 * devicePixelRatio > canvas.width ? x - w - devicePixelRatio : x + devicePixelRatio;
+    g.fillStyle = color("--ink");
+    g.fillRect(left, top, w, 16 * devicePixelRatio);
+    g.fillStyle = color("--surface");
+    g.fillText(text, left + 4 * devicePixelRatio, top + 2 * devicePixelRatio);
   }
 
   /** Moves the playhead each frame; when it runs off the right of the view, the view pages after it. */
@@ -190,21 +210,61 @@ function page() {
     return near(state.start) ? "start" : near(state.end) ? "end" : null;
   };
 
-  // Audacity's selection: a click places the cursor, a drag selects, a drag at an edge moves that edge.
+  const onRuler = (event) => event.clientY - canvas.getBoundingClientRect().top < RULER;
+
+  /** One short faded slice of the recording at the scrub position, so a drag on the ruler is heard where it is. */
+  function grained() {
+    if (context.currentTime < state.scrub.next) return;
+    context.resume();
+    const t = context.currentTime;
+    const gain = new GainNode(context, { gain: 0 });
+    gain.gain.linearRampToValueAtTime(1, t + 0.005);
+    gain.gain.setValueAtTime(1, t + GRAIN - 0.01);
+    gain.gain.linearRampToValueAtTime(0, t + GRAIN);
+    const source = new AudioBufferSourceNode(context, { buffer: state.audio });
+    source.connect(gain).connect(context.destination);
+    source.start(t, secs(state.scrub.at), GRAIN);
+    state.scrub.next = t + GRAIN_EVERY;
+  }
+
+  // The ruler scrubs and seeks; below it a click places the cursor, a drag selects, a drag at an edge moves that edge.
   canvas.addEventListener("pointerdown", (event) => {
     if (!state.audio || event.button !== 0) return;
-    // A click on the ruler plays from there to the end and leaves the selection, as a DAW's timeline does.
-    if (event.clientY - canvas.getBoundingClientRect().top < RULER) return playing(sampleAt(event), state.audio.length);
+    canvas.setPointerCapture(event.pointerId);
+    if (onRuler(event)) {
+      stopped();
+      state.scrub = { at: sampleAt(event), next: 0 };
+      grained();
+      return drawn();
+    }
     const edge = edgeAt(event);
     state.anchor = edge === "start" ? state.end : edge === "end" ? state.start : sampleAt(event);
-    canvas.setPointerCapture(event.pointerId);
     moved(event);
   });
   canvas.addEventListener("pointermove", (event) => {
-    if (state.anchor !== null) moved(event);
-    else if (state.audio) canvas.style.cursor = event.clientY - canvas.getBoundingClientRect().top < RULER ? "pointer" : edgeAt(event) ? "ew-resize" : "text";
+    if (!state.audio) return;
+    state.hover = { at: sampleAt(event), ruler: onRuler(event) };
+    if (state.scrub) {
+      state.scrub.at = state.hover.at;
+      grained();
+    } else if (state.anchor !== null) return moved(event);
+    else canvas.style.cursor = state.hover.ruler ? "pointer" : edgeAt(event) ? "ew-resize" : "text";
+    drawn();
   });
-  for (const type of ["pointerup", "pointercancel"]) canvas.addEventListener(type, () => (state.anchor = null));
+  canvas.addEventListener("pointerleave", () => {
+    state.hover = null;
+    drawn();
+  });
+  for (const type of ["pointerup", "pointercancel"]) {
+    canvas.addEventListener(type, () => {
+      state.anchor = null;
+      if (!state.scrub) return;
+      const { at } = state.scrub;
+      state.scrub = null;
+      if (type === "pointerup") playing(at, state.audio.length);
+      else drawn();
+    });
+  }
 
   function moved(event) {
     const at = sampleAt(event);
@@ -290,31 +350,37 @@ function page() {
     drop.classList.add("over");
   });
   drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-  drop.addEventListener("drop", async (event) => {
+  drop.addEventListener("drop", (event) => {
     event.preventDefault();
     drop.classList.remove("over");
-    const file = event.dataTransfer.files[0];
-    if (!file) return;
+    if (!event.dataTransfer.files[0]) return;
+    $("file").files = event.dataTransfer.files;
+    opened(event.dataTransfer.files[0]);
+  });
+  $("file").addEventListener("change", () => $("file").files[0] && opened($("file").files[0]));
+
+  // A file that does not decode leaves no recording open and says why; a failure of the page itself stays shown.
+  async function opened(file) {
     stopped();
+    const fatal = document.body.dataset.state === "failed";
+    if (!fatal) $("failure").textContent = "";
     context ??= new AudioContext({ sampleRate: RATE });
-    said(`Decoding ${file.name}.`);
+    let audio = null;
     try {
-      state.audio = await context.decodeAudioData(await file.arrayBuffer());
+      audio = await context.decodeAudioData(await file.arrayBuffer());
     } catch (error) {
-      failed(`${file.name} does not decode in this browser: ${error.message}`);
-      return;
+      if (!fatal) $("failure").textContent = `${file.name} does not decode in this browser: ${error.message}`;
     }
     state.run += 1;
-    Object.assign(state, { file: file.name, start: 0, end: 0, view: { from: 0, span: state.audio.length }, peaks: null, results: new Map(), asked: null });
-    drop.textContent = `${file.name}: ${state.audio.numberOfChannels} channels, ${fixed(state.audio.duration)} s. Drop another to replace it.`;
+    Object.assign(state, { audio, file: file.name, crop: null, start: 0, end: 0, view: { from: 0, span: audio?.length ?? 1 }, peaks: null, results: new Map(), asked: null });
     $("download").disabled = true;
     shown();
-    selectionShown();
+    canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    if (audio) selectionShown();
     drawn();
-    said(state.readings ? "Ready." : "Loading sva-wasm.");
-    document.body.dataset.state = state.readings ? "ready" : "loading";
+    if (!fatal) document.body.dataset.state = state.readings ? "ready" : "loading";
     enabled();
-  });
+  }
 
   $("run").addEventListener("click", () => {
     stopped();
@@ -328,7 +394,7 @@ function page() {
     $("download").disabled = true;
     enabled();
     shown();
-    said(`Reading ${state.asked.length} readings of the crop.`);
+    selectionShown();
     analyst.postMessage({ run: state.run, target: targetOf(), channels, calls: state.asked }, channels.map((c) => c.buffer));
   });
 
