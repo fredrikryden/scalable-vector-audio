@@ -184,6 +184,45 @@ fn a_representation_crosses_as_the_object_the_cli_puts_under_data() {
     );
 }
 
+/// PCM a page holds is read as `sva-cli analyze` reads a file: the same `data` object, the
+/// same refusal of a reading that needs a graph, and channels of one length.
+#[wasm_bindgen_test]
+fn pcm_a_page_holds_is_analyzed_as_the_cli_analyzes_a_file() {
+    let tone: Vec<f32> = (0..8000)
+        .map(|i| (std::f64::consts::TAU * 220.0 * f64::from(i) / 8000.0).sin() as f32 * 0.5)
+        .collect();
+    let channels = |planes: &[&[f32]]| -> js_sys::Array {
+        planes
+            .iter()
+            .map(|p| JsValue::from(js_sys::Float32Array::from(*p)))
+            .collect()
+    };
+    let asked = |names: &[&str]| names.iter().map(|n| (*n).to_string()).collect::<Vec<_>>();
+    let read = sva_wasm::analyze(
+        "crop.wav",
+        8000,
+        channels(&[&tone, &tone]),
+        asked(&["envelope", "stereo"]),
+    )
+    .unwrap_or_else(|e| unreachable!("a tone analyzes: {}", as_text(&field(&e, "refusal"))));
+    let spelled = as_text(&read);
+    assert!(
+        spelled.contains("\"target\":\"crop.wav\"") && spelled.contains("\"stereo\":"),
+        "the CLI's own keys: {spelled}"
+    );
+    assert_eq!(field(&read, "sample_rate").as_f64(), Some(8000.0));
+
+    let graph = sva_wasm::analyze("crop.wav", 8000, channels(&[&tone]), asked(&["ledger"]));
+    refused_as(graph.err(), "query.not_analyzable");
+    let uneven = sva_wasm::analyze(
+        "crop.wav",
+        8000,
+        channels(&[&tone, &tone[..10]]),
+        asked(&["envelope"]),
+    );
+    refused_as(uneven.err(), "wasm.bad_argument");
+}
+
 /// `set` reads a reserved variable as the text it names, as `sva-cli render --set` does.
 #[wasm_bindgen_test]
 fn a_render_sets_a_reserved_variable_without_inserting_it() {

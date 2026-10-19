@@ -3,10 +3,8 @@
 use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
-use sva_core::{Asked, Call, CliError, Destination, asked_all, calls, is_wav, wav_path};
-use sva_engine::READINGS;
-
 use super::{AnalyzeArgs, CacheAt, Command, RenderArgs, value};
+use sva_core::{Asked, Call, CliError, Destination, asked_all, calls, is_wav, wav_path};
 
 /// What `render` and `analyze` both read: the calls asked for, and `--confirm`.
 #[derive(Default)]
@@ -35,28 +33,13 @@ impl Flags {
         Ok(true)
     }
 
-    /// `off_file` keeps to the readings a file's samples answer alone, and to files.
+    /// `off_file` keeps a device to a render.
     fn resolved(&self, off_file: bool) -> Result<Vec<Asked>, CliError> {
         let out = asked_all(&self.calls)?;
         for one in &out {
             if let Some(Destination::Alsa { device, .. }) = &one.dest {
                 refuse_device(&one.name, device, off_file)?;
             }
-        }
-        if let Some(one) = out.iter().find(|one| off_file && !one.off_samples(true)) {
-            let answered: Vec<&str> = READINGS
-                .iter()
-                .filter(|row| row.reads.off_samples(true))
-                .map(|row| row.name)
-                .collect();
-            return Err(CliError::usage(
-                "query.not_analyzable",
-                format!(
-                    "`analyze` does not answer `{}` — only {} need no rendered graph",
-                    one.name,
-                    answered.join(", ")
-                ),
-            ));
         }
         Ok(out)
     }
@@ -143,6 +126,7 @@ pub(super) fn analyze_args(rest: &[String]) -> Result<Command, CliError> {
         ));
     }
     let asked = flags.resolved(true)?;
+    sva_core::analyzable(&asked)?;
     refuse_shared_destination(asked.iter().filter_map(Asked::path))?;
     if asked.is_empty() {
         return Err(CliError::usage(

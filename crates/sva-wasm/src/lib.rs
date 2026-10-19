@@ -4,11 +4,13 @@
 //! than read. A refusal crosses as a thrown `Error`: `name` is the CLI's error code,
 //! `refusal` the envelope it would print.
 
+mod analyze;
 mod describe;
 mod opfs;
 mod stats;
 mod threads;
 
+pub use analyze::analyze;
 pub use describe::{outline, readings};
 pub use opfs::DirectoryHandle;
 pub use stats::{subscribe, unsubscribe};

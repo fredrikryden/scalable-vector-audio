@@ -486,12 +486,14 @@ DEFAULTS:
   dissonance(pairs=<n>) the most partial pairs one frame sums before it refuses.
                        Default {DEFAULT_MAX_PAIRS}.
   periodicity(window=<t>) the span of onset strength one window autocorrelates,
-                       in seconds, at least twice the longest period it reads.
+                       in seconds, at least twice the shortest period it reads;
+                       it reads periods up to half its span.
                        Default {DEFAULT_PERIODICITY_WINDOW_SECS}.
   periodicity(curve=<0|1>) `1` adds every window's height at every lag.
                        Default 0.
   modulation(window=<t>) the span of band envelope one window transforms, in
-                       seconds, at least twice the slowest period it reads.
+                       seconds, at least twice the fastest rate's period; it
+                       reads rates down to two periods per span.
                        Default {DEFAULT_MODULATION_WINDOW_SECS}.
   modulation(bpm=<n>)  a tempo, as `140`, adding each rate's period in beats.
                        Default none.

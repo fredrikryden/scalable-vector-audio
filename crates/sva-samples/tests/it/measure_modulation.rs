@@ -192,10 +192,10 @@ fn silence_reads_no_peak_and_no_centroid() {
 fn a_window_under_two_periods_and_a_target_under_the_window_refuse() {
     let samples = vec![0.0; (3.0 * RATE) as usize];
     assert_eq!(
-        measure(&[&samples[..]], RATE, 0.0, 0.5, 3.0, None),
+        measure(&[&samples[..]], RATE, 0.0, 0.5, 0.05, None),
         Err(Unread::WindowUnderTwoPeriods {
-            window_secs: 3.0,
-            least_secs: 4.0
+            window_secs: 0.05,
+            least_secs: 0.1
         })
     );
     assert_eq!(
@@ -203,7 +203,7 @@ fn a_window_under_two_periods_and_a_target_under_the_window_refuse() {
         Err(Unread::TargetShorterThanWindow {
             held_secs: 3.0,
             window_secs: 4.0,
-            least_secs: 4.0
+            least_secs: 0.1
         })
     );
 }

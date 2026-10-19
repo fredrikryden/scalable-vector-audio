@@ -384,7 +384,8 @@ static PERIODICITY: Reading = Reading {
     takes: &[Arg::Frame, Arg::Window, Arg::Curve],
     reads: Reads::Samples,
     help: "how strongly its onset strength repeats per sliding window, broadband, under 150 Hz \
-           and over: the leading periods in seconds and bpm with their bounds, their \
+           and over: the leading periods up to 2 s, or half the window, in seconds and bpm \
+           with their bounds, their \
            autocorrelation heights, the drift between windows; every channel's band energy \
            averaged",
     build: |g| Representation::Periodicity {
@@ -399,7 +400,8 @@ static MODULATION: Reading = Reading {
     takes: &[Arg::Frame, Arg::Window, Arg::Bpm],
     reads: Reads::Samples,
     help: "how its band envelopes move per sliding window, under 150 Hz, to 2 kHz and over: \
-           the leading modulation rates from 0.5 to 20 Hz, in beats where `bpm` is given, \
+           the leading modulation rates from 0.5 Hz, or the slowest two of whose periods the \
+           window holds, to 20 Hz, in beats where `bpm` is given, \
            their depth as a modulation index, each with its bounds, the level, and the \
            spectral centroid's mean and its own swing in Hz; every channel's band energy \
            averaged",

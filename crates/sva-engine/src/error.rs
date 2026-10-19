@@ -468,7 +468,7 @@ pub static REGISTRY: [(&str, &str); 101] = [
     ),
     (
         "read.window_under_two_periods",
-        "a sliding-window reading's window under twice the longest period it reads",
+        "a sliding-window reading's window under twice the shortest period it reads",
     ),
     (
         "read.target_under_window",

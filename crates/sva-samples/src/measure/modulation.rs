@@ -38,7 +38,10 @@ pub const MODEL: &str = "modulation spectrum: the spectrum of each band's amplit
                          Signal Process. 2003(7) 668-675, read over the 0.5-20 Hz modulation \
                          range the envelope filterbank of Dau, T., Kollmeier, B. and \
                          Kohlrausch, A. (1997), Modeling auditory processing of amplitude \
-                         modulation I, J. Acoust. Soc. Am. 102(5) 2892-2905, models. Envelopes: \
+                         modulation I, J. Acoust. Soc. Am. 102(5) 2892-2905, models, as much \
+                         of it as the window holds two periods of: `min_hz` is the higher of \
+                         0.5 Hz and 2 / `window_secs`, and a window under two periods of \
+                         `max_hz` reads nothing and refuses. Envelopes: \
                          the RMS of each ERB band of `bands` (Glasberg and Moore's filter \
                          widths), its energy smoothed by `smoothing.poles` one-pole lowpasses at \
                          `smoothing.hz` in place of the one at the band's own width, decimated \
@@ -228,7 +231,7 @@ pub fn measure(
     bpm: Option<f64>,
 ) -> Result<Modulation, Unread> {
     let held = crate::measure::held(planes);
-    sliding::fits(held, sample_rate, window_secs, 1.0 / MIN_HZ)?;
+    sliding::fits(held, sample_rate, window_secs, 1.0 / MAX_HZ)?;
     let split = bands::smoothed(planes, sample_rate, start_secs, SMOOTHING);
     let lowpass = Lowpass::new(split.rate_hz);
     let groups = grouped(&split, &lowpass);

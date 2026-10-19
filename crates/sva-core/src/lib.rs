@@ -1,5 +1,6 @@
 // Concern: the parse->tempo->render pipeline shared by both front ends | Non-concern: argv (sva-cli), JS bindings (sva-wasm) | IO: (a Source, a target) -> Rendered, a Stream or CliError
 
+mod analyze;
 mod answer;
 mod builtins;
 mod cli_error;
@@ -14,6 +15,7 @@ mod song;
 mod target;
 mod until;
 
+pub use analyze::{analyzable, analyzed};
 pub use answer::{
     Played, Printed, Report, SAMPLE_LIMIT, answer_json, counters_json, engine_stats_json,
     label_json, query_data, stats_json, stream_stats_json, value_json, work_json,

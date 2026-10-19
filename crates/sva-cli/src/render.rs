@@ -4,9 +4,9 @@ use std::path::Path;
 
 use sva_core::{
     Answer, Asked, CliError, Destination, Diagnostic, Hear, Job, Output, Printed, Report,
-    SAMPLE_LIMIT, Session, Tier, cwd, execute_over, query_data,
+    SAMPLE_LIMIT, Session, Tier, analyzed, cwd, execute_over, query_data,
 };
-use sva_engine::{Buffer, PSYCHOACOUSTIC_V1, answer_buffer, cache_log};
+use sva_engine::{Buffer, PSYCHOACOUSTIC_V1, cache_log};
 
 use crate::args::{AnalyzeArgs, RenderArgs};
 use crate::destination::{Framing, refuse_inside, refuse_replacing, write};
@@ -195,14 +195,13 @@ pub fn analyze(args: &AnalyzeArgs) -> Result<String, CliError> {
     }
     let (planes, rate) = read_channels(&args.path)?;
     let target = args.path.display().to_string();
-    let held = Buffer::of_planes(
+    let buffer = Buffer::of_planes(
         rate,
         planes
             .iter()
             .map(|p| p.iter().map(|v| f64::from(*v)).collect())
             .collect(),
     );
-    let buffer = held;
     let interval = Some((0.0, buffer.len() as f64 / f64::from(rate)));
     let framing = Framing {
         target: target.clone(),
@@ -214,18 +213,7 @@ pub fn analyze(args: &AnalyzeArgs) -> Result<String, CliError> {
         replace: args.confirm,
     };
 
-    let mut taken = Vec::with_capacity(args.asked.len());
-    for asked in &args.asked {
-        taken.push(
-            answer_buffer(
-                &target,
-                &buffer,
-                asked.representation(rate, None)?,
-                PSYCHOACOUSTIC_V1.name,
-            )
-            .map_err(CliError::Engine)?,
-        );
-    }
+    let taken = analyzed(&target, &buffer, &args.asked)?;
     let (answers, written) = routed(&args.asked.iter().collect::<Vec<_>>(), taken, &framing)?;
     Ok(success_envelope(
         &query_data(&Report {

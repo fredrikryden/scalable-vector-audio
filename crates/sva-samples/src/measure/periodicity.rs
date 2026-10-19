@@ -10,7 +10,7 @@ use crate::stft::hann_periodic;
 pub const SPLIT_HZ: f64 = 150.0;
 /// 600 bpm, a sixteenth at 150 bpm.
 pub const MIN_PERIOD_SECS: f64 = 0.1;
-/// 30 bpm.
+/// 30 bpm, where the window holds two of it.
 pub const MAX_PERIOD_SECS: f64 = 2.0;
 pub const PEAKS: usize = 3;
 /// Each band's energy through two one-poles at 10 Hz before it is decimated: a sustained
@@ -53,7 +53,9 @@ pub const MODEL: &str = "onset strength: the spectral flux `onsets` takes, sum o
                          peak by up to a quarter lag, and the bias toward short lags is gone \
                          (Harris, F. J. (1978), On the use of windows for harmonic analysis \
                          with the discrete Fourier transform, Proc. IEEE 66(1) 51-83). peaks: \
-                         lags L from `min_period_secs` to `max_period_secs` whose height is \
+                         lags L from `min_period_secs` to `max_period_secs`, the shorter of \
+                         2 s and half `window_secs` so the window holds two of every period \
+                         read (a window under two of `min_period_secs` refuses), whose height is \
                          positive and whose place is over the lag before's and no lower than \
                          the lag after's, the highest three by height, highest first, each \
                          with the plain curve's height at L. period: L + d lags of \
@@ -169,14 +171,9 @@ pub fn measure(
     curve: bool,
 ) -> Result<Periodicity, Unread> {
     let held = crate::measure::held(planes);
-    sliding::fits(held, sample_rate, window_secs, MAX_PERIOD_SECS)?;
+    sliding::fits(held, sample_rate, window_secs, MIN_PERIOD_SECS)?;
     let split = bands::smoothed(planes, sample_rate, start_secs, SMOOTHING);
     let rate = split.rate_hz;
-    let lags = Lags {
-        min: (MIN_PERIOD_SECS * rate).ceil() as usize,
-        max: (MAX_PERIOD_SECS * rate).floor() as usize,
-        rate,
-    };
     let len = split.bands.first().map_or(0, |b| b.rms.len());
     let grid = sliding::spans(
         held,
@@ -188,6 +185,11 @@ pub fn measure(
         len,
     );
     let size = (grid.window_secs * rate).round() as usize;
+    let lags = Lags {
+        min: (MIN_PERIOD_SECS * rate).ceil() as usize,
+        max: (MAX_PERIOD_SECS.min(grid.window_secs / 2.0) * rate).floor() as usize,
+        rate,
+    };
     let tracks = Group::ALL
         .into_iter()
         .zip(envelopes(&split))

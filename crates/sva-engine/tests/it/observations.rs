@@ -807,26 +807,21 @@ fn a_closed_forms_periodicity_is_measured_off_its_samples() {
 }
 
 /// A target under the window refuses under its own code, naming the interval that would
-/// read, and the shorter window only where one fits the target.
+/// read, and a window as long as the target only where that holds two of the shortest period.
 #[test]
 fn periodicity_of_a_target_under_its_window_names_the_remedies_that_read() {
-    let (law, asked) = periodicity_of("periodic-short", 1.0);
-    let refused = answer(&law, law.id("node").expect("the root"), asked).expect_err("1 s < 4 s");
+    let (law, asked) = periodicity_of("periodic-short", 0.1);
+    let refused = answer(&law, law.id("node").expect("the root"), asked).expect_err("0.1 s < 4 s");
     assert_eq!(refused.code(), "read.target_under_window");
     let said = format!("{refused}");
     assert!(said.contains("([0, 4s])"), "{said}");
     assert!(!said.contains("periodicity(window="), "{said}");
-    assert!(said.contains("no window under 4s holds"), "{said}");
-    let wide = Representation::Periodicity {
-        frame_secs: 0.5,
-        window_secs: 6.0,
-        curve: false,
-    };
-    let (law, _) = periodicity_of("periodic-five", 5.0);
-    let refused = answer(&law, law.id("node").expect("the root"), wide).expect_err("5 s < 6 s");
+    assert!(said.contains("no window under 0.2s holds"), "{said}");
+    let (law, asked) = periodicity_of("periodic-one", 1.0);
+    let refused = answer(&law, law.id("node").expect("the root"), asked).expect_err("1 s < 4 s");
     let said = format!("{refused}");
-    assert!(said.contains("([0, 6s])"), "{said}");
-    assert!(said.contains("periodicity(window=4s)"), "{said}");
+    assert!(said.contains("([0, 4s])"), "{said}");
+    assert!(said.contains("periodicity(window=1s)"), "{said}");
 }
 
 fn modulation_of(name: &str, window_secs: f64) -> (Render, Representation) {
@@ -873,14 +868,15 @@ fn a_closed_forms_modulation_is_measured_off_its_samples() {
     }
 }
 
-/// A window under two periods of the slowest rate refuses, naming the window that would read.
+/// A window under two periods of the fastest rate refuses, naming the window that would read.
 #[test]
 fn modulation_under_two_periods_names_the_least_window() {
-    let (law, asked) = modulation_of("tremolo-narrow", 3.0);
-    let refused = answer(&law, law.id("node").expect("the root"), asked).expect_err("3 s < 4 s");
+    let (law, asked) = modulation_of("tremolo-narrow", 0.05);
+    let refused =
+        answer(&law, law.id("node").expect("the root"), asked).expect_err("0.05 s < 0.1 s");
     assert_eq!(refused.code(), "read.window_under_two_periods");
     let said = format!("{refused}");
-    assert!(said.contains("modulation(window=4s)"), "{said}");
+    assert!(said.contains("modulation(window=0.1s)"), "{said}");
 }
 
 fn self_similarity_of(name: &str, frame_secs: f64, cell_secs: f64) -> (Render, Representation) {

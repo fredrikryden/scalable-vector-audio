@@ -240,10 +240,10 @@ fn silence_reads_no_period() {
 fn a_window_under_two_periods_and_a_target_under_the_window_refuse() {
     let samples = vec![0.0; (3.0 * RATE) as usize];
     assert_eq!(
-        measure(&[&samples[..]], RATE, 0.0, 0.5, 3.0, false),
+        measure(&[&samples[..]], RATE, 0.0, 0.5, 0.1, false),
         Err(Unread::WindowUnderTwoPeriods {
-            window_secs: 3.0,
-            least_secs: 4.0
+            window_secs: 0.1,
+            least_secs: 0.2
         })
     );
     assert_eq!(
@@ -251,7 +251,7 @@ fn a_window_under_two_periods_and_a_target_under_the_window_refuse() {
         Err(Unread::TargetShorterThanWindow {
             held_secs: 3.0,
             window_secs: 4.0,
-            least_secs: 4.0
+            least_secs: 0.2
         })
     );
 }

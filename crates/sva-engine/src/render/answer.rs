@@ -387,7 +387,7 @@ fn unread(
         } => (
             "read.window_under_two_periods",
             format!(
-                "a {window_secs}s window holds under two of the longest period `{reading}` \
+                "a {window_secs}s window holds under two of the shortest period `{reading}` \
                  reads, {}s",
                 least_secs / 2.0
             ),
@@ -404,12 +404,12 @@ fn unread(
             format!("the target holds {held_secs}s, under the {window_secs}s window"),
             match least_secs <= held_secs {
                 true => format!(
-                    "{}, or ask a window as short as {least_secs}s, as \
-                     `{reading}(window={least_secs}s)`",
+                    "{}, or ask a window as long as the target, as \
+                     `{reading}(window={held_secs}s)`",
                     longer(window_secs)
                 ),
                 false => format!(
-                    "{}; no window under {least_secs}s holds two of the longest period",
+                    "{}; no window under {least_secs}s holds two of the shortest period",
                     longer(window_secs)
                 ),
             },
