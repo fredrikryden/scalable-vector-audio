@@ -872,41 +872,22 @@ fn measured(
         }
         Representation::Ledger { depth } => Output::Ledger(attributed(render, node, depth)?),
         other => {
+            let name = render.tys.name(node);
+            let longer = |secs: f64| {
+                format!("render an interval of at least {secs}s, as `@x([0, {secs}s])` writes one")
+            };
+            let shorter = |secs: f64| {
+                format!("render an interval of at most {secs}s, as `@x([0, {secs}s])` writes one")
+            };
+            let faster = |hz: f64| format!("render at a rate over {hz} Hz, as `--rate 48000` asks");
             return off_buffer(buffer, other).map_err(|fault| match fault {
                 NoReading::NeedsAGraph => not_a_reading(render, node, other),
                 NoReading::WidthMismatch { need, held } => width_mismatch(render, node, need, held),
-                NoReading::Crowded(held) => crowded(render.tys.name(node), other, held),
-                NoReading::Unread(why) => unread(
-                    render.tys.name(node),
-                    other,
-                    why,
-                    |secs| {
-                        format!(
-                            "render an interval of at least {secs}s, as `@x([0, {secs}s])` \
-                             writes one"
-                        )
-                    },
-                    |hz| format!("render at a rate over {hz} Hz, as `--rate 48000` asks"),
-                ),
-                NoReading::RateUnder(held) => rate_under(render.tys.name(node), held, |hz| {
-                    format!("render at a rate over {hz} Hz, as `--rate 48000` asks")
-                }),
-                NoReading::UnderOrder(why) => under_order(render.tys.name(node), why, |secs| {
-                    format!(
-                        "render an interval of at least {secs}s, as `@x([0, {secs}s])` writes one"
-                    )
-                }),
-                NoReading::Unfit(why) => unfit(
-                    render.tys.name(node),
-                    why,
-                    |secs| {
-                        format!(
-                            "render an interval of at most {secs}s, as `@x([0, {secs}s])` \
-                             writes one"
-                        )
-                    },
-                    |hz| format!("render at a rate over {hz} Hz, as `--rate 48000` asks"),
-                ),
+                NoReading::Crowded(held) => crowded(name, other, held),
+                NoReading::Unread(why) => unread(name, other, why, longer, faster),
+                NoReading::RateUnder(held) => rate_under(name, held, faster),
+                NoReading::UnderOrder(why) => under_order(name, why, longer),
+                NoReading::Unfit(why) => unfit(name, why, shorter, faster),
             });
         }
     })
@@ -1288,6 +1269,9 @@ pub fn answer_buffer(
             help: "ask for a reading a buffer answers on its own".to_string(),
         })
     };
+    let longer = |secs: f64| format!("analyze a file holding at least {secs}s");
+    let shorter = |secs: f64| format!("analyze a file holding at most {secs}s");
+    let faster = |hz: f64| format!("analyze a file sampled over {hz} Hz");
     let value = off_buffer(buffer, representation).map_err(|fault| match fault {
         NoReading::NeedsAGraph => refused(
             "engine.observation_needs_a_graph",
@@ -1303,25 +1287,10 @@ pub fn answer_buffer(
             help: format!("analyze a file of exactly {need} channels"),
         }),
         NoReading::Crowded(held) => crowded(name, representation, held),
-        NoReading::Unread(why) => unread(
-            name,
-            representation,
-            why,
-            |secs| format!("analyze a file holding at least {secs}s"),
-            |hz| format!("analyze a file sampled over {hz} Hz"),
-        ),
-        NoReading::Unfit(why) => unfit(
-            name,
-            why,
-            |secs| format!("analyze a file holding at most {secs}s"),
-            |hz| format!("analyze a file sampled over {hz} Hz"),
-        ),
-        NoReading::RateUnder(held) => rate_under(name, held, |hz| {
-            format!("analyze a file sampled over {hz} Hz")
-        }),
-        NoReading::UnderOrder(why) => under_order(name, why, |secs| {
-            format!("analyze a file holding at least {secs}s")
-        }),
+        NoReading::Unread(why) => unread(name, representation, why, longer, faster),
+        NoReading::Unfit(why) => unfit(name, why, shorter, faster),
+        NoReading::RateUnder(held) => rate_under(name, held, faster),
+        NoReading::UnderOrder(why) => under_order(name, why, longer),
     })?;
     Ok(Answer::whole(
         value,
