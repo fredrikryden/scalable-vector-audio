@@ -6,8 +6,8 @@ use sva_ast::SpanUnit;
 use sva_ast::score::{Field, Kind, Reading as Folding, Refused, evaluate};
 use sva_engine::harmony::voice_leading::Norm;
 use sva_engine::{
-    Arg, DEFAULT_BUFFER_SECS, Given, MAX_PINNED_FRAME, READINGS, Reading, Representation,
-    pinned_frame,
+    Arg, DEFAULT_BUFFER_SECS, DEFAULT_PRUNE_DB, Given, LEAST_PRUNE_DB, MAX_PINNED_FRAME, READINGS,
+    Reading, Representation, pinned_frame,
 };
 
 use crate::cli_error::CliError;
@@ -299,12 +299,16 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
             Arg::Skim => skim = switch(raw, key)?,
             Arg::Node => node = Some(self::node(raw)?),
             Arg::Buffer => buffer = Some(microseconds(raw, key)?),
-            Arg::Floor => given.floor_db = decibels(raw, key)?,
+            Arg::Floor => given.floor_db = Some(decibels(raw, key)?),
+            Arg::Prune => given.prune_db = prune(raw)?,
             Arg::Norm => given.norm = norm(raw)?,
             Arg::Pairs => given.max_pairs = count(raw, key)?,
             Arg::Curve => given.curve = switch(raw, key)?,
             Arg::Bpm => given.bpm = Some(tempo(raw, key)?),
         }
+    }
+    if row.takes.contains(&Arg::Prune) {
+        cut(name, given)?;
     }
     if row.takes.contains(&Arg::Node) && node.is_none() {
         return Err(CliError::usage(
@@ -562,6 +566,54 @@ fn decibels(raw: &str, key: &str) -> Result<f64, CliError> {
             "query.bad_value",
             format!("`{key}` needs a level in decibels, as `-40db`, got `{raw}`"),
         )),
+    }
+}
+
+/// `1` prunes within `DEFAULT_PRUNE_DB`, `0` not at all, and a level in dB within that level.
+fn prune(raw: &str) -> Result<Option<f64>, CliError> {
+    match raw {
+        "1" => return Ok(Some(DEFAULT_PRUNE_DB)),
+        "0" => return Ok(None),
+        _ => {}
+    }
+    let malformed = || {
+        CliError::usage(
+            "query.bad_value",
+            format!("`prune` is `1`, `0` or a level over 0db, as `0.5db`, got `{raw}`"),
+        )
+    };
+    match decibels(raw, "prune").map_err(|_| malformed())? {
+        db if db >= LEAST_PRUNE_DB => Ok(Some(db)),
+        db if db <= 0.0 => Err(malformed()),
+        _ => Err(CliError::usage(
+            "query.bad_value",
+            format!(
+                "`prune={raw}` is under {LEAST_PRUNE_DB}db, finer than an f64 holds a level \
+                 of tens of dB, so no error evaluated in one could certify it; ask at least \
+                 {LEAST_PRUNE_DB}db"
+            ),
+        )),
+    }
+}
+
+/// A floor cuts only a pruned track, and only under the peak it is counted from.
+fn cut(name: &str, given: Given) -> Result<(), CliError> {
+    match (given.prune_db, given.floor_db) {
+        (None, Some(_)) => Err(CliError::usage(
+            "query.missing_argument",
+            format!(
+                "`floor` cuts a pruned track, and this `{name}` prunes none; write \
+                 `{name}(prune=1, floor=...)`, or drop `floor`"
+            ),
+        )),
+        (Some(_), Some(db)) if db >= 0.0 => Err(CliError::usage(
+            "query.bad_value",
+            format!(
+                "`{name}(floor=...)` counts down from each band's peak, so it is under \
+                 0db, as `-80db`, got {db}db"
+            ),
+        )),
+        _ => Ok(()),
     }
 }
 

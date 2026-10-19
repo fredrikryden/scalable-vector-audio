@@ -2,11 +2,11 @@
 
 use sva_core::DEFAULT_STORE_BYTES;
 use sva_engine::{
-    DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB, DEFAULT_FRAME_SECS,
-    DEFAULT_LEDGER_DEPTH, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS, DEFAULT_MODULATION_WINDOW_SECS,
-    DEFAULT_NOVELTY_WINDOW_SECS, DEFAULT_OVERSAMPLE, DEFAULT_PERIODICITY_WINDOW_SECS,
-    DEFAULT_SAMPLE_RATE, DEFAULT_SMOOTH_SECS, PSYCHOACOUSTIC_V1, READINGS, Reads,
-    self_similarity::MAX_CELLS, spectrum,
+    DEFAULT_BAND_FLOOR_DB, DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB,
+    DEFAULT_FRAME_SECS, DEFAULT_LEDGER_DEPTH, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS,
+    DEFAULT_MODULATION_WINDOW_SECS, DEFAULT_NOVELTY_WINDOW_SECS, DEFAULT_OVERSAMPLE,
+    DEFAULT_PERIODICITY_WINDOW_SECS, DEFAULT_PRUNE_DB, DEFAULT_SAMPLE_RATE, DEFAULT_SMOOTH_SECS,
+    PSYCHOACOUSTIC_V1, READINGS, Reads, self_similarity::MAX_CELLS, spectrum,
 };
 
 /// Read off the constants the parser itself defaults to, so a printed default cannot drift
@@ -482,6 +482,11 @@ DEFAULTS:
                        or `self_similarity` drops a partial, and under which
                        `self_similarity` counts a band level as zero.
                        Default {DEFAULT_FLOOR_DB}db.
+  bands(prune=<0|1|db>) the level, as `0.5db`, each band's knots stay within
+                       of its track at every source sample; `1` is
+                       {DEFAULT_PRUNE_DB}db. Default 0: every band's 2 kHz track.
+  bands(floor=<db>)    under each band's peak, as `-80db`, where a pruned track
+                       is cut. Default {DEFAULT_BAND_FLOOR_DB}db.
   voice_leading(norm=<l1|l2>) how a voice leading's moves add up. Default l1.
   dissonance(pairs=<n>) the most partial pairs one frame sums before it refuses.
                        Default {DEFAULT_MAX_PAIRS}.

@@ -36,7 +36,10 @@ pub use measure::Consumes;
 pub use measure::alias::{
     AUDIBLE_NMR_DB, Alias, AliasBand, PLAYBACK_DB_SPL, measure_alias, worst as worst_alias,
 };
-pub use measure::bands::{BAND_COUNT, BandFloor, BandTrack, Bands, DECIMATED_HZ, cam, erb_hz};
+pub use measure::bands::{
+    BAND_COUNT, BandFloor, BandTrack, Bands, DECIMATED_HZ, Knot, LEAST_PRUNE_DB, Prune, PrunedBand,
+    PrunedBands, cam, erb_hz,
+};
 pub use measure::crest::{BandCrest, Crest};
 pub use measure::envelope::EnvelopeFrame;
 pub use measure::formants::{Formant, FormantFrame, MAX_ORDER, default_order};

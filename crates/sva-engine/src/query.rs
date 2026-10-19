@@ -10,7 +10,7 @@ use sva_samples::measure::periodicity::Periodicity;
 use sva_samples::measure::self_similarity::SelfSimilarity;
 use sva_samples::{
     Alias, Bands, Buffer, Consumes, Crest, EnvelopeFrame, FormantFrame, LedgerEntry, Loudness,
-    Onsets, PitchFrame, Source, Spectrum, StereoImage,
+    Onsets, PitchFrame, Prune, PrunedBands, Source, Spectrum, StereoImage,
 };
 
 use crate::arguments::Arguments;
@@ -25,6 +25,12 @@ pub const DEFAULT_OVERSAMPLE: u32 = 4;
 pub const DEFAULT_BUFFER_SECS: f64 = 0.05;
 /// The amplitude, in dB against full scale, under which a harmonic reading drops a partial.
 pub const DEFAULT_FLOOR_DB: f64 = -40.0;
+/// How far from every source sample `bands(prune=1)` keeps each band's track, in dB: about
+/// the least level change a listener hears. Music at 0.1 dB needs some 11000 knots a band a
+/// second, more than the 2000 samples unpruned; at 1 dB some 1000.
+pub const DEFAULT_PRUNE_DB: f64 = 1.0;
+/// Against each band's own peak, the level under which a pruned `bands` cuts its track.
+pub const DEFAULT_BAND_FLOOR_DB: f64 = -80.0;
 /// The most partial pairs one `dissonance` frame sums before it refuses.
 pub const DEFAULT_MAX_PAIRS: usize = 1 << 17;
 /// The span of onset-strength envelope one `periodicity` window autocorrelates.
@@ -57,6 +63,7 @@ pub enum Arg {
     Bpm,
     Cell,
     Smooth,
+    Prune,
 }
 
 impl Arg {
@@ -78,6 +85,7 @@ impl Arg {
             Arg::Bpm => "bpm",
             Arg::Cell => "cell",
             Arg::Smooth => "smooth",
+            Arg::Prune => "prune",
         }
     }
 }
@@ -91,7 +99,8 @@ pub struct Given {
     pub frame: Option<f64>,
     pub depth: usize,
     pub oversample: u32,
-    pub floor_db: f64,
+    /// `None` until written: each reading that takes a floor then takes its own default.
+    pub floor_db: Option<f64>,
     pub norm: Norm,
     pub max_pairs: usize,
     /// `None` until written: each windowed reading then takes its own default.
@@ -100,6 +109,8 @@ pub struct Given {
     pub bpm: Option<f64>,
     pub cell_secs: f64,
     pub smooth_secs: f64,
+    /// `None` until written: `bands` then answers its 2 kHz tracks unpruned.
+    pub prune_db: Option<f64>,
 }
 
 impl Default for Given {
@@ -109,7 +120,7 @@ impl Default for Given {
             frame: None,
             depth: DEFAULT_LEDGER_DEPTH,
             oversample: DEFAULT_OVERSAMPLE,
-            floor_db: DEFAULT_FLOOR_DB,
+            floor_db: None,
             norm: Norm::L1,
             max_pairs: DEFAULT_MAX_PAIRS,
             window: None,
@@ -117,6 +128,7 @@ impl Default for Given {
             bpm: None,
             cell_secs: DEFAULT_CELL_SECS,
             smooth_secs: DEFAULT_SMOOTH_SECS,
+            prune_db: None,
         }
     }
 }
@@ -282,10 +294,18 @@ static STEREO: Reading = Reading {
 
 static BANDS: Reading = Reading {
     name: "bands",
-    takes: &[],
+    takes: &[Arg::Prune, Arg::Floor],
     reads: Reads::Samples,
-    help: "each auditory band's level over time, every channel's band energy averaged",
-    build: |_| Representation::Bands,
+    help: "each auditory band's level over time, every channel's band energy averaged, at \
+           2 kHz; `prune` instead reads each band's track at every source sample and answers \
+           knots whose line, in dB, stays within `prune` of every one, the track cut to \
+           `floor` under the band's peak, with the largest error the line reached there",
+    build: |g| Representation::Bands {
+        prune: g.prune_db.map(|eps_db| Prune {
+            eps_db,
+            floor_db: g.floor_db.unwrap_or(DEFAULT_BAND_FLOOR_DB),
+        }),
+    },
 };
 
 static CREST: Reading = Reading {
@@ -335,7 +355,7 @@ static DISSONANCE: Reading = Reading {
             max_pairs: g.max_pairs,
         },
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
-        floor_db: g.floor_db,
+        floor_db: g.floor_db.unwrap_or(DEFAULT_FLOOR_DB),
     },
 };
 
@@ -348,7 +368,7 @@ static VOICE_LEADING: Reading = Reading {
     build: |g| Representation::Harmony {
         reading: Harmonic::VoiceLeading { norm: g.norm },
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
-        floor_db: g.floor_db,
+        floor_db: g.floor_db.unwrap_or(DEFAULT_FLOOR_DB),
     },
 };
 
@@ -361,7 +381,7 @@ static TONAL_DISTANCE: Reading = Reading {
     build: |g| Representation::Harmony {
         reading: Harmonic::TonalDistance,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
-        floor_db: g.floor_db,
+        floor_db: g.floor_db.unwrap_or(DEFAULT_FLOOR_DB),
     },
 };
 
@@ -375,7 +395,7 @@ static INHARMONICITY: Reading = Reading {
     build: |g| Representation::Harmony {
         reading: Harmonic::Inharmonicity,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
-        floor_db: g.floor_db,
+        floor_db: g.floor_db.unwrap_or(DEFAULT_FLOOR_DB),
     },
 };
 
@@ -434,7 +454,7 @@ static SELF_SIMILARITY: Reading = Reading {
         cell_secs: g.cell_secs,
         smooth_secs: g.smooth_secs,
         window_secs: g.window.unwrap_or(DEFAULT_NOVELTY_WINDOW_SECS),
-        floor_db: g.floor_db,
+        floor_db: g.floor_db.unwrap_or(DEFAULT_FLOOR_DB),
         listed: g.peaks,
         curve: g.curve,
     },
@@ -511,7 +531,10 @@ pub enum Representation {
     Stereo {
         frame_secs: f64,
     },
-    Bands,
+    /// `None` answers the 2 kHz tracks.
+    Bands {
+        prune: Option<Prune>,
+    },
     Crest,
     Loudness,
     Onsets,
@@ -579,6 +602,7 @@ pub enum Output {
     Formants(Vec<FormantFrame>),
     Stereo(Box<StereoImage>),
     Bands(Box<Bands>),
+    PrunedBands(Box<PrunedBands>),
     Crest(Box<Crest>),
     Loudness(Box<Loudness>),
     Onsets(Box<Onsets>),
@@ -657,7 +681,7 @@ impl Representation {
             Representation::Pitch { .. } => &PITCH,
             Representation::Formants { .. } => &FORMANTS,
             Representation::Stereo { .. } => &STEREO,
-            Representation::Bands => &BANDS,
+            Representation::Bands { .. } => &BANDS,
             Representation::Crest => &CREST,
             Representation::Loudness => &LOUDNESS,
             Representation::Onsets => &ONSETS,

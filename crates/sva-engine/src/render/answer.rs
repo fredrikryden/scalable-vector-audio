@@ -959,7 +959,12 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
                 frame_secs,
             )))
         }
-        Representation::Bands => Output::Bands(Box::new(bands::analyze(&planes, sr, start))),
+        Representation::Bands { prune: None } => {
+            Output::Bands(Box::new(bands::analyze(&planes, sr, start)))
+        }
+        Representation::Bands { prune: Some(prune) } => {
+            Output::PrunedBands(Box::new(bands::pruned(&planes, sr, start, prune)))
+        }
         Representation::Crest => Output::Crest(Box::new(crest::analyze(&planes, sr))),
         Representation::Onsets => Output::Onsets(Box::new(onsets::detect(&planes, sr, start))),
         Representation::Loudness => Output::Loudness(Box::new(
