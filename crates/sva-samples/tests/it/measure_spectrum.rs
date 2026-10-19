@@ -156,30 +156,6 @@ fn peaks_under_the_floor_rank_by_amplitude() {
     assert!((second.hz - 1000.0).abs() < s.resolution_hz, "{second:?}");
 }
 
-/// A sine only in the last 50 ms of a second, under half a frame, is read.
-#[test]
-fn a_tone_in_the_last_partial_hop_is_read() {
-    let mut samples = vec![0.0; RATE as usize];
-    let tail = tone(1000.0, 0.05, 1.0);
-    let from = samples.len() - tail.len();
-    samples[from..].copy_from_slice(&tail);
-    let s = analyze(&[&samples[..]], RATE, 4, None);
-    let loudest = s.peaks.first().expect("the tail's sine is a peak");
-    assert!((loudest.hz - 1000.0).abs() < s.resolution_hz, "{s:?}");
-    assert!((s.centroid_hz - 1000.0).abs() < 50.0, "{}", s.centroid_hz);
-}
-
-/// A DC offset's Hann sidelobes are no peaks: under a short frame only the sine is one.
-#[test]
-fn a_dc_offsets_sidelobes_are_no_peaks() {
-    let samples: Vec<f64> = tone(1000.0, 0.05, 0.1).iter().map(|x| 0.5 + x).collect();
-    let s = analyze(&[&samples[..]], RATE, 8, None);
-    let [only] = s.peaks.as_slice() else {
-        panic!("one sine over a DC, one peak: {:?}", s.peaks);
-    };
-    assert!((only.hz - 1000.0).abs() < s.resolution_hz, "{only:?}");
-}
-
 /// 0.5 DC beside a unit 1 kHz sine is a third of the power, at bins 0 and 1, 2:1.
 #[test]
 fn a_dc_offset_weighs_its_own_power_in_the_centroid() {

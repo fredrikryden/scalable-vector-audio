@@ -187,31 +187,6 @@ fn alias_scores_a_collapse_and_refuses_where_no_law_is_behind_it() {
     assert_eq!(refused.code(), "engine.alias_needs_a_closed_form");
 }
 
-/// A target under one frame has no alias score, and says how long a target has one.
-#[test]
-fn an_alias_score_of_a_target_under_one_frame_refuses() {
-    let g = graph_of(
-        "alias-short",
-        &[("node", "sample(tanh(sin(2*pi*3000*t)*4))\n")],
-    );
-    let held = render(
-        &g,
-        "node",
-        RenderConfig::seconds(8_192, 0.1),
-        &Tier::default(),
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
-    let refused = answer(
-        &held,
-        held.id("node").expect("the root"),
-        Representation::Alias { oversample: 4 },
-    )
-    .expect_err("819 samples under a 1024-sample frame");
-    assert_eq!(refused.code(), "read.target_under_frame");
-    let said = format!("{refused}");
-    assert!(said.contains("0.125s"), "{said}");
-}
-
 /// A reading's reference is a value like any other, kept in the memory the render read: asked
 /// again, memory answers it, the same bits.
 #[test]
@@ -898,65 +873,6 @@ fn a_closed_forms_modulation_is_measured_off_its_samples() {
     }
 }
 
-/// A render whose Nyquist the K-weighting shelf reaches has no loudness, and says what rate does.
-#[test]
-fn loudness_at_a_rate_under_the_k_weighting_names_the_least_rate() {
-    let g = graph_of("loudness-slow", &[("node", "sin(2*pi*100*t)\n")]);
-    let config = RenderConfig::seconds(2_000, 1.0).asking(vec![Ask {
-        node: "node".to_string(),
-        representation: Representation::Loudness,
-    }]);
-    let held = render(&g, "node", config, &Tier::default()).unwrap_or_else(|e| panic!("{e}"));
-    let refused = answer(
-        &held,
-        held.id("node").expect("the root"),
-        Representation::Loudness,
-    )
-    .expect_err("a 1 kHz Nyquist is under the 1682 Hz shelf");
-    assert_eq!(refused.code(), "read.rate_under_weighting");
-    let said = format!("{refused}");
-    assert!(said.contains("3363.94 Hz"), "{said}");
-}
-
-/// A render at 30 Hz places no ERB band: periodicity, modulation and self_similarity refuse,
-/// naming the rate, rather than one reading an empty band view.
-#[test]
-fn band_readings_at_a_rate_under_every_band_name_the_least_rate() {
-    for asked in [
-        Representation::SelfSimilarity {
-            frame_secs: 0.5,
-            cell_secs: 0.5,
-            smooth_secs: 2.0,
-            window_secs: 4.0,
-            floor_db: -40.0,
-            listed: 16,
-            curve: false,
-        },
-        Representation::Periodicity {
-            frame_secs: 0.5,
-            window_secs: 4.0,
-            curve: false,
-        },
-        Representation::Modulation {
-            frame_secs: 0.5,
-            window_secs: 4.0,
-            bpm: None,
-        },
-    ] {
-        let g = graph_of("bands-slow", &[("node", "sin(2*pi*3*t)\n")]);
-        let config = RenderConfig::seconds(30, 10.0).asking(vec![Ask {
-            node: "node".to_string(),
-            representation: asked,
-        }]);
-        let held = render(&g, "node", config, &Tier::default()).unwrap_or_else(|e| panic!("{e}"));
-        let refused = answer(&held, held.id("node").expect("the root"), asked)
-            .expect_err("a 15 Hz Nyquist is under the 26 Hz first band");
-        assert_eq!(refused.code(), "read.rate_under_bands");
-        let said = format!("{refused}");
-        assert!(said.contains("over 57.77 Hz"), "{said}");
-    }
-}
-
 /// A window under two periods of the slowest rate refuses, naming the window that would read.
 #[test]
 fn modulation_under_two_periods_names_the_least_window() {
@@ -1022,81 +938,125 @@ fn self_similarity_past_the_cap_names_both_remedies() {
     assert!(said.contains("@x([0, 10.25s])"), "{said}");
 }
 
-/// A novelty window of 1e10 s is past the cap a side: refused, naming the widest that fits,
-/// 2048 cells of 4100 samples at 8192 Hz.
+/// A target, rate, frame or window a reading cannot read refuses under the code naming why,
+/// and the remedy names the least or most that reads.
 #[test]
-fn self_similarity_with_a_kernel_past_the_cap_names_the_widest_window() {
-    let (law, asked) = self_similarity_of("crossfade-wide", 0.05, 0.5);
-    let Representation::SelfSimilarity {
-        frame_secs,
-        cell_secs,
-        smooth_secs,
-        floor_db,
-        listed,
-        curve,
-        ..
-    } = asked
-    else {
-        panic!("a self_similarity ask")
-    };
-    let wide = Representation::SelfSimilarity {
-        frame_secs,
-        cell_secs,
-        smooth_secs,
-        window_secs: 1e10,
-        floor_db,
-        listed,
-        curve,
-    };
-    let refused = answer(&law, law.id("node").expect("the root"), wide).expect_err("1e10 > 1024");
-    assert_eq!(refused.code(), "read.kernel_past_cap");
-    let said = format!("{refused}");
-    assert!(said.contains("self_similarity(window=1025s)"), "{said}");
-}
-
-/// `atoms` names the channel of each term.
-#[test]
-fn a_two_channel_forms_atoms_name_their_channel() {
-    let law = rendered(
-        "two-channel-atoms",
-        "join(sin(2*pi*256*t), 0.5*sin(2*pi*512*t))\n",
-        vec!["lines"],
-    );
-    let id = law.id("node").expect("the root");
-    let Output::Atoms(atoms) = answer(&law, id, Representation::Atoms)
-        .expect("atoms")
-        .value
-    else {
-        panic!("a law's atoms");
-    };
-    let at = |channel: usize| -> Vec<f64> {
-        atoms
-            .iter()
-            .filter(|a| a.channel == channel)
-            .map(|a| a.turns.abs().round())
-            .collect()
-    };
-    assert_eq!(
-        (at(0), at(1)),
-        (vec![256.0; 2], vec![512.0; 2]),
-        "{atoms:?}"
-    );
-}
-
-/// A first difference has no value at the first sample, which has none before it.
-#[test]
-fn a_first_difference_starts_at_the_second_sample() {
-    let sampled = rendered("ramp-difference", "sample(t)\n", vec!["derivative"]);
-    let id = sampled.id("node").expect("the root");
-    let Output::Samples(slope) = answer(&sampled, id, Representation::Derivative)
-        .expect("a measured slope")
-        .value
-    else {
-        panic!("a first difference is samples");
-    };
-    assert_eq!((slope.start, slope.plane(0).len()), (1, 8_191));
-    assert!(
-        slope.plane(0).iter().all(|x| (x - 1.0).abs() < 1e-9),
-        "a ramp's slope is one at every sample"
-    );
+fn each_unreadable_ask_refuses_under_its_own_code_naming_what_reads() {
+    let self_similarity =
+        |frame_secs: f64, cell_secs: f64, window_secs: f64| Representation::SelfSimilarity {
+            frame_secs,
+            cell_secs,
+            smooth_secs: 2.0,
+            window_secs,
+            floor_db: -40.0,
+            listed: 16,
+            curve: false,
+        };
+    let tone = "sin(2*pi*100*t)\n";
+    let slow = "sin(2*pi*3*t)\n";
+    for (body, rate, secs, asked, code, says) in [
+        (
+            "sample(tanh(sin(2*pi*3000*t)*4))\n",
+            8_192,
+            0.1,
+            Representation::Alias { oversample: 4 },
+            "read.target_under_frame",
+            "@x([0, 0.125s])",
+        ),
+        (
+            tone,
+            2_000,
+            1.0,
+            Representation::Loudness,
+            "read.rate_under_weighting",
+            "over 3363.94 Hz",
+        ),
+        (
+            slow,
+            30,
+            10.0,
+            self_similarity(0.5, 0.5, 4.0),
+            "read.rate_under_bands",
+            "over 57.77 Hz",
+        ),
+        (
+            slow,
+            30,
+            10.0,
+            Representation::Periodicity {
+                frame_secs: 0.5,
+                window_secs: 4.0,
+                curve: false,
+            },
+            "read.rate_under_bands",
+            "over 57.77 Hz",
+        ),
+        (
+            slow,
+            30,
+            10.0,
+            Representation::Modulation {
+                frame_secs: 0.5,
+                window_secs: 4.0,
+                bpm: None,
+            },
+            "read.rate_under_bands",
+            "over 57.77 Hz",
+        ),
+        (
+            tone,
+            8_192,
+            1.0,
+            self_similarity(0.05, 0.5, 1e10),
+            "read.kernel_past_cap",
+            "self_similarity(window=1025s)",
+        ),
+        (
+            tone,
+            16_000,
+            0.05,
+            self_similarity(2.0 / 16_000.0, 2.0 / 16_000.0, 0.01),
+            "read.cell_under_band_step",
+            "self_similarity(cell=0.0005s)",
+        ),
+        (
+            tone,
+            16_000,
+            0.05,
+            Representation::Formants {
+                max_formants: 4,
+                frame_secs: 0.0005,
+            },
+            "read.frame_under_order",
+            "formants(frame=0.0012s)",
+        ),
+        (
+            tone,
+            16_000,
+            0.001,
+            Representation::Formants {
+                max_formants: 4,
+                frame_secs: 0.05,
+            },
+            "read.target_under_order",
+            "@x([0, 0.0012s])",
+        ),
+        (
+            "join(sin(t), sin(2*t), sin(3*t))\n",
+            8_192,
+            0.1,
+            Representation::Stereo { frame_secs: 0.05 },
+            "type.width_mismatch",
+            "needs exactly 2 components and the node holds 3",
+        ),
+    ] {
+        let g = graph_of("unreadable", &[("node", body)]);
+        let config = RenderConfig::seconds(rate, secs);
+        let held = render(&g, "node", config, &Tier::default()).unwrap_or_else(|e| panic!("{e}"));
+        let refused = answer(&held, held.id("node").expect("the root"), asked)
+            .expect_err("an ask no reading answers");
+        let said = format!("{refused}");
+        assert_eq!(refused.code(), code, "{said}");
+        assert!(said.contains(says), "{says}: {said}");
+    }
 }

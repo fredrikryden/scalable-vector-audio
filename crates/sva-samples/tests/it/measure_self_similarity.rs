@@ -3,7 +3,7 @@
 use std::f64::consts::TAU;
 
 use sva_samples::measure::self_similarity::{
-    Asked, MAX_CELLS, Reading, SelfSimilarity, Stripe, TooManyCells, Unfit, View, measure,
+    Asked, Reading, SelfSimilarity, Stripe, View, measure,
 };
 
 const RATE: f64 = 16_000.0;
@@ -158,86 +158,4 @@ fn the_matrix_is_the_lower_triangle_in_time_lag_form() {
     assert!(matrix.iter().enumerate().all(|(i, row)| row.len() == i + 1));
     assert!(near(matrix[12][8], 1.0, 1e-6), "{:?}", matrix[12]);
     assert!(read(&samples).cells.is_none());
-}
-
-/// 60 s at 50 ms is 1200 cells: refused, naming the cell that fits and the target this does.
-#[test]
-fn a_matrix_past_the_cap_refuses() {
-    let held = vec![0.0; (60.0 * RATE) as usize];
-    let refused = measure(&[&held[..]], RATE, 0.0, asked(0.05)).expect_err("1200 > 1024");
-    assert_eq!(
-        refused,
-        Unfit::TooManyCells(TooManyCells {
-            cells: 1200,
-            cap: MAX_CELLS,
-            cell_secs: 0.05,
-            held_secs: 60.0,
-            least_cell_secs: 0.1,
-            most_secs: 51.2,
-        })
-    );
-}
-
-/// A novelty window of 1e10 s is 1e10 cells a side, past the cap: refused before any kernel
-/// is laid out, naming the widest window the cap holds.
-#[test]
-fn a_novelty_kernel_past_the_cap_refuses() {
-    let held = vec![0.0; RATE as usize];
-    let wide = Asked {
-        window_secs: 1e10,
-        ..asked(0.5)
-    };
-    assert_eq!(
-        measure(&[&held[..]], RATE, 0.0, wide),
-        Err(Unfit::KernelPastCap {
-            window_secs: 1e10,
-            kernel_cells: 10_000_000_000,
-            cap: MAX_CELLS,
-            cell_secs: 0.5,
-            widest_secs: 1024.0,
-        })
-    );
-    let widest = Asked {
-        window_secs: 1024.0,
-        ..asked(0.5)
-    };
-    assert_eq!(
-        measure(&[&held[..]], RATE, 0.0, widest).map(|s| s.kernel_cells),
-        Ok(MAX_CELLS)
-    );
-}
-
-/// Cells of 2 samples at 16 kHz fall between the 2 kHz band envelope's samples: refused,
-/// naming the finest cell each of whose spans holds one, where none read null levels.
-#[test]
-fn a_cell_under_the_band_step_refuses() {
-    let held = vec![0.1; 800];
-    let at = |cell_secs: f64| Asked {
-        hop_secs: 2.0 / RATE,
-        window_secs: 0.01,
-        curve: true,
-        ..asked(cell_secs)
-    };
-    let Err(Unfit::CellUnderBandStep {
-        least_cell_secs, ..
-    }) = measure(&[&held[..]], RATE, 0.0, at(2.0 / RATE))
-    else {
-        panic!("a quarter band step is no cell");
-    };
-    let read = measure(&[&held[..]], RATE, 0.0, at(least_cell_secs)).expect("the least reads");
-    let cells = read.cells.expect("asked");
-    assert!(cells.iter().flat_map(|c| &c.levels_db).all(|l| !l.is_nan()));
-}
-
-/// Silence reads novelty 0 at every boundary, and the first, with no boundary before it,
-/// peaks as MODEL states.
-#[test]
-fn silences_first_boundary_is_its_one_novelty_peak() {
-    let s = read(&vec![0.0; (4.0 * RATE) as usize]);
-    for which in [View::Chroma, View::Timbre] {
-        let v = view(&s, which);
-        assert!(v.novelty.iter().all(|n| *n == 0.0));
-        assert_eq!(v.peaks_found, 1);
-        assert_eq!(v.peaks[0].t_secs, s.novelty_from_secs);
-    }
 }

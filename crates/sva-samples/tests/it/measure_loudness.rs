@@ -1,6 +1,6 @@
 // Concern: states the BS.1770 readings a K-weighted measure owes its own conformance tones | Non-concern: per-component level (src/measure/envelope.rs) | IO: (planes) -> asserted LUFS
 
-use sva_samples::measure::loudness::{LEAST_RATE_HZ, Loudness, analyze};
+use sva_samples::measure::loudness::{Loudness, analyze};
 
 fn sine(hz: f64, sr: f64, secs: f64, amp: f64) -> Vec<f64> {
     (0..(secs * sr) as usize)
@@ -80,18 +80,18 @@ fn digital_silence_has_no_loudness_and_no_peak_in_decibels() {
     assert_eq!(l.sample_peak_dbfs, None);
 }
 
-/// A level whose weighted square passes the largest double is still a level, up to a peak
-/// near the largest double itself.
+/// A level whose weighted square passes the largest double, or falls under the smallest, is
+/// still a level, up to a peak near the largest double itself.
 #[test]
-fn a_finite_buffer_too_loud_to_square_still_reads_its_loudness() {
+fn a_finite_buffer_too_loud_or_too_quiet_to_square_still_reads_its_loudness() {
     let sr = 48_000.0;
-    let quiet = sine(1_000.0, sr, 4.0, 1.0);
-    let at_scale = of(&[&quiet], sr).integrated_lufs.expect("a level");
-    for gain in [1e160, 1.5e308] {
-        let loud: Vec<f64> = quiet.iter().map(|v| v * gain).collect();
-        let level = of(&[&loud], sr)
-            .integrated_lufs
-            .expect("a level past the largest square");
+    let unit = sine(1_000.0, sr, 4.0, 1.0);
+    let at_scale = of(&[&unit], sr).momentary_max_lufs.expect("a level");
+    for gain in [1e-200, 1e160, 1.5e308] {
+        let scaled: Vec<f64> = unit.iter().map(|v| v * gain).collect();
+        let level = of(&[&scaled], sr)
+            .momentary_max_lufs
+            .expect("a level past the largest square or under the smallest");
         let lift = 20.0 * f64::log10(gain);
         assert!((level - at_scale - lift).abs() < 1e-6, "{gain}: {level}");
     }
@@ -120,39 +120,4 @@ fn a_quiet_block_after_a_loud_stretch_reads_its_own_level() {
             "{lufs} LUFS after a loud stretch, {steady} alone"
         );
     }
-}
-
-/// The headroom works both ways: a square too small for a double is still a level.
-#[test]
-fn a_finite_buffer_too_quiet_to_square_still_reads_its_loudness() {
-    let sr = 48_000.0;
-    let unit = sine(1_000.0, sr, 4.0, 1.0);
-    let at_scale = of(&[&unit], sr).momentary_max_lufs.expect("a level");
-    let gain = 1e-200;
-    let quiet: Vec<f64> = unit.iter().map(|v| v * gain).collect();
-    let read = of(&[&quiet], sr);
-    let level = read
-        .momentary_max_lufs
-        .expect("a level under the smallest square");
-    assert!(
-        (level - at_scale - -4000.0).abs() < 1e-6,
-        "{level} against {at_scale}"
-    );
-}
-
-/// The shelf stands at 1681.97 Hz: a rate whose Nyquist it reaches has no K-weighting, and
-/// refuses rather than read an unstable filter's output as a level.
-#[test]
-fn a_rate_whose_nyquist_the_shelf_reaches_refuses() {
-    assert!((LEAST_RATE_HZ - 3363.94).abs() < 1e-9);
-    for sr in [1_000.0, 3_000.0, LEAST_RATE_HZ] {
-        let s = sine(100.0, sr, 2.0, 1.0);
-        let refused = analyze(&[&s], sr, 0.0).expect_err("no K-weighting at this rate");
-        assert_eq!((refused.rate_hz, refused.least_hz), (sr, LEAST_RATE_HZ));
-    }
-    let sr = 3_400.0;
-    let level = of(&[&sine(100.0, sr, 2.0, 1.0)], sr)
-        .integrated_lufs
-        .unwrap();
-    assert!((-5.0..-3.0).contains(&level), "{level} LUFS at {sr} Hz");
 }

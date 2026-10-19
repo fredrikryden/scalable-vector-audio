@@ -142,13 +142,19 @@ fn every_answer_names_its_source_profile_and_rate() {
     assert!(json.contains("\"rate\": null"));
 }
 
-/// A derivative and an exact envelope print each term as `atoms` prints one, its frequency and
-/// channel with it, so the answer states the function and not only its sizes.
+/// `atoms`, a derivative and an exact envelope print each term with its channel and frequency,
+/// so the answer states the function and not only its sizes.
 #[test]
-fn a_derivative_prints_each_term_with_its_frequency_and_channel() {
+fn atoms_a_derivative_and_an_envelope_print_each_term_with_its_channel_and_frequency() {
     let dir = scratch("derivative-terms");
     put(&dir, "x", "join(sin(2*pi*100*t), 0.5*sin(2*pi*200*t))\n");
     let rendered = probe(&dir, "@x([0, 1s])").expect("a closed form");
+    let json = json_of(&rendered, "atoms", Representation::Atoms);
+    for (channel, amp, hz) in [(0, "0.5", "100"), (1, "0.25", "200")] {
+        let wanted =
+            format!("\"channel\": {channel}, \"sketch\": \"{amp} x an exponential\", \"hz\": {hz}");
+        assert!(json.contains(&wanted), "{wanted}: {json}");
+    }
     let json = json_of(&rendered, "derivative", Representation::Derivative);
     let slope = |channel: usize, hz: &str, re: f64| {
         format!(

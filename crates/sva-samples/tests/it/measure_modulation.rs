@@ -207,16 +207,3 @@ fn a_window_under_two_periods_and_a_target_under_the_window_refuse() {
         })
     );
 }
-
-#[test]
-fn a_rate_that_places_no_band_refuses() {
-    let samples = vec![1.0; 300];
-    assert_eq!(
-        measure(&[&samples[..]], 30.0, 0.0, 0.5, 4.0, None),
-        Err(Unread::RateUnderBands {
-            rate_hz: 30.0,
-            least_hz: sva_samples::measure::bands::least_rate_hz(),
-        })
-    );
-    assert!(measure(&[&samples[..]], 58.0, 0.0, 0.5, 4.0, None).is_ok());
-}

@@ -255,19 +255,3 @@ fn a_window_under_two_periods_and_a_target_under_the_window_refuse() {
         })
     );
 }
-
-/// At 30 Hz no ERB band fits under 0.45 of the rate, so no envelope exists to read.
-#[test]
-fn a_rate_that_places_no_band_refuses() {
-    let samples = vec![1.0; 300];
-    let least_hz = sva_samples::measure::bands::least_rate_hz();
-    assert!((57.76..57.77).contains(&least_hz), "{least_hz}");
-    assert_eq!(
-        measure(&[&samples[..]], 30.0, 0.0, 0.5, 4.0, false),
-        Err(Unread::RateUnderBands {
-            rate_hz: 30.0,
-            least_hz
-        })
-    );
-    assert!(measure(&[&samples[..]], 58.0, 0.0, 0.5, 4.0, false).is_ok());
-}

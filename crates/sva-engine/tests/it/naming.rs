@@ -79,24 +79,12 @@ fn an_instance_spelt_otherwise_refuses_naming_each_spelling_that_resolves() {
         &Tier::default(),
     )
     .expect("one voice");
-    for written in ["voice(g=0.5,f0=220)", "voice(f0=220)"] {
+    let spelt = "voice(f0=220, g=0.5)";
+    assert!(held.node(spelt).is_ok(), "`{spelt}` resolves");
+    for written in ["voice(g=0.5,f0=220)", "voice(f0=220)", "nobody(f0=1)"] {
         let refused = held.node(written).expect_err("no instance is spelt so");
         assert_eq!(refused.code(), "engine.unknown_node");
-        let EngineError::UnknownInstance(asked, names) = &refused else {
-            panic!("{refused:?}")
-        };
-        assert_eq!(asked, written);
-        let [name] = names.as_slice() else {
-            panic!("one instance: {names:?}")
-        };
-        assert!(held.node(name).is_ok(), "`{name}` resolves as listed");
-        assert!(
-            refused.to_string().contains(&format!("`@{name}`")),
-            "{refused}"
-        );
+        let lists = refused.to_string().contains(&format!("`@{spelt}`"));
+        assert_eq!(lists, written.starts_with("voice"), "{refused}");
     }
-    assert!(
-        matches!(held.node("nobody(f0=1)"), Err(EngineError::UnknownNode(_))),
-        "a file with no instance has none to list"
-    );
 }

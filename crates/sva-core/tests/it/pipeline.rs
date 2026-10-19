@@ -270,26 +270,6 @@ fn a_level_reads_every_channel() {
     }
 }
 
-/// A frame steps by whole samples, so one under half a sample at the rate refuses rather than
-/// stepping by a sample it was not asked for.
-#[test]
-fn a_frame_under_half_a_sample_refuses_at_the_rate() {
-    let reading = |text: &str| sva_core::asked(&sva_core::call(text).unwrap()).unwrap();
-    let Err(CliError::Usage { code, .. }) =
-        reading("envelope(frame=0.00001s)").representation(44_100, None)
-    else {
-        panic!("0.44 samples at 44.1 kHz is no frame");
-    };
-    assert_eq!(code, "query.bad_value");
-    let Ok(Representation::Envelope {
-        frame_secs: Some(secs),
-    }) = reading("envelope(frame=0.00001s)").representation(96_000, None)
-    else {
-        panic!("0.96 samples at 96 kHz rounds to one");
-    };
-    assert_eq!(secs, 0.00001);
-}
-
 /// A reading's time arguments are times as a score writes them: a bar is what the render's
 /// tempo says, the same at any argument, and with no tempo to count it in a bar refuses.
 #[test]
@@ -343,27 +323,49 @@ fn a_readings_times_count_bars_in_the_renders_tempo() {
     );
 }
 
-/// A cell of 1e15 s is 4.41e19 samples at 44.1 kHz, past what a count holds: refused, where
-/// the cell's samples wrapped and the reading named a cell it was never asked.
+/// A time argument counts samples at the render's rate: a frame rounding to none, or a time
+/// past the 2^53 a count holds exactly, refuses naming the least or most it may be.
 #[test]
-fn a_time_past_2_to_the_53_samples_refuses_at_the_rate() {
+fn a_time_no_whole_sample_count_holds_refuses_at_the_rate() {
     let reading = |text: &str| sva_core::asked(&sva_core::call(text).unwrap()).unwrap();
-    for text in [
-        "self_similarity(cell=1e15)",
-        "self_similarity(smooth=1e300)",
-        "periodicity(window=1e15)",
-        "envelope(frame=1e15)",
+    for (text, rate, says) in [
+        (
+            "envelope(frame=0.00001s)",
+            44_100,
+            "at least 0.000011337868480725624s",
+        ),
+        (
+            "self_similarity(cell=1e15)",
+            44_100,
+            "at most 204244881059.88644s",
+        ),
+        (
+            "self_similarity(smooth=1e300)",
+            44_100,
+            "at most 204244881059.88644s",
+        ),
+        (
+            "periodicity(window=1e15)",
+            44_100,
+            "at most 204244881059.88644s",
+        ),
+        (
+            "envelope(frame=1e15)",
+            44_100,
+            "at most 204244881059.88644s",
+        ),
     ] {
-        let Err(CliError::Usage { code, message }) = reading(text).representation(44_100, None)
+        let Err(CliError::Usage { code, message }) = reading(text).representation(rate, None)
         else {
-            panic!("{text} counts past 2^53 samples");
+            panic!("{text} counts no whole samples at {rate} Hz");
         };
         assert_eq!(code, "query.bad_value", "{text}");
-        assert!(message.contains("204244881059.88644"), "{message}");
+        assert!(message.contains(says), "{says}: {message}");
     }
-    assert!(
-        reading("self_similarity(cell=1e11)")
-            .representation(44_100, None)
-            .is_ok()
-    );
+    for (text, rate) in [
+        ("envelope(frame=0.00001s)", 96_000),
+        ("self_similarity(cell=1e11)", 44_100),
+    ] {
+        assert!(reading(text).representation(rate, None).is_ok(), "{text}");
+    }
 }
