@@ -219,7 +219,7 @@ pub fn measure(planes: &[&[f64]], sr: f64, start: f64, asked: Asked) -> Partials
     let hop = ((asked.hop_secs * sr).round() as usize).max(1);
     let reach = ((asked.window_secs * sr - frame as f64).max(0.0) / (2 * hop) as f64).round();
     let reach = reach as usize;
-    let floor = 10f64.powf(asked.floor_db / 20.0);
+    let floor = libm::pow(10.0, asked.floor_db / 20.0);
     let grid = Grid {
         sr,
         samples: x.len(),
@@ -332,7 +332,7 @@ fn detect(
         plan.forward(&mut re, &mut im);
         let unpacked = |n: usize, second: bool| {
             (n >= 2).then(|| {
-                let scale = (4.0 / n as f64).powi(2);
+                let scale = (4.0 / n as f64) * (4.0 / n as f64);
                 let bins = (0..=size / 2).map(|j| {
                     let (zr, zi, wr, wi) =
                         (re[j], im[j], re[(size - j) % size], im[(size - j) % size]);
@@ -411,7 +411,7 @@ fn picked(
     let edge = 2.0 * sr / spanned as f64;
     let mut kept: Vec<(usize, Found)> = Vec::new();
     for (k, p) in peaks::located(mags, bin_hz) {
-        let amp = 10f64.powf(p.db / 20.0);
+        let amp = libm::pow(10.0, p.db / 20.0);
         if amp < floor || kept.len() == 4 * cap {
             break;
         }
@@ -433,16 +433,16 @@ fn picked(
 }
 
 fn prominent(mags: &[f64], bin_hz: f64, p: &Found) -> bool {
-    let lo = (p.hz * 2f64.powf(-1.0 / 6.0) / bin_hz - PROMINENCE_BINS).max(0.0) as usize;
-    let hi = (p.hz * 2f64.powf(1.0 / 6.0) / bin_hz + PROMINENCE_BINS) as usize;
+    let lo = (p.hz * libm::pow(2.0, -1.0 / 6.0) / bin_hz - PROMINENCE_BINS).max(0.0) as usize;
+    let hi = (p.hz * libm::pow(2.0, 1.0 / 6.0) / bin_hz + PROMINENCE_BINS) as usize;
     let mut near: Vec<f64> = mags[lo..=hi.min(mags.len() - 1)].to_vec();
     let middle = near.len() / 2;
     let (_, median, _) = near.select_nth_unstable_by(middle, f64::total_cmp);
-    p.amp >= *median * 10f64.powf(PROMINENCE_DB / 20.0)
+    p.amp >= *median * libm::pow(10.0, PROMINENCE_DB / 20.0)
 }
 
 fn cents(a: f64, b: f64) -> f64 {
-    1200.0 * (a / b).log2()
+    1200.0 * libm::log2(a / b)
 }
 
 fn near(a: f64, b: f64) -> bool {
@@ -641,7 +641,7 @@ const ZERO: C = C { re: 0.0, im: 0.0 };
 
 impl C {
     fn of_turns(turns: f64) -> C {
-        let (im, re) = (TAU * turns.rem_euclid(1.0)).sin_cos();
+        let (im, re) = libm::sincos(TAU * turns.rem_euclid(1.0));
         C { re, im }
     }
     fn mul(self, o: C) -> C {
@@ -675,7 +675,7 @@ impl C {
         self.norm().sqrt()
     }
     fn arg(self) -> f64 {
-        self.im.atan2(self.re)
+        libm::atan2(self.im, self.re)
     }
 }
 
@@ -749,7 +749,7 @@ impl Reader<'_> {
         for bin in first..=last {
             let f = bin as f64 * bin_hz;
             let off = (flat.0 - f).max(f - flat.1).max(0.0);
-            let w = (-0.5 * (off / widest).powi(2)).exp() * gain;
+            let w = libm::exp(-0.5 * (off / widest) * (off / widest)) * gain;
             let j = (bin as isize - b.centre_bin as isize).rem_euclid(m as isize) as usize;
             re[j] += whole.re[bin] * w;
             im[j] += whole.im[bin] * w;
@@ -810,7 +810,7 @@ impl Reader<'_> {
 }
 
 fn gaussian(sigma: f64) -> impl Fn(f64) -> f64 {
-    move |f| (-0.5 * (f / sigma).powi(2)).exp()
+    move |f| libm::exp(-0.5 * (f / sigma) * (f / sigma))
 }
 
 fn brickwall(half: f64) -> impl Fn(f64) -> f64 {
@@ -941,7 +941,7 @@ fn read(x: &[f64], grid: &Grid, groups: &[Group], floor: f64) -> (Vec<Track>, Op
                     let span = r.span(&reader);
                     let held: f64 = r.z[span.clone()].iter().map(|c| c.norm()).sum();
                     let lost: f64 = rest[span].iter().map(|c| c.norm()).sum();
-                    (held > 0.0).then(|| 10.0 * (lost / held).log10())
+                    (held > 0.0).then(|| 10.0 * libm::log10(lost / held))
                 })
                 .flatten();
             track(r, grid.start, residual_db)
@@ -964,7 +964,7 @@ fn track(r: &Reading, start: f64, residual_db: Option<f64>) -> Track {
         flutter_db: r.flutter_db,
         coherence: r.coherence,
         bandwidth_hz: (r.kind == Kind::Breathy).then(|| {
-            let lorentz = -r.coherence.max(1e-3).ln() / (PI * COHERENCE_LAG_SECS);
+            let lorentz = -libm::log(r.coherence.max(1e-3)) / (PI * COHERENCE_LAG_SECS);
             lorentz.max(2.0 * r.band.sigma / 3.0)
         }),
         resolution_hz: r.band.sigma,
@@ -976,7 +976,7 @@ fn track(r: &Reading, start: f64, residual_db: Option<f64>) -> Track {
 fn energy_ratio(rest: &[f64], whole: &[f64]) -> Option<f64> {
     let held: f64 = whole.iter().map(|v| v * v).sum();
     let lost: f64 = rest.iter().map(|v| v * v).sum();
-    (held > 0.0).then(|| 10.0 * (lost / held).log10())
+    (held > 0.0).then(|| 10.0 * libm::log10(lost / held))
 }
 
 impl Reading {
@@ -1039,7 +1039,7 @@ fn synthesis(readings: &[Reading], grid: &Grid, n: usize) -> Vec<f64> {
         for (i, slot) in out.iter_mut().enumerate().take(to).skip(from) {
             let t = i as f64 / grid.sr;
             let turns = phase.integral(t).rem_euclid(1.0);
-            *slot += amp.value(t) * (TAU * turns + r.phase).sin();
+            *slot += amp.value(t) * libm::sin(TAU * turns + r.phase);
         }
     }
     out
@@ -1124,7 +1124,7 @@ fn refined(reader: &Reader, raw: &[C], b: Band, along: &[f64]) -> (Curve, f64) {
         }
         false => refined[0],
     };
-    let cent = mean_hz * (2f64.powf(KNOT_CENTS / 1200.0) - 1.0);
+    let cent = mean_hz * (libm::pow(2.0, KNOT_CENTS / 1200.0) - 1.0);
     let tolerance = cent.max(2.0 * spread(&refined, &counted));
     let table = knots(hops, &refined, &counted, tolerance);
     (refit(table, hops, &refined, &weights), mean_hz)
@@ -1223,7 +1223,7 @@ fn flutter(z: &[C], rate: f64, from: usize) -> f64 {
         .map(|f| {
             let s = &z[from + f * frame..from + (f + 1) * frame];
             let mean = s.iter().map(|c| c.abs()).sum::<f64>() / frame as f64;
-            20.0 * (mean + 1e-12).log10()
+            20.0 * libm::log10(mean + 1e-12)
         })
         .collect();
     let offs: Vec<f64> = (edge..frames - edge)
@@ -1233,7 +1233,7 @@ fn flutter(z: &[C], rate: f64, from: usize) -> f64 {
         })
         .collect();
     let mean = offs.iter().sum::<f64>() / offs.len() as f64;
-    (offs.iter().map(|o| (o - mean).powi(2)).sum::<f64>() / offs.len() as f64).sqrt()
+    (offs.iter().map(|o| (o - mean) * (o - mean)).sum::<f64>() / offs.len() as f64).sqrt()
 }
 
 fn coherence(b: &[C], rate: f64, from: usize) -> f64 {

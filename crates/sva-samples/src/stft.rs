@@ -13,7 +13,7 @@ use crate::profile::Profile;
 /// constant overlap-add at a hop that divides the window.
 pub fn hann_periodic(n: usize) -> Vec<f64> {
     (0..n)
-        .map(|k| 0.5 - 0.5 * (TAU * k as f64 / n as f64).cos())
+        .map(|k| 0.5 - 0.5 * libm::cos(TAU * k as f64 / n as f64))
         .collect()
 }
 

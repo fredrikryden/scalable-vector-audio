@@ -354,7 +354,7 @@ fn cell(f: &Span, b: &Span, chroma: &[[f64; CLASSES]], split: &bands::Bands) -> 
         .map(|band| {
             let held = &band.rms[b.from..b.to];
             let energy = held.iter().map(|r| r * r).sum::<f64>() / held.len() as f64;
-            10.0 * energy.log10()
+            10.0 * libm::log10(energy)
         })
         .collect();
     Cell {
@@ -516,7 +516,7 @@ fn novelty(raw: &[Vec<f64>], half: usize) -> Vec<f64> {
     let taper: Vec<f64> = (0..2 * half)
         .map(|a| {
             let u = a as f64 - half as f64 + 0.5;
-            u.signum() * (-u * u / (2.0 * (half * half) as f64)).exp()
+            u.signum() * libm::exp(-u * u / (2.0 * (half * half) as f64))
         })
         .collect();
     let total: f64 = taper.iter().map(|g| g.abs()).sum::<f64>().powi(2);

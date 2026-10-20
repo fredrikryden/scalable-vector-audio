@@ -67,7 +67,10 @@ pub fn partials(lines: impl IntoIterator<Item = (f64, C64)>) -> Vec<Partial> {
         });
         *summed = *summed + amp;
     }
-    let modulus = |hz: f64| at.get(&hz.to_bits()).map_or(0.0, |c| c.abs());
+    let modulus = |hz: f64| {
+        at.get(&hz.to_bits())
+            .map_or(0.0, |c| libm::hypot(c.re, c.im))
+    };
     order
         .into_iter()
         .filter(|hz| *hz > 0.0)
@@ -113,7 +116,7 @@ pub fn averaged(per_channel: Vec<Vec<Partial>>) -> Vec<Partial> {
 }
 
 pub fn above(moment: &Moment, floor_db: f64) -> Vec<Partial> {
-    let floor = 10f64.powf(floor_db / 20.0);
+    let floor = libm::pow(10f64, floor_db / 20.0);
     moment
         .partials
         .iter()

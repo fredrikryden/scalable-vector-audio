@@ -62,7 +62,7 @@ fn measure(l: &[f64], r: &[f64], t_secs: f64) -> StereoFrame {
 
 /// Silence over silence is 0, never NaN; anything past the rail `RAIL_DB` names stands on it.
 fn ratio(a: f64, b: f64) -> f64 {
-    let rail = 10f64.powf(RAIL_DB / 20.0);
+    let rail = libm::pow(10f64, RAIL_DB / 20.0);
     match () {
         () if b > 0.0 => (a / b).min(rail),
         () if a > 0.0 => rail,
@@ -73,7 +73,7 @@ fn ratio(a: f64, b: f64) -> f64 {
 /// A rail rather than an infinity, so no reader has to special-case a null.
 fn db(a: f64, b: f64) -> f64 {
     match ratio(a, b) {
-        r if r > 0.0 => (20.0 * r.log10()).clamp(-RAIL_DB, RAIL_DB),
+        r if r > 0.0 => (20.0 * libm::log10(r)).clamp(-RAIL_DB, RAIL_DB),
         _ if b > 0.0 => -RAIL_DB,
         _ => 0.0,
     }

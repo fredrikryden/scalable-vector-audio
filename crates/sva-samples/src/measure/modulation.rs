@@ -303,10 +303,10 @@ impl Lowpass {
                 let j = i as f64 - half;
                 let sinc = match j == 0.0 {
                     true => 2.0 * cut,
-                    false => (TAU * cut * j).sin() / (PI * j),
+                    false => libm::sin(TAU * cut * j) / (PI * j),
                 };
                 let x = PI * j / half;
-                sinc * (0.42 + 0.5 * x.cos() + 0.08 * (2.0 * x).cos())
+                sinc * (0.42 + 0.5 * libm::cos(x) + 0.08 * libm::cos(2.0 * x))
             })
             .collect();
         let sum: f64 = raw.iter().sum();
@@ -322,7 +322,7 @@ impl Lowpass {
         self.taps
             .iter()
             .enumerate()
-            .map(|(i, h)| h * (TAU * hz * (i as f64 - HALF_TAPS as f64) / self.rate).cos())
+            .map(|(i, h)| h * libm::cos(TAU * hz * (i as f64 - HALF_TAPS as f64) / self.rate))
             .sum()
     }
 
@@ -485,7 +485,7 @@ impl Read<'_> {
                     .clone()
                     .map(|k| {
                         let (r, i) = (re[self.n - k], -im[self.n - k]);
-                        (re[k] + sign * r).hypot(im[k] + sign * i) / 2.0
+                        libm::hypot(re[k] + sign * r, im[k] + sign * i) / 2.0
                     })
                     .collect()
             };
@@ -634,7 +634,7 @@ impl Read<'_> {
     /// The smoothing's response on energy at `hz`.
     fn smoothed(&self, hz: f64) -> C64 {
         let w = TAU * hz / self.sample_rate;
-        let back = C64::new(w.cos(), -w.sin()).scale(self.smoothing.a1);
+        let back = C64::new(libm::cos(w), -libm::sin(w)).scale(self.smoothing.a1);
         (C64::real(self.smoothing.b0) / (C64::ONE + back)).powi(SMOOTHING.poles as u32)
     }
 
@@ -642,7 +642,7 @@ impl Read<'_> {
     /// and the lowpass's for an envelope, the lowpass's alone for a centroid.
     fn gain(&self, hz: f64, kind: Kind) -> f64 {
         match kind {
-            Kind::Envelope => self.smoothed(hz).abs() * self.lowpass.gain(hz),
+            Kind::Envelope => modulus(self.smoothed(hz)) * self.lowpass.gain(hz),
             Kind::Centroid => self.lowpass.gain(hz),
         }
     }
@@ -656,8 +656,8 @@ impl Read<'_> {
         let (lo, hi) = (pass - moved, pass + moved);
         match kind {
             Kind::Envelope => (
-                self.smoothed(hz.1).abs() * lo,
-                self.smoothed(hz.0).abs() * hi,
+                modulus(self.smoothed(hz.1)) * lo,
+                modulus(self.smoothed(hz.0)) * hi,
             ),
             Kind::Centroid => (lo, hi),
         }
@@ -666,16 +666,21 @@ impl Read<'_> {
     /// V at `hz`: (1 - |H(f)|^2 + |H(2f) - H(f)^2|) / 2, H the smoothing on energy.
     fn square_law(&self, hz: f64) -> f64 {
         let (one, two) = (self.smoothed(hz), self.smoothed(2.0 * hz));
-        (1.0 - one.norm_sqr() + (two - one * one).abs()) / 2.0
+        (1.0 - one.norm_sqr() + modulus(two - one * one)) / 2.0
     }
 }
 
 /// The periodic Hann over `n` samples, its transform as three Dirichlet kernels: at `x` of
 /// its bins, sin(pi x) times this.
+/// `|z|` through libm, one value native and in wasm.
+fn modulus(z: C64) -> f64 {
+    libm::hypot(z.re, z.im)
+}
+
 fn dirichlet(x: f64, n: usize) -> C64 {
     let n = n as f64;
-    let turn = C64::new((PI / n).cos(), (PI / n).sin());
-    let s = |y: f64| (PI * y / n).sin();
+    let turn = C64::new(libm::cos(PI / n), libm::sin(PI / n));
+    let s = |y: f64| libm::sin(PI * y / n);
     C64::real(0.5 / s(x)) - turn.conj().over(4.0 * s(x - 1.0)) - turn.over(4.0 * s(x + 1.0))
 }
 
@@ -684,13 +689,13 @@ fn kernel(x: f64, n: usize) -> f64 {
     match x.abs() {
         0.0 => 1.0,
         1.0 => 0.5,
-        x => 2.0 / n as f64 * (PI * x).sin().abs() * dirichlet(x, n).abs(),
+        x => 2.0 / n as f64 * libm::sin(PI * x).abs() * modulus(dirichlet(x, n)),
     }
 }
 
 /// `kernel` with |sin(pi x)| taken as 1: over it, and falling, for 1 < x < n / 2.
 fn reach(x: f64, n: usize) -> f64 {
-    2.0 / n as f64 * dirichlet(x, n).abs()
+    2.0 / n as f64 * modulus(dirichlet(x, n))
 }
 
 /// The least and most kernel(q - u) / kernel(u) takes for u in [-q, q]: two bins `q` apart
@@ -753,7 +758,7 @@ mod tests {
             for x in [0.0, 0.01, 0.39, 0.5, 1.0, 1.7, 2.3, 7.5, 61.2] {
                 let summed = w.iter().enumerate().fold(C64::ZERO, |acc, (k, h)| {
                     let turn = -TAU * x * k as f64 / n as f64;
-                    acc + C64::new(turn.cos(), turn.sin()).scale(*h)
+                    acc + C64::new(libm::cos(turn), libm::sin(turn)).scale(*h)
                 });
                 assert!(
                     (kernel(x, n) - summed.abs() / total).abs() < 1e-12,

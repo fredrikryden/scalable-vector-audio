@@ -68,7 +68,7 @@ pub const DAMPING: (f64, f64) = (1.0 / (1u64 << 31) as f64, (1u64 << 22) as f64)
 
 fn damping_at_unit_q(shape: Shape, cutoff: f64, gain: f64, sr: f64) -> (f64, f64) {
     let w0 = 2.0 * std::f64::consts::PI * cutoff / sr;
-    let (cs, half_sn) = (w0.cos(), w0.sin() / 2.0);
+    let (cs, half_sn) = (libm::cos(w0), libm::sin(w0) / 2.0);
     let a = gain.sqrt();
     let shelf = |poles_c: f64, zeros_c: f64| {
         let s = 2.0 * a.sqrt() * half_sn;
@@ -119,8 +119,8 @@ pub fn design(shape: Shape, cutoff: f64, q: f64, gain: f64, sr: f64) -> Coeffs {
     }
 
     let w0 = 2.0 * std::f64::consts::PI * cutoff / sr;
-    let cs = w0.cos();
-    let sn = w0.sin();
+    let cs = libm::cos(w0);
+    let sn = libm::sin(w0);
     let alpha = sn / (2.0 * q);
     let a = gain.sqrt();
     let sqrt_a = a.sqrt();
@@ -182,8 +182,8 @@ pub fn design(shape: Shape, cutoff: f64, q: f64, gain: f64, sr: f64) -> Coeffs {
 
 pub fn magnitude_db(c: &Coeffs, hz: f64, sr: f64) -> f64 {
     let w = 2.0 * std::f64::consts::PI * hz / sr;
-    let (c1, s1) = (w.cos(), -w.sin());
-    let (c2, s2) = ((2.0 * w).cos(), -(2.0 * w).sin());
+    let (c1, s1) = (libm::cos(w), -libm::sin(w));
+    let (c2, s2) = (libm::cos(2.0 * w), -libm::sin(2.0 * w));
     let num_re = c.b0 + c.b1 * c1 + c.b2 * c2;
     let num_im = c.b1 * s1 + c.b2 * s2;
     let den_re = 1.0 + c.a1 * c1 + c.a2 * c2;
@@ -193,7 +193,7 @@ pub fn magnitude_db(c: &Coeffs, hz: f64, sr: f64) -> f64 {
     if den == 0.0 || num == 0.0 {
         return f64::NEG_INFINITY;
     }
-    20.0 * (num / den).log10()
+    20.0 * libm::log10(num / den)
 }
 
 pub const RESPONSE_RATIOS: [f64; 9] = [0.125, 0.25, 0.5, 0.707, 1.0, 1.414, 2.0, 4.0, 8.0];

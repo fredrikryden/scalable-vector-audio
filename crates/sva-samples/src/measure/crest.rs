@@ -44,7 +44,7 @@ pub fn analyze(planes: &[&[f64]], sample_rate: f64) -> Crest {
         .collect();
 
     let loudest = bands.iter().map(|b| b.rms).fold(0.0, f64::max);
-    let floor = loudest * 10f64.powf(-COUNTED_UNDER_DB / 20.0);
+    let floor = loudest * libm::pow(10f64, -COUNTED_UNDER_DB / 20.0);
     for b in &mut bands {
         b.counted = b.rms > floor && b.rms > 0.0;
     }

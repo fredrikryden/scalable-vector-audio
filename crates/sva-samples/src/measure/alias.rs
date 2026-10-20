@@ -179,7 +179,7 @@ pub fn measure_alias(
 /// A power ratio in dB on the floor every level here stops at.
 fn power_db(ratio: f64) -> f64 {
     match ratio > 0.0 {
-        true => (10.0 * ratio.log10()).max(FLOOR_DB),
+        true => (10.0 * libm::log10(ratio)).max(FLOOR_DB),
         false => FLOOR_DB,
     }
 }
@@ -242,12 +242,12 @@ fn thresholds(signal: &[f64], edges: &[f64]) -> Vec<f64> {
                     } else {
                         SPREAD_DOWN_DB_PER_BARK
                     };
-                    s * 10f64.powf(-slope * (zj - zi).abs() / 10.0)
+                    s * libm::pow(10f64, -slope * (zj - zi).abs() / 10.0)
                 })
                 .sum();
             let offset = if zj <= 12.0 { 3.0 } else { 0.25 * zj };
             let centre = (edges[j] + edges[j + 1]) / 2.0;
-            (spread * 10f64.powf(-offset / 10.0)).max(quiet_energy(centre))
+            (spread * libm::pow(10f64, -offset / 10.0)).max(quiet_energy(centre))
         })
         .collect()
 }
@@ -260,9 +260,9 @@ fn nmr_of(signal: &[f64], alias: &[f64], edges: &[f64]) -> f64 {
 /// Terhardt's threshold in quiet, in a band energy's own units.
 fn quiet_energy(hz: f64) -> f64 {
     let f = (hz / 1000.0).max(0.02);
-    let db_spl =
-        3.64 * f.powf(-0.8) - 6.5 * (-0.6 * (f - 3.3) * (f - 3.3)).exp() + 0.001 * f.powi(4);
-    10f64.powf((db_spl - PLAYBACK_DB_SPL) / 10.0)
+    let db_spl = 3.64 * libm::pow(f, -0.8) - 6.5 * libm::exp(-0.6 * (f - 3.3) * (f - 3.3))
+        + 0.001 * f.powi(4);
+    libm::pow(10f64, (db_spl - PLAYBACK_DB_SPL) / 10.0)
 }
 
 fn bands(signal: &[f64], alias: &[f64], edges: &[f64], frames: usize) -> Vec<AliasBand> {

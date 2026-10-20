@@ -108,7 +108,7 @@ pub fn analyze(
                 .enumerate()
                 .map(|(n, &x)| {
                     let turn = 2.0 * std::f64::consts::PI * n as f64 / len as f64;
-                    let w = 0.54 - 0.46 * turn.cos();
+                    let w = 0.54 - 0.46 * libm::cos(turn);
                     x * w
                 })
                 .collect()
@@ -142,14 +142,14 @@ pub fn analyze(
         .into_iter()
         .filter(|z| z.im > 0.0)
         .filter_map(|z| {
-            let hz = z.im.atan2(z.re) * sample_rate / (2.0 * std::f64::consts::PI);
+            let hz = libm::atan2(z.im, z.re) * sample_rate / (2.0 * std::f64::consts::PI);
             let radius = z.abs();
             if !(EDGE_HZ..sample_rate / 2.0 - EDGE_HZ).contains(&hz) || radius >= 1.0 {
                 return None;
             }
             Some(Formant {
                 hz,
-                bandwidth_hz: -radius.ln() * sample_rate / std::f64::consts::PI,
+                bandwidth_hz: -libm::log(radius) * sample_rate / std::f64::consts::PI,
                 db: db(gain / response(&a, hz, sample_rate)),
             })
         })
@@ -198,8 +198,8 @@ fn response(a: &[f64], hz: f64, sample_rate: f64) -> f64 {
     let w = 2.0 * std::f64::consts::PI * hz / sample_rate;
     let (mut re, mut im) = (0.0, 0.0);
     for (k, coefficient) in a.iter().enumerate() {
-        re += coefficient * (w * k as f64).cos();
-        im -= coefficient * (w * k as f64).sin();
+        re += coefficient * libm::cos(w * k as f64);
+        im -= coefficient * libm::sin(w * k as f64);
     }
     (re * re + im * im).sqrt()
 }
@@ -237,7 +237,7 @@ impl C {
     }
 
     fn abs(self) -> f64 {
-        self.re.hypot(self.im)
+        libm::hypot(self.re, self.im)
     }
 }
 

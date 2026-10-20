@@ -15,7 +15,7 @@ pub const S1: f64 = 0.021;
 pub const S2: f64 = 19.0;
 
 fn d(x: f64) -> f64 {
-    (-A * x).exp() - (-B * x).exp()
+    libm::exp(-A * x) - libm::exp(-B * x)
 }
 
 fn s(f_low: f64) -> f64 {
@@ -32,7 +32,7 @@ fn pair_bounds(p: &Partial, q: &Partial) -> (f64, f64) {
     let ((p1, p2), (q1, q2)) = (p.hz_bounds, q.hz_bounds);
     let df = ((p1 - q2).max(q1 - p2).max(0.0), (p2 - q1).max(q2 - p1));
     let x = (s(p2.min(q2)) * df.0, s(p1.min(q1)) * df.1);
-    let top = ((B / A).ln() / (B - A)).clamp(x.0, x.1);
+    let top = (libm::log(B / A) / (B - A)).clamp(x.0, x.1);
     let (va, vb) = (p.amplitude_bounds, q.amplitude_bounds);
     (va.0 * vb.0 * d(x.0).min(d(x.1)), va.1 * vb.1 * d(top))
 }
@@ -76,7 +76,7 @@ pub fn measure(
     floor_db: f64,
     max_pairs: usize,
 ) -> Result<Dissonance, Crowded> {
-    let floor = 10f64.powf(floor_db / 20.0);
+    let floor = libm::pow(10f64, floor_db / 20.0);
     let mut frames = Vec::with_capacity(moments.len());
     for moment in moments {
         let reach: Vec<&Partial> = moment

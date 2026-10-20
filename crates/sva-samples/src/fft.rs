@@ -12,7 +12,7 @@ pub fn twiddles(n: usize) -> Vec<(f64, f64)> {
     (0..n / 2)
         .map(|k| {
             let angle = -TAU * k as f64 / n as f64;
-            (angle.cos(), angle.sin())
+            (libm::cos(angle), libm::sin(angle))
         })
         .collect()
 }

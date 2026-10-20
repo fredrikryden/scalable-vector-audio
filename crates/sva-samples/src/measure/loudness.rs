@@ -15,9 +15,9 @@ const HIGHPASS_Q: f64 = 0.50033;
 pub const LEAST_RATE_HZ: f64 = 2.0 * SHELF_HZ;
 
 fn shelf(sr: f64) -> Coeffs {
-    let k = (std::f64::consts::PI * SHELF_HZ / sr).tan();
-    let high = 10f64.powf(SHELF_GAIN_DB / 20.0);
-    let mid = high.powf(SHELF_MID);
+    let k = libm::tan(std::f64::consts::PI * SHELF_HZ / sr);
+    let high = libm::pow(10f64, SHELF_GAIN_DB / 20.0);
+    let mid = libm::pow(high, SHELF_MID);
     let a0 = 1.0 + k / SHELF_Q + k * k;
     Coeffs {
         b0: (high + mid * k / SHELF_Q + k * k) / a0,
@@ -29,7 +29,7 @@ fn shelf(sr: f64) -> Coeffs {
 }
 
 fn highpass(sr: f64) -> Coeffs {
-    let k = (std::f64::consts::PI * HIGHPASS_HZ / sr).tan();
+    let k = libm::tan(std::f64::consts::PI * HIGHPASS_HZ / sr);
     let a0 = 1.0 + k / HIGHPASS_Q + k * k;
     Coeffs {
         b0: 1.0,
@@ -123,7 +123,7 @@ pub fn analyze(
     let at = Blocks {
         sr,
         start_secs,
-        lift_db: 20.0 * scale.log10(),
+        lift_db: 20.0 * libm::log10(scale),
     };
 
     let seconds = |secs: f64| (secs * sr).round() as usize;
@@ -140,7 +140,7 @@ pub fn analyze(
         momentary_max_lufs: peak_of(&momentary),
         short_term_max_lufs: peak_of(&short_term),
         sample_peak,
-        sample_peak_dbfs: (sample_peak > 0.0).then(|| 20.0 * sample_peak.log10()),
+        sample_peak_dbfs: (sample_peak > 0.0).then(|| 20.0 * libm::log10(sample_peak)),
         peak_note: PEAK_NOTE,
         momentary_secs: block as f64 / sr,
         hop_secs: step as f64 / sr,
@@ -153,8 +153,7 @@ pub fn analyze(
 fn headroom(peak: f64) -> f64 {
     match peak > 0.0 && peak.is_finite() {
         true => {
-            let exponent = peak
-                .log2()
+            let exponent = libm::log2(peak)
                 .ceil()
                 .clamp(f64::from(f64::MIN_EXP - 1), f64::from(f64::MAX_EXP - 1));
             2f64.powi(exponent as i32)
@@ -214,7 +213,7 @@ fn level(power: f64) -> f64 {
     if power <= 0.0 {
         return f64::NEG_INFINITY;
     }
-    OFFSET_DB + 10.0 * power.log10()
+    OFFSET_DB + 10.0 * libm::log10(power)
 }
 
 /// The mean runs on POWER, not on the levels: averaging decibels is not averaging loudness.
@@ -228,8 +227,11 @@ fn mean_above(frames: &[LoudnessFrame], threshold: f64) -> Option<f64> {
         return None;
     }
     let from = kept.iter().copied().fold(OFFSET_DB, f64::max);
-    let power: f64 = kept.iter().map(|l| 10f64.powf((l - from) / 10.0)).sum();
-    Some(from + 10.0 * (power / kept.len() as f64).log10())
+    let power: f64 = kept
+        .iter()
+        .map(|l| libm::pow(10f64, (l - from) / 10.0))
+        .sum();
+    Some(from + 10.0 * libm::log10(power / kept.len() as f64))
 }
 
 /// Both relative gates measure down from the ABSOLUTE-gated mean, never from each other.

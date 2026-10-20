@@ -181,7 +181,7 @@ pub(crate) fn starts(len: usize, frame: usize) -> Vec<usize> {
 /// Third-octave from 20 Hz up.
 pub fn third_octave_edges(sample_rate: f64) -> Vec<(f64, f64)> {
     let nyquist = sample_rate / 2.0;
-    let ratio = 2f64.powf(1.0 / 3.0);
+    let ratio = libm::cbrt(2.0);
     let mut out = Vec::new();
     let mut lo = 20.0;
     while lo < nyquist {

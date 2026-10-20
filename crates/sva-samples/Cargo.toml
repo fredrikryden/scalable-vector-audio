@@ -9,3 +9,5 @@ repository.workspace = true
 
 [dependencies]
 sva-formula = { workspace = true }
+# Pure-Rust transcendentals: a reading computes the same bits native and in wasm.
+libm = "0.2.16"

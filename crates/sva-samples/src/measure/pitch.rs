@@ -98,7 +98,7 @@ fn name_all(found: &[Peak], max_notes: usize, spread_hz: f64) -> Vec<Note> {
 }
 
 pub fn midi_of(hz: f64) -> f64 {
-    69.0 + 12.0 * (hz / 440.0).log2()
+    69.0 + 12.0 * libm::log2(hz / 440.0)
 }
 
 pub fn note_name(midi: i64) -> String {
@@ -140,7 +140,7 @@ fn series_roots(notes: &[&Peak], spread_hz: f64) -> Vec<(Option<f64>, u32)> {
             let miss = |i: usize, m: &Member, q: u32| {
                 let k = f64::from(q * m.n);
                 let law = m.hz * f64::from(q) * stretch(k, b) / stretch(f64::from(m.n), b);
-                (notes[i].hz / law).ln().abs()
+                libm::log(notes[i].hz / law).abs()
             };
             let nearest = |i: usize| {
                 let admitted: Vec<(Member, u32)> = series
@@ -194,7 +194,7 @@ fn over(hz: f64, m: &Member, b: f64) -> Option<u32> {
 }
 
 fn amp(db: f64) -> f64 {
-    10f64.powf(db / 20.0)
+    libm::pow(10f64, db / 20.0)
 }
 
 fn salience(notes: &[&Peak], among: &[usize], hz: f64) -> f64 {

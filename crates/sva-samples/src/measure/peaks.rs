@@ -12,7 +12,7 @@ pub fn db(amplitude: f64) -> f64 {
     if amplitude <= 0.0 {
         FLOOR_DB
     } else {
-        (20.0 * amplitude.log10()).max(FLOOR_DB)
+        (20.0 * libm::log10(amplitude)).max(FLOOR_DB)
     }
 }
 
@@ -108,7 +108,7 @@ pub(crate) fn kernel(d: f64) -> f64 {
         _ if d >= 1.0 => 0.5,
         _ => {
             let x = std::f64::consts::PI * d;
-            x.sin() / (x * (1.0 - d * d))
+            libm::sin(x) / (x * (1.0 - d * d))
         }
     }
 }

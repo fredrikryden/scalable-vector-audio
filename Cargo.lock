@@ -440,6 +440,7 @@ version = "0.14.27"
 name = "sva-samples"
 version = "0.14.27"
 dependencies = [
+ "libm",
  "sva-formula",
 ]
 

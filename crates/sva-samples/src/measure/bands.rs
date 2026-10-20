@@ -11,11 +11,11 @@ pub fn erb_hz(hz: f64) -> f64 {
 
 /// One Cam is one filter width along the cochlea.
 pub fn cam(hz: f64) -> f64 {
-    21.4 * (1.0 + 4.37 * hz / 1000.0).log10()
+    21.4 * libm::log10(1.0 + 4.37 * hz / 1000.0)
 }
 
 pub fn hz_at_cam(cam: f64) -> f64 {
-    (10f64.powf(cam / 21.4) - 1.0) * 1000.0 / 4.37
+    (libm::pow(10f64, cam / 21.4) - 1.0) * 1000.0 / 4.37
 }
 
 /// 1 to 40 Cam is 26 Hz to 16.7 kHz.

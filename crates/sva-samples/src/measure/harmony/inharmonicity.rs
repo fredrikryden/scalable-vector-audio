@@ -92,7 +92,7 @@ pub struct Inharmonicity {
 }
 
 fn cents(ratio: f64) -> f64 {
-    1200.0 * ratio.log2()
+    1200.0 * libm::log2(ratio)
 }
 
 /// The root is n = 1 of itself, 0 cents whatever its bounds.
