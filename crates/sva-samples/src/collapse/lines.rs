@@ -121,19 +121,6 @@ pub(super) fn kept_lines(
         kept.push(here);
         dropped.push(gone);
     }
-    // A form with no line at all is silence, not a band every line sat above.
-    if kept.iter().all(Vec::is_empty) && !dropped.iter().all(Vec::is_empty) {
-        let lowest = dropped
-            .iter()
-            .flatten()
-            .map(|l| l.hz.abs())
-            .fold(f64::INFINITY, f64::min);
-        return Err(CollapseError::EmptyBand {
-            ceiling,
-            lowest,
-            by_rate: ceiling < profile.ceiling_hz,
-        });
-    }
     Ok(Some(Kept {
         kept,
         dropped,

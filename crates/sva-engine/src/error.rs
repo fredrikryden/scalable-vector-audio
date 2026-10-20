@@ -230,7 +230,7 @@ impl std::error::Error for EngineError {}
 
 /// Every code a judgment in this engine can refuse under, with what trips it. The prefix
 /// says which judgment refused, per FORMAT 16.
-pub static REGISTRY: [(&str, &str); 105] = [
+pub static REGISTRY: [(&str, &str); 104] = [
     (
         "type.no_overload",
         "a builtin applied to operand types no row names",
@@ -316,10 +316,6 @@ pub static REGISTRY: [(&str, &str); 105] = [
     (
         "cast.window_off_the_lattice",
         "an stft window or hop that is no whole number of steps of the rate in use",
-    ),
-    (
-        "collapse.empty_band",
-        "every line sits at or above the ceiling",
     ),
     (
         "collapse.singular_in_ct",
