@@ -98,7 +98,7 @@ fn a_cutoff_past_nyquist_or_at_zero_clamps_rather_than_producing_nonsense() {
     assert_eq!(clamp_cutoff(0.0, SR), (1.0, true));
     assert_eq!(clamp_cutoff(1000.0, SR), (1000.0, false));
     for shape in [Shape::Lowpass, Shape::Highpass, Shape::Bandpass] {
-        let c = design(shape, hz, clamp_q(0.0).0, 1.0, SR);
+        let c = design(shape, hz, clamp_q(shape, hz, 0.0, 1.0, SR).0, 1.0, SR);
         assert!(c.b0.is_finite() && c.a1.is_finite() && c.a2.is_finite());
     }
 }

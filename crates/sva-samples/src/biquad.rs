@@ -36,10 +36,6 @@ impl State {
     }
 }
 
-/// Outside these it is a wire or a ringing sine, not a filter.
-pub const MIN_Q: f64 = 1e-3;
-pub const MAX_Q: f64 = 100.0;
-
 /// Short of the top tenth, where `tan` runs away.
 const HIGHEST_FRACTION_OF_RATE: f64 = 0.45;
 
@@ -66,13 +62,44 @@ pub fn clamp_gain(gain: f64) -> (f64, bool) {
     }
 }
 
-pub fn clamp_q(q: f64) -> (f64, bool) {
-    if q < MIN_Q {
-        (MIN_Q, true)
-    } else if q > MAX_Q {
-        (MAX_Q, true)
+/// Correctness: damping `d = s/c` (`a0, a2 = c ± s`; `b0, b2` for zeros) rounds
+/// within `2^-20` of itself from `2^-31`; the ringing bound holds to `2^22`.
+pub const DAMPING: (f64, f64) = (1.0 / (1u64 << 31) as f64, (1u64 << 22) as f64);
+
+fn damping_at_unit_q(shape: Shape, cutoff: f64, gain: f64, sr: f64) -> (f64, f64) {
+    let w0 = 2.0 * std::f64::consts::PI * cutoff / sr;
+    let (cs, half_sn) = (w0.cos(), w0.sin() / 2.0);
+    let a = gain.sqrt();
+    let shelf = |poles_c: f64, zeros_c: f64| {
+        let s = 2.0 * a.sqrt() * half_sn;
+        (s / poles_c, s / zeros_c)
+    };
+    match shape {
+        Shape::Peaking => (half_sn / a, half_sn * a),
+        Shape::Lowshelf => shelf((a + 1.0) + (a - 1.0) * cs, (a + 1.0) - (a - 1.0) * cs),
+        Shape::Highshelf => shelf((a + 1.0) - (a - 1.0) * cs, (a + 1.0) + (a - 1.0) * cs),
+        _ => (half_sn, half_sn),
+    }
+}
+
+/// Holds q inside `DAMPING`; zeros no q fits are flagged.
+pub fn clamp_q(shape: Shape, cutoff: f64, q: f64, gain: f64, sr: f64) -> (f64, bool) {
+    if shape == Shape::OnePole {
+        return (q, false);
+    }
+    let (poles, zeros) = damping_at_unit_q(shape, cutoff, gain, sr);
+    let (least, most) = DAMPING;
+    let (mut lo, mut hi) = (poles.max(zeros) / most, poles.min(zeros) / least);
+    let apart = lo > hi;
+    if apart {
+        (lo, hi) = (poles / most, poles / least);
+    }
+    if q < lo || q.is_nan() {
+        (lo, true)
+    } else if q > hi {
+        (hi, true)
     } else {
-        (q, false)
+        (q, apart)
     }
 }
 

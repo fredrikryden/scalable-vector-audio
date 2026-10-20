@@ -130,6 +130,28 @@ fn a_swept_gain_is_traced_alongside_cutoff_and_q() {
     assert!(frames.iter().all(|f| f.cutoff == 1000.0 && f.q == 2.0));
 }
 
+/// A bandpass at q 1000 runs at that q, unflagged: a tone 1% off the centre sits 26 dB
+/// down, as the design says, read once 22 time constants have rung out.
+#[test]
+fn a_bandpass_keeps_a_q_of_a_thousand() {
+    let (n, q) = (384_000, 1000.0);
+    let s = site(Shape::Bandpass, 1000.0, q, 48000.0);
+    assert!(!s.trace("n", 0, 48000.0)[0].clamped);
+    for hz in [1000.0, 1010.0] {
+        let out = run(Shape::Bandpass, 1000.0, q, &tone(hz, n));
+        let measured = 20.0 * (rms(&out[n - 48_000..]) / rms(&tone(hz, 48_000))).log10();
+        let predicted = sva_samples::biquad::magnitude_db(
+            &sva_samples::biquad::design(Shape::Bandpass, 1000.0, q, 1.0, 48000.0),
+            hz,
+            48000.0,
+        );
+        assert!(
+            (measured - predicted).abs() < 0.01,
+            "{hz} Hz: measured {measured:.3} dB, q {q} predicts {predicted:.3} dB"
+        );
+    }
+}
+
 #[test]
 fn a_cutoff_swept_past_nyquist_is_flagged_clamped_and_stays_finite() {
     let sr = 48000.0;

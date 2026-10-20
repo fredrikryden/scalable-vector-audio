@@ -54,7 +54,8 @@ impl FilterTrace {
         });
         let shape = self.shape;
         let cutoff = clamp_cutoff(mid.cutoff, sample_rate).0;
-        let (q, gain) = (clamp_q(mid.q).0, clamp_gain(mid.gain).0);
+        let gain = clamp_gain(mid.gain).0;
+        let q = clamp_q(shape, cutoff, mid.q, gain, sample_rate).0;
         let coefficients = design(shape, cutoff, q, gain, sample_rate);
         Automation {
             node: self.node.clone(),
@@ -130,11 +131,11 @@ struct Lane {
 
 pub fn coefficients(shape: Shape, cutoff: f64, q: f64, gain: f64, sr: f64) -> (Coeffs, bool) {
     let (c, c_clamped) = clamp_cutoff(cutoff, sr);
-    let (qq, q_clamped) = clamp_q(q);
     let (g, g_clamped) = match shape.takes_gain() {
         true => clamp_gain(gain),
         false => (1.0, false),
     };
+    let (qq, q_clamped) = clamp_q(shape, c, q, g, sr);
     (
         design(shape, c, qq, g, sr),
         c_clamped || q_clamped || g_clamped,

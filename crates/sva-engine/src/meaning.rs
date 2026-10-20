@@ -89,7 +89,13 @@ pub fn meaning(builtin: &str, key: &str) -> Option<Meaning> {
 fn filter(key: &str) -> Option<Meaning> {
     Some(match key {
         "cutoff" => plain("corner or centre frequency", "Hz"),
-        "q" => plain("resonance: centre frequency over bandwidth", "none"),
+        "q" => plain(
+            "resonance: centre frequency over bandwidth, with no limit of its own; a sampled \
+             filter holds q, flagged, where its damping (sin(2*pi*cutoff/rate)/(2q) for a \
+             bandpass) leaves [2^-31, 2^22], inside which rounding errs it by under 2^-20: at \
+             48 kHz q reaches 2.8e6 at 20 Hz and 1.4e8 at 1 kHz",
+            "none",
+        ),
         "gain" => plain(
             "boost or cut of a shelf or peak: the amplitude ratio there, written in db (`12db`, \
              `-6db`); a bare number is that ratio, 1 flat",
