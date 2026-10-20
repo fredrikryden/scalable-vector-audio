@@ -1,6 +1,6 @@
 // Concern: states the BS.1770 readings a K-weighted measure owes its own conformance tones | Non-concern: per-component level (src/measure/envelope.rs) | IO: (planes) -> asserted LUFS
 
-use sva_samples::measure::loudness::{Loudness, analyze};
+use sva_samples::measure::loudness::{Loudness, MOMENTARY_SECS, analyze};
 
 fn sine(hz: f64, sr: f64, secs: f64, amp: f64) -> Vec<f64> {
     (0..(secs * sr) as usize)
@@ -9,7 +9,7 @@ fn sine(hz: f64, sr: f64, secs: f64, amp: f64) -> Vec<f64> {
 }
 
 fn of(planes: &[&[f64]], sr: f64) -> Loudness {
-    analyze(planes, sr, 0.0).expect("a rate the K-weighting is designed at")
+    analyze(planes, sr, 0.0, MOMENTARY_SECS).expect("a rate the K-weighting is designed at")
 }
 
 /// BS.1770-2 conformance, which pins offset, shelf and highpass at once.
@@ -120,4 +120,18 @@ fn a_quiet_block_after_a_loud_stretch_reads_its_own_level() {
             "{lufs} LUFS after a loud stretch, {steady} alone"
         );
     }
+}
+
+/// A sound shorter than BS.1770's 400 ms block has no integrated loudness at that block, and
+/// reads its own under a shorter one: a 1 kHz sine at -20 dBFS is -23 LKFS either way.
+#[test]
+fn a_shorter_window_reads_a_sound_shorter_than_the_momentary_block() {
+    let s = sine(1000.0, 48000.0, 0.3, 0.1);
+    assert_eq!(of(&[&s], 48000.0).integrated_lufs, None);
+    let short = analyze(&[&s], 48000.0, 0.0, 0.1).expect("a rate the K-weighting is designed at");
+    let integrated = short
+        .integrated_lufs
+        .expect("blocks of 100 ms fit in 300 ms");
+    assert!((integrated + 23.0).abs() < 0.1, "{integrated}");
+    assert_eq!((short.momentary_secs, short.hop_secs), (0.1, 0.025));
 }

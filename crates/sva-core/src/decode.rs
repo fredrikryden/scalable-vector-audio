@@ -207,6 +207,8 @@ fn loudness(at: At) -> Read<Output> {
         sample_peak: field!(at, "sample_peak").num()?,
         sample_peak_dbfs: field!(at, "sample_peak_dbfs").maybe()?,
         peak_note: PEAK_NOTE,
+        momentary_secs: field!(at, "momentary_secs").num()?,
+        hop_secs: field!(at, "hop_secs").num()?,
         momentary: frames(field!(at, "momentary"))?,
         short_term: frames(field!(at, "short_term"))?,
     })))
@@ -264,7 +266,7 @@ pub fn reading(representation: Representation, value: &Value, path: &str) -> Rea
         Representation::Envelope { .. } => envelope(at),
         Representation::Pitch { .. } => pitch(at),
         Representation::Bands => bands(at),
-        Representation::Loudness => loudness(at),
+        Representation::Loudness { .. } => loudness(at),
         Representation::Crest => crest(at),
         Representation::Onsets => onsets(at),
         other => Err(format!("`{other:?}` has no JSON reader")),

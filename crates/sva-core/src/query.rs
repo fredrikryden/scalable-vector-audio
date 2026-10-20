@@ -248,6 +248,7 @@ impl Asked {
                 frame_secs,
             } => vec![(Arg::Peaks, count(peaks)), (Arg::Frame, secs(frame_secs))],
             R::Stereo { frame_secs } => vec![(Arg::Frame, secs(frame_secs))],
+            R::Loudness { window_secs } => vec![(Arg::Window, secs(window_secs))],
             R::Bands => vec![],
             R::Alias { oversample } => vec![(Arg::Oversample, count(oversample as usize))],
             R::Harmony {
@@ -303,7 +304,6 @@ impl Asked {
             | R::Derivative
             | R::Samples
             | R::Crest
-            | R::Loudness
             | R::Onsets
             | R::Bindings
             | R::Arguments => Vec::new(),

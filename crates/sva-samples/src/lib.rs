@@ -42,7 +42,7 @@ pub use measure::crest::{BandCrest, Crest};
 pub use measure::envelope::EnvelopeFrame;
 pub use measure::formants::{Formant, FormantFrame, MAX_ORDER, default_order};
 pub use measure::ledger::{LedgerEntry, SignalKind, Unit};
-pub use measure::loudness::{Loudness, LoudnessFrame, PEAK_NOTE, RateUnderWeighting};
+pub use measure::loudness::{Loudness, LoudnessFrame, PEAK_NOTE, RateUnderWeighting, Unweighted};
 pub use measure::onsets::{IoiBucket, Onset, Onsets};
 pub use measure::pitch::{Note, PitchFrame};
 pub use measure::spectrum::{

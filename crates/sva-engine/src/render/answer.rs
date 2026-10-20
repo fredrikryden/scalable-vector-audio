@@ -461,6 +461,20 @@ fn rate_under(
     })
 }
 
+fn block_under(name: &str, (window_secs, samples, rate): (f64, usize, u32)) -> EngineError {
+    let least = sva_samples::measure::loudness::LEAST_BLOCK_SAMPLES;
+    let secs = least as f64 / f64::from(rate);
+    EngineError::refused(Diagnostic {
+        code: "read.block_under_samples".to_string(),
+        message: format!(
+            "a {window_secs}s `loudness` window holds {samples} samples at {rate} Hz, under the \
+             {least} a block a quarter of itself apart needs"
+        ),
+        location: Located::at(name, None),
+        help: format!("ask a window of {secs}s or longer, as `loudness(window={secs}s)`"),
+    })
+}
+
 /// Names the least frame or target an all-pole fit of the order reads, `longer` how to hand
 /// it a target that long.
 fn under_order(
@@ -886,6 +900,11 @@ fn measured(
                 NoReading::Crowded(held) => crowded(name, other, held),
                 NoReading::Unread(why) => unread(name, other, why, longer, faster),
                 NoReading::RateUnder(held) => rate_under(name, held, faster),
+                NoReading::BlockUnder {
+                    window_secs,
+                    samples,
+                    rate,
+                } => block_under(name, (window_secs, samples, rate)),
                 NoReading::UnderOrder(why) => under_order(name, why, longer),
                 NoReading::Unfit(why) => unfit(name, why, shorter, faster),
             });
@@ -898,11 +917,19 @@ fn measured(
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NoReading {
     NeedsAGraph,
-    WidthMismatch { need: usize, held: usize },
+    WidthMismatch {
+        need: usize,
+        held: usize,
+    },
     Crowded(Crowded),
     Unread(sliding::Unread),
     Unfit(self_similarity::Unfit),
     RateUnder(sva_samples::RateUnderWeighting),
+    BlockUnder {
+        window_secs: f64,
+        samples: usize,
+        rate: u32,
+    },
     UnderOrder(formants::UnderOrder),
 }
 
@@ -962,8 +989,18 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
         Representation::Bands => Output::Bands(Box::new(bands::analyze(&planes, sr, start))),
         Representation::Crest => Output::Crest(Box::new(crest::analyze(&planes, sr))),
         Representation::Onsets => Output::Onsets(Box::new(onsets::detect(&planes, sr, start))),
-        Representation::Loudness => Output::Loudness(Box::new(
-            loudness::analyze(&planes, sr, start).map_err(NoReading::RateUnder)?,
+        Representation::Loudness { window_secs } => Output::Loudness(Box::new(
+            loudness::analyze(&planes, sr, start, window_secs).map_err(|why| match why {
+                sva_samples::Unweighted::Rate(held) => NoReading::RateUnder(held),
+                sva_samples::Unweighted::Block {
+                    window_secs,
+                    samples,
+                } => NoReading::BlockUnder {
+                    window_secs,
+                    samples,
+                    rate: buffer.rate,
+                },
+            })?,
         )),
         Representation::Harmony {
             reading,
@@ -1290,6 +1327,11 @@ pub fn answer_buffer(
         NoReading::Unread(why) => unread(name, representation, why, longer, faster),
         NoReading::Unfit(why) => unfit(name, why, shorter, faster),
         NoReading::RateUnder(held) => rate_under(name, held, faster),
+        NoReading::BlockUnder {
+            window_secs,
+            samples,
+            rate,
+        } => block_under(name, (window_secs, samples, rate)),
         NoReading::UnderOrder(why) => under_order(name, why, longer),
     })?;
     Ok(Answer::whole(

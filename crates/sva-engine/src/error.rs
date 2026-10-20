@@ -230,7 +230,7 @@ impl std::error::Error for EngineError {}
 
 /// Every code a judgment in this engine can refuse under, with what trips it. The prefix
 /// says which judgment refused, per FORMAT 16.
-pub static REGISTRY: [(&str, &str); 104] = [
+pub static REGISTRY: [(&str, &str); 105] = [
     (
         "type.no_overload",
         "a builtin applied to operand types no row names",
@@ -461,6 +461,10 @@ pub static REGISTRY: [(&str, &str); 104] = [
     (
         "read.too_many_partial_pairs",
         "a harmonic reading of a frame whose partials over the floor pair past the cap",
+    ),
+    (
+        "read.block_under_samples",
+        "a loudness window under the four samples a block a quarter of itself apart needs",
     ),
     (
         "read.window_under_two_periods",

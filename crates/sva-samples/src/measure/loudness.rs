@@ -46,7 +46,7 @@ const INTEGRATED_GATE_LU: f64 = -10.0;
 
 const RANGE_GATE_LU: f64 = -20.0;
 
-const MOMENTARY_SECS: f64 = 0.4;
+pub const MOMENTARY_SECS: f64 = 0.4;
 const SHORT_TERM_SECS: f64 = 3.0;
 
 const STEP_SECS: f64 = 0.1;
@@ -70,6 +70,8 @@ pub struct Loudness {
     pub sample_peak: f64,
     pub sample_peak_dbfs: Option<f64>,
     pub peak_note: &'static str,
+    pub momentary_secs: f64,
+    pub hop_secs: f64,
     pub momentary: Vec<LoudnessFrame>,
     pub short_term: Vec<LoudnessFrame>,
 }
@@ -81,19 +83,37 @@ pub struct RateUnderWeighting {
     pub least_hz: f64,
 }
 
+/// So a quarter block is a whole step.
+pub const LEAST_BLOCK_SAMPLES: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Unweighted {
+    Rate(RateUnderWeighting),
+    Block { window_secs: f64, samples: usize },
+}
+
 /// Every component weighs 1.0: BS.1770's 1.41 surround lift needs a channel identity an
 /// indexed component does not carry.
 pub fn analyze(
     planes: &[&[f64]],
     sr: f64,
     start_secs: f64,
-) -> Result<Loudness, RateUnderWeighting> {
+    window_secs: f64,
+) -> Result<Loudness, Unweighted> {
     if sr <= LEAST_RATE_HZ {
-        return Err(RateUnderWeighting {
+        return Err(Unweighted::Rate(RateUnderWeighting {
             rate_hz: sr,
             least_hz: LEAST_RATE_HZ,
+        }));
+    }
+    let samples = (window_secs * sr).round();
+    if samples.is_nan() || samples < LEAST_BLOCK_SAMPLES as f64 {
+        return Err(Unweighted::Block {
+            window_secs,
+            samples: samples.max(0.0) as usize,
         });
     }
+    let (block, step) = (samples as usize, (samples / 4.0).round() as usize);
     let sample_peak = planes
         .iter()
         .flat_map(|p| p.iter())
@@ -106,8 +126,13 @@ pub fn analyze(
         lift_db: 20.0 * scale.log10(),
     };
 
-    let momentary = blocks(&squares, &at, MOMENTARY_SECS);
-    let short_term = blocks(&squares, &at, SHORT_TERM_SECS);
+    let seconds = |secs: f64| (secs * sr).round() as usize;
+    let momentary = blocks(&squares, &at, (block, step));
+    let short_term = blocks(
+        &squares,
+        &at,
+        (seconds(SHORT_TERM_SECS), seconds(STEP_SECS)),
+    );
 
     Ok(Loudness {
         integrated_lufs: gated_mean(&momentary, INTEGRATED_GATE_LU),
@@ -117,6 +142,8 @@ pub fn analyze(
         sample_peak,
         sample_peak_dbfs: (sample_peak > 0.0).then(|| 20.0 * sample_peak.log10()),
         peak_note: PEAK_NOTE,
+        momentary_secs: block as f64 / sr,
+        hop_secs: step as f64 / sr,
         momentary,
         short_term,
     })
@@ -157,9 +184,8 @@ struct Blocks {
 }
 
 /// A block sums its own samples, piece by piece between edges, whatever loud stretch precedes it.
-fn blocks(squares: &[f64], at: &Blocks, block_secs: f64) -> Vec<LoudnessFrame> {
-    let n = (block_secs * at.sr).round() as usize;
-    let step = ((STEP_SECS * at.sr).round() as usize).max(1);
+fn blocks(squares: &[f64], at: &Blocks, (n, step): (usize, usize)) -> Vec<LoudnessFrame> {
+    let step = step.max(1);
     if n == 0 || squares.len() < n {
         return Vec::new();
     }

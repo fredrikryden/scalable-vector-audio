@@ -963,7 +963,9 @@ fn each_unreadable_ask_refuses_under_its_own_code_naming_what_reads() {
             tone,
             2_000,
             1.0,
-            Representation::Loudness,
+            Representation::Loudness {
+                window_secs: sva_engine::DEFAULT_LOUDNESS_WINDOW_SECS,
+            },
             "read.rate_under_weighting",
             "over 3363.94 Hz",
         ),

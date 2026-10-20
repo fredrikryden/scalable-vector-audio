@@ -5,10 +5,10 @@ use sva_core::solve;
 use sva_engine::resample;
 use sva_engine::{
     DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB, DEFAULT_FRAME_SECS,
-    DEFAULT_LEDGER_DEPTH, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS, DEFAULT_MODULATION_WINDOW_SECS,
-    DEFAULT_NOVELTY_WINDOW_SECS, DEFAULT_OVERSAMPLE, DEFAULT_PERIODICITY_WINDOW_SECS,
-    DEFAULT_SAMPLE_RATE, DEFAULT_SMOOTH_SECS, PSYCHOACOUSTIC_V1, READINGS, Reads,
-    self_similarity::MAX_CELLS, spectrum,
+    DEFAULT_LEDGER_DEPTH, DEFAULT_LOUDNESS_WINDOW_SECS, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS,
+    DEFAULT_MODULATION_WINDOW_SECS, DEFAULT_NOVELTY_WINDOW_SECS, DEFAULT_OVERSAMPLE,
+    DEFAULT_PERIODICITY_WINDOW_SECS, DEFAULT_SAMPLE_RATE, DEFAULT_SMOOTH_SECS, PSYCHOACOUSTIC_V1,
+    READINGS, Reads, self_similarity::MAX_CELLS, spectrum,
 };
 
 /// Read off the constants the parser itself defaults to, so a printed default cannot drift
@@ -648,6 +648,13 @@ DEFAULTS:
   voice_leading(norm=<l1|l2>) how a voice leading's moves add up. Default l1.
   dissonance(pairs=<n>) the most partial pairs one frame sums before it refuses.
                        Default {DEFAULT_MAX_PAIRS}.
+  loudness(window=<t>) the length of one momentary block, in seconds, each a
+                       quarter of one after the last, the integrated loudness
+                       gated over them; both are whole samples, at least 4 in
+                       a block, and the reading states them as `momentary_secs`
+                       and `hop_secs`. A window under the default reads a sound
+                       shorter than the default, whose integrated is null there.
+                       Default {DEFAULT_LOUDNESS_WINDOW_SECS}.
   periodicity(window=<t>) the span of onset strength one window autocorrelates,
                        in seconds, at least twice the shortest period it reads;
                        it reads periods up to half its span.

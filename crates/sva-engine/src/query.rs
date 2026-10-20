@@ -27,6 +27,8 @@ pub const DEFAULT_BUFFER_SECS: f64 = 0.05;
 pub const DEFAULT_FLOOR_DB: f64 = -40.0;
 /// The most partial pairs one `dissonance` frame sums before it refuses.
 pub const DEFAULT_MAX_PAIRS: usize = 1 << 17;
+/// BS.1770's momentary block, which `loudness` integrates over unless asked another.
+pub const DEFAULT_LOUDNESS_WINDOW_SECS: f64 = sva_samples::measure::loudness::MOMENTARY_SECS;
 /// The span of onset-strength envelope one `periodicity` window autocorrelates.
 pub const DEFAULT_PERIODICITY_WINDOW_SECS: f64 = 6.0;
 /// The span of band envelope one `modulation` window transforms.
@@ -299,10 +301,13 @@ static CREST: Reading = Reading {
 
 static LOUDNESS: Reading = Reading {
     name: "loudness",
-    takes: &[],
+    takes: &[Arg::Window],
     reads: Reads::Samples,
-    help: "integrated, momentary and short-term loudness in LUFS",
-    build: |_| Representation::Loudness,
+    help: "integrated, momentary and short-term loudness in LUFS, the momentary blocks `window` \
+           long and the integrated gated over them",
+    build: |g| Representation::Loudness {
+        window_secs: g.window.unwrap_or(DEFAULT_LOUDNESS_WINDOW_SECS),
+    },
 };
 
 static ONSETS: Reading = Reading {
@@ -513,7 +518,10 @@ pub enum Representation {
     },
     Bands,
     Crest,
-    Loudness,
+    /// Momentary blocks of `window_secs`, the integrated loudness gated over them.
+    Loudness {
+        window_secs: f64,
+    },
     Onsets,
     Alias {
         oversample: u32,
@@ -659,7 +667,7 @@ impl Representation {
             Representation::Stereo { .. } => &STEREO,
             Representation::Bands => &BANDS,
             Representation::Crest => &CREST,
-            Representation::Loudness => &LOUDNESS,
+            Representation::Loudness { .. } => &LOUDNESS,
             Representation::Onsets => &ONSETS,
             Representation::Alias { .. } => &ALIAS,
             Representation::Harmony { reading, .. } => match reading {

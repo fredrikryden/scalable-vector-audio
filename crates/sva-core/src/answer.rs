@@ -183,7 +183,8 @@ fn loudness_json(l: &Loudness, limit: Option<usize>) -> String {
     format!(
         "{{ \"integrated_lufs\": {}, \"range_lu\": {}, \"momentary_max_lufs\": {}, \
          \"short_term_max_lufs\": {}, \"sample_peak\": {}, \"sample_peak_dbfs\": {}, \
-         \"peak_note\": \"{}\", \"momentary\": {}, \"short_term\": {} }}",
+         \"peak_note\": \"{}\", \"momentary_secs\": {}, \"hop_secs\": {}, \"momentary\": {}, \
+         \"short_term\": {} }}",
         maybe(l.integrated_lufs),
         maybe(l.range_lu),
         maybe(l.momentary_max_lufs),
@@ -191,6 +192,8 @@ fn loudness_json(l: &Loudness, limit: Option<usize>) -> String {
         num(l.sample_peak),
         maybe(l.sample_peak_dbfs),
         escape(l.peak_note),
+        num(l.momentary_secs),
+        num(l.hop_secs),
         frames(&l.momentary),
         frames(&l.short_term)
     )

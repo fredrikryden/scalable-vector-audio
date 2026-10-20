@@ -16,6 +16,10 @@ fn second(expr: &str) -> sva_core::Rendered {
     probe(&dir, "@x([0, 1s])").unwrap_or_else(|e| panic!("`{expr}`: {e}"))
 }
 
+const LOUDNESS: Representation = Representation::Loudness {
+    window_secs: sva_engine::DEFAULT_LOUDNESS_WINDOW_SECS,
+};
+
 #[test]
 fn basic_fixture_renders_with_bpm_meter_and_a_repeat_desugared() {
     let rendered = master(&fixture("basic")).expect("basic fixture should render");
@@ -132,7 +136,7 @@ fn every_answer_names_its_source_profile_and_rate() {
     };
     assert!(lines.iter().any(|l| (l.hz - 440.0).abs() < 1e-9));
 
-    let measured = rendered.answer(PROBE, Representation::Loudness).unwrap();
+    let measured = rendered.answer(PROBE, LOUDNESS).unwrap();
     assert_eq!(measured.source, Source::Measured);
     assert_eq!(measured.rate, Some(44_100));
 
@@ -724,7 +728,7 @@ fn a_capped_reading_names_the_second_its_items_stop_before() {
         "a plane resumes at the sample after the last one shown"
     );
 
-    for representation in [Representation::Bands, Representation::Loudness] {
+    for representation in [Representation::Bands, LOUDNESS] {
         let answer = rendered.answer(PROBE, representation).unwrap();
         let json = sva_core::value_json(&answer.value, Some(3), false);
         let resume = at(&json);
