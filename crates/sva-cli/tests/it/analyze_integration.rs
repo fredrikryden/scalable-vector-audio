@@ -627,4 +627,8 @@ fn partials_prints_its_arguments_and_tracks_a_node_pastes() {
     for bound in ["resolution_hz", "resolution_secs", "residual_db"] {
         assert!(track["bound"][bound].as_f64().is_some(), "{track}");
     }
+    assert!(
+        track["bound"]["unclaimed_db"].is_null(),
+        "a lone tone's band is its own everywhere: {track}"
+    );
 }

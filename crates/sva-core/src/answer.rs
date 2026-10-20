@@ -666,7 +666,8 @@ fn partial_json(t: &partials::Track) -> String {
     format!(
         "\n    {{ \"kind\": \"{}\", \"hz\": {}, \"frequency\": {}, \"amplitude\": {}, \
          \"phase\": {}, \"flutter_db\": {}, \"coherence\": {}, \"bandwidth_hz\": {}, \
-         \"bound\": {{ \"resolution_hz\": {}, \"resolution_secs\": {}, \"residual_db\": {} }} }}",
+         \"bound\": {{ \"resolution_hz\": {}, \"resolution_secs\": {}, \"residual_db\": {}, \
+         \"unclaimed_db\": {} }} }}",
         t.kind.key(),
         num(t.hz),
         knots_json(&t.frequency, "hz"),
@@ -677,7 +678,8 @@ fn partial_json(t: &partials::Track) -> String {
         maybe(t.bandwidth_hz),
         num(t.resolution_hz),
         num(t.resolution_secs),
-        maybe(t.residual_db)
+        maybe(t.residual_db),
+        maybe(t.unclaimed_db)
     )
 }
 

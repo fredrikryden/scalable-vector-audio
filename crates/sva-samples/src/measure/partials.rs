@@ -101,9 +101,10 @@ pub const MODEL: &str = "heterodyne partial tracking, as the fit harness's analy
                          neighbour d Hz away moves the band by at most its amplitude times \
                          e^(-d^2 / (2 sigma^2)). Frequency: the group's peaks per hop, plus the \
                          band's mean phase slope over 2 pi across 4 time deviations about the \
-                         hop, where the band is over the floor, that span lies 3 time \
-                         deviations inside the target (anywhere it sounds, where no hop does) \
-                         and the slope is within 2 sigma, farther than which the band reads a \
+                         hop, where the group holds a peak, the band is over the floor, that \
+                         span lies 3 time deviations inside the target (anywhere it sounds, \
+                         where no hop does) and the slope is within 2 sigma and lands nearer \
+                         the track than any other group's peak there, else the band reads a \
                          neighbour's frequency and not its own; held between and outward. \
                          Cancel: then twice, every tonal track's band, Re z(t) e^(i 2 pi \
                          pwl_integral(t)), is taken from the target and each track read again \
@@ -144,10 +145,15 @@ pub const MODEL: &str = "heterodyne partial tracking, as the fit harness's analy
                          demodulated as above, over the energy its band holds, over the \
                          amplitude table's span, the whole of what the track misses there, \
                          noise, a neighbour's error and its own; null for a breathy track, a \
-                         band whose waveform no table claims. A track whose group holds no peak \
-                         for a while keeps the frequency it held, and where a louder neighbour \
-                         within 2 sigma of it fills its band there it reads that neighbour, a \
-                         second synthesis of one partial its `residual_db` shows near 0 dB. The \
+                         band whose waveform no table claims. Before its group's first peak and \
+                         after its last a track sounds only within a window and half a frame of \
+                         them, and only where its band holds over twice what any other group's \
+                         peak there puts through its Gaussian, amp e^(-d^2 / (2 sigma^2)) at \
+                         the gap d: a track with no peaks of its own never reads a louder \
+                         neighbour filling its band as a second synthesis of it; \
+                         `unclaimed_db` is its band's energy over the floor at the hops so \
+                         ruled out, over the energy at the hops it keeps, null where none is. \
+                         The \
                          target's `residual_db` is its energy less the tonal tracks' tables' \
                          over its energy, breathy energy left in.";
 
@@ -199,6 +205,8 @@ pub struct Track {
     pub resolution_hz: f64,
     pub resolution_secs: f64,
     pub residual_db: Option<f64>,
+    /// The band's energy at hops ruled a louder neighbour's, over what the track keeps.
+    pub unclaimed_db: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -233,7 +241,7 @@ pub fn measure(planes: &[&[f64]], sr: f64, start: f64, asked: Asked) -> Partials
     groups.sort_by(|a, b| b.energy.total_cmp(&a.energy).then(a.hz.total_cmp(&b.hz)));
     groups.truncate(asked.tracks);
     groups.sort_by(|a, b| a.hz.total_cmp(&b.hz));
-    let (tracks, residual_db) = read(&x, &grid, &groups, floor);
+    let (tracks, residual_db) = read(&x, &grid, (&groups, reach + frame.div_ceil(2 * hop)), floor);
     Partials {
         frame_secs: frame as f64 / sr,
         window_secs: (2 * reach * hop + frame) as f64 / sr,
@@ -528,8 +536,8 @@ fn group(fragments: Vec<Fragment>) -> Vec<Group> {
     groups
 }
 
-/// The group's peaks per hop, energy-weighted, held and interpolated between.
-fn coarse(g: &Group, hops: usize) -> Vec<f64> {
+/// Each hop's own peak, energy-weighted: (frequency, amplitude).
+fn peaks_of(g: &Group, hops: usize) -> Vec<Option<(f64, f64)>> {
     let mut sum = vec![0.0; hops];
     let mut weight = vec![0.0; hops];
     for f in &g.members {
@@ -538,12 +546,73 @@ fn coarse(g: &Group, hops: usize) -> Vec<f64> {
             weight[*k] += a * a;
         }
     }
-    let held: Vec<Option<f64>> = sum
-        .iter()
+    sum.iter()
         .zip(&weight)
-        .map(|(s, w)| (*w > 0.0).then(|| s / w))
-        .collect();
-    filled(&held, g.hz)
+        .map(|(s, w)| (*w > 0.0).then(|| (s / w, w.sqrt())))
+        .collect()
+}
+
+fn coarse(own: &[Option<(f64, f64)>], otherwise: f64) -> Vec<f64> {
+    let held: Vec<Option<f64>> = own.iter().map(|p| p.map(|(hz, _)| hz)).collect();
+    filled(&held, otherwise)
+}
+
+const CLAIM_MARGIN: f64 = 2.0;
+
+/// Per hop: whether the group holds a peak, where alone the phase slope reads its frequency;
+/// every other group's peak; the least modulus that is the track's own, 0 within its peaks'
+/// span, `CLAIM_MARGIN` times `amp e^(-d^2 / (2 sigma^2))` at the gap d within `reach` of
+/// them, infinite past.
+struct Claim {
+    peak: bool,
+    rivals: Vec<f64>,
+    least: f64,
+}
+
+fn claims(
+    held: &[Vec<Option<(f64, f64)>>],
+    curves: &[Vec<f64>],
+    sigmas: &[f64],
+    reach: usize,
+) -> Vec<Vec<Claim>> {
+    (0..held.len())
+        .map(|g| {
+            let hops = held[g].len();
+            let peaks: Vec<usize> = (0..hops).filter(|&k| held[g][k].is_some()).collect();
+            (0..hops)
+                .map(|k| {
+                    let others: Vec<(f64, f64)> = (0..held.len())
+                        .filter(|&h| h != g)
+                        .filter_map(|h| held[h][k])
+                        .collect();
+                    let at = peaks.partition_point(|&j| j < k);
+                    let peak = held[g][k].is_some();
+                    let near = |j: usize| j.abs_diff(k) <= reach;
+                    let reached =
+                        (at < peaks.len() && near(peaks[at])) || (at > 0 && near(peaks[at - 1]));
+                    let least = if peak || (at > 0 && at < peaks.len()) {
+                        0.0
+                    } else if !reached {
+                        f64::INFINITY
+                    } else {
+                        let leak = others
+                            .iter()
+                            .map(|&(hz, amp)| {
+                                let d = (hz - curves[g][k]) / sigmas[g];
+                                amp * libm::exp(-0.5 * d * d)
+                            })
+                            .fold(0.0, f64::max);
+                        CLAIM_MARGIN * leak
+                    };
+                    Claim {
+                        peak,
+                        rivals: others.into_iter().map(|(hz, _)| hz).collect(),
+                        least,
+                    }
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// `None` hops interpolated between their held neighbours, held past the ends.
@@ -827,15 +896,27 @@ struct Reading {
     flutter_db: f64,
     coherence: f64,
     hz: f64,
+    unclaimed_db: Option<f64>,
     /// The band demodulated along `freq` and lowpassed by the band's own Gaussian.
     z: Vec<C>,
 }
 
-fn read(x: &[f64], grid: &Grid, groups: &[Group], floor: f64) -> (Vec<Track>, Option<f64>) {
+fn read(
+    x: &[f64],
+    grid: &Grid,
+    (groups, reach): (&[Group], usize),
+    floor: f64,
+) -> (Vec<Track>, Option<f64>) {
     if groups.is_empty() {
         return (Vec::new(), energy_ratio(x, x));
     }
-    let curves: Vec<Vec<f64>> = groups.iter().map(|g| coarse(g, grid.hops)).collect();
+    let held: Vec<Vec<Option<(f64, f64)>>> =
+        groups.iter().map(|g| peaks_of(g, grid.hops)).collect();
+    let curves: Vec<Vec<f64>> = held
+        .iter()
+        .zip(groups)
+        .map(|(o, g)| coarse(o, g.hz))
+        .collect();
     let sigmas: Vec<f64> = groups
         .iter()
         .map(|g| {
@@ -847,6 +928,7 @@ fn read(x: &[f64], grid: &Grid, groups: &[Group], floor: f64) -> (Vec<Track>, Op
             (GAP_SHARE * gap).clamp(RESOLUTION_HZ.0, RESOLUTION_HZ.1)
         })
         .collect();
+    let claimed = claims(&held, &curves, &sigmas, reach);
     let narrowest = sigmas.iter().copied().fold(f64::MAX, f64::min);
     let pad = (PAD_SIGMAS / (TAU * narrowest) * grid.sr).ceil() as usize;
     let size = (x.len() + pad).next_power_of_two();
@@ -888,8 +970,11 @@ fn read(x: &[f64], grid: &Grid, groups: &[Group], floor: f64) -> (Vec<Track>, Op
     let first = Whole::of(x, &reader.whole, size);
     let mut readings: Vec<Reading> = bands
         .iter()
-        .zip(&curves)
-        .map(|(b, curve)| read_one(&reader, reader.band(&first, b), *b, (curve, b.sigma)))
+        .zip(curves.iter().zip(&claimed))
+        .map(|(b, (curve, claim))| {
+            let raw = reader.band(&first, b);
+            read_one(&reader, raw, *b, (curve, claim, b.sigma))
+        })
         .collect();
     for _ in 0..CANCELLATIONS {
         let left: Vec<f64> = x
@@ -900,8 +985,8 @@ fn read(x: &[f64], grid: &Grid, groups: &[Group], floor: f64) -> (Vec<Track>, Op
         let left = Whole::of(&left, &reader.whole, size);
         readings = readings
             .iter()
-            .zip(&curves)
-            .map(|(r, curve)| {
+            .zip(curves.iter().zip(&claimed))
+            .map(|(r, (curve, claim))| {
                 let again = add(&reader.band(&left, &r.band), &own(&reader, r));
                 let curve = match r.kind {
                     Kind::Tonal => curve.clone(),
@@ -911,7 +996,7 @@ fn read(x: &[f64], grid: &Grid, groups: &[Group], floor: f64) -> (Vec<Track>, Op
                     }
                 };
                 let flags = r.band.sigma.max(FLAG_LEAST_HZ);
-                read_one(&reader, again, r.band, (&curve, flags))
+                read_one(&reader, again, r.band, (&curve, claim, flags))
             })
             .collect();
     }
@@ -970,6 +1055,7 @@ fn track(r: &Reading, start: f64, residual_db: Option<f64>) -> Track {
         resolution_hz: r.band.sigma,
         resolution_secs: 1.0 / (TAU * r.band.sigma),
         residual_db,
+        unclaimed_db: r.unclaimed_db,
     }
 }
 
@@ -1051,9 +1137,14 @@ fn add(a: &[C], b: &[C]) -> Vec<C> {
 
 /// Reads one track off `raw`, its band: frequency refined by the band's phase slope along
 /// `curve`, then amplitude, phase and flags, read at `flag_sigma`, along the table it fits.
-fn read_one(reader: &Reader, raw: Vec<C>, b: Band, (curve, flag_sigma): (&[f64], f64)) -> Reading {
-    let (freq, mean_hz) = refined(reader, &raw, b, curve);
-    let r = measured(reader, &raw, b, freq, (None, Err(flag_sigma)));
+fn read_one(
+    reader: &Reader,
+    raw: Vec<C>,
+    b: Band,
+    (curve, claim, flag_sigma): (&[f64], &[Claim], f64),
+) -> Reading {
+    let (freq, mean_hz) = refined(reader, &raw, b, (curve, claim));
+    let r = measured(reader, &raw, b, (freq, claim), (None, Err(flag_sigma)));
     let r = match r.kind {
         Kind::Tonal => r,
         Kind::Breathy => {
@@ -1064,7 +1155,7 @@ fn read_one(reader: &Reader, raw: Vec<C>, b: Band, (curve, flag_sigma): (&[f64],
                 error: 0.0,
             };
             let flags = Ok((r.flutter_db, r.coherence));
-            measured(reader, &raw, b, held, (Some(Kind::Breathy), flags))
+            measured(reader, &raw, b, (held, claim), (Some(Kind::Breathy), flags))
         }
     };
     Reading { hz: mean_hz, ..r }
@@ -1072,7 +1163,12 @@ fn read_one(reader: &Reader, raw: Vec<C>, b: Band, (curve, flag_sigma): (&[f64],
 
 /// The frequency per hop where the band sounds: `along`'s plus the band's mean phase slope
 /// demodulated along it, held between; its table, fitted; and its energy-weighted mean.
-fn refined(reader: &Reader, raw: &[C], b: Band, along: &[f64]) -> (Curve, f64) {
+fn refined(
+    reader: &Reader,
+    raw: &[C],
+    b: Band,
+    (along, claim): (&[f64], &[Claim]),
+) -> (Curve, f64) {
     let (grid, hops) = (reader.grid, &reader.hop_secs);
     let rate = reader.rate(&b);
     let per_hop = grid.hop / b.every;
@@ -1080,7 +1176,10 @@ fn refined(reader: &Reader, raw: &[C], b: Band, along: &[f64]) -> (Curve, f64) {
     let zc = reader.lowpass(&reader.spectrum(&mixed), rate, gaussian(b.sigma));
     let at_hop = |k: usize| zc[(k * per_hop).min(zc.len() - 1)];
     let sounding: Vec<bool> = (0..grid.hops)
-        .map(|k| at_hop(k).abs() >= reader.floor)
+        .map(|k| {
+            let m = at_hop(k).abs();
+            m >= reader.floor && m > claim[k].least
+        })
         .collect();
     let mut turns = vec![0.0; zc.len()];
     for m in 1..zc.len() {
@@ -1103,7 +1202,11 @@ fn refined(reader: &Reader, raw: &[C], b: Band, along: &[f64]) -> (Curve, f64) {
         (turns[hi] - turns[lo]) * rate / (hi - lo) as f64
     };
     let counted: Vec<bool> = (0..grid.hops)
-        .map(|k| counted[k] && slope(k).abs() <= CAPTURE_SIGMAS * b.sigma)
+        .map(|k| {
+            let (off, at) = (slope(k), along[k] + slope(k));
+            let rival = claim[k].rivals.iter().any(|hz| (hz - at).abs() < off.abs());
+            counted[k] && claim[k].peak && off.abs() <= CAPTURE_SIGMAS * b.sigma && !rival
+        })
         .collect();
     let held: Vec<Option<f64>> = (0..grid.hops)
         .map(|k| counted[k].then(|| along[k] + slope(k)))
@@ -1136,7 +1239,7 @@ fn measured(
     reader: &Reader,
     raw: &[C],
     b: Band,
-    freq: Curve,
+    (freq, claim): (Curve, &[Claim]),
     (kind, flags): (Option<Kind>, Result<(f64, f64), f64>),
 ) -> Reading {
     let grid = reader.grid;
@@ -1170,11 +1273,9 @@ fn measured(
         true => Kind::Breathy,
         false => Kind::Tonal,
     });
-    let amps: Vec<f64> = match kind {
-        Kind::Tonal => moduli
-            .iter()
-            .map(|&a| if a < reader.floor { 0.0 } else { a })
-            .collect(),
+    let claimed = |k: usize| moduli[k] > claim[k].least;
+    let levels: Vec<f64> = match kind {
+        Kind::Tonal => moduli.clone(),
         Kind::Breathy => {
             let half = ((BREATHY_POWER_SECS / 2.0) * rate).round() as usize;
             (0..grid.hops)
@@ -1183,21 +1284,37 @@ fn measured(
                     let (lo, hi) = (c.saturating_sub(half), (c + half).min(z.len() - 1));
                     let power =
                         z[lo..=hi].iter().map(|v| v.norm()).sum::<f64>() / (hi - lo + 1) as f64;
-                    let rms = (power / 2.0).sqrt();
-                    if rms * SQRT_2 < reader.floor {
-                        0.0
-                    } else {
-                        rms
-                    }
+                    (power / 2.0).sqrt()
                 })
                 .collect()
         }
     };
+    let peak = |level: f64| match kind {
+        Kind::Tonal => level,
+        Kind::Breathy => level * SQRT_2,
+    };
+    let heard = |k: usize| peak(levels[k]) >= reader.floor;
+    let amps: Vec<f64> = (0..grid.hops)
+        .map(|k| {
+            if heard(k) && claimed(k) {
+                levels[k]
+            } else {
+                0.0
+            }
+        })
+        .collect();
     let amp = amplitude_knots((&reader.hop_secs, grid.secs(1)), &amps, reader.floor);
     let weighted = (0..grid.hops)
         .filter(|&k| amps[k] > 0.0)
         .map(|k| at_hop(k).scale(at_hop(k).abs()))
         .fold(ZERO, C::add);
+    let (mut kept, mut ruled) = (0.0, 0.0);
+    for k in (0..grid.hops).filter(|&k| heard(k)) {
+        match claimed(k) {
+            true => kept += levels[k] * levels[k],
+            false => ruled += levels[k] * levels[k],
+        }
+    }
     Reading {
         band: b,
         freq,
@@ -1207,6 +1324,7 @@ fn measured(
         flutter_db,
         coherence,
         hz: 0.0,
+        unclaimed_db: (ruled > 0.0 && kept > 0.0).then(|| 10.0 * libm::log10(ruled / kept)),
         z,
     }
 }
