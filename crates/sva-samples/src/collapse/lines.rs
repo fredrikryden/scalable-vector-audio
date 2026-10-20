@@ -290,7 +290,7 @@ pub(crate) fn dropped_list(per_lane: &[Vec<Line>]) -> (Vec<Dropped>, usize) {
         .into_iter()
         .map(|(hz, amp)| Dropped {
             hz,
-            db: 20.0 * amp.log10(),
+            db: 20.0 * libm::log10(amp),
         })
         .collect();
     (list, total.saturating_sub(64))

@@ -137,7 +137,7 @@ pub fn ratio(f: &Body, k: IndexId) -> Option<f64> {
         Body::Apply(Unary::Abs, arg) => ratio(&arg.body, k),
         Body::Apply(Unary::Exp, arg) => {
             let (slope, _) = affine_in(&arg.body, Reading::Index(k))?;
-            Some(slope.exact()?.re.exp())
+            Some(libm::exp(slope.exact()?.re))
         }
         Body::Pow(base, n) if *n >= 0 => Some(ratio(&base.body, k)?.powi(*n)),
         _ => None,
@@ -329,7 +329,7 @@ fn walk(
     if truncates && ratio.is_none() && decays.is_none() {
         return None;
     }
-    let floor = 10f64.powf(floor_db / 20.0);
+    let floor = libm::pow(10f64, floor_db / 20.0);
     let ladders: Vec<Option<(f64, f64)>> = voices
         .iter()
         .map(|(place, _)| ladder(place, s.index, reads))
@@ -387,7 +387,7 @@ fn walk(
     let gone = loudest(&dropped).max(left.unwrap_or(0.0));
     Some(Lines {
         tail_db: if gone > 0.0 && peak > 0.0 {
-            20.0 * (gone / peak).log10()
+            20.0 * libm::log10(gone / peak)
         } else {
             f64::NEG_INFINITY
         },

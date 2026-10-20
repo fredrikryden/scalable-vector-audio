@@ -42,7 +42,7 @@ fn pure_antiphase_reads_its_width_at_the_rail() {
     let n = noise(7.0, 400);
     let f = image(n.clone(), n.iter().map(|x| -x).collect());
     assert_eq!(f.mid_rms, 0.0, "nothing in the middle");
-    assert_eq!(f.width, 10f64.powf(RAIL_DB / 20.0));
+    assert_eq!(f.width, libm::pow(10f64, RAIL_DB / 20.0));
     assert_eq!(f.mono_db, -RAIL_DB);
 }
 

@@ -301,7 +301,7 @@ fn constant(inst: &Instances, e: &Expr, cx: Cx) -> Option<C64> {
 /// `sum(k, 0, inf, g^k * rest(t - k*d))`, with the shift written into the body and the
 /// product distributed, so each addend of the body is one readable wave.
 pub(crate) fn neumann(rest: &Body, gain: C64, delay: f64, index: IndexId) -> Body {
-    let log = C64::new(gain.abs().ln(), gain.im.atan2(gain.re));
+    let log = C64::new(libm::log(gain.abs()), libm::atan2(gain.im, gain.re));
     let power = Body::Apply(
         sva_formula::Unary::Exp,
         Part::bare(Body::Mul(vec![

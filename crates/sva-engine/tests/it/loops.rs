@@ -109,7 +109,7 @@ fn at_rate(files: &[(&str, &str)], root: &str, rate: u32, secs: f64) -> sva_engi
 #[test]
 fn a_continuous_loop_renders_its_series_exactly_at_any_rate() {
     let x = |t: f64| match (0.0..0.005).contains(&t) {
-        true => (TAU * 200.0 * t).sin(),
+        true => libm::sin(TAU * 200.0 * t),
         false => 0.0,
     };
     for rate in RATES {
@@ -429,9 +429,11 @@ fn a_closed_loop_renders_its_comb_and_reports_its_tail() {
     );
     let peak = buffer.plane(0).iter().fold(0.0f64, |a, s| a.max(s.abs()));
     let closed = 1.0
-        / (1.0 - 0.5 * (-std::f64::consts::TAU * 220.0 * 0.01).cos())
-            .hypot(0.5 * (-std::f64::consts::TAU * 220.0 * 0.01).sin());
-    let off = 20.0 * (peak / closed).log10();
+        / libm::hypot(
+            1.0 - 0.5 * libm::cos(-std::f64::consts::TAU * 220.0 * 0.01),
+            0.5 * libm::sin(-std::f64::consts::TAU * 220.0 * 0.01),
+        );
+    let off = 20.0 * libm::log10(peak / closed);
     assert!(
         off < 0.0 && off > tail_db.expect("a stated tail"),
         "the render sits between the closed loop and the tail the label states: {off} dB"
@@ -667,7 +669,7 @@ fn a_join_of_one_channel_loops_echoes_each_channel_on_its_own() {
     let out = held.output(id).expect("two echoes");
     assert_eq!(out.width(), 2, "one channel per operand");
     for (c, hz, delay) in [(0, 440.0, 136), (1, 660.0, 184)] {
-        let x = |n: usize| (TAU * hz * n as f64 / f64::from(rate)).sin();
+        let x = |n: usize| libm::sin(TAU * hz * n as f64 / f64::from(rate));
         for (n, got) in out.plane(c).iter().enumerate().take(2 * delay).skip(delay) {
             let want = x(n) + 0.5 * x(n - delay);
             assert!(

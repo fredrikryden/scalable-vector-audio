@@ -6,12 +6,12 @@ use sva_samples::measure::spectrum;
 pub fn level_db(x: &[f64], rate: f64, hz: f64, start: usize, len: usize) -> f64 {
     let (mut re, mut im) = (0.0, 0.0);
     for (i, s) in x[start..start + len].iter().enumerate() {
-        let w = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / len as f64).cos();
+        let w = 0.5 - 0.5 * libm::cos(std::f64::consts::TAU * i as f64 / len as f64);
         let phase = std::f64::consts::TAU * hz * (start + i) as f64 / rate;
-        re += w * s * phase.cos();
-        im -= w * s * phase.sin();
+        re += w * s * libm::cos(phase);
+        im -= w * s * libm::sin(phase);
     }
-    10.0 * (re * re + im * im).log10()
+    10.0 * libm::log10(re * re + im * im)
 }
 
 /// The peak bin near `hz`, refined by golden section.

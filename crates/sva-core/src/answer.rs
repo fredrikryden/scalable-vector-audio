@@ -1010,7 +1010,7 @@ fn atom_json(a: &sva_engine::Atom) -> String {
         num(a.turns),
         num(a.amp.re),
         num(a.amp.im),
-        num(20.0 * a.amp.abs().log10()),
+        num(20.0 * libm::log10(a.amp.abs())),
         num(a.decay),
         num(a.decay_from),
         a.degree,
@@ -1026,7 +1026,7 @@ fn line_json(l: &sva_engine::Line) -> String {
         num(l.hz),
         num(l.amp.re),
         num(l.amp.im),
-        num(20.0 * l.amp.abs().log10())
+        num(20.0 * libm::log10(l.amp.abs()))
     )
 }
 

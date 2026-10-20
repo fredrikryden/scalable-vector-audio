@@ -101,7 +101,7 @@ mod tests {
     fn bent_far(n: usize) -> StringGrid {
         let shape = |j: usize, phase: f64| {
             let x = std::f64::consts::PI * j as f64 / n as f64;
-            1e3 * (x.sin() * phase.cos() + (3.0 * x).sin() * phase.sin() / 7.0)
+            1e3 * (libm::sin(x) * libm::cos(phase) + libm::sin(3.0 * x) * libm::sin(phase) / 7.0)
         };
         let mut y_now: Vec<f64> = (0..=n).map(|j| shape(j, 0.3)).collect();
         let mut y_prev: Vec<f64> = (0..=n).map(|j| shape(j, 0.31)).collect();

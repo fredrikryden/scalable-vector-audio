@@ -181,7 +181,7 @@ fn partials_one_and_two_imply_the_asked_f0_and_b_at_any_rate() {
             );
             let r = (f2 / (2.0 * f1)).powi(2);
             let realized_b = (r - 1.0) / (4.0 - r);
-            let cents = 1200.0 * (f1 / (1.0 + realized_b).sqrt() / f0).log2();
+            let cents = 1200.0 * libm::log2(f1 / (1.0 + realized_b).sqrt() / f0);
             assert!(
                 cents.abs() < 0.001,
                 "{f0} Hz at {rate} rings {cents} cents off"
@@ -209,7 +209,7 @@ fn partial_db(p: &WillemsenBilbaoSerafinParams, x: &[f64], rate: f64, k: u32) ->
     let (mags, bin_hz, _, _) = spectrum::magnitudes(x, rate, None);
     let hz = stiff_partial(p.f0, p.b, k);
     let band = ((hz - p.f0 / 4.0) / bin_hz) as usize..=((hz + p.f0 / 4.0) / bin_hz) as usize;
-    20.0 * mags[band].iter().fold(0.0f64, |m, &v| m.max(v)).log10()
+    20.0 * libm::log10(mags[band].iter().fold(0.0f64, |m, &v| m.max(v)))
 }
 
 /// At C6 the grid holds about twenty points, so 1/7 and 1/8 once bowed the same node. Bowed

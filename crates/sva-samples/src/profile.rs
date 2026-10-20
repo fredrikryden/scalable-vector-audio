@@ -31,7 +31,7 @@ impl Profile {
     }
 
     pub fn silence_threshold_amplitude(&self) -> f64 {
-        10f64.powf(self.silence_threshold_dbfs / 20.0)
+        libm::pow(10f64, self.silence_threshold_dbfs / 20.0)
     }
 
     /// Every setting a value or its label depends on.

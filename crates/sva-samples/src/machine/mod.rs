@@ -632,7 +632,7 @@ mod tests {
         let spanned =
             Spanned::new(&delayed(), &layout, (0, to), &[Extent::EVERYWHERE]).expect("a program");
         let mut input = Buffer::empty(48_000, 1, to as usize, 0);
-        (0..to).for_each(|n| input.push(0, (n as f64 * 0.01).sin()));
+        (0..to).for_each(|n| input.push(0, libm::sin(n as f64 * 0.01)));
         let mut out = Buffer::empty(48_000, 1, to as usize, 0);
         let mut machine = Machine::over(&spanned, 0).expect("a machine");
         let before = WIDE.with(std::cell::Cell::get);

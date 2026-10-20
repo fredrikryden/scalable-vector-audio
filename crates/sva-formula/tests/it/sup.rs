@@ -65,7 +65,7 @@ fn an_atom_s_bound_from_an_instant_holds_at_every_later_instant() {
             };
             assert!(!bound.is_nan(), "{a:?} from {t}: NaN");
             for k in 0..400 {
-                let s = t + (k as f64) * 0.01 + (k as f64 / 40.0).exp2() - 1.0;
+                let s = t + (k as f64) * 0.01 + libm::exp2(k as f64 / 40.0) - 1.0;
                 let v = match a.smooth_at(s).map_or(0.0, |v| v.abs()) {
                     v if v.is_nan() => f64::INFINITY,
                     v => v,
@@ -95,7 +95,7 @@ fn a_factor_past_a_double_s_range_still_bounds_the_product() {
         }),
         ..Factors::NONE
     });
-    let truth = (0.7f64.ln() - 760.0 + 300.0 * 10f64.ln()).exp();
+    let truth = libm::exp(libm::log(0.7f64) - 760.0 + 300.0 * libm::log(10f64));
     let bound = magnitude_upper_bound_from_instant(&a, 760.0).expect("a bound");
     assert!(truth > 1e-31 && bound >= truth, "{bound} under {truth}");
 }

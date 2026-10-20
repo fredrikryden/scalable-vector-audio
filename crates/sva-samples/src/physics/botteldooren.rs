@@ -192,7 +192,7 @@ fn build_source_patch(
     cy: usize,
     cz: usize,
 ) -> SourcePatch {
-    let coeff = SOURCE_WINDOW_WEIGHT_FLOOR.ln().abs() / SOURCE_WINDOW_RADIUS_CELLS.powi(4);
+    let coeff = libm::log(SOURCE_WINDOW_WEIGHT_FLOOR).abs() / SOURCE_WINDOW_RADIUS_CELLS.powi(4);
     let radius = SOURCE_WINDOW_RADIUS_CELLS.ceil() as isize;
     let mut nodes = Vec::new();
     let mut weights = Vec::new();
@@ -211,7 +211,7 @@ fn build_source_patch(
                     continue;
                 }
                 let quartic = |d: isize| (d * d * d * d) as f64;
-                let w = (-coeff * (quartic(di) + quartic(dj) + quartic(dk))).exp();
+                let w = libm::exp(-coeff * (quartic(di) + quartic(dj) + quartic(dk)));
                 if w < SOURCE_WINDOW_WEIGHT_FLOOR {
                     continue;
                 }

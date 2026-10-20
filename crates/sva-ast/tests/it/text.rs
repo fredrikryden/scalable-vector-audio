@@ -92,7 +92,7 @@ fn a_negative_shift_round_trips() {
 /// 2^(11/12) sits by a rounding tie, where `powf` and `exp2` round apart.
 #[test]
 fn a_pitch_unit_reads_the_same_bits_in_every_build() {
-    let eleven_twelfths = std::hint::black_box(11.0f64 / 12.0).exp2();
+    let eleven_twelfths = libm::exp2(std::hint::black_box(11.0f64 / 12.0));
     for src in ["1100ct", "11st"] {
         assert_eq!(
             parse_expr(src).unwrap(),

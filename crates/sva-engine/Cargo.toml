@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+libm = { workspace = true }
 rayon = "1.12"
 sva-ast = { workspace = true }
 sva-formula = { workspace = true }

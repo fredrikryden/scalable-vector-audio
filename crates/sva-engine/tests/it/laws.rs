@@ -134,7 +134,7 @@ fn noise_through_a_bandpass_is_a_pair_with_shaped_lines() {
             continue;
         }
         let want = bandpass_db(a.hz, 1200.0, 2.0);
-        let found = 20.0 * (a.amp.abs() / b.amp.abs()).log10();
+        let found = 20.0 * libm::log10(a.amp.abs() / b.amp.abs());
         assert!(
             (found - want).abs() < 0.5,
             "{} Hz carries {found} dB, not {want} dB",
@@ -148,7 +148,7 @@ fn bandpass_db(hz: f64, cutoff: f64, q: f64) -> f64 {
     let (w, w0) = (std::f64::consts::TAU * hz, std::f64::consts::TAU * cutoff);
     let numerator = w0 / q * w;
     let (re, im) = (w0 * w0 - w * w, w0 / q * w);
-    20.0 * (numerator.abs() / (re * re + im * im).sqrt()).log10()
+    20.0 * libm::log10(numerator.abs() / (re * re + im * im).sqrt())
 }
 
 /// A reading in both representations runs against whichever the node holds, and a pair
@@ -194,7 +194,7 @@ fn pitch_of_a_pure_sine_is_exact() {
         "samples are measured, whatever law was behind them"
     );
     assert!(
-        (note.db - 20.0 * 0.5f64.log10()).abs() < 1e-9,
+        (note.db - 20.0 * libm::log10(0.5f64)).abs() < 1e-9,
         "one reading, one level scale: a wave of amplitude 0.5 is -6.02 dB on either \
          route, not the half each of its conjugate lines carries: {}",
         note.db
@@ -274,7 +274,7 @@ fn pitch_sums_the_complex_amplitudes_of_lines_at_one_frequency() {
     };
     assert_eq!(note.hz, 880.0);
     assert!(
-        (note.db - 20.0 * 0.5f64.log10()).abs() < 1e-12,
+        (note.db - 20.0 * libm::log10(0.5f64)).abs() < 1e-12,
         "{} dB",
         note.db
     );
@@ -448,7 +448,7 @@ fn a_steep_decay_cropped_at_a_late_onset_reads_its_value_there() {
     let at = |n: usize| samples.plane(0)[3 * 44_100 + n];
     assert!((at(0) - 1.0).abs() < 1e-12, "{}", at(0));
     assert!(
-        (at(1) - (-400.0f64 / 44_100.0).exp()).abs() < 1e-12,
+        (at(1) - libm::exp(-400.0f64 / 44_100.0)).abs() < 1e-12,
         "{}",
         at(1)
     );

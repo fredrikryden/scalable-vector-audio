@@ -36,7 +36,7 @@ fn q_raises_the_corner_and_the_butterworth_default_does_not() {
 
 /// The amplitude ratio `db` writes.
 fn ratio(db: f64) -> f64 {
-    10f64.powf(db / 20.0)
+    libm::pow(10f64, db / 20.0)
 }
 
 #[test]

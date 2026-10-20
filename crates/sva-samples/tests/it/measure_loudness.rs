@@ -4,7 +4,7 @@ use sva_samples::measure::loudness::{Loudness, MOMENTARY_SECS, analyze};
 
 fn sine(hz: f64, sr: f64, secs: f64, amp: f64) -> Vec<f64> {
     (0..(secs * sr) as usize)
-        .map(|i| amp * (2.0 * std::f64::consts::PI * hz * i as f64 / sr).sin())
+        .map(|i| amp * libm::sin(2.0 * std::f64::consts::PI * hz * i as f64 / sr))
         .collect()
 }
 
@@ -56,7 +56,7 @@ fn the_range_is_the_spread_of_the_short_term_distribution() {
     assert!(of(&[&steady], sr).range_lu.unwrap() < 0.01);
 
     let mut stepped = sine(1000.0, sr, 20.0, 0.1);
-    stepped.extend(sine(1000.0, sr, 20.0, 0.1 * 10f64.powf(-10.0 / 20.0)));
+    stepped.extend(sine(1000.0, sr, 20.0, 0.1 * libm::pow(10f64, -10.0 / 20.0)));
     let range = of(&[&stepped], sr).range_lu.unwrap();
     assert!((range - 10.0).abs() < 0.6, "{range} LU across a 10 dB step");
 }
@@ -92,7 +92,7 @@ fn a_finite_buffer_too_loud_or_too_quiet_to_square_still_reads_its_loudness() {
         let level = of(&[&scaled], sr)
             .momentary_max_lufs
             .expect("a level past the largest square or under the smallest");
-        let lift = 20.0 * f64::log10(gain);
+        let lift = 20.0 * libm::log10(gain);
         assert!((level - at_scale - lift).abs() < 1e-6, "{gain}: {level}");
     }
 }

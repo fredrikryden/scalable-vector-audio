@@ -7,7 +7,7 @@ const RATE: f64 = 44_100.0;
 fn tone(hz: f64, secs: f64, amp: f64) -> Vec<f64> {
     let len = (secs * RATE) as usize;
     (0..len)
-        .map(|i| amp * (std::f64::consts::TAU * hz * i as f64 / RATE).sin())
+        .map(|i| amp * libm::sin(std::f64::consts::TAU * hz * i as f64 / RATE))
         .collect()
 }
 
@@ -50,7 +50,7 @@ fn a_decaying_tone_falls_frame_by_frame() {
     let decaying: Vec<f64> = (0..len)
         .map(|i| {
             let t = i as f64 / RATE;
-            (-t / 0.1).exp() * (std::f64::consts::TAU * 440.0 * t).sin()
+            libm::exp(-t / 0.1) * libm::sin(std::f64::consts::TAU * 440.0 * t)
         })
         .collect();
     let frames = trace(&[&decaying], RATE, 0.0, 0.05);

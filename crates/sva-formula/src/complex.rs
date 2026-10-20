@@ -54,7 +54,7 @@ impl C64 {
     }
 
     pub fn abs(self) -> f64 {
-        self.re.hypot(self.im)
+        libm::hypot(self.re, self.im)
     }
 
     /// A component alone on its axis inverts by one division, correctly rounded; only a
@@ -69,16 +69,16 @@ impl C64 {
     }
 
     pub fn exp(self) -> C64 {
-        let r = self.re.exp();
-        C64::new(r * self.im.cos(), r * self.im.sin())
+        let r = libm::exp(self.re);
+        C64::new(r * libm::cos(self.im), r * libm::sin(self.im))
     }
 
     /// `e^z - 1` without the cancellation `exp() - ONE` meets near zero.
     pub fn exp_m1(self) -> C64 {
-        let half = (self.im * 0.5).sin();
+        let half = libm::sin(self.im * 0.5);
         C64::new(
-            self.re.exp_m1() * self.im.cos() - 2.0 * half * half,
-            self.re.exp() * self.im.sin(),
+            libm::expm1(self.re) * libm::cos(self.im) - 2.0 * half * half,
+            libm::exp(self.re) * libm::sin(self.im),
         )
     }
 

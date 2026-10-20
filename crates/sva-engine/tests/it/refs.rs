@@ -117,7 +117,7 @@ fn a_bar_offset_that_lands_on_the_grid_reads_a_sampled_ref() {
     let delay = 16_000;
     for i in 0..buffer.len() {
         let at = i as f64 - f64::from(delay);
-        let want = 0.5 * (std::f64::consts::TAU * 220.0 * at / 8_000.0).sin();
+        let want = 0.5 * libm::sin(std::f64::consts::TAU * 220.0 * at / 8_000.0);
         assert!(
             (buffer.at(0, i) - want).abs() < 1e-9,
             "sample {i}: {} against {want}",
@@ -188,7 +188,7 @@ fn a_law_read_at_a_grid_offset_renders() {
     assert_eq!(buffer.len(), 80);
     for i in 0..buffer.len() {
         let at = i as f64 / 8_000.0 - 2.0 / 8_000.0;
-        let want = 0.5 * (std::f64::consts::TAU * 220.0 * at).sin();
+        let want = 0.5 * libm::sin(std::f64::consts::TAU * 220.0 * at);
         assert!(
             (buffer.at(0, i) - want).abs() < 1e-9,
             "sample {i}: {} against {want}",
@@ -226,7 +226,7 @@ fn a_law_ref_tiled_by_modulo_point_samples() {
     let buffer = rendered.output(root).expect("a point-sampled law");
     for i in 0..buffer.len() {
         let tiled = (i as i64 * 10_000) % (37 * 8_000);
-        let want = (std::f64::consts::TAU * 100.0 * (tiled as f64 / 80_000_000.0)).sin();
+        let want = libm::sin(std::f64::consts::TAU * 100.0 * (tiled as f64 / 80_000_000.0));
         assert!(
             (buffer.at(0, i) - want).abs() < 1e-9,
             "sample {i}: {} against {want}",
@@ -262,7 +262,7 @@ fn a_key_times_a_semitone_offset_folds() {
         .map(|l| l.hz.abs())
         .filter(|h| *h > 0.0)
         .collect();
-    let want = sva_ast::note_hz("D3").expect("D3") * 2f64.powf(3.0 / 12.0);
+    let want = sva_ast::note_hz("D3").expect("D3") * libm::pow(2f64, 3.0 / 12.0);
     assert!(
         hz.iter().all(|h| (h - want).abs() < 1e-9),
         "a minor third above D3 is {want} Hz, got {hz:?}"
@@ -339,8 +339,8 @@ fn a_per_channel_shift_on_a_law_substitutes_per_lane() {
     assert_eq!(buffer.width(), 2);
     for i in [0usize, 441, 1000] {
         let t = i as f64 / 44_100.0;
-        let left = (std::f64::consts::TAU * 220.0 * (t - 0.01)).sin();
-        let right = (std::f64::consts::TAU * 330.0 * (t - 0.02)).sin();
+        let left = libm::sin(std::f64::consts::TAU * 220.0 * (t - 0.01));
+        let right = libm::sin(std::f64::consts::TAU * 330.0 * (t - 0.02));
         assert!(
             (buffer.at(0, i) - left).abs() < 1e-12,
             "left at {i}: {} against {left}",

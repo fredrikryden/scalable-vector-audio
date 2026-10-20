@@ -558,7 +558,7 @@ impl<'a> Terms<'a> {
             && falls(&bound.body, k)
             && let (Some(top), Some(gone)) = (at(lo), at(lo + kept))
         {
-            b.dropped_db = 20.0 * (gone / top).log10();
+            b.dropped_db = 20.0 * libm::log10(gone / top);
         }
     }
 

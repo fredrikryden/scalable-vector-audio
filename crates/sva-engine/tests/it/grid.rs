@@ -119,7 +119,10 @@ fn a_formula_read_at_any_instant_is_exact() {
         let scaled = render(&g, "scaled", config.clone(), &Tier::default()).expect("a scaled read");
         for (n, v) in plane(&scaled, "scaled").iter().enumerate() {
             let at = 0.37 * n as f64 / f64::from(rate) - 0.012_345_6;
-            assert!((v - (TAU * 220.0 * at).sin()).abs() < 1e-9, "{rate}: {n}");
+            assert!(
+                (v - libm::sin(TAU * 220.0 * at)).abs() < 1e-9,
+                "{rate}: {n}"
+            );
         }
         // A render holds past its pass only the buffers a reading asks for.
         let config = RenderConfig {
@@ -138,7 +141,10 @@ fn a_formula_read_at_any_instant_is_exact() {
             .to_vec();
         for (n, v) in plane(&held, "vibrato").iter().enumerate() {
             let at = n as f64 / f64::from(rate) + lfo[n];
-            assert!((v - (TAU * 220.0 * at).sin()).abs() < 1e-12, "{rate}: {n}");
+            assert!(
+                (v - libm::sin(TAU * 220.0 * at)).abs() < 1e-12,
+                "{rate}: {n}"
+            );
         }
     }
 }

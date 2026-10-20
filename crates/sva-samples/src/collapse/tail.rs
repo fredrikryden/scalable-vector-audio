@@ -22,7 +22,7 @@ pub(crate) fn tail_db(n: &SpectralSum, ceiling: f64) -> Option<f64> {
         held += power * width;
         gone += power * (above(width, ceiling - hz) + above(width, ceiling + hz));
     }
-    (held > 0.0).then(|| 10.0 * (gone / held).log10())
+    (held > 0.0).then(|| 10.0 * libm::log10(gone / held))
 }
 
 fn sinc_dual(a: &SpectralAtom) -> bool {
@@ -43,7 +43,7 @@ fn above(width: f64, x: f64) -> f64 {
         return width / 2.0;
     }
     let turns = TAU * width * x;
-    (1.0 - turns.cos()) / (2.0 * PI * PI * x) + width / PI * (PI / 2.0 - sine_integral(turns))
+    (1.0 - libm::cos(turns)) / (2.0 * PI * PI * x) + width / PI * (PI / 2.0 - sine_integral(turns))
 }
 
 fn sine_integral(x: f64) -> f64 {
@@ -65,7 +65,7 @@ fn sine_integral(x: f64) -> f64 {
             break;
         }
     }
-    PI / 2.0 + (C64::new(x.cos(), -x.sin()) * h).im
+    PI / 2.0 + (C64::new(libm::cos(x), -libm::sin(x)) * h).im
 }
 
 fn series(x: f64) -> f64 {

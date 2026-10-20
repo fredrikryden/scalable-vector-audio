@@ -21,7 +21,7 @@ const LOSSLESS: Damping = Damping {
 };
 
 fn cents(a: f64, b: f64) -> f64 {
-    (1200.0 * (a / b).log2()).abs()
+    (1200.0 * libm::log2(a / b)).abs()
 }
 
 fn heard(found: &[Mode]) -> Vec<f64> {
@@ -141,7 +141,7 @@ fn hammer_pulse_contact_time_follows_the_velocity_exponent() {
         };
         let (slow, fast) = (contact_time(1.0, &felt), contact_time(4.0, &felt));
         assert!((slow - 2.0e-3).abs() < 1e-15, "the reference is its own");
-        let measured = (fast / slow).log2() / 4.0f64.log2();
+        let measured = libm::log2(fast / slow) / libm::log2(4.0f64);
         assert!(
             (measured - wanted).abs() < 1e-12,
             "{measured} against {wanted}"
@@ -152,7 +152,7 @@ fn hammer_pulse_contact_time_follows_the_velocity_exponent() {
         else {
             panic!("a strike is a hammer pulse");
         };
-        let force = (hard / soft).log2() / 4.0f64.log2();
+        let force = libm::log2(hard / soft) / libm::log2(4.0f64);
         let momentum = 2.0 * stiffness / (stiffness + 1.0);
         assert!(
             (force - momentum).abs() < 1e-12,
@@ -319,10 +319,10 @@ fn a_struck_bank_is_its_impulse_response_convolved_with_the_force() {
     let rings = |u: f64| -> f64 {
         modes
             .iter()
-            .map(|m| m.amp * (-u / m.tau).exp() * (m.omega * u + m.phase).cos())
+            .map(|m| m.amp * libm::exp(-u / m.tau) * libm::cos(m.omega * u + m.phase))
             .sum()
     };
-    let force = |s: f64| f0 * 0.5 * (1.0 - (TAU * (s - t0) / contact).cos());
+    let force = |s: f64| f0 * 0.5 * (1.0 - libm::cos(TAU * (s - t0) / contact));
     let convolved = |t: f64| -> f64 {
         let end = t.min(t0 + contact);
         if end <= t0 {

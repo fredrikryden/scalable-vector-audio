@@ -183,7 +183,7 @@ impl Envelope {
     }
 
     fn power(&self, k: i64) -> f64 {
-        ((k as f64 * self.rho.ln()).exp() * (1.0 + SLACK)).max(f64::MIN_POSITIVE)
+        (libm::exp(k as f64 * libm::log(self.rho)) * (1.0 + SLACK)).max(f64::MIN_POSITIVE)
     }
 
     fn at(&self, k: i64) -> f64 {

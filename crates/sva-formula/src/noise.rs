@@ -10,9 +10,9 @@ pub const LINE: IndexId = IndexId(u32::MAX);
 /// Line `k`, at `f = k/period` Hz, is `f^log2(color)/sqrt(period)`: a level a hertz no
 /// period moves.
 pub fn noise(seed: u64, period: f64, color: f64) -> Series {
-    let tilt = color.log2();
+    let tilt = libm::log2(color);
     let amplitude = Body::Mul(vec![
-        Part::bare(Body::Const(C64::real(period.powf(-(tilt + 0.5))))),
+        Part::bare(Body::Const(C64::real(libm::pow(period, -(tilt + 0.5))))),
         Part::bare(Body::Apply(
             Unary::Exp,
             Part::bare(Body::Mul(vec![

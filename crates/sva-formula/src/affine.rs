@@ -234,11 +234,11 @@ pub fn apply_scalar(op: Unary, x: C64) -> C64 {
         }
         Unary::Sat => C64::real(x.re.clamp(-1.0, 1.0)),
         Unary::Abs => C64::real(x.abs()),
-        Unary::Log => C64::new(x.abs().ln(), x.im.atan2(x.re)),
+        Unary::Log => C64::new(libm::log(x.abs()), libm::atan2(x.im, x.re)),
         Unary::Sqrt => {
             let r = x.abs().sqrt();
-            let half = x.im.atan2(x.re) / 2.0;
-            C64::new(r * half.cos(), r * half.sin())
+            let half = libm::atan2(x.im, x.re) / 2.0;
+            C64::new(r * libm::cos(half), r * libm::sin(half))
         }
         Unary::Step => C64::real(step(x.re)),
     }

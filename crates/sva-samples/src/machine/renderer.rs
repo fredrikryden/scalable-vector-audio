@@ -601,13 +601,13 @@ impl From<sva_formula::Unary> for Unary {
 impl Unary {
     pub fn apply(self, x: f64) -> f64 {
         match self {
-            Unary::Sin => x.sin(),
-            Unary::Cos => x.cos(),
-            Unary::Exp => x.exp(),
+            Unary::Sin => libm::sin(x),
+            Unary::Cos => libm::cos(x),
+            Unary::Exp => libm::exp(x),
             Unary::Sqrt => x.sqrt(),
             Unary::Abs => x.abs(),
-            Unary::Tanh => x.tanh(),
-            Unary::Log => x.ln(),
+            Unary::Tanh => libm::tanh(x),
+            Unary::Log => libm::log(x),
             Unary::Sat => x.clamp(-1.0, 1.0),
             Unary::Step => sva_formula::affine::step(x),
         }

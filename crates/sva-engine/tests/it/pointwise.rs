@@ -183,9 +183,9 @@ fn a_neumann_series_under_a_product_renders() {
     for i in (0..buffer.len()).step_by(37) {
         let t = i as f64 / 44_100.0;
         let want: f64 = (0..taken)
-            .map(|k| 0.5f64.powi(k) * (TAU * 220.0 * (t - 0.01 * f64::from(k))).sin())
+            .map(|k| 0.5f64.powi(k) * libm::sin(TAU * 220.0 * (t - 0.01 * f64::from(k))))
             .sum::<f64>()
-            * t.tanh();
+            * libm::tanh(t);
         assert!(
             (buffer.at(0, i) - want).abs() < 1e-7,
             "sample {i}: {} against {want}",
@@ -264,14 +264,14 @@ fn a_panned_ct_law_point_samples_both_lanes() {
     let buffer = held.output(id).expect("a rendered pan");
     assert_eq!(buffer.width(), 2, "the join names two components");
     for i in [1usize, 17, 123] {
-        let mono = (3.0 * (TAU * 220.0 * i as f64 / 44_100.0).sin()).tanh();
+        let mono = libm::tanh(3.0 * libm::sin(TAU * 220.0 * i as f64 / 44_100.0));
         assert!(
-            (buffer.at(0, i) - mono * (0.3f64).cos()).abs() < 1e-12,
+            (buffer.at(0, i) - mono * libm::cos(0.3f64)).abs() < 1e-12,
             "left at {i}: {}",
             buffer.at(0, i)
         );
         assert!(
-            (buffer.at(1, i) - mono * (0.3f64).sin()).abs() < 1e-12,
+            (buffer.at(1, i) - mono * libm::sin(0.3f64)).abs() < 1e-12,
             "right at {i}: {}",
             buffer.at(1, i)
         );

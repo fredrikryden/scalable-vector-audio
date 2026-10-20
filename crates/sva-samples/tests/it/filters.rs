@@ -29,7 +29,7 @@ fn rms(v: &[f64]) -> f64 {
 
 fn tone(hz: f64, n: usize) -> Vec<f64> {
     (0..n)
-        .map(|i| (2.0 * std::f64::consts::PI * hz * i as f64 / 48000.0).sin())
+        .map(|i| libm::sin(2.0 * std::f64::consts::PI * hz * i as f64 / 48000.0))
         .collect()
 }
 
@@ -44,7 +44,7 @@ fn a_rendered_tone_is_attenuated_by_what_the_response_predicts() {
     ] {
         let out = run(shape, cutoff, 0.707, &tone(hz, n));
         let settled = &out[n / 2..];
-        let measured = 20.0 * (rms(settled) / rms(&tone(hz, n)[n / 2..])).log10();
+        let measured = 20.0 * libm::log10(rms(settled) / rms(&tone(hz, n)[n / 2..]));
         let predicted = sva_samples::biquad::magnitude_db(
             &sva_samples::biquad::design(shape, cutoff, 0.707, 1.0, 48000.0),
             hz,
@@ -139,7 +139,7 @@ fn a_bandpass_keeps_a_q_of_a_thousand() {
     assert!(!s.trace("n", 0, 48000.0)[0].clamped);
     for hz in [1000.0, 1010.0] {
         let out = run(Shape::Bandpass, 1000.0, q, &tone(hz, n));
-        let measured = 20.0 * (rms(&out[n - 48_000..]) / rms(&tone(hz, 48_000))).log10();
+        let measured = 20.0 * libm::log10(rms(&out[n - 48_000..]) / rms(&tone(hz, 48_000)));
         let predicted = sva_samples::biquad::magnitude_db(
             &sva_samples::biquad::design(Shape::Bandpass, 1000.0, q, 1.0, 48000.0),
             hz,

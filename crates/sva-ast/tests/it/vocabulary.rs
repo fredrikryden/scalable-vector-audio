@@ -88,5 +88,5 @@ fn a_note_sounds_at_its_equal_tempered_frequency() {
         "an octave is a doubling"
     );
     assert!((sva_ast::note_hz("C4").unwrap() - 261.6255653005986).abs() < 1e-9);
-    assert!((sva_ast::note_hz("As4").unwrap() / 440.0 - 2f64.powf(1.0 / 12.0)).abs() < 1e-12);
+    assert!((sva_ast::note_hz("As4").unwrap() / 440.0 - libm::pow(2f64, 1.0 / 12.0)).abs() < 1e-12);
 }

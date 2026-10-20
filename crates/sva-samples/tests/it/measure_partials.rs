@@ -59,7 +59,7 @@ fn interior() -> impl Iterator<Item = f64> {
 #[test]
 fn a_lone_sinusoid_reads_within_its_stated_bounds() {
     let (hz, amp, phase) = (440.37, 0.3, 0.7);
-    let p = read(1.0, |t| amp * (TAU * hz * t + phase).sin());
+    let p = read(1.0, |t| amp * libm::sin(TAU * hz * t + phase));
     assert_eq!(p.tracks.len(), 1, "{p:?}");
     let track = &p.tracks[0];
     assert_eq!(track.kind, Kind::Tonal);
@@ -89,12 +89,12 @@ fn a_lone_sinusoid_reads_within_its_stated_bounds() {
 #[test]
 fn a_weak_partial_beside_a_loud_one_reads_its_own_frequency_and_level() {
     let p = read(1.5, |t| {
-        0.4 * (TAU * 220.0 * t).sin() + 0.04 * (TAU * 330.5 * t + 1.9).sin()
+        0.4 * libm::sin(TAU * 220.0 * t) + 0.04 * libm::sin(TAU * 330.5 * t + 1.9)
     });
     let weak = nearest(&p, 330.5);
     assert_eq!(weak.kind, Kind::Tonal);
     for t in interior() {
-        let cents = 1200.0 * (value(&weak.frequency, t) / 330.5).log2();
+        let cents = 1200.0 * libm::log2(value(&weak.frequency, t) / 330.5);
         assert!(cents.abs() < 0.1, "{t}: {cents} cents, {weak:?}");
         let off = (value(&weak.amplitude, t) - 0.04).abs();
         assert!(off < weak.amplitude.error + 4e-4, "{t}: {off}, {weak:?}");
@@ -116,8 +116,11 @@ fn narrowband_noise_reads_breathy_and_a_tone_tonal() {
         .collect();
     let scale = 0.05 / (lines.len() as f64 / 2.0).sqrt();
     let p = read(1.0, |t| {
-        let noise: f64 = lines.iter().map(|(hz, ph)| (TAU * hz * t + ph).sin()).sum();
-        0.1 * (TAU * 400.0 * t).sin() + scale * noise
+        let noise: f64 = lines
+            .iter()
+            .map(|(hz, ph)| libm::sin(TAU * hz * t + ph))
+            .sum();
+        0.1 * libm::sin(TAU * 400.0 * t) + scale * noise
     });
     assert_eq!(nearest(&p, 400.0).kind, Kind::Tonal, "{p:?}");
     let band = p

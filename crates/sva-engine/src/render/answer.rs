@@ -153,7 +153,7 @@ fn exact(
                 .into_iter()
                 .map(|p| Peak {
                     hz: p.hz,
-                    db: 20.0 * p.amplitude.log10(),
+                    db: 20.0 * libm::log10(p.amplitude),
                 })
                 .collect();
             found.sort_by(|a, b| b.db.total_cmp(&a.db));
@@ -664,7 +664,7 @@ impl Listed {
         let loudest = |set: &mut dyn Iterator<Item = f64>| set.fold(0.0f64, f64::max);
         let gone = loudest(&mut self.dropped.iter().map(|l| l.amp.abs()));
         let kept = loudest(&mut self.atoms.iter().map(|a| a.c.abs()));
-        (gone > 0.0 && kept > 0.0).then(|| 20.0 * (gone / kept).log10())
+        (gone > 0.0 && kept > 0.0).then(|| 20.0 * libm::log10(gone / kept))
     }
 }
 

@@ -362,9 +362,9 @@ fn the_arguments_reading_answers_what_each_binding_handed_its_builtins() {
                 .find(|a| a.name == name)
                 .unwrap_or_else(|| panic!("{name} in {call:?}"))
         };
-        let b = (1.4e-4f64).max(4.1e-4 * (f0 / 262.0).powf(1.9));
+        let b = (1.4e-4f64).max(4.1e-4 * libm::pow(f0 / 262.0, 1.9));
         assert_eq!((arg("b").value, arg("b").written), (b, true), "{f0}");
-        let k = 2e10 * 1f64.max((f0 / 523.0).powf(0.6));
+        let k = 2e10 * 1f64.max(libm::pow(f0 / 523.0, 0.6));
         assert_eq!(arg("hammer_k").value, k, "{f0}");
         assert_eq!((arg("f0").value, arg("vel").value), (f0, 3.0));
         let strike = arg("strike_pos");
@@ -468,7 +468,7 @@ fn a_whole_power_past_the_order_cap_is_no_polynomial() {
         .plane(0)
         .iter()
         .fold(0f64, |m, s| m.max(s.abs()));
-    let gain = 1.000_000_000_1f64.powf(2e9);
+    let gain = libm::pow(1.000_000_000_1f64, 2e9);
     assert!((peak - gain).abs() < 1e-2 * gain, "{peak} against {gain}");
     let Err(EngineError::Refused(d)) = types(&g, "signal") else {
         panic!("a signal to the two billionth names no polynomial power");
@@ -544,7 +544,7 @@ fn centre_db(name: &str, files: &[(&str, &str)]) -> f64 {
     let plane = output.plane(0);
     let settled = &plane[2400..4800];
     let power = settled.iter().map(|s| s * s).sum::<f64>() / settled.len() as f64;
-    10.0 * (2.0 * power).log10()
+    10.0 * libm::log10(2.0 * power)
 }
 
 /// A level is the amplitude ratio `db` writes, in a filter's gain as anywhere: `12db` leaves
@@ -552,7 +552,11 @@ fn centre_db(name: &str, files: &[(&str, &str)]) -> f64 {
 #[test]
 fn a_gain_written_in_db_is_the_level_it_names() {
     let tone = "sin(2*pi*1000*t)";
-    for (gain, want) in [("12db", 12.0), ("-40db", -40.0), ("4", 20.0 * 4f64.log10())] {
+    for (gain, want) in [
+        ("12db", 12.0),
+        ("-40db", -40.0),
+        ("4", 20.0 * libm::log10(4f64)),
+    ] {
         for body in [
             format!("peaking(sample({tone}), 1000hz, 2, {gain})\n"),
             format!("sample(peaking({tone}, 1000hz, 2, gain={gain}))\n"),

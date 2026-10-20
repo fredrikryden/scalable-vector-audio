@@ -57,7 +57,7 @@ fn the_triad_under_a_300_hz_lowpass_is_placed_at_the_response() {
     };
     for (hz, amplitude) in &found {
         let want = response(*hz);
-        let off = 20.0 * (amplitude / want).log10();
+        let off = 20.0 * libm::log10(amplitude / want);
         assert!(off.abs() < 0.5, "{hz} Hz sits {off} dB off its response");
     }
     let root = found[0];
@@ -118,7 +118,7 @@ fn a_lowpass_over_a_second_long_crop_holds_its_response() {
         .fold(0.0f64, f64::max);
     let want = 1.0 / (1.0f64 + 0.25).sqrt();
     assert!(
-        (20.0 * (peak / want).log10()).abs() < 0.5,
+        (20.0 * libm::log10(peak / want)).abs() < 0.5,
         "the one-pole response at half its corner is {peak}, not {want}"
     );
 }

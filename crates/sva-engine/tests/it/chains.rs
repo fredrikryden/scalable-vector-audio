@@ -51,7 +51,7 @@ const TONE: &str = "sin(2*pi*220*t)";
 #[test]
 fn a_sum_reading_its_source_thrice_at_each_of_twelve_levels() {
     let digest = chain(TONE, 12, "1s", |p| format!("{p}*0.5 + {p}*0.3 + {p}*0.2"));
-    assert_eq!(digest, 0xec39_7011_2dae_c8b7);
+    assert_eq!(digest, 0xe65f_0146_ef92_733e);
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn a_sum_with_a_modulated_term_at_each_of_twelve_levels() {
     let digest = chain(TONE, 12, "1s", |p| {
         format!("{p}*sin(2*pi*3*t) + {p}*0.3 + {p}*0.2")
     });
-    assert_eq!(digest, 0x975d_1983_4c26_01b5);
+    assert_eq!(digest, 0x95d4_816d_2b9c_a6ef);
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn a_sum_with_a_max_at_each_of_twelve_levels() {
     let digest = chain(TONE, 12, "1s", |p| {
         format!("max({p}, 0)*0.5 + {p}*0.3 + {p}*0.2")
     });
-    assert_eq!(digest, 0x2150_5fe6_e36e_9ea7);
+    assert_eq!(digest, 0xa9f6_7b58_072d_ce56);
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn a_sum_with_a_square_at_each_of_eight_levels() {
     let digest = chain("sin(2*pi*t) + 1.5", 8, "2s", |p| {
         format!("0.5*{p} + 0.3*{p}*{p}")
     });
-    assert_eq!(digest, 0xbf63_7e7d_2991_24b6);
+    assert_eq!(digest, 0x8ecb_ff5e_eb4f_065a);
 }
 
 /// An exponential window bounds what it multiplies before it finds where the product is zero.
@@ -83,7 +83,7 @@ fn a_sum_with_a_square_at_each_of_eight_levels() {
 fn an_exponential_window_over_a_sum_twelve_levels_deep() {
     let sum = |p: &str| format!("{p}*0.5 + {p}*0.3 + {p}*0.2");
     let digest = over(TONE, (12, "1s"), sum, "crop(exp(-3*t)*@n12(t), 0s, 1s)");
-    assert_eq!(digest, 0xa515_a431_4935_0c71);
+    assert_eq!(digest, 0xb065_af8d_5931_0dec);
 }
 
 /// Read once per path, each term would be `3^12` copies of the tone.
@@ -91,7 +91,7 @@ fn an_exponential_window_over_a_sum_twelve_levels_deep() {
 fn a_loop_over_a_sum_with_a_modulated_term_twelve_levels_deep() {
     let body = |p: &str| format!("{p}*sin(2*pi*3*t) + {p}*0.3 + {p}*0.2");
     let digest = over(TONE, (12, "1s"), body, "@n12(t) + 0.5*self(t - 17ms)");
-    assert_eq!(digest, 0xa004_0318_faff_2338);
+    assert_eq!(digest, 0x2e85_23a2_04ca_e220);
 }
 
 /// Samples `top` renders, never treated as silent, over a chain whose `ck` reads `c{k-1}` as `read` writes it.

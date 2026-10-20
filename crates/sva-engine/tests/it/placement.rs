@@ -264,7 +264,7 @@ fn a_periodic_value_read_across_its_period_from_past_zero_holds_every_sample() {
         );
         for (i, x) in out.plane(0).iter().enumerate() {
             let n = start + i as i64;
-            let exact = (std::f64::consts::TAU * 1000.0 * n as f64 / f64::from(RATE)).sin();
+            let exact = libm::sin(std::f64::consts::TAU * 1000.0 * n as f64 / f64::from(RATE));
             assert!(
                 (x - exact).abs() < 1e-9,
                 "[{start}, {end}) sample {n}: {x} for {exact}"

@@ -394,6 +394,7 @@ checksum = "5b3dc8af474f516a851ff4bd12db780f948b9250ad37211e4eec0bccea54e01b"
 name = "sva-ast"
 version = "0.14.28"
 dependencies = [
+ "libm",
  "serde",
  "serde_json",
 ]
@@ -403,6 +404,7 @@ name = "sva-cli"
 version = "0.14.28"
 dependencies = [
  "hound",
+ "libm",
  "serde_json",
  "signal-hook",
  "sva-ast",
@@ -416,6 +418,7 @@ dependencies = [
 name = "sva-core"
 version = "0.14.28"
 dependencies = [
+ "libm",
  "serde_json",
  "sva-ast",
  "sva-engine",
@@ -426,6 +429,7 @@ dependencies = [
 name = "sva-engine"
 version = "0.14.28"
 dependencies = [
+ "libm",
  "rayon",
  "sva-ast",
  "sva-formula",
@@ -435,6 +439,9 @@ dependencies = [
 [[package]]
 name = "sva-formula"
 version = "0.14.28"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "sva-samples"

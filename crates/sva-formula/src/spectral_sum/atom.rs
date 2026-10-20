@@ -128,7 +128,7 @@ fn absorb_shift(atom: SpectralAtom) -> SpectralAtom {
     SpectralAtom {
         c: atom
             .c
-            .scale((e.sigma * g.mu + e.sigma * e.sigma / (4.0 * g.a)).exp()),
+            .scale(libm::exp(e.sigma * g.mu + e.sigma * e.sigma / (4.0 * g.a))),
         gauss: Some(Gauss {
             mu: g.mu + e.sigma / (2.0 * g.a),
             ..g
@@ -324,7 +324,7 @@ impl SpectralAtom {
             v = v * C64::new(e.sigma * (x - e.mu), e.omega * x).exp();
         }
         if let Some(g) = self.gauss {
-            v = v.scale((-g.a * (x - g.mu) * (x - g.mu)).exp());
+            v = v.scale(libm::exp(-g.a * (x - g.mu) * (x - g.mu)));
         }
         if let Some(p) = self.pole {
             let d = C64::real(x) - p.at;

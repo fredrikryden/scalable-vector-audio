@@ -28,7 +28,7 @@ fn echoes(t: f64, l: f64, r: f64, g: f64, d: f64, terms: i32) -> f64 {
         .map(|k| {
             let at = t - d * f64::from(k);
             match (l..r).contains(&at) {
-                true => g.powi(k) * (TAU * 440.0 * at).sin(),
+                true => g.powi(k) * libm::sin(TAU * 440.0 * at),
                 false => 0.0,
             }
         })

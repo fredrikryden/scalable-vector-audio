@@ -327,7 +327,7 @@ fn under_ceiling(model: &'static str, nodes: f64, ceiling: usize) -> Result<(), 
 /// `width` seconds and silence after, so the drive starts and ends at rest.
 pub(crate) fn raised_cosine_pulse(t: f64, amp: f64, width: f64) -> f64 {
     match t < width {
-        true => amp * 0.5 * (1.0 - (std::f64::consts::TAU * t / width).cos()),
+        true => amp * 0.5 * (1.0 - libm::cos(std::f64::consts::TAU * t / width)),
         false => 0.0,
     }
 }

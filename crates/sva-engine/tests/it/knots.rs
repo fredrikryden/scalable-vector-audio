@@ -57,7 +57,7 @@ fn a_knot_integral_is_the_area_under_its_lines_and_a_glides_phase() {
     let glide = samples("cos(2*pi*pwl_integral(t, 0s, 440hz, 1s, 880hz))\n", 1.0).expect("a glide");
     for (n, v) in glide.iter().enumerate() {
         let t = n as f64 / f64::from(RATE);
-        let want = (std::f64::consts::TAU * (440.0 * t + 220.0 * t * t)).cos();
+        let want = libm::cos(std::f64::consts::TAU * (440.0 * t + 220.0 * t * t));
         assert!((v - want).abs() < 1e-9, "sample {n}: {v} against {want}");
     }
     let area = samples(

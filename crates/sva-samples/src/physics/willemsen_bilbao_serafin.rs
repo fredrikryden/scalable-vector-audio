@@ -114,7 +114,7 @@ fn sgn(x: f64) -> f64 {
 
 /// Eq. (7): `abs()` around `z_ss`, missing in the pre-DAFx-19 literature.
 fn steady_state(v: f64, s0: f64, f_c: f64, f_s: f64, stribeck_vel: f64) -> f64 {
-    sgn(v) / s0 * (f_c + (f_s - f_c) * (-(v / stribeck_vel).powi(2)).exp())
+    sgn(v) / s0 * (f_c + (f_s - f_c) * libm::exp(-(v / stribeck_vel).powi(2)))
 }
 
 /// Eq. (8)-(9): `sgn(z)` on the sine offset; `|z|=z_ba`/`|z_ss|` resolved, not undefined.
@@ -130,7 +130,7 @@ fn adhesion(v: f64, z: f64, z_ba: f64, zss: f64) -> f64 {
     } else {
         let span = (azss - z_ba).max(1e-300);
         let s = sgn(z);
-        0.5 * (1.0 + s * (std::f64::consts::PI * (z - s * 0.5 * (azss + z_ba)) / span).sin())
+        0.5 * (1.0 + s * libm::sin(std::f64::consts::PI * (z - s * 0.5 * (azss + z_ba)) / span))
     }
 }
 

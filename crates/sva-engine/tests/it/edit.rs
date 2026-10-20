@@ -1006,7 +1006,8 @@ fn an_edit_plays_a_node_as_its_own_graph_holds_it() {
     )
     .expect("a render");
     let bed = whole.output(whole.root).expect("the bed").plane(0).to_vec();
-    let tone = |n: usize| 0.1 * (std::f64::consts::TAU * 440.0 * n as f64 / f64::from(RATE)).sin();
+    let tone =
+        |n: usize| 0.1 * libm::sin(std::f64::consts::TAU * 440.0 * n as f64 / f64::from(RATE));
     for (k, v) in heard.plane(0).iter().enumerate() {
         let n = BLOCK + k;
         assert!((v - (bed[n] + tone(n))).abs() < 1e-9, "sample {n}: {v}");

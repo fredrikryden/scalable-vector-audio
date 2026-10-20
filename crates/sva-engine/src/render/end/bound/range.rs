@@ -398,7 +398,7 @@ fn exp(s: Span) -> Span {
     }
     let g = |x: f64| {
         let d = err + rel * x.abs();
-        (x + d).exp() * (d + OP)
+        libm::exp(x + d) * (d + OP)
     };
     let mut most = g(s.hi);
     if s.lo < 0.0 {
@@ -410,7 +410,7 @@ fn exp(s: Span) -> Span {
         }
     }
     let most = if most.is_nan() { f64::INFINITY } else { most };
-    Span::new(s.lo.exp(), s.hi.exp(), most)
+    Span::new(libm::exp(s.lo), libm::exp(s.hi), most)
 }
 
 /// A run is summed by its own evaluator, so its lines' atoms never stand for it.
@@ -532,10 +532,10 @@ fn mapped(op: Unary, s: Span) -> Option<Span> {
         Some(Span::new(lo, hi, slope * err + OP * reach))
     };
     match op {
-        Unary::Exp => next(lo.exp(), hi.exp(), (hi + err).exp()),
+        Unary::Exp => next(libm::exp(lo), libm::exp(hi), libm::exp(hi + err)),
         Unary::Tanh | Unary::Sat | Unary::Sin | Unary::Cos => {
             let (lo, hi) = match op {
-                Unary::Tanh => (lo.tanh(), hi.tanh()),
+                Unary::Tanh => (libm::tanh(lo), libm::tanh(hi)),
                 Unary::Sat => (lo.clamp(-1.0, 1.0), hi.clamp(-1.0, 1.0)),
                 _ => (-1.0, 1.0),
             };
@@ -548,7 +548,7 @@ fn mapped(op: Unary, s: Span) -> Option<Span> {
             let reach = hi.sqrt();
             Some(Span::new(lo.sqrt(), reach, err.sqrt() + OP * reach))
         }
-        Unary::Log if lo - err > 0.0 => next(lo.ln(), hi.ln(), 1.0 / (lo - err)),
+        Unary::Log if lo - err > 0.0 => next(libm::log(lo), libm::log(hi), 1.0 / (lo - err)),
         Unary::Sqrt | Unary::Log => None,
         // Exact wherever its argument cannot round across zero; there, anything in [0, 1].
         Unary::Step if lo - err >= 0.0 => Some(Span::new(1.0, 1.0, 0.0)),

@@ -779,9 +779,9 @@ fn power(base: Body, exponent: Body, var: Var, origin: Origin) -> Option<Body> {
     }
     let b = super::constant_value(&base, var).filter(|b| *b > 0.0)?;
     if let Some(n) = n {
-        return Some(Body::Const(C64::real(b.powf(n))));
+        return Some(Body::Const(C64::real(libm::pow(b, n))));
     }
-    let rate = Body::Const(C64::real(b.ln()));
+    let rate = Body::Const(C64::real(libm::log(b)));
     let scaled = Body::Mul(vec![part(exponent), part(rate)]);
     Some(Body::Apply(Unary::Exp, part(scaled)))
 }

@@ -138,7 +138,7 @@ impl Vary {
         let number = match precision {
             Precision::Decimals(d) => trimmed(&format!("{value:.d$}")),
             Precision::Significant(s) => {
-                let d = (s as i32 - 1 - value.abs().log10().floor() as i32).max(0) as usize;
+                let d = (s as i32 - 1 - libm::log10(value.abs()).floor() as i32).max(0) as usize;
                 trimmed(&format!("{value:.d$}"))
             }
             Precision::Shortest => format!("{value}"),
@@ -208,9 +208,9 @@ impl Vary {
         Some(match (held, self.unit) {
             (Held::Plain(v) | Held::Note(v), "" | "hz") => v,
             (Held::Plain(v) | Held::Note(v), "khz") => v / 1000.0,
-            (Held::Plain(v), "db") => 20.0 * ratio(v)?.log10(),
-            (Held::Plain(v), "ct") => 1200.0 * ratio(v)?.log2(),
-            (Held::Plain(v), "st") => 12.0 * ratio(v)?.log2(),
+            (Held::Plain(v), "db") => 20.0 * libm::log10(ratio(v)?),
+            (Held::Plain(v), "ct") => 1200.0 * libm::log2(ratio(v)?),
+            (Held::Plain(v), "st") => 12.0 * libm::log2(ratio(v)?),
             (Held::Log(v, LogUnit::Decibels), "db")
             | (Held::Log(v, LogUnit::Cents), "ct")
             | (Held::Log(v, LogUnit::Semitones), "st") => v,

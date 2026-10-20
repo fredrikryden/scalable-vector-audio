@@ -103,16 +103,16 @@ fn a_one_pole_smoother_written_with_sp_renders_at_two_rates() {
             .expect("a rendered loop")
             .at(0, rate as usize / 100)
     };
-    let settled = 1.0 - (-1.0f64).exp();
+    let settled = 1.0 - libm::exp(-1.0f64);
     let (low, high) = (level(RATE), level(12_000));
     for (rate, held) in [(RATE, low), (12_000, high)] {
-        let apart = 20.0 * (held / settled).log10();
+        let apart = 20.0 * libm::log10(held / settled);
         assert!(
             apart.abs() < 0.5,
             "{rate}: one time constant reads {held}, not {settled}"
         );
     }
-    let apart = 20.0 * (low / high).log10();
+    let apart = 20.0 * libm::log10(low / high);
     assert!(
         apart.abs() < 0.5,
         "the two rates state one time constant: {low} against {high}"
@@ -145,11 +145,11 @@ fn a_swept_cutoff_on_samples_renders() {
     };
     let (stopped, passed) = (peak(0.006, 0.03), peak(0.45, 0.5));
     assert!(
-        20.0 * (stopped / passed).log10() < -12.0,
+        20.0 * libm::log10(stopped / passed) < -12.0,
         "the corner below the tone stops it: {stopped} against {passed}"
     );
     assert!(
-        (20.0 * passed.log10()).abs() < 0.5,
+        (20.0 * libm::log10(passed)).abs() < 0.5,
         "the corner above the tone passes it: {passed}"
     );
 }
@@ -311,7 +311,7 @@ fn a_render_at_any_rate_steps_its_nodes_at_that_rate() {
     };
     let tone = read("tone");
     for (n, s) in tone.plane(0).iter().enumerate() {
-        let want = (2.0 * std::f64::consts::PI * 440.0 * n as f64 / f64::from(rate)).sin();
+        let want = libm::sin(2.0 * std::f64::consts::PI * 440.0 * n as f64 / f64::from(rate));
         assert!((s - want).abs() < 1e-4, "sample {n}: {s} against {want}");
     }
     assert_eq!(read("late").len(), tone.len());

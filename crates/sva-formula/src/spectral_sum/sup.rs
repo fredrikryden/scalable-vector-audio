@@ -33,7 +33,7 @@ pub fn magnitude_upper_bound_from_instant(atom: &SpectralAtom, t: f64) -> Option
         let power = match (p == 0.0, s == from) {
             (true, _) => 0.0,
             (false, true) => f64::NEG_INFINITY,
-            (false, false) => p * (s - from).abs().ln(),
+            (false, false) => p * libm::log((s - from).abs()),
         };
         match grown.is_infinite() {
             true => grown,
@@ -55,15 +55,15 @@ pub fn magnitude_upper_bound_from_instant(atom: &SpectralAtom, t: f64) -> Option
         None => (1.0, 0.0),
         Some(pole) => {
             let dx = (lo - pole.at.re).max(0.0).max(pole.at.re - hi);
-            let d = dx.hypot(pole.at.im);
+            let d = libm::hypot(dx, pole.at.im);
             if d == 0.0 {
                 return None;
             }
             let order = i32::from(pole.order);
-            (d.powi(-order), -f64::from(order) * d.ln())
+            (d.powi(-order), -f64::from(order) * libm::log(d))
         }
     };
-    let factors = [top.exp(), gauss.exp(), pole];
+    let factors = [libm::exp(top), libm::exp(gauss), pole];
     if factors.iter().all(|f| f.is_normal()) {
         return Some(atom.c.abs() * factors[0] * factors[1] * factors[2]);
     }
@@ -74,7 +74,7 @@ pub fn magnitude_upper_bound_from_instant(atom: &SpectralAtom, t: f64) -> Option
         return Some(0.0);
     }
     let slack = 1.0 + 4.0 * f64::EPSILON * (1.0 + terms.iter().map(|x| x.abs()).sum::<f64>());
-    Some(atom.c.abs() * ln.exp() * slack).filter(|s| !s.is_nan())
+    Some(atom.c.abs() * libm::exp(ln) * slack).filter(|s| !s.is_nan())
 }
 
 pub fn fate(atom: &SpectralAtom) -> Fate {

@@ -100,7 +100,7 @@ pub fn steps(run: &Run) -> usize {
 pub fn bound(run: &Run) -> f64 {
     let rotor = (32.0 + 12.0 * (run.first as f64).abs()) * U;
     let term =
-        |j: usize| (rotor + j as f64 * STEP_ROTOR + (j + 1) as f64 * PRODUCT_AND_SUM).exp_m1();
+        |j: usize| libm::expm1(rotor + j as f64 * STEP_ROTOR + (j + 1) as f64 * PRODUCT_AND_SUM);
     let ladder = |amps: &[C64]| -> (f64, f64) {
         amps.iter()
             .enumerate()
@@ -185,6 +185,6 @@ fn wrap(x: f64) -> f64 {
 }
 
 fn cis(turns: f64) -> C64 {
-    let (sin, cos) = (TAU * turns).sin_cos();
+    let (sin, cos) = libm::sincos(TAU * turns);
     C64::new(cos, sin)
 }

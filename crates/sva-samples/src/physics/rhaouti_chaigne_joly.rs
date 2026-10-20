@@ -103,8 +103,10 @@ fn build_contact_patch(
     contact_iy: usize,
     h: f64,
 ) -> ContactPatch {
-    let cutoff_m =
-        (MALLET_WINDOW_WEIGHT_FLOOR.ln().abs() / MALLET_WINDOW_QUARTIC_COEFF_M4).powf(0.25);
+    let cutoff_m = libm::pow(
+        libm::log(MALLET_WINDOW_WEIGHT_FLOOR).abs() / MALLET_WINDOW_QUARTIC_COEFF_M4,
+        0.25,
+    );
     let radius_cells = (cutoff_m / h).ceil() as isize;
 
     let mut nodes = Vec::new();
@@ -117,7 +119,7 @@ fn build_contact_patch(
                 continue;
             }
             let (dx, dy) = (di as f64 * h, dj as f64 * h);
-            let w = (-MALLET_WINDOW_QUARTIC_COEFF_M4 * (dx.powi(4) + dy.powi(4))).exp();
+            let w = libm::exp(-MALLET_WINDOW_QUARTIC_COEFF_M4 * (dx.powi(4) + dy.powi(4)));
             if w < MALLET_WINDOW_WEIGHT_FLOOR {
                 continue;
             }

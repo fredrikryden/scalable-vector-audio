@@ -75,7 +75,7 @@ pub const RULES: [(&str, &str); 9] = [
 
 fn db(level: f64) -> f64 {
     match level > 0.0 {
-        true => (20.0 * level.log10()).max(FLOOR_DB),
+        true => (20.0 * libm::log10(level)).max(FLOOR_DB),
         false => FLOOR_DB,
     }
 }
@@ -126,7 +126,7 @@ fn sets(a: &[f64], b: &[f64], zone: f64, missed: f64) -> Vec<f64> {
 /// `100 ln(a / b)` over `jnd` percent, where both sides hold the axis.
 fn ratio(a: Option<f64>, b: Option<f64>, jnd: f64) -> f64 {
     match (a, b) {
-        (Some(a), Some(b)) if a > 0.0 && b > 0.0 => 100.0 * (a / b).ln() / jnd,
+        (Some(a), Some(b)) if a > 0.0 && b > 0.0 => 100.0 * libm::log(a / b) / jnd,
         _ => 0.0,
     }
 }
@@ -173,7 +173,7 @@ fn pitches(a: &sva_engine::panel::Note, b: &sva_engine::panel::Note) -> Vec<f64>
 }
 
 fn cents(hz: f64) -> f64 {
-    1200.0 * hz.log2()
+    1200.0 * libm::log2(hz)
 }
 
 /// `None` where the two are not one kind; the cost's typing already refused that.
@@ -258,7 +258,7 @@ pub fn residual(a: &Output, b: &Output) -> Option<Vec<f64>> {
                     let (x, y) = (cell(a, k, z), cell(b, k, z));
                     out.push(match x <= t && y <= t {
                         true => 0.0,
-                        false => 10.0 * ((x + t) / (y + t)).log2(),
+                        false => 10.0 * libm::log2((x + t) / (y + t)),
                     });
                 }
             }

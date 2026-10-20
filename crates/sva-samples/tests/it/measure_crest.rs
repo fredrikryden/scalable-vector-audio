@@ -4,7 +4,7 @@ use sva_samples::measure::crest::{BandCrest, Crest, analyze};
 
 fn at(hz: f64, sr: f64, secs: f64, amp: f64) -> Vec<f64> {
     (0..(secs * sr) as usize)
-        .map(|i| amp * (2.0 * std::f64::consts::PI * hz * i as f64 / sr).sin())
+        .map(|i| amp * libm::sin(2.0 * std::f64::consts::PI * hz * i as f64 / sr))
         .collect()
 }
 

@@ -28,7 +28,7 @@ fn a_kink_two_refs_down_splits_the_form_reading_it() {
         ("mid", "@ramp(t)*0.5 + @ramp(t)*0.5\n"),
         ("top", "crop(exp(-3*@mid(t))*sin(2*pi*220*t), 0s, 1s)\n"),
     ];
-    assert_eq!(digest(&files, "top", 1.0), 0x5b93_8aeb_39ee_b29f);
+    assert_eq!(digest(&files, "top", 1.0), 0x84be_1e53_bd00_d1ac);
 }
 
 /// A form no atom sum reaches, read at a time that moves, is its written form at that time.
@@ -40,7 +40,7 @@ fn a_written_form_read_at_a_moving_time_reads_each_ref_it_holds() {
         ("n2", "max(@n1(t), 0)*0.5 + @n1(t)*0.3 + @n1(t)*0.2\n"),
         ("top", "crop(@n2(t + 0.002*sin(2*pi*5*t)), 0s, 0.5s)\n"),
     ];
-    assert_eq!(digest(&files, "top", 0.5), 0x9929_8012_9a93_a725);
+    assert_eq!(digest(&files, "top", 0.5), 0xd129_7746_1571_fc12);
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn an_index_of_a_time_held_in_refs_reads_the_step_nearest_it() {
         ("when", "@late(t) - 0.002s\n"),
         ("top", "@x[idx(@when(t))]\n"),
     ];
-    assert_eq!(digest(&files, "top", 0.1), 0x74d1_93fc_31d2_926a);
+    assert_eq!(digest(&files, "top", 0.1), 0x677d_0482_60c8_82c2);
 }
 
 /// A dashpot ramped in through refs switches where the crop it reads opens.
@@ -88,7 +88,7 @@ fn a_closed_loop_reads_each_ref_its_body_reads_at_each_terms_time() {
         ("pair", "@tone(t)*0.5 + @tone(t)*0.5\n"),
         ("top", "@pair(t) + 0.5*self(t - 17ms)\n"),
     ];
-    assert_eq!(digest(&files, "top", 0.5), 0xa753_8c22_efde_c177);
+    assert_eq!(digest(&files, "top", 0.5), 0x54d3_c7e1_fd06_de9e);
 }
 
 /// A series term reading a closed form at its own instant renders the bits it does with that

@@ -23,8 +23,8 @@ pub fn modes(g: &MembraneGeom, count: usize) -> Vec<Mode> {
         for n in 1..=span[1] {
             let (mf, nf) = (m as f64, n as f64);
             let hz = 0.5 * speed * ((mf / g.lx).powi(2) + (nf / g.ly).powi(2)).sqrt();
-            let shape = (mf * std::f64::consts::PI * g.strike.0).sin()
-                * (nf * std::f64::consts::PI * g.strike.1).sin();
+            let shape = libm::sin(mf * std::f64::consts::PI * g.strike.0)
+                * libm::sin(nf * std::f64::consts::PI * g.strike.1);
             found.push(mode(hz, shape, g.damping));
         }
     }

@@ -84,7 +84,7 @@ fn ledger_shares_sum_to_one_for_a_sum() {
     let len = 480;
     let wave = |hz: f64, amp: f64| -> Vec<f64> {
         (0..len)
-            .map(|i| amp * (std::f64::consts::TAU * hz * i as f64 / 48_000.0).sin())
+            .map(|i| amp * libm::sin(std::f64::consts::TAU * hz * i as f64 / 48_000.0))
             .collect()
     };
     let (a, b, c) = (wave(200.0, 0.3), wave(300.0, 0.5), wave(200.0, 0.2));
@@ -156,7 +156,7 @@ fn a_tally_in_stretches_is_the_tally_whole() {
     let len = 10_007;
     let wave = |hz: f64, amp: f64| -> Vec<f64> {
         (0..len)
-            .map(|i| amp * (std::f64::consts::TAU * hz * i as f64 / 48_000.0).sin())
+            .map(|i| amp * libm::sin(std::f64::consts::TAU * hz * i as f64 / 48_000.0))
             .collect()
     };
     let (a, b) = (wave(200.0, 0.3), wave(310.0, 0.5));

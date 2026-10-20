@@ -70,7 +70,7 @@ fn an_exponential_decay_falls_at_the_rate_it_was_built_with() {
     let x: Vec<f64> = (0..(2.0 * SR) as usize)
         .map(|i| {
             let t = i as f64 / SR;
-            (2.0 * std::f64::consts::PI * hz * t).sin() * (-t / tau).exp()
+            libm::sin(2.0 * std::f64::consts::PI * hz * t) * libm::exp(-t / tau)
         })
         .collect();
     let bands = analyze(&[&x[..]], SR, 0.0);
@@ -78,7 +78,7 @@ fn an_exponential_decay_falls_at_the_rate_it_was_built_with() {
     let rate = bands.rate_hz;
     let at = |secs: f64| b.rms[(secs * rate) as usize];
     for (a, c) in [(0.1, 0.2), (0.2, 0.3), (0.3, 0.4)] {
-        let measured = -(c - a) / (at(c) / at(a)).ln();
+        let measured = -(c - a) / libm::log(at(c) / at(a));
         assert!(
             (measured - tau).abs() < 0.004,
             "{a}..{c} s read tau {measured}"
@@ -89,12 +89,12 @@ fn an_exponential_decay_falls_at_the_rate_it_was_built_with() {
 #[test]
 fn a_swept_sine_peaks_in_each_band_when_it_passes_that_bands_centre() {
     let (secs, lo, hi): (f64, f64, f64) = (4.0, 100.0, 8000.0);
-    let k = (hi / lo).ln() / secs;
+    let k = libm::log(hi / lo) / secs;
     let x: Vec<f64> = (0..(secs * SR) as usize)
         .map(|i| {
             let t = i as f64 / SR;
-            let phase = 2.0 * std::f64::consts::PI * lo * ((k * t).exp() - 1.0) / k;
-            phase.sin()
+            let phase = 2.0 * std::f64::consts::PI * lo * (libm::exp(k * t) - 1.0) / k;
+            libm::sin(phase)
         })
         .collect();
     let bands = analyze(&[&x[..]], SR, 0.0);
@@ -106,7 +106,7 @@ fn a_swept_sine_peaks_in_each_band_when_it_passes_that_bands_centre() {
     let mut previous = 0.0;
     for b in &heard {
         let arrived = b.time_to_peak_secs.expect("a swept band peaks");
-        let expected = (b.centre_hz / lo).ln() / k;
+        let expected = libm::log(b.centre_hz / lo) / k;
         assert!(
             (arrived - expected).abs() < 0.06,
             "{} Hz peaked at {arrived}, the sweep reached it at {expected}",

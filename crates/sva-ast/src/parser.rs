@@ -1046,7 +1046,7 @@ mod tests {
             Expr::Bin(
                 BinOp::Sub,
                 Box::new(Expr::Lit(Literal::Num(1.0))),
-                Box::new(Expr::Lit(Literal::Num(10f64.powf(3.0 / 20.0))))
+                Box::new(Expr::Lit(Literal::Num(libm::pow(10f64, 3.0 / 20.0))))
             ),
             "only a PREFIX minus folds; a subtraction is still a subtraction"
         );

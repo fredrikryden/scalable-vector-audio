@@ -227,7 +227,7 @@ fn a_twelfth_order_rational_round_trips_within_the_measured_residue_bound() {
     let poles: Vec<C64> = (0..6)
         .flat_map(|k| {
             let angle = std::f64::consts::PI * (0.5 + (2.0 * f64::from(k) + 1.0) / 24.0);
-            let p = C64::new(angle.cos(), angle.sin()).scale(300.0);
+            let p = C64::new(libm::cos(angle), libm::sin(angle)).scale(300.0);
             [p, p.conj()]
         })
         .collect();
@@ -245,11 +245,11 @@ fn a_twelfth_order_rational_round_trips_within_the_measured_residue_bound() {
         let f = 1.0 + 40.0 * f64::from(step);
         let direct = evaluate(&spectrum, f);
         let looped = evaluate(&back, f);
-        let db = 20.0 * direct.abs().log10();
+        let db = 20.0 * libm::log10(direct.abs());
         if db < -100.0 {
             continue;
         }
-        worst = worst.max((20.0 * looped.abs().log10() - db).abs());
+        worst = worst.max((20.0 * libm::log10(looped.abs()) - db).abs());
     }
     assert!(worst < ROUND_TRIP_DB, "worst round-trip error {worst} dB");
 }

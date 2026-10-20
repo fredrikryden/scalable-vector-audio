@@ -84,11 +84,11 @@ fn set_lines(dir: &std::path::Path, sets: &[(&str, &str)]) -> Vec<f64> {
 fn the_key_transposes_a_score_and_the_scale_changes_mode() {
     let major = lines("d3-major", ("D3", "major"));
     assert_eq!(major.len(), 2, "two degrees, two lines: {major:?}");
-    let third = |hz: &[f64]| 1200.0 * (hz[1] / hz[0]).log2();
+    let third = |hz: &[f64]| 1200.0 * libm::log2(hz[1] / hz[0]);
     assert!((third(&major) - 400.0).abs() < 1e-9, "{major:?}");
 
     let up = lines("a3-major", ("A3", "major"));
-    let fifth = 2f64.powf(7.0 / 12.0);
+    let fifth = libm::pow(2f64, 7.0 / 12.0);
     assert!(
         (up[0] / major[0] - fifth).abs() < 1e-12,
         "{up:?} against {major:?}"
@@ -216,7 +216,7 @@ fn a_key_move_lifts_a_line_whose_degree_binds_the_f0_its_default_reads_the_key_f
     assert_eq!(starts, [0.0, 2.0, 4.0], "{lines:?}");
     let d3 = sva_ast::note_hz("D3").expect("a note");
     assert!((hz[0] - d3).abs() < 1e-9, "{hz:?}");
-    let lift = 1200.0 * (hz[1] / hz[0]).log2();
+    let lift = 1200.0 * libm::log2(hz[1] / hz[0]);
     assert!((lift - 200.0).abs() < 1e-9, "a whole tone up, {lift} cents");
     assert!((hz[2] - 330.0).abs() < 1e-9, "{hz:?}");
 }

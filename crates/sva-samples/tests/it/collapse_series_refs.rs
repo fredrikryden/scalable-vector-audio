@@ -59,7 +59,7 @@ fn looped(depth: usize) -> SpectralSum {
         Unary::Exp,
         bare(Body::Mul(vec![
             bare(Body::Index(index)),
-            bare(Body::Const(C64::real(0.5f64.ln()))),
+            bare(Body::Const(C64::real(libm::log(0.5f64)))),
         ])),
     );
     let term = Body::Mul(vec![

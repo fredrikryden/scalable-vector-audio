@@ -93,7 +93,7 @@ fn an_index_of_a_moving_time_reads_the_step_nearest_it() {
     let config = RenderConfig::seconds(RATE, 0.1);
     let (x, wobbled) = (whole(&g, "x", &config), whole(&g, "wobbled", &config));
     reads_nearest(&x, &wobbled, |t| {
-        t - 0.005 - 0.002 * (2.0 * std::f64::consts::PI * 5.0 * t).sin()
+        t - 0.005 - 0.002 * libm::sin(2.0 * std::f64::consts::PI * 5.0 * t)
     });
 }
 
@@ -131,7 +131,7 @@ fn an_index_of_any_time_reads_the_step_nearest_it() {
             ((t * f64::from(RATE)).round() as i64 / 4 * 4) as f64 / f64::from(RATE)
         }),
         ("t - t % 0.06ms", &|t| t - t % 0.000_06),
-        ("t - 0.1s*sin(t % 0.3s)", &|t| t - 0.1 * t.sin()),
+        ("t - 0.1s*sin(t % 0.3s)", &|t| t - 0.1 * libm::sin(t)),
         ("t - max(min(exp(t), 0.003), 0)", &|t| t - 0.003),
     ];
     let mut files = vec![(
@@ -206,7 +206,7 @@ fn a_whole_render_reads_ahead_where_no_bound_holds_the_index() {
     let x = whole(&g, "x", &RenderConfig::seconds(RATE, 0.2));
     let read = whole(&g, "ahead", &RenderConfig::seconds(RATE, 0.1));
     reads_nearest(&x, &read, |t| {
-        t + 0.001 * (2.0 * std::f64::consts::PI * 50.0 * t).sin()
+        t + 0.001 * libm::sin(2.0 * std::f64::consts::PI * 50.0 * t)
     });
 }
 
@@ -224,7 +224,7 @@ fn a_sum_of_two_indices_reads_the_sample_it_names() {
     let rate = f64::from(RATE);
     for (n, v) in whole(&g, "node", &config).iter().enumerate() {
         let at = (2.0 * n as f64 - rate) / rate;
-        let want = (2.0 * std::f64::consts::PI * 220.0 * at).sin();
+        let want = libm::sin(2.0 * std::f64::consts::PI * 220.0 * at);
         assert!((v - want).abs() < 1e-9, "sample {n}: {v} against {want}");
     }
 }

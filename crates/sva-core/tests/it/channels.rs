@@ -26,12 +26,12 @@ fn tone(gain: f64) -> Vec<f64> {
     (0..10 * RATE as usize)
         .map(|n| {
             let t = n as f64 / f64::from(RATE);
-            let wobbled = t + 0.02 * (std::f64::consts::TAU * 0.37 * t).sin();
-            let struck = (-12.0 * (wobbled % 0.5)).exp();
-            let swell = (1.0 + 0.07 * t) * (1.0 + 0.3 * (std::f64::consts::TAU * 3.0 * t).sin());
+            let wobbled = t + 0.02 * libm::sin(std::f64::consts::TAU * 0.37 * t);
+            let struck = libm::exp(-12.0 * (wobbled % 0.5));
+            let swell = (1.0 + 0.07 * t) * (1.0 + 0.3 * libm::sin(std::f64::consts::TAU * 3.0 * t));
             let partials: f64 = [(1.0, 0.5), (2.0, 0.25), (3.0, 0.125)]
                 .iter()
-                .map(|(k, a)| a * (std::f64::consts::TAU * 220.0 * k * t).sin())
+                .map(|(k, a)| a * libm::sin(std::f64::consts::TAU * 220.0 * k * t))
                 .sum();
             gain * struck * swell * partials
         })
@@ -99,7 +99,7 @@ fn every_reading_off_samples_averages_every_channels_power() {
                     other => panic!("a crest, not {other:?}"),
                 };
                 let up = crest(&right) - crest(&mono);
-                assert!((up - 10.0 * 2f64.log10()).abs() < 1e-9, "crest: {up}");
+                assert!((up - 10.0 * libm::log10(2f64)).abs() < 1e-9, "crest: {up}");
             }
             _ => alike(name, &right, &read(name, vec![halved.clone()])),
         }
@@ -147,7 +147,7 @@ fn exact(name: &str, node: &str) -> Box<dyn std::fmt::Debug> {
         Output::Lines(lines) => Box::new(
             lines
                 .iter()
-                .map(|l| (l.hz, 20.0 * l.amp.abs().log10()))
+                .map(|l| (l.hz, 20.0 * libm::log10(l.amp.abs())))
                 .collect::<Vec<_>>(),
         ),
         other => Box::new(other),

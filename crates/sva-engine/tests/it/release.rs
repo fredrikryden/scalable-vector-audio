@@ -46,7 +46,7 @@ fn at(i: usize) -> f64 {
 
 fn sustain(t: f64) -> f64 {
     let (a, d, s) = (0.01, 0.3, 0.6);
-    (t / a).min(1.0) * (s + (1.0 - s) * (-(t - a).max(0.0) / d).exp())
+    (t / a).min(1.0) * (s + (1.0 - s) * libm::exp(-(t - a).max(0.0) / d))
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn a_note_released_at_half_a_second_is_the_held_note_until_then() {
     }
     for i in [key_up + 10, (0.7 * f64::from(RATE)) as usize, 44_000] {
         let t = at(i);
-        let want = (TAU * 220.0 * t).sin() * sustain(0.5) * (-(t - 0.5) / 0.4).exp();
+        let want = libm::sin(TAU * 220.0 * t) * sustain(0.5) * libm::exp(-(t - 0.5) / 0.4);
         assert!(
             (released[i] - want).abs() <= 1e-12,
             "sample {i} after key-up: {} against {want}",
@@ -84,7 +84,7 @@ fn a_note_nobody_releases_holds_its_sustain() {
     let held = samples(&files, "held", 1.0);
     for i in [100, 22_000, 44_000] {
         let t = at(i);
-        let want = (TAU * 220.0 * t).sin() * sustain(t);
+        let want = libm::sin(TAU * 220.0 * t) * sustain(t);
         assert!(
             (held[i] - want).abs() <= 1e-12,
             "sample {i}: {} against {want}",
@@ -139,9 +139,9 @@ fn a_decay_past_a_release_at_inf_stays_at_one() {
     let released = samples(&files, "released", 1.0);
     for i in [100, 22_000, 44_000] {
         let t = at(i);
-        let tone = (TAU * 220.0 * t).sin();
+        let tone = libm::sin(TAU * 220.0 * t);
         assert!((held[i] - tone).abs() <= 1e-12, "sample {i}: {}", held[i]);
-        let decay = (-(t - 0.5).max(0.0) / 0.15).exp();
+        let decay = libm::exp(-(t - 0.5).max(0.0) / 0.15);
         let want = tone * decay;
         assert!(
             (released[i] - want).abs() <= 1e-12,

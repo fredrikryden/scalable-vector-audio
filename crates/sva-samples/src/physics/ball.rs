@@ -107,7 +107,7 @@ impl Ball {
     }
 
     pub(crate) fn sin(self) -> Ball {
-        let c = self.c.sin();
+        let c = libm::sin(self.c);
         Ball {
             c,
             r: widened(self.r + 4.0 * U, c),

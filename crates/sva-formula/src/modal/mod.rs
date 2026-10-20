@@ -202,7 +202,7 @@ pub struct HammerGeom {
 
 pub fn contact_time(velocity: f64, h: &HammerGeom) -> f64 {
     let p = h.stiffness_exponent;
-    h.reference_contact * (velocity / h.reference_velocity).powf((1.0 - p) / (1.0 + p))
+    h.reference_contact * libm::pow(velocity / h.reference_velocity, (1.0 - p) / (1.0 + p))
 }
 
 /// `F0 * Tc` is the hammer's momentum, so the peak force carries what `Tc` does not.
@@ -210,7 +210,7 @@ pub fn strike(velocity: f64, h: &HammerGeom, at: f64) -> Excitation {
     let p = h.stiffness_exponent;
     let ratio = velocity / h.reference_velocity;
     Excitation::HammerPulse {
-        f0: h.force * ratio.powf(2.0 * p / (p + 1.0)),
+        f0: h.force * libm::pow(ratio, 2.0 * p / (p + 1.0)),
         t0: at,
         contact: contact_time(velocity, h),
     }

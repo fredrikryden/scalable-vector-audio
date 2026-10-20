@@ -155,7 +155,7 @@ impl Scale {
             0 => 0.0,
             k => self.cents[k as usize - 1],
         };
-        let ratio = ((periods as f64 * period + within) / 1200.0).exp2();
+        let ratio = libm::exp2((periods as f64 * period + within) / 1200.0);
         (ratio.is_finite() && ratio > 0.0).then_some(ratio)
     }
 }
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn degrees_count_from_one_and_continue_through_periods_both_ways() {
-        let st = |n: f64| (n / 12.0).exp2();
+        let st = |n: f64| libm::exp2(n / 12.0);
         let close = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-12);
         assert!(close(major().ratio(1), 1.0));
         assert!(close(major().ratio(5), st(7.0)));

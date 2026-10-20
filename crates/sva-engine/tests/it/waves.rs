@@ -83,8 +83,8 @@ fn share_above(samples: &[f64], hz: f64, rate: f64) -> f64 {
         let (mut re, mut im) = (0.0, 0.0);
         for (i, s) in samples.iter().enumerate() {
             let w = TAU * (k * i % n) as f64 / n as f64;
-            re += s * w.cos();
-            im -= s * w.sin();
+            re += s * libm::cos(w);
+            im -= s * libm::sin(w);
         }
         re * re + im * im
     };
@@ -125,7 +125,7 @@ fn a_saw_whose_pitch_moves_keeps_every_harmonic_under_the_ceiling() {
         let (turns, hz) = ((1000.0 + 200.0 * t) * t, 1000.0 + 400.0 * t);
         let want: f64 = (1..)
             .take_while(|n| f64::from(*n) * hz < ceiling - 1e-6)
-            .map(|n| (TAU * f64::from(n) * turns).sin() / f64::from(n))
+            .map(|n| libm::sin(TAU * f64::from(n) * turns) / f64::from(n))
             .sum::<f64>()
             * 2.0
             / std::f64::consts::PI;

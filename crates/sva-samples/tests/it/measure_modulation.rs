@@ -30,7 +30,7 @@ fn track(m: &Modulation, group: Group) -> &Track {
 fn tremolo_at_4_hz_reads_4_hz_at_its_depth() {
     let m = read(
         &tone(8.0, |t| {
-            (1.0 + 0.5 * (TAU * 4.0 * t).sin()) * (TAU * 1000.0 * t).sin()
+            (1.0 + 0.5 * libm::sin(TAU * 4.0 * t)) * libm::sin(TAU * 1000.0 * t)
         }),
         Some(120.0),
     );
@@ -62,7 +62,7 @@ fn tremolo_across_rates_reads_rate_and_depth_inside_its_bounds() {
         for depth in [0.2, 0.5] {
             let m = read(
                 &tone(8.0, |t| {
-                    (1.0 + depth * (TAU * hz * t).sin()) * (TAU * 1320.0 * t).sin()
+                    (1.0 + depth * libm::sin(TAU * hz * t)) * libm::sin(TAU * 1320.0 * t)
                 }),
                 Some(120.0),
             );
@@ -93,7 +93,7 @@ fn tremolo_across_rates_reads_rate_and_depth_inside_its_bounds() {
 fn a_sidelobe_whose_bins_no_main_lobe_reads_is_unbounded() {
     let m = read(
         &tone(8.0, |t| {
-            (1.0 + 0.5 * (TAU * 4.0 * t).sin()) * (TAU * 1000.0 * t).sin()
+            (1.0 + 0.5 * libm::sin(TAU * 4.0 * t)) * libm::sin(TAU * 1000.0 * t)
         }),
         None,
     );
@@ -117,7 +117,7 @@ fn a_sidelobe_whose_bins_no_main_lobe_reads_is_unbounded() {
 fn near_20_hz_the_depth_is_corrected_for_the_passband() {
     let m = read(
         &tone(8.0, |t| {
-            (1.0 + 0.2 * (TAU * 19.9 * t).sin()) * (TAU * 1320.0 * t).sin()
+            (1.0 + 0.2 * libm::sin(TAU * 19.9 * t)) * libm::sin(TAU * 1320.0 * t)
         }),
         None,
     );
@@ -135,7 +135,7 @@ fn near_20_hz_the_depth_is_corrected_for_the_passband() {
 /// A steady 1 kHz tone moves at no rate: every peak clear of its opening is rounding.
 #[test]
 fn a_static_tone_reads_no_depth_worth_the_name() {
-    let m = read(&tone(8.0, |t| (TAU * 1000.0 * t).sin()), None);
+    let m = read(&tone(8.0, |t| libm::sin(TAU * 1000.0 * t)), None);
     for t in &m.tracks {
         for w in t.windows.iter().filter(|w| w.from_secs >= 0.5) {
             assert!(
@@ -154,12 +154,12 @@ fn a_static_tone_reads_no_depth_worth_the_name() {
 fn a_filter_swept_saw_reads_its_lfo_in_the_mid_band() {
     let m = read(
         &tone(8.0, |t| {
-            let cutoff = 200.0 * 10f64.powf(0.5 * (1.0 + (TAU * 3.0 * t).sin()));
+            let cutoff = 200.0 * libm::pow(10f64, 0.5 * (1.0 + libm::sin(TAU * 3.0 * t)));
             (1..=140)
                 .map(|n| {
                     let hz = 55.0 * n as f64;
                     let gain = 1.0 / (1.0 + (hz / cutoff).powi(4)).sqrt();
-                    gain * (TAU * hz * t).sin() / n as f64
+                    gain * libm::sin(TAU * hz * t) / n as f64
                 })
                 .sum::<f64>()
                 * 0.3

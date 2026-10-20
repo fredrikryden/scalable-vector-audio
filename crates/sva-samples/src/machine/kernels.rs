@@ -81,7 +81,7 @@ pub(super) fn pair(op: Op, out: &mut [f64], w: usize, a: Operand, b: Operand) {
     match op {
         Op::Sub => binary(out, w, a, b, |a, b| a - b),
         Op::Div => binary(out, w, a, b, |a, b| a / b),
-        Op::Pow => binary(out, w, a, b, f64::powf),
+        Op::Pow => binary(out, w, a, b, libm::pow),
         Op::Zip(f) => binary(out, w, a, b, |a, b| f.apply(a, b)),
         other => unreachable!("{other:?} is no two-operand op"),
     }

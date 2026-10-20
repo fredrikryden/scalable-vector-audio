@@ -14,7 +14,7 @@ const A: [[i32; 3]; 4] = [[60, 64, 67], [57, 60, 64], [62, 67, 69], [64, 67, 69]
 const B: [[i32; 3]; 4] = [[70, 73, 75], [68, 73, 75], [63, 66, 70], [66, 70, 73]];
 
 fn hz(midi: f64) -> f64 {
-    440.0 * 2f64.powf((midi - 69.0) / 12.0)
+    440.0 * libm::pow(2f64, (midi - 69.0) / 12.0)
 }
 
 fn chords(sections: &[(&[[i32; 3]; 4], i32)]) -> Vec<f64> {
@@ -28,7 +28,7 @@ fn chords(sections: &[(&[[i32; 3]; 4], i32)]) -> Vec<f64> {
                 let edge = (i.min(each - i) as f64 / fade).min(1.0);
                 chord
                     .iter()
-                    .map(|m| 0.2 * edge * (TAU * hz(f64::from(m + up)) * t).sin())
+                    .map(|m| 0.2 * edge * libm::sin(TAU * hz(f64::from(m + up)) * t))
                     .sum::<f64>()
             }));
         }
@@ -99,8 +99,8 @@ fn a_through_composed_glide_reads_no_exact_repeat() {
     let mut phase = 0.0;
     let glide: Vec<f64> = (0..(secs * RATE) as usize)
         .map(|i| {
-            phase += TAU * 220.0 * (415.0f64 / 220.0).powf(i as f64 / (secs * RATE)) / RATE;
-            0.5 * phase.sin()
+            phase += TAU * 220.0 * libm::pow(415.0f64 / 220.0, i as f64 / (secs * RATE)) / RATE;
+            0.5 * libm::sin(phase)
         })
         .collect();
     let s = read(&glide);

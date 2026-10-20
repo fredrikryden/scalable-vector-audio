@@ -34,7 +34,7 @@ impl Piece {
             }
             Shape::Exp => {
                 let k = rb / ra;
-                d * (1.0 + b * k.ln() / (ra * d)).ln() / k.ln()
+                d * libm::log(1.0 + b * libm::log(k) / (ra * d)) / libm::log(k)
             }
         }
     }
@@ -48,13 +48,13 @@ impl Piece {
             Shape::Lin => ra * s + (rb - ra) * s * s / (2.0 * d),
             Shape::Exp => {
                 let k = rb / ra;
-                ra * d / k.ln() * (k.powf(s / d) - 1.0)
+                ra * d / libm::log(k) * (libm::pow(k, s / d) - 1.0)
             }
         }
     }
 }
 
-/// Bar 0 is second 0. Past a ramp's start seconds are irrational: `ln`, `sqrt` and `powf` in
+/// Bar 0 is second 0. Past a ramp's start seconds are irrational: `log`, `sqrt` and `pow` in
 /// f64 err a few ulps, under 1e-9 s in a song under a day, far under the half sample each
 /// shift rounds to, which a render reports as `moved_s`.
 #[derive(Clone, Debug)]
@@ -203,7 +203,7 @@ fn duration(len: f64, ra: f64, rb: f64, shape: Shape) -> f64 {
     }
     match shape {
         Shape::Lin => len / ((ra + rb) / 2.0),
-        Shape::Exp => len * (rb / ra).ln() / (rb - ra),
+        Shape::Exp => len * libm::log(rb / ra) / (rb - ra),
     }
 }
 
@@ -247,7 +247,7 @@ mod tests {
         );
         let (ra, rb) = (144.0 / 240.0, 128.0 / 240.0);
         let lasts = exp.seconds(bars(96)) - exp.seconds(bars(92));
-        assert!((lasts - 4.0 * f64::ln(rb / ra) / (rb - ra)).abs() < 1e-9);
+        assert!((lasts - 4.0 * libm::log(rb / ra) / (rb - ra)).abs() < 1e-9);
         let s = exp.seconds(Ratio::of_f64(94.25).unwrap());
         assert!((exp.bars(s) - 94.25).abs() < 1e-9);
     }

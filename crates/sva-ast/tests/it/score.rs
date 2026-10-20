@@ -84,7 +84,7 @@ fn ratio(e: &Expr) -> f64 {
             other => panic!("the tonic times literals: {other:?}"),
         }
     }
-    (1200.0 * product.log2() * 1e6).round() / 1e6
+    (1200.0 * libm::log2(product) * 1e6).round() / 1e6
 }
 
 /// The ratio the one line's `f0` multiplies the tonic by.
@@ -94,7 +94,7 @@ fn third(e: &Expr) -> f64 {
     };
     match &binds[0].1 {
         Expr::Bin(BinOp::Mul, _, ratio) => match **ratio {
-            Expr::Lit(Literal::Num(r)) => (1200.0 * r.log2() * 1e6).round() / 1e6,
+            Expr::Lit(Literal::Num(r)) => (1200.0 * libm::log2(r) * 1e6).round() / 1e6,
             ref other => panic!("a lowered degree is a number: {other:?}"),
         },
         other => panic!("`f0` is the tonic times a ratio: {other:?}"),

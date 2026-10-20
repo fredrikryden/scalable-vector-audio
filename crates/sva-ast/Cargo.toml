@@ -8,5 +8,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+libm = { workspace = true }
 serde = "1.0.229"
 serde_json = { workspace = true, features = ["raw_value"] }

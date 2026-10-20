@@ -9,8 +9,8 @@ fn chirp(rate: u32, len: usize) -> Buffer {
         (0..len)
             .map(|i| {
                 let t = i as f64 / f64::from(rate);
-                (std::f64::consts::TAU * (220.0 + 900.0 * t) * t).sin() * 0.7
-                    + (std::f64::consts::TAU * 3000.0 * t).cos() * 0.2
+                libm::sin(std::f64::consts::TAU * (220.0 + 900.0 * t) * t) * 0.7
+                    + libm::cos(std::f64::consts::TAU * 3000.0 * t) * 0.2
             })
             .collect(),
     )

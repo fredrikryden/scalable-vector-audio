@@ -29,7 +29,7 @@ pub fn help_text() -> String {
         solve::DEFAULT_COST_TOL,
     );
     let (passband, stopband) = (resample::PASSBAND, resample::STOPBAND);
-    let bound = format!("{} dB", 20.0 * resample::BOUND.log10());
+    let bound = format!("{} dB", 20.0 * libm::log10(resample::BOUND));
     let formats = crate::recording::READS
         .map(|e| format!("`.{e}`"))
         .join(", ");

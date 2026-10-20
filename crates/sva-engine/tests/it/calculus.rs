@@ -108,11 +108,11 @@ fn a_loops_derivative_differentiates_every_term_of_its_series() {
         .atoms()
         .filter(|a| a.exp.is_some_and(|e| (e.omega - w).abs() < 1e-6))
         .fold((0.0, 0.0), |(re, im), a| (re + a.c.re, im + a.c.im));
-    let (dr, di) = (1.0 - 0.5 * (w * 0.017).cos(), 0.5 * (w * 0.017).sin());
+    let (dr, di) = (1.0 - 0.5 * libm::cos(w * 0.017), 0.5 * libm::sin(w * 0.017));
     let norm = dr * dr + di * di;
     let (line_re, line_im) = (-0.5 * di / norm, -0.5 * dr / norm);
     let (wanted_re, wanted_im) = (-w * line_im, w * line_re);
-    let off = (re - wanted_re).hypot(im - wanted_im) / wanted_re.hypot(wanted_im);
+    let off = libm::hypot(re - wanted_re, im - wanted_im) / libm::hypot(wanted_re, wanted_im);
     assert!(
         off < 1e-7,
         "{re} {im}i against {wanted_re} {wanted_im}i: under the series' -150 dB tail"

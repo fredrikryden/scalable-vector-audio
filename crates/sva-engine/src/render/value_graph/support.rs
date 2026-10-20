@@ -398,7 +398,7 @@ impl Supports<'_> {
             |t: f64| 8.0 + 2.0 * count + 1e-9 * (sizes[0] + sizes[1] * t.abs() + sizes[2] * t * t);
         let side = |from: f64, to: f64| -> Option<f64> {
             let zero =
-                |t: f64, bound: f64| at(t) + bound.max(1.0).ln() + margin(t) <= exp_zero_at();
+                |t: f64, bound: f64| at(t) + libm::log(bound.max(1.0)) + margin(t) <= exp_zero_at();
             let mut edge = crossing(from, to, |t| zero(t, 1.0))?;
             for _ in 0..2 {
                 let (lo, hi) = (edge.min(to), edge.max(to));
@@ -471,7 +471,7 @@ impl Supports<'_> {
                         top = top.max(at(vertex));
                     }
                 }
-                (top + 1.0).exp()
+                libm::exp(top + 1.0)
             }
             Body::Crop { of: inner, .. } | Body::Channel(inner, _) => of(&inner.body)?,
             Body::Knots { at, table } => {

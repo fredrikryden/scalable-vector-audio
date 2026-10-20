@@ -49,7 +49,7 @@ fn sum(parts: Vec<Body>) -> Body {
 fn sinc_tail_db(hz: f64, width: f64) -> f64 {
     let ceiling = f64::from(RATE) / 2.0;
     let spread = 1.0 / (ceiling - hz) + 1.0 / (ceiling + hz);
-    10.0 * (spread / (2.0 * PI * PI * width)).log10()
+    10.0 * libm::log10(spread / (2.0 * PI * PI * width))
 }
 
 #[test]
@@ -82,11 +82,11 @@ fn a_line_spectrum_collapse_is_exact_and_lists_dropped() {
     assert_eq!(*dropped_more, 0);
     assert_eq!(dropped.len(), 1, "5000 Hz is above 8192/2");
     assert!((dropped[0].hz - 5000.0).abs() < 1e-6);
-    assert!((dropped[0].db - 20.0 * 0.25f64.log10()).abs() < 1e-9);
+    assert!((dropped[0].db - 20.0 * libm::log10(0.25f64)).abs() < 1e-9);
 
     for i in [0usize, 1, 37, 4096, 8191] {
         let t = i as f64 / f64::from(RATE);
-        let want = (TAU * 256.0 * t).cos() + 0.5 * (TAU * 1024.0 * t).cos();
+        let want = libm::cos(TAU * 256.0 * t) + 0.5 * libm::cos(TAU * 1024.0 * t);
         assert!(
             (buffer.at(0, i) - want).abs() < 1e-10,
             "sample {i}: {} vs {want}",
@@ -142,7 +142,7 @@ fn dense_series_and_direct_sum_agree() {
         let held = rows.planes(i, i + 1).expect("a sample")[0][0];
         let t = i as f64 / f64::from(rate);
         let direct: f64 = (1..=199_999u32)
-            .map(|n| (TAU * 0.1 * f64::from(n) * t).sin() / f64::from(n))
+            .map(|n| libm::sin(TAU * 0.1 * f64::from(n) * t) / f64::from(n))
             .sum();
         worst = worst.max((held - direct).abs());
     }
@@ -288,7 +288,7 @@ fn a_two_lane_law_reports_one_dropped_line_at_one_channels_level() {
     };
     assert_eq!(dropped.len(), 1);
     assert!(
-        (dropped[0].db - 20.0 * 0.25f64.log10()).abs() < 1e-9,
+        (dropped[0].db - 20.0 * libm::log10(0.25f64)).abs() < 1e-9,
         "{dropped:?}"
     );
     assert_eq!(*summed, 1, "one kept frequency, carried by both lanes");
@@ -303,7 +303,7 @@ fn a_series_under_a_nonlinearity_takes_the_terms_the_precision_leaves() {
         Unary::Exp,
         part(Body::Mul(vec![
             part(Body::Index(k)),
-            part(constant(0.5f64.ln())),
+            part(constant(libm::log(0.5f64))),
         ])),
     );
     let series = Body::Series(Box::new(Series {
@@ -322,7 +322,7 @@ fn a_series_under_a_nonlinearity_takes_the_terms_the_precision_leaves() {
     let taken: f64 = (0..kept(1.0, 0.5)).map(|n| 0.5f64.powi(n)).sum();
     for i in 0..buffer.len() {
         let t = i as f64 / f64::from(RATE);
-        let want = taken * (TAU * 220.0 * t).cos() * t.tanh();
+        let want = taken * libm::cos(TAU * 220.0 * t) * libm::tanh(t);
         assert!(
             (buffer.at(0, i) - want).abs() < 1e-9,
             "sample {i}: {} against {want}",
@@ -378,7 +378,7 @@ fn a_series_no_line_reads_is_counted_off_its_coefficient() {
         Unary::Exp,
         part(Body::Mul(vec![
             part(Body::Index(k)),
-            part(constant(0.9f64.ln())),
+            part(constant(libm::log(0.9f64))),
         ])),
     );
     let turning = Body::Apply(Unary::Tanh, part(Body::Line));
@@ -397,7 +397,7 @@ fn a_series_no_line_reads_is_counted_off_its_coefficient() {
     let taken: f64 = (0..counted).map(|n| 0.9f64.powi(n)).sum();
     for i in 0..buffer.len() {
         let t = i as f64 / f64::from(RATE);
-        let want = taken * t.tanh() * t.tanh();
+        let want = taken * libm::tanh(t) * libm::tanh(t);
         assert!(
             (buffer.at(0, i) - want).abs() < 1e-9,
             "sample {i}: {} against {want}",
@@ -415,7 +415,7 @@ fn a_series_of_warped_terms_takes_the_point_row() {
         Unary::Exp,
         part(Body::Mul(vec![
             part(Body::Index(k)),
-            part(constant(0.5f64.ln())),
+            part(constant(libm::log(0.5f64))),
         ])),
     );
     let warped = Body::Apply(
@@ -439,7 +439,7 @@ fn a_series_of_warped_terms_takes_the_point_row() {
     for i in 0..buffer.len() {
         let t = i as f64 / f64::from(RATE);
         let want: f64 = (0..counted)
-            .map(|n| 0.5f64.powi(n) * (f64::from(n) * t.exp()).sin())
+            .map(|n| 0.5f64.powi(n) * libm::sin(f64::from(n) * libm::exp(t)))
             .sum();
         assert!(
             (buffer.at(0, i) - want).abs() < 1e-9,
@@ -469,7 +469,7 @@ fn a_series_reading_a_node_no_bound_holds_refuses() {
                 Unary::Exp,
                 part(Body::Mul(vec![
                     part(Body::Index(k)),
-                    part(constant(0.5f64.ln())),
+                    part(constant(libm::log(0.5f64))),
                 ])),
             )),
             part(turning),
@@ -516,12 +516,12 @@ fn a_saw_whose_pitch_moves_sums_every_harmonic_under_the_ceiling_at_each_instant
     for i in 0..buffer.len() {
         let t = i as f64 / f64::from(RATE);
         let (angle, hz) = (
-            TAU * 220.0 * t + 10.0 * (TAU * 5.0 * t).sin(),
-            220.0 + 50.0 * (TAU * 5.0 * t).cos(),
+            TAU * 220.0 * t + 10.0 * libm::sin(TAU * 5.0 * t),
+            220.0 + 50.0 * libm::cos(TAU * 5.0 * t),
         );
         let want: f64 = (1..)
             .take_while(|n| f64::from(*n) * hz < ceiling - 1e-6)
-            .map(|n| (f64::from(n) * angle).sin() / f64::from(n))
+            .map(|n| libm::sin(f64::from(n) * angle) / f64::from(n))
             .sum();
         assert!(
             (buffer.at(0, i) - want).abs() < 1e-9,
@@ -535,7 +535,7 @@ fn a_saw_whose_pitch_moves_sums_every_harmonic_under_the_ceiling_at_each_instant
     let first = (1..)
         .find(|n| f64::from(*n) * 270.0 >= ceiling)
         .expect("a harmonic past it");
-    let loudest = 20.0 * (1.0 / f64::from(first)).log10();
+    let loudest = 20.0 * libm::log10(1.0 / f64::from(first));
     let tail = tail_db.expect("a bound on what it drops");
     assert!((tail - loudest).abs() < 1e-9, "{tail} dB against {loudest}");
 }
@@ -555,7 +555,7 @@ fn nested_series_beyond_the_bound_refuse_naming_the_count() {
                     Unary::Exp,
                     part(Body::Mul(vec![
                         part(Body::Index(k)),
-                        part(constant(0.82f64.ln())),
+                        part(constant(libm::log(0.82f64))),
                     ])),
                 )),
                 part(inner),
@@ -660,7 +660,7 @@ fn a_cropped_neumann_series_has_a_spectral_sum() {
                 Unary::Exp,
                 part(Body::Mul(vec![
                     part(Body::Index(k)),
-                    part(constant(0.5f64.ln())),
+                    part(constant(libm::log(0.5f64))),
                 ])),
             )),
             part(cosine(220.0, 1.0)),
@@ -688,7 +688,7 @@ fn a_cropped_neumann_series_has_a_spectral_sum() {
         let t = i as f64 / f64::from(RATE);
         let inside = (0.002..=0.006).contains(&t);
         let want = if inside {
-            taken * (TAU * 220.0 * t).cos()
+            taken * libm::cos(TAU * 220.0 * t)
         } else {
             0.0
         };
@@ -719,7 +719,10 @@ fn abutting_crops_do_not_double_at_the_seam() {
         render(&law, RATE, whole_second(), &PSYCHOACOUSTIC_V1).expect("two abutting crops");
 
     let seam = (0.5 * f64::from(RATE)) as usize;
-    let (below, above) = ((TAU * 440.0 * 0.5f64).cos(), (TAU * 660.0 * 0.5f64).cos());
+    let (below, above) = (
+        libm::cos(TAU * 440.0 * 0.5f64),
+        libm::cos(TAU * 660.0 * 0.5f64),
+    );
     assert!(
         (buffer.at(0, seam) - above).abs() < 1e-9,
         "the seam instant belongs to the later window alone, got {} against {above} and {below}",
@@ -892,8 +895,8 @@ fn two_windows_state_one_energy_weighted_tail() {
     };
     let found = tail_db.expect("two sinc windows state their tail");
 
-    let ratio = |hz: f64, width: f64| 10f64.powf(sinc_tail_db(hz, width) / 10.0);
-    let weighted = 10.0 * ((1.6 * ratio(440.0, 1.6) + 0.05 * ratio(880.0, 0.05)) / 1.65).log10();
+    let ratio = |hz: f64, width: f64| libm::pow(10f64, sinc_tail_db(hz, width) / 10.0);
+    let weighted = 10.0 * libm::log10((1.6 * ratio(440.0, 1.6) + 0.05 * ratio(880.0, 0.05)) / 1.65);
     assert!(
         (found - weighted).abs() < 0.05,
         "two windows state {found} dB where their energies weigh to {weighted} dB"
@@ -1164,7 +1167,7 @@ fn a_nested_series_past_the_bound_refuses_or_labels() {
                     Unary::Exp,
                     part(Body::Mul(vec![
                         part(Body::Index(IndexId(2))),
-                        part(constant(0.82f64.ln())),
+                        part(constant(libm::log(0.82f64))),
                     ])),
                 )),
                 part(cosine(220.0, 1.0)),
@@ -1179,7 +1182,7 @@ fn a_nested_series_past_the_bound_refuses_or_labels() {
                     Unary::Exp,
                     part(Body::Mul(vec![
                         part(Body::Index(IndexId(1))),
-                        part(constant(0.5f64.ln())),
+                        part(constant(libm::log(0.5f64))),
                     ])),
                 )),
                 part(inner),

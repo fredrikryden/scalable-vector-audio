@@ -181,7 +181,7 @@ impl Lane {
                 };
                 let u = (s - m.start) / (m.end - m.start);
                 return Some(Held::Number(match m.shape {
-                    Some(Shape::Exp) => a * (b / a).powf(u),
+                    Some(Shape::Exp) => a * libm::pow(b / a, u),
                     _ => a + (b - a) * u,
                 }));
             }

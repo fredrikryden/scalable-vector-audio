@@ -7,7 +7,7 @@ const RATE: f64 = 44_100.0;
 fn tone(hz: f64, secs: f64, amp: f64) -> Vec<f64> {
     let len = (secs * RATE) as usize;
     (0..len)
-        .map(|i| amp * (std::f64::consts::TAU * hz * i as f64 / RATE).sin())
+        .map(|i| amp * libm::sin(std::f64::consts::TAU * hz * i as f64 / RATE))
         .collect()
 }
 
@@ -76,7 +76,10 @@ fn third_octave_edges_step_by_a_third_of_an_octave_up_to_nyquist() {
     let [(lo, hi), ..] = edges.as_slice() else {
         panic!("at least one band");
     };
-    assert!((hi / lo - 2f64.powf(1.0 / 3.0)).abs() < 1e-9, "{lo} {hi}");
+    assert!(
+        (hi / lo - libm::pow(2f64, 1.0 / 3.0)).abs() < 1e-9,
+        "{lo} {hi}"
+    );
     let (_, top) = edges.last().expect("a last band");
     assert!(*top <= RATE / 2.0, "nothing above Nyquist: {top}");
     for pair in edges.windows(2) {
@@ -117,11 +120,14 @@ fn a_frame_longer_than_its_samples_windows_the_samples_alone() {
             .iter()
             .enumerate()
             .fold((0.0, 0.0), |(re, im), (n, x)| {
-                let hann = 0.5 - 0.5 * (std::f64::consts::TAU * n as f64 / span).cos();
+                let hann = 0.5 - 0.5 * libm::cos(std::f64::consts::TAU * n as f64 / span);
                 let n = n as f64;
-                (re + x * hann * (w * n).cos(), im - x * hann * (w * n).sin())
+                (
+                    re + x * hann * libm::cos(w * n),
+                    im - x * hann * libm::sin(w * n),
+                )
             });
-        let wanted = 4.0 / span * re.hypot(im);
+        let wanted = 4.0 / span * libm::hypot(re, im);
         assert!(
             (mags[k] - wanted).abs() <= 1e-12 * (1.0 + wanted),
             "bin {k} ({} Hz): {} against {wanted}",

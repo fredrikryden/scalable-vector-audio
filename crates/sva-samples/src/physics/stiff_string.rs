@@ -86,9 +86,7 @@ fn lossy_grid(
 
 /// Pinned mode `m` is exactly `sin(m pi j/n)`.
 pub(crate) fn mode_s(m: usize, n: usize) -> f64 {
-    (m as f64 * std::f64::consts::PI / (2.0 * n as f64))
-        .sin()
-        .powi(2)
+    libm::sin(m as f64 * std::f64::consts::PI / (2.0 * n as f64)).powi(2)
 }
 
 fn mode_sigma(grid: &StringGrid, s: f64) -> f64 {
@@ -98,7 +96,7 @@ fn mode_sigma(grid: &StringGrid, s: f64) -> f64 {
 /// `2 - sigma - 2 sqrt(1 - sigma) cos(theta)`, without cancellation.
 fn stiffness_for(theta: f64, sigma: f64) -> f64 {
     let r = (1.0 - sigma).sqrt();
-    (sigma / (1.0 + r)).powi(2) + 4.0 * r * (theta / 2.0).sin().powi(2)
+    (sigma / (1.0 + r)).powi(2) + 4.0 * r * libm::sin(theta / 2.0).powi(2)
 }
 
 /// Jury's test on `z^2 + (D + sigma - 2) z + 1 - sigma`, every mode.
@@ -166,11 +164,11 @@ pub(crate) fn point_weights(n: usize, x: f64) -> Vec<f64> {
     // sum_{m=1}^{n-1} cos(m theta)
     let cos_sum = |theta: f64| {
         let half = theta / 2.0;
-        let sh = half.sin();
+        let sh = libm::sin(half);
         if sh == 0.0 {
             nf - 1.0
         } else {
-            (nf * half).sin() * ((nf - 1.0) * half).cos() / sh - 1.0
+            libm::sin(nf * half) * libm::cos((nf - 1.0) * half) / sh - 1.0
         }
     };
     (0..=n)

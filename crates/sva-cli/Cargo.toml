@@ -12,6 +12,7 @@ name = "sva-cli"
 path = "src/main.rs"
 
 [dependencies]
+libm = { workspace = true }
 sva-ast = { workspace = true }
 sva-core = { workspace = true }
 sva-engine = { workspace = true }

@@ -119,7 +119,7 @@ fn shoulder(into: f64, span: f64) -> f64 {
     if span <= 0.0 || into >= span {
         return 1.0;
     }
-    0.5 - 0.5 * (std::f64::consts::PI * into / span).cos()
+    0.5 - 0.5 * libm::cos(std::f64::consts::PI * into / span)
 }
 
 /// Which operand of a `join` holds one component of the joined value, and which of its own
@@ -138,12 +138,18 @@ pub fn lane_of(widths: &[usize], component: usize) -> Option<(usize, usize)> {
 pub fn unary(op: Unary, x: C64) -> C64 {
     match op {
         Unary::Exp => x.exp(),
-        Unary::Sin => C64::new(x.re.sin() * x.im.cosh(), x.re.cos() * x.im.sinh()),
-        Unary::Cos => C64::new(x.re.cos() * x.im.cosh(), -x.re.sin() * x.im.sinh()),
-        Unary::Tanh => C64::real(x.re.tanh()),
+        Unary::Sin => C64::new(
+            libm::sin(x.re) * libm::cosh(x.im),
+            libm::cos(x.re) * libm::sinh(x.im),
+        ),
+        Unary::Cos => C64::new(
+            libm::cos(x.re) * libm::cosh(x.im),
+            -libm::sin(x.re) * libm::sinh(x.im),
+        ),
+        Unary::Tanh => C64::real(libm::tanh(x.re)),
         Unary::Sat => C64::real(x.re.clamp(-1.0, 1.0)),
         Unary::Abs => C64::real(x.abs()),
-        Unary::Log => C64::real(x.re.ln()),
+        Unary::Log => C64::real(libm::log(x.re)),
         Unary::Sqrt => C64::real(x.re.sqrt()),
         Unary::Step => C64::real(sva_formula::affine::step(x.re)),
     }

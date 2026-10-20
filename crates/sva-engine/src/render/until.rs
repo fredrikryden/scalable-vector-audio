@@ -179,7 +179,7 @@ impl fmt::Display for Term {
 impl fmt::Display for Until {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let side = |term: &Term, other: &Term| match (term, other) {
-            (Term::Number(v), Term::Envelope) => format!("{:.1}db", 20.0 * v.log10()),
+            (Term::Number(v), Term::Envelope) => format!("{:.1}db", 20.0 * libm::log10(*v)),
             (Term::Number(v), Term::Time) => format!("{v}s"),
             (term, _) => term.to_string(),
         };

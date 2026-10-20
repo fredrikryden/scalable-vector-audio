@@ -99,7 +99,7 @@ fn smooth_times(a: &SpectralAtom, b: &SpectralAtom, poly: Poly) -> Result<Vec<Sp
         (Some(x), Some(y)) => {
             let sum = x.a + y.a;
             let gap = x.mu - y.mu;
-            c = c.scale((-x.a * y.a * gap * gap / sum).exp());
+            c = c.scale(libm::exp(-x.a * y.a * gap * gap / sum));
             Some(Gauss {
                 a: sum,
                 mu: (x.a * x.mu + y.a * y.mu) / sum,

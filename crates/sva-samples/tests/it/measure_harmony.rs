@@ -23,7 +23,7 @@ fn rough(moments: &[Moment], framing: Framing, floor_db: f64) -> Dissonance {
 }
 
 fn hz(midi: i64) -> f64 {
-    440.0 * 2f64.powf((midi as f64 - 69.0) / 12.0)
+    440.0 * libm::pow(2f64, (midi as f64 - 69.0) / 12.0)
 }
 
 /// Six harmonics falling 0.88 per partial, the timbre of Sethares' Fig. 2.
@@ -54,7 +54,7 @@ fn roughness(moment: Moment) -> f64 {
 fn one_pair_peaks_where_sethares_scaled_it_and_vanishes_at_unison() {
     assert_eq!(pair(C4, C4, 1.0, 1.0), 0.0);
     let s = 0.24 / (0.021 * C4 + 19.0);
-    let x_star = (5.75f64 / 3.5).ln() / (5.75 - 3.5);
+    let x_star = libm::log(5.75f64 / 3.5) / (5.75 - 3.5);
     let top = pair(C4, C4 + x_star / s, 1.0, 1.0);
     for df in [1.0, 5.0, 40.0, 80.0] {
         assert!(pair(C4, C4 + df, 1.0, 1.0) < top, "{df} Hz is off the peak");
@@ -68,14 +68,14 @@ fn one_pair_peaks_where_sethares_scaled_it_and_vanishes_at_unison() {
 fn consonant_intervals_and_triads_are_smoother_than_their_neighbours_and_clusters() {
     let interval = |semis: f64| {
         let mut two = harmonic_tone(C4);
-        two.extend(harmonic_tone(C4 * 2f64.powf(semis / 12.0)));
+        two.extend(harmonic_tone(C4 * libm::pow(2f64, semis / 12.0)));
         roughness(Moment {
             t_secs: 0.0,
             partials: two,
         })
     };
     for (just, at) in [(1.5f64, "fifth"), (2.0, "octave")] {
-        let semis = 12.0 * just.log2();
+        let semis = 12.0 * libm::log2(just);
         assert!(
             interval(semis) < interval(semis - 0.3),
             "{at} below its flat side"
@@ -235,7 +235,7 @@ fn render(partials: &[(f64, f64)], rate: f64, secs: f64) -> Vec<f64> {
             let t = n as f64 / rate;
             partials
                 .iter()
-                .map(|(f, a)| a * (std::f64::consts::TAU * f * t).cos())
+                .map(|(f, a)| a * libm::cos(std::f64::consts::TAU * f * t))
                 .sum()
         })
         .collect()

@@ -43,7 +43,7 @@ fn a_unison_coupled_site_steps_the_same_buffer_every_time() {
     let params = Params::ChaigneAskenfelt(ChaigneAskenfeltParams {
         vel: 3.2,
         unison_count: 2.0,
-        detune: 2f64.powf(5.0 / 1200.0),
+        detune: libm::pow(2f64, 5.0 / 1200.0),
         ..ChaigneAskenfeltParams::at(220.0)
     });
     fd::is_deterministic(&params, 22_050, 0.02);
@@ -221,7 +221,7 @@ fn sustain_beat_depth_db(p: &ChaigneAskenfeltParams, x: &[f64], rate: f64) -> f6
             let hz = stiff_partial(p.f0, p.b, k);
             (
                 beat_depth_db(x, rate, hz),
-                10f64.powf(level_db(x, rate, hz, at, len) / 10.0),
+                libm::pow(10f64, level_db(x, rate, hz, at, len) / 10.0),
             )
         })
         .collect();
@@ -262,7 +262,7 @@ fn a_massive_bridge_and_unequal_strings_keep_a_unison_from_beating_to_nulls() {
             level_db(a.plane(0), rate, hz, 0, onset),
             level_db(b.plane(0), rate, hz, 0, onset),
         );
-        let weight = 10f64.powf(was / 10.0);
+        let weight = libm::pow(10f64, was / 10.0);
         drift += weight * (was - now).abs();
         power += weight;
     }
@@ -292,7 +292,7 @@ fn partials_one_and_two_imply_the_asked_f0_and_b_at_any_rate() {
             );
             let r = (f2 / (2.0 * f1)).powi(2);
             let realized_b = (r - 1.0) / (4.0 - r);
-            let cents = 1200.0 * (f1 / (1.0 + realized_b).sqrt() / f0).log2();
+            let cents = 1200.0 * libm::log2(f1 / (1.0 + realized_b).sqrt() / f0);
             assert!(
                 cents.abs() < 0.001,
                 "{f0} Hz at {rate} rings {cents} cents off"
@@ -310,7 +310,7 @@ fn partial_db(p: &ChaigneAskenfeltParams, x: &[f64], rate: f64, k: u32) -> f64 {
     let (mags, bin_hz, _, _) = spectrum::magnitudes(x, rate, None);
     let hz = stiff_partial(p.f0, p.b, k);
     let band = ((hz - p.f0 / 4.0) / bin_hz) as usize..=((hz + p.f0 / 4.0) / bin_hz) as usize;
-    20.0 * mags[band].iter().fold(0.0f64, |m, &v| m.max(v)).log10()
+    20.0 * libm::log10(mags[band].iter().fold(0.0f64, |m, &v| m.max(v)))
 }
 
 /// At C6 the grid holds about twenty points, so 1/7 and 1/8 once struck the same node. Struck

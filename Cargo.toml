@@ -1,4 +1,4 @@
-# Concern: declares the resolver, the members, the version every crate inherits and the JSON parser all share | Non-concern: a crate's other dependencies, deny edges (.annotated-tree.toml) | IO: none
+# Concern: declares the resolver, the members, the version every crate inherits, the JSON parser and libm | Non-concern: a crate's other dependencies, deny edges (.annotated-tree.toml) | IO: none
 [workspace]
 resolver = "2"
 members = [
@@ -27,6 +27,7 @@ sva-core = { path = "crates/sva-core", version = "0.14.28" }
 sva-cli = { path = "crates/sva-cli", version = "0.14.28" }
 sva-wasm = { path = "crates/sva-wasm", version = "0.14.28" }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+libm = "0.2.16"
 
 [profile.dev]
 debug = "line-tables-only"

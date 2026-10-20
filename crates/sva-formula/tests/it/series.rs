@@ -153,13 +153,13 @@ fn a_tail_no_ratio_bounds_is_dropped_only_where_its_whole_sum_is_under_the_floor
     assert!(
         dropped < loudest * 0.1,
         "the {last} terms kept leave {} dB of tail, over the -20 dB floor",
-        20.0 * (dropped / loudest).log10()
+        20.0 * libm::log10(dropped / loudest)
     );
     assert!(
-        answer.tail_db >= 20.0 * (dropped / loudest).log10(),
+        answer.tail_db >= 20.0 * libm::log10(dropped / loudest),
         "the stated tail {} dB covers the {} dB dropped",
         answer.tail_db,
-        20.0 * (dropped / loudest).log10()
+        20.0 * libm::log10(dropped / loudest)
     );
 }
 
@@ -214,10 +214,10 @@ fn noise_holds_its_level_a_hertz_whatever_its_period() {
             "period {period} holds {flat} over 1000 Hz, not 500"
         );
     }
-    for color in [10f64.powf(-3.0 / 20.0), 2.0] {
+    for color in [libm::pow(10f64, -3.0 / 20.0), 2.0] {
         let at_one = band_power(1.0, color);
         for period in [0.25, 4.0] {
-            let db = 10.0 * (band_power(period, color) / at_one).log10();
+            let db = 10.0 * libm::log10(band_power(period, color) / at_one);
             assert!(
                 db.abs() < 0.05,
                 "color {color} at period {period} moves the band {db} dB from period 1"
@@ -228,7 +228,8 @@ fn noise_holds_its_level_a_hertz_whatever_its_period() {
 
 #[test]
 fn noise_lines_are_conjugate_symmetric() {
-    let answer = enumerate(&noise(7, 2.0, 10f64.powf(-3.0 / 20.0)), 20.0).expect("noise lines");
+    let answer =
+        enumerate(&noise(7, 2.0, libm::pow(10f64, -3.0 / 20.0)), 20.0).expect("noise lines");
     for line in &answer.taken {
         let mirror = answer
             .taken

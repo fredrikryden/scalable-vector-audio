@@ -132,7 +132,7 @@ fn a_geometry_argument_that_is_not_a_number_refuses() {
 fn a_non_integer_constant_power_folds_exactly() {
     assert_eq!(
         folded("root-of-two", "pow(2, 1.5)\n"),
-        2f64.powf(1.5),
+        libm::pow(2f64, 1.5),
         "pow(2, 1.5) is not 2"
     );
     assert_eq!(

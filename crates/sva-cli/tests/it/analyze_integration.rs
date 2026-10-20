@@ -14,7 +14,7 @@ fn tone(rate: u32, hz: f64, secs: f64) -> Vec<f32> {
     (0..len)
         .map(|i| {
             let t = i as f64 / f64::from(rate);
-            (std::f64::consts::TAU * hz * t).sin() as f32 * 0.5
+            libm::sin(std::f64::consts::TAU * hz * t) as f32 * 0.5
         })
         .collect()
 }
@@ -59,8 +59,8 @@ fn strikes(rate: u32, len_secs: f64, struck: &[f64], (decay, secs): (f64, f64)) 
         let from = (at * sr) as usize;
         for n in 0..(sr * secs) as usize {
             let t = n as f64 / sr;
-            let shape = (1.0 - (-t / 0.0015).exp()) * (-t / decay).exp();
-            let wave = (std::f64::consts::TAU * 440.0 * t).sin();
+            let shape = (1.0 - libm::exp(-t / 0.0015)) * libm::exp(-t / decay);
+            let wave = libm::sin(std::f64::consts::TAU * 440.0 * t);
             if let Some(s) = samples.get_mut(from + n) {
                 *s += (0.7 * shape * wave) as f32;
             }
@@ -381,7 +381,7 @@ fn a_held_tone_is_one_event_where_it_starts() {
         .map(|i| {
             let t = i as f64 / f64::from(rate);
             let swell = (t / 0.25).min(1.0);
-            (swell * (std::f64::consts::TAU * 440.0 * t).sin() * 0.5) as f32
+            (swell * libm::sin(std::f64::consts::TAU * 440.0 * t) * 0.5) as f32
         })
         .collect();
     let found = event_times(&written("score-held", rate, &[&held]));
@@ -401,7 +401,7 @@ fn a_held_tones_opening_phase_changes_no_event() {
             .map(|i| {
                 let t = i as f64 / f64::from(rate);
                 let swell = (t / 0.25).min(1.0);
-                (swell * (std::f64::consts::TAU * 440.0 * t + quarter).sin() * 0.5) as f32
+                (swell * libm::sin(std::f64::consts::TAU * 440.0 * t + quarter) * 0.5) as f32
             })
             .collect();
         event_times(&written("score-phase", rate, &[&held]))
@@ -453,11 +453,11 @@ fn score_loudness_pattern_and_panel_print_the_fields_a_fit_reads() {
                 (1..=4)
                     .map(|k| {
                         let k = f64::from(k);
-                        (std::f64::consts::TAU * hz * k * u).sin() / k
+                        libm::sin(std::f64::consts::TAU * hz * k * u) / k
                     })
                     .sum::<f64>()
-                    * (1.0 - (-u / 0.002).exp())
-                    * (-u / 0.4).exp()
+                    * (1.0 - libm::exp(-u / 0.002))
+                    * libm::exp(-u / 0.4)
             };
             (0.2 * (note(220.0, 0.05) + note(277.18, 0.05) + note(330.0, 0.6))) as f32
         })

@@ -74,7 +74,7 @@ fn two_gaussians_multiply_to_one_gaussian() {
         panic!("two Gaussians are one Gaussian");
     };
     assert_eq!(atom.gauss, Some(Gauss { a: 4.0, mu: 1.5 }));
-    let leftover = (-(1.0 * 3.0) * 4.0 / 4.0f64).exp();
+    let leftover = libm::exp(-(1.0 * 3.0) * 4.0 / 4.0f64);
     assert!((atom.c.re - leftover).abs() < 1e-12, "{:?}", atom.c);
 }
 
@@ -266,5 +266,9 @@ fn constants_nested_under_unaries_and_folds_are_one_number() {
         panic!("one atom, not {held:?}")
     };
     assert!(one.is_bare(), "a bare constant, not {one:?}");
-    assert!((one.c.re - 0.5f64.powf(0.8)).abs() <= 1e-15, "{:?}", one.c);
+    assert!(
+        (one.c.re - libm::pow(0.5f64, 0.8)).abs() <= 1e-15,
+        "{:?}",
+        one.c
+    );
 }

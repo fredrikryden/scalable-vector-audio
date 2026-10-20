@@ -47,11 +47,11 @@ struct Axis {
 impl Axis {
     fn of(vary: &Vary, start: f64) -> Axis {
         let (lo, hi) = match vary.log {
-            true => (vary.lo.ln(), vary.hi.ln()),
+            true => (libm::log(vary.lo), libm::log(vary.hi)),
             false => (vary.lo, vary.hi),
         };
         let first = match (vary.step, vary.log) {
-            (Some(ratio), true) => ratio.ln(),
+            (Some(ratio), true) => libm::log(ratio),
             (Some(step), false) => step,
             (None, _) => (hi - lo) * FIRST_STEP_OF_SPAN,
         };
@@ -70,14 +70,14 @@ impl Axis {
 
     fn value(&self, u: f64) -> f64 {
         match self.log {
-            true => u.exp().clamp(self.lo.exp(), self.hi.exp()),
+            true => libm::exp(u).clamp(libm::exp(self.lo), libm::exp(self.hi)),
             false => u,
         }
     }
 
     fn coordinate(&self, value: f64) -> f64 {
         match self.log {
-            true => value.ln(),
+            true => libm::log(value),
             false => value,
         }
     }
@@ -162,7 +162,9 @@ impl Search {
             .zip(&self.steps)
             .map(|(a, step)| match a.decimals {
                 Some(d) => Precision::Decimals(d + self.halvings as usize),
-                None => Precision::Significant((2.0 - step.log10().floor()).max(3.0) as usize),
+                None => {
+                    Precision::Significant((2.0 - libm::log10(*step).floor()).max(3.0) as usize)
+                }
             })
             .collect()
     }

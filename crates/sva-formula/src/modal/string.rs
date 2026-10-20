@@ -22,7 +22,7 @@ pub fn modes(g: &StringGeom, count: usize) -> Vec<Mode> {
         .map(|n| {
             let n = n as f64;
             let hz = n * g.f0 * (1.0 + g.inharmonicity * n * n).sqrt();
-            let amp = (n * std::f64::consts::PI * g.strike).sin() / (n * n);
+            let amp = libm::sin(n * std::f64::consts::PI * g.strike) / (n * n);
             mode(hz, amp, g.damping)
         })
         .collect()

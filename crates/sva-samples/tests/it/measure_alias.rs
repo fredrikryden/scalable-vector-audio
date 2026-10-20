@@ -5,7 +5,7 @@ use sva_samples::measure::alias::{AUDIBLE_NMR_DB, measure_alias};
 fn sine(hz: f64, sr: f64, n: usize) -> Vec<f64> {
     (0..n)
         .map(|i| 2.0 * std::f64::consts::PI * hz * i as f64 / sr)
-        .map(|p| p.sin())
+        .map(libm::sin)
         .collect()
 }
 
@@ -92,7 +92,7 @@ fn a_dc_and_an_alias_at_nyquist_count_their_power_once() {
         ),
     ] {
         let m = measure_alias(&base, &high, k, sr, 0.0).expect("a frame");
-        let known = 10.0 * known.log10();
+        let known = 10.0 * libm::log10(known);
         assert!(
             (m.asr_db - known).abs() < 0.01,
             "{} against {known}",

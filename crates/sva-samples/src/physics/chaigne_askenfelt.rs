@@ -56,7 +56,7 @@ impl ChaigneAskenfeltParams {
             damp_dc: 0.6,
             damp_freq: 1.6e-4,
             unison_count: 1.0,
-            detune: 2f64.powf(3.0 / 1200.0),
+            detune: libm::pow(2f64, 3.0 / 1200.0),
             bridge_coupling: 1000.0,
             bridge_mass: 0.0,
             string_cents: [0.0; MAX_UNISON],
@@ -142,7 +142,7 @@ fn unison_frequencies(f0: f64, detune: f64, unison_count: usize, cents: &[f64]) 
     placed
         .iter()
         .zip(cents)
-        .map(|(&f, &c)| f * (c / 1200.0).exp2())
+        .map(|(&f, &c)| f * libm::exp2(c / 1200.0))
         .collect()
 }
 

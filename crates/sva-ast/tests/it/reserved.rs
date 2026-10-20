@@ -115,7 +115,7 @@ fn a_scale_is_a_name_or_a_bare_ref_to_a_scale_file_or_refuses_at_its_variable() 
 /// A name the language owns reads its scale; any other name refuses listing every one.
 #[test]
 fn a_scale_named_bare_is_the_built_in_of_that_name_or_refuses_listing_them() {
-    let octaves = |x: f64| std::hint::black_box(x).exp2();
+    let octaves = |x: f64| libm::exp2(std::hint::black_box(x));
     let ratio = |scale: &str| {
         let mut g = load(&Composition::from_iter([
             ("variables/key", "A3\n"),

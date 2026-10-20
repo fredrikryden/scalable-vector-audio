@@ -12,7 +12,7 @@ fn peak(hz: f64, db: f64) -> Peak {
 fn sine(hz: f64, rate: f64, secs: f64) -> Vec<f64> {
     let n = (rate * secs) as usize;
     (0..n)
-        .map(|k| (std::f64::consts::TAU * hz * k as f64 / rate).sin())
+        .map(|k| libm::sin(std::f64::consts::TAU * hz * k as f64 / rate))
         .collect()
 }
 
@@ -29,7 +29,7 @@ fn a_peak_is_named_by_the_equal_tempered_note_nearest_it() {
 /// The cents field is what says a peak is not the note it was named by.
 #[test]
 fn a_peak_between_two_notes_is_named_by_one_and_detuned_from_it() {
-    let sharp = 440.0 * 2f64.powf(0.25 / 12.0);
+    let sharp = 440.0 * libm::pow(2f64, 0.25 / 12.0);
     let held = name_peaks(&[peak(sharp, -6.0)], 8);
     let [named] = held.as_slice() else {
         unreachable!("one peak in, one note out")
@@ -157,7 +157,7 @@ fn a_tone_with_a_weak_fundamental_is_tracked_as_its_fundamental() {
             let t = k as f64 / rate;
             partials
                 .iter()
-                .map(|(hz, a)| a * (std::f64::consts::TAU * hz * t).sin())
+                .map(|(hz, a)| a * libm::sin(std::f64::consts::TAU * hz * t))
                 .sum()
         })
         .collect();
@@ -189,7 +189,7 @@ fn string(f0: f64, b: f64, gain: f64) -> Vec<(f64, f64)> {
 fn exact_heads(partials: &[(f64, f64)]) -> Vec<String> {
     let mut found: Vec<Peak> = partials
         .iter()
-        .map(|(hz, a)| peak(*hz, 20.0 * a.log10()))
+        .map(|(hz, a)| peak(*hz, 20.0 * libm::log10(*a)))
         .collect();
     found.sort_by(|a, b| b.db.total_cmp(&a.db));
     let mut heads: Vec<String> = name_peaks(&found, 32)
@@ -208,9 +208,9 @@ fn measured(partials: &[(f64, f64)]) -> Vec<PitchFrame> {
             let t = n as f64 / rate;
             let sum: f64 = partials
                 .iter()
-                .map(|(hz, a)| a * (std::f64::consts::TAU * hz * t).sin())
+                .map(|(hz, a)| a * libm::sin(std::f64::consts::TAU * hz * t))
                 .sum();
-            sum * (-2.0 * t).exp()
+            sum * libm::exp(-2.0 * t)
         })
         .collect();
     track(&[&tone[..]], rate, 0.0, 0.05, 16)
@@ -316,7 +316,7 @@ fn a_frame_longer_than_its_transform_seeks_a_fundamental_at_the_transforms_resol
             let t = n as f64 / rate;
             chord
                 .iter()
-                .map(|(hz, a)| a * (std::f64::consts::TAU * hz * t).sin())
+                .map(|(hz, a)| a * libm::sin(std::f64::consts::TAU * hz * t))
                 .sum()
         })
         .collect();

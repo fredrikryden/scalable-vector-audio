@@ -46,7 +46,7 @@ impl Hammer {
             for i in 0..anvils.len() {
                 let compression = hp - anvils[i];
                 let force = if !detached[i] && compression > 0.0 {
-                    self.anvil_k.get(i).copied().unwrap_or(self.k) * compression.powf(self.p)
+                    self.anvil_k.get(i).copied().unwrap_or(self.k) * libm::pow(compression, self.p)
                 } else {
                     detached[i] = true;
                     0.0

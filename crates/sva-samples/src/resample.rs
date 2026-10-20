@@ -32,8 +32,8 @@ impl Resampled {
             to_hz,
             passband_hz: PASSBAND * lower,
             stopband_hz: STOPBAND * lower,
-            ripple_db: 20.0 * (1.0 + pass).log10(),
-            stopband_db: -20.0 * stop.log10(),
+            ripple_db: 20.0 * libm::log10(1.0 + pass),
+            stopband_db: -20.0 * libm::log10(stop),
         }
     }
 }
@@ -49,13 +49,14 @@ fn design(lower: f64) -> (f64, f64, f64) {
         let tv: f64 = (0..=2 * P)
             .map(|j| {
                 let a = f64::from((P - j).abs()) * PI / h;
-                binomial(2 * P, j) * (2.0 * a.powf(n) + 2.0 * h * a.powf(n + 1.0))
+                binomial(2 * P, j) * (2.0 * libm::pow(a, n) + 2.0 * h * libm::pow(a, n + 1.0))
             })
             .sum::<f64>()
             / 4f64.powi(P);
-        let k = tv / ((2.0 * PI).powf(n + 1.0) * n);
-        let tail = |d: f64| k / d.powf(n);
-        let images = |from: f64| tail(1.0 - from) + k / ((n - 1.0) * (1.0 - from).powf(n - 1.0));
+        let k = tv / (libm::pow(2.0 * PI, n + 1.0) * n);
+        let tail = |d: f64| k / libm::pow(d, n);
+        let images =
+            |from: f64| tail(1.0 - from) + k / ((n - 1.0) * libm::pow(1.0 - from, n - 1.0));
         (
             2.0 * tail(c - fp) + 4.0 * images(fp + c),
             2.0 * tail(fs - c) + 4.0 * images(0.5 + c),
@@ -142,8 +143,8 @@ impl Recorded {
         let y = 2.0 * self.cutoff * x;
         let sinc = match y == 0.0 {
             true => 1.0,
-            false => (PI * y).sin() / (PI * y),
+            false => libm::sin(PI * y) / (PI * y),
         };
-        2.0 * self.cutoff * sinc * (FRAC_PI_2 * x / self.half).cos().powi(2 * P)
+        2.0 * self.cutoff * sinc * libm::cos(FRAC_PI_2 * x / self.half).powi(2 * P)
     }
 }

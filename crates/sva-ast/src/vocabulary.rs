@@ -158,7 +158,7 @@ pub fn note_midi(name: &str) -> Option<i32> {
 
 /// Twelve-tone equal temperament, `A4` = 440 Hz = MIDI 69.
 pub fn note_hz(name: &str) -> Option<f64> {
-    note_midi(name).map(|midi| 440.0 * ((f64::from(midi) - 69.0) / 12.0).exp2())
+    note_midi(name).map(|midi| 440.0 * libm::exp2((f64::from(midi) - 69.0) / 12.0))
 }
 
 pub fn is_language_value(name: &str) -> bool {

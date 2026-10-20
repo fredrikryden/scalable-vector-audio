@@ -40,7 +40,7 @@ fn render(partials: &[(f64, f64)], secs: f64) -> Vec<f64> {
             let t = n as f64 / RATE;
             partials
                 .iter()
-                .map(|(f, a)| a * (std::f64::consts::TAU * f * t).cos())
+                .map(|(f, a)| a * libm::cos(std::f64::consts::TAU * f * t))
                 .sum()
         })
         .collect()
@@ -96,7 +96,7 @@ fn a_stiff_strings_partials_fit_their_own_b_and_stand_sharp_by_the_law() {
     assert_eq!(series.members.len(), 8);
     for m in &series.members {
         let n = f64::from(m.n);
-        let law = 1200.0 * ((1.0 + b * n * n) / (1.0 + b)).sqrt().log2();
+        let law = 1200.0 * libm::log2(((1.0 + b * n * n) / (1.0 + b)).sqrt());
         assert!(
             (m.cents - law).abs() < 1e-9,
             "n {}: {} vs {law}",
