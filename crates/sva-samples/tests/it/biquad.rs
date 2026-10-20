@@ -6,7 +6,7 @@ use sva_samples::biquad::{RESPONSE_RATIOS, clamp_cutoff, clamp_q, design, magnit
 const SR: f64 = 48000.0;
 
 fn db_at(shape: Shape, cutoff: f64, q: f64, hz: f64) -> f64 {
-    magnitude_db(&design(shape, cutoff, q, 0.0, SR), hz, SR)
+    magnitude_db(&design(shape, cutoff, q, 1.0, SR), hz, SR)
 }
 
 #[test]
@@ -34,16 +34,29 @@ fn q_raises_the_corner_and_the_butterworth_default_does_not() {
     assert!(resonant > 15.0, "Q=8 should ring, got {resonant}");
 }
 
+/// The amplitude ratio `db` writes.
+fn ratio(db: f64) -> f64 {
+    10f64.powf(db / 20.0)
+}
+
 #[test]
 fn a_shelf_and_a_bell_reach_their_stated_gain() {
-    let peak = magnitude_db(&design(Shape::Peaking, 1000.0, 1.0, 9.0, SR), 1000.0, SR);
+    let peak = magnitude_db(
+        &design(Shape::Peaking, 1000.0, 1.0, ratio(9.0), SR),
+        1000.0,
+        SR,
+    );
     assert!((peak - 9.0).abs() < 0.1, "peaking gain {peak}");
 
-    let low = magnitude_db(&design(Shape::Lowshelf, 1000.0, 0.707, -12.0, SR), 20.0, SR);
+    let low = magnitude_db(
+        &design(Shape::Lowshelf, 1000.0, 0.707, ratio(-12.0), SR),
+        20.0,
+        SR,
+    );
     assert!((low + 12.0).abs() < 0.3, "lowshelf gain {low}");
 
     let high = magnitude_db(
-        &design(Shape::Highshelf, 1000.0, 0.707, 6.0, SR),
+        &design(Shape::Highshelf, 1000.0, 0.707, ratio(6.0), SR),
         20000.0,
         SR,
     );
@@ -53,7 +66,7 @@ fn a_shelf_and_a_bell_reach_their_stated_gain() {
 /// `lp` reported in biquad form must still be the one-pole `y += alpha*(x - y)`.
 #[test]
 fn the_one_pole_is_a_degenerate_biquad_at_minus_three_db() {
-    let c = design(Shape::OnePole, 1000.0, 0.0, 0.0, SR);
+    let c = design(Shape::OnePole, 1000.0, 0.0, 1.0, SR);
     assert_eq!((c.b1, c.b2, c.a2), (0.0, 0.0, 0.0));
     assert!(
         (c.b0 - (1.0 + c.a1)).abs() < 1e-12,
@@ -70,10 +83,10 @@ fn the_one_pole_is_a_degenerate_biquad_at_minus_three_db() {
 
 #[test]
 fn the_response_table_stops_at_nyquist_instead_of_piling_up_on_it() {
-    let full = response(&design(Shape::Lowpass, 500.0, 1.0, 0.0, SR), 500.0, SR);
+    let full = response(&design(Shape::Lowpass, 500.0, 1.0, 1.0, SR), 500.0, SR);
     assert_eq!(full.len(), RESPONSE_RATIOS.len());
 
-    let high = response(&design(Shape::Lowpass, 8000.0, 1.0, 0.0, SR), 8000.0, SR);
+    let high = response(&design(Shape::Lowpass, 8000.0, 1.0, 1.0, SR), 8000.0, SR);
     assert_eq!(high.len(), 7, "4x and 8x of 8kHz are past 24kHz");
     assert!(high.iter().all(|(hz, db)| *hz < SR / 2.0 && *db > -200.0));
 }
@@ -85,7 +98,7 @@ fn a_cutoff_past_nyquist_or_at_zero_clamps_rather_than_producing_nonsense() {
     assert_eq!(clamp_cutoff(0.0, SR), (1.0, true));
     assert_eq!(clamp_cutoff(1000.0, SR), (1000.0, false));
     for shape in [Shape::Lowpass, Shape::Highpass, Shape::Bandpass] {
-        let c = design(shape, hz, clamp_q(0.0).0, 0.0, SR);
+        let c = design(shape, hz, clamp_q(0.0).0, 1.0, SR);
         assert!(c.b0.is_finite() && c.a1.is_finite() && c.a2.is_finite());
     }
 }

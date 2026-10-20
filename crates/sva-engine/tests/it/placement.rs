@@ -156,7 +156,7 @@ fn a_read_folded_to_both_ends_of_a_long_period_lays_only_what_it_reads() {
         &[
             (
                 "nz",
-                "bandpass(noise(9, period=8/184.9972, color=-3), 6500, 0.5)\n",
+                "bandpass(noise(9, period=8/184.9972, color=-3db), 6500, 0.5)\n",
             ),
             ("top", "crop(sample(@nz(t - 1sp)), 0s, 0.05s)\n"),
         ],

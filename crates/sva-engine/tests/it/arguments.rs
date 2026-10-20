@@ -528,3 +528,72 @@ fn a_choice_inside_a_noise_seed_is_noted() {
     assert_eq!(held.calls[0].arguments[0].name, "seed");
     assert_eq!(held.calls[0].arguments[0].value, 3.0);
 }
+
+/// The level a peak at a sine's own frequency leaves it at, in dB, over its settled second half.
+fn centre_db(name: &str, files: &[(&str, &str)]) -> f64 {
+    let g = graph_of(name, files);
+    let held = render(
+        &g,
+        "body",
+        RenderConfig::seconds(48_000, 0.1),
+        &Tier::default(),
+    )
+    .unwrap_or_else(|e| panic!("{files:?}: {e}"));
+    let root = held.id("body").expect("the root");
+    let output = held.output(root).expect("a render");
+    let plane = output.plane(0);
+    let settled = &plane[2400..4800];
+    let power = settled.iter().map(|s| s * s).sum::<f64>() / settled.len() as f64;
+    10.0 * (2.0 * power).log10()
+}
+
+/// A level is the amplitude ratio `db` writes, in a filter's gain as anywhere: `12db` leaves
+/// the centre 12 dB up, written in place or held by a ref, never `12db` read again as dB.
+#[test]
+fn a_gain_written_in_db_is_the_level_it_names() {
+    let tone = "sin(2*pi*1000*t)";
+    for (gain, want) in [("12db", 12.0), ("-40db", -40.0), ("4", 20.0 * 4f64.log10())] {
+        for body in [
+            format!("peaking(sample({tone}), 1000hz, 2, {gain})\n"),
+            format!("sample(peaking({tone}, 1000hz, 2, gain={gain}))\n"),
+        ] {
+            let found = centre_db("db-gain", &[("body", &body)]);
+            assert!(
+                (found - want).abs() < 0.01,
+                "{body}: {found} dB, not {want}"
+            );
+        }
+    }
+    let held = format!("peaking(sample({tone}), 1000hz, 2, gain=@air)\n");
+    let found = centre_db("db-gain-ref", &[("air", "12db\n"), ("body", &held)]);
+    assert!(
+        (found - 12.0).abs() < 0.01,
+        "a ref holding 12db: {found} dB"
+    );
+}
+
+/// A level spelled as a bare number in dB, `-6`, is a ratio no level names: refused, never
+/// read as a cut or a tilt.
+#[test]
+fn a_level_at_or_below_zero_is_refused() {
+    for written in [
+        "peaking(sample(sin(2*pi*1000*t)), 1000hz, 2, -6)\n",
+        "lowshelf(sin(2*pi*1000*t), 300hz, 0.7, gain=0)\n",
+        "crop(noise(1, period=1, color=-3), 0s, 0.01s)\n",
+    ] {
+        let g = graph_of("no-level", &[("body", written)]);
+        let Err(refused) = render(
+            &g,
+            "body",
+            RenderConfig::seconds(48_000, 0.01),
+            &Tier::default(),
+        ) else {
+            panic!("{written} names no level and renders nothing");
+        };
+        assert_eq!(
+            refused.code(),
+            "engine.level_not_a_ratio",
+            "{written}: {refused}"
+        );
+    }
+}

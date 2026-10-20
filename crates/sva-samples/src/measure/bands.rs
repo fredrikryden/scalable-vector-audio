@@ -81,8 +81,8 @@ impl Chain {
         let erb = erb_hz(centre_hz);
         let hz = smoothing.hz.unwrap_or(erb.min(DECIMATED_HZ / 4.0));
         Chain {
-            pass: design(Shape::Bandpass, centre_hz, centre_hz / erb, 0.0, sr),
-            smooth: design(Shape::OnePole, hz, 0.0, 0.0, sr),
+            pass: design(Shape::Bandpass, centre_hz, centre_hz / erb, 1.0, sr),
+            smooth: design(Shape::OnePole, hz, 0.0, 1.0, sr),
             a: State::default(),
             b: State::default(),
             energy: vec![State::default(); smoothing.poles],

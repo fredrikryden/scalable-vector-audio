@@ -16,9 +16,9 @@ fn rings() -> Graph {
             ("highpass", "highpass(sample(@src), 300hz)\n"),
             ("bandpass", "bandpass(sample(@src), 440hz, 20)\n"),
             ("notch", "notch(sample(@src), 440hz, 2)\n"),
-            ("peaking", "peaking(sample(@src), 440hz, 2, 12)\n"),
-            ("lowshelf", "lowshelf(sample(@src), 300hz, 0.7, -6)\n"),
-            ("highshelf", "highshelf(sample(@src), 300hz, 0.7, 6)\n"),
+            ("peaking", "peaking(sample(@src), 440hz, 2, 12db)\n"),
+            ("lowshelf", "lowshelf(sample(@src), 300hz, 0.7, -6db)\n"),
+            ("highshelf", "highshelf(sample(@src), 300hz, 0.7, 6db)\n"),
             (
                 "cascade",
                 "highpass(lowpass(sample(@src), 2000hz), 100hz)\n",
@@ -163,7 +163,7 @@ fn a_fixed_filter_with_a_pole_near_one_ends() {
         format!("lowpass({input}, cutoff=40, q=0.7)"),
         format!("bandpass({input}, 60hz, 4)"),
         format!("notch({input}, 50hz, 0.5)"),
-        format!("lowshelf({input}, 60hz, 0.7, -6)"),
+        format!("lowshelf({input}, 60hz, 0.7, -6db)"),
     ];
     let files: Vec<(String, String)> = shapes
         .iter()

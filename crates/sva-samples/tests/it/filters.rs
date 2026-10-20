@@ -4,7 +4,7 @@ use sva_samples::Shape;
 use sva_samples::filters::FilterSite;
 
 fn site(shape: Shape, cutoff: f64, q: f64, sr: f64) -> FilterSite {
-    FilterSite::new(shape, 1, &[cutoff], &[q], &[0.0], sr)
+    FilterSite::new(shape, 1, &[cutoff], &[q], &[1.0], sr)
 }
 
 fn step(s: &mut FilterSite, x: f64, cutoff: f64, q: f64, gain: f64, sr: f64, i: usize) -> f64 {
@@ -19,7 +19,7 @@ fn run(shape: Shape, cutoff: f64, q: f64, input: &[f64]) -> Vec<f64> {
     input
         .iter()
         .enumerate()
-        .map(|(i, &x)| step(&mut s, x, cutoff, q, 0.0, sr, i))
+        .map(|(i, &x)| step(&mut s, x, cutoff, q, 1.0, sr, i))
         .collect()
 }
 
@@ -46,7 +46,7 @@ fn a_rendered_tone_is_attenuated_by_what_the_response_predicts() {
         let settled = &out[n / 2..];
         let measured = 20.0 * (rms(settled) / rms(&tone(hz, n)[n / 2..])).log10();
         let predicted = sva_samples::biquad::magnitude_db(
-            &sva_samples::biquad::design(shape, cutoff, 0.707, 0.0, 48000.0),
+            &sva_samples::biquad::design(shape, cutoff, 0.707, 1.0, 48000.0),
             hz,
             48000.0,
         );
@@ -71,7 +71,7 @@ fn a_swept_cutoff_is_traced_in_time_and_sliceable_by_window() {
     let sr = 48000.0;
     let mut s = site(Shape::Lowpass, 200.0, 1.0, sr);
     for i in 0..96000 {
-        step(&mut s, 0.1, 200.0 + i as f64 / 48.0, 1.0, 0.0, sr, i);
+        step(&mut s, 0.1, 200.0 + i as f64 / 48.0, 1.0, 1.0, sr, i);
     }
     let traces = s.trace("n", 0, sr);
     assert_eq!(traces.len(), 1, "a mono site is one trace");
@@ -122,11 +122,11 @@ fn a_swept_gain_is_traced_alongside_cutoff_and_q() {
     let sr = 48000.0;
     let mut s = site(Shape::Peaking, 1000.0, 2.0, sr);
     for i in 0..48000 {
-        step(&mut s, 0.1, 1000.0, 2.0, i as f64 / 4800.0, sr, i);
+        step(&mut s, 0.1, 1000.0, 2.0, 1.0 + i as f64 / 4800.0, sr, i);
     }
     let frames = s.trace("n", 0, sr)[0].frames.clone();
-    assert_eq!(frames.first().map(|f| f.gain_db), Some(0.0));
-    assert!(frames.last().unwrap().gain_db > 9.9);
+    assert_eq!(frames.first().map(|f| f.gain), Some(1.0));
+    assert!(frames.last().unwrap().gain > 10.9);
     assert!(frames.iter().all(|f| f.cutoff == 1000.0 && f.q == 2.0));
 }
 
@@ -135,7 +135,7 @@ fn a_cutoff_swept_past_nyquist_is_flagged_clamped_and_stays_finite() {
     let sr = 48000.0;
     let mut s = site(Shape::Highpass, 1000.0, 1.0, sr);
     for i in 0..100 {
-        let y = step(&mut s, 0.5, 1000.0 + i as f64 * 1000.0, 1.0, 0.0, sr, i);
+        let y = step(&mut s, 0.5, 1000.0 + i as f64 * 1000.0, 1.0, 1.0, sr, i);
         assert!(y.is_finite());
     }
     assert!(s.trace("n", 0, sr)[0].clamped);

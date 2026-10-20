@@ -1,4 +1,4 @@
-// Concern: the eight shapes' H(s) as a Rational in s | Non-concern: the biquad recurrence (sva-samples) | IO: (Shape, cutoff, q, gain_db) -> Rational
+// Concern: the eight shapes' H(s) as a Rational in s | Non-concern: the biquad recurrence (sva-samples) | IO: (Shape, cutoff, q, gain) -> Rational
 
 use std::f64::consts::TAU;
 
@@ -43,10 +43,11 @@ impl Shape {
     }
 }
 
-/// The RBJ Audio EQ Cookbook's analog prototypes, before any bilinear transform.
-pub fn design(shape: Shape, cutoff: f64, q: f64, gain_db: f64) -> Rational {
+/// The RBJ Audio EQ Cookbook's analog prototypes, before any bilinear transform. `gain` is
+/// the amplitude ratio at the peak or shelf, what `12db` writes; the cookbook's `A` is its root.
+pub fn design(shape: Shape, cutoff: f64, q: f64, gain: f64) -> Rational {
     let w0 = TAU * cutoff;
-    let a = 10f64.powf(gain_db / 40.0);
+    let a = gain.sqrt();
     let root_a = a.sqrt();
     match shape {
         Shape::OnePole => Rational {

@@ -64,7 +64,11 @@ pub fn meaning(builtin: &str, key: &str) -> Option<Meaning> {
             "s",
         ),
         ("noise", "period") => plain("repeat time; the lines fall every 1/period Hz", "s"),
-        ("noise", "color") => plain("spectral tilt of the lines", "dB/octave"),
+        ("noise", "color") => plain(
+            "spectral tilt: the amplitude ratio from one octave to the next, written in db \
+             (`-3db` is pink); a bare number is that ratio, 1 flat",
+            "ratio per octave",
+        ),
         _ => return None,
     })
 }
@@ -73,7 +77,11 @@ fn filter(key: &str) -> Option<Meaning> {
     Some(match key {
         "cutoff" => plain("corner or centre frequency", "Hz"),
         "q" => plain("resonance: centre frequency over bandwidth", "none"),
-        "gain" => plain("boost or cut of a shelf or peak", "dB"),
+        "gain" => plain(
+            "boost or cut of a shelf or peak: the amplitude ratio there, written in db (`12db`, \
+             `-6db`); a bare number is that ratio, 1 flat",
+            "ratio",
+        ),
         _ => return None,
     })
 }

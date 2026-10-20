@@ -138,10 +138,10 @@ fn moved(tys: &Typing, id: NodeId, gain: &dyn Fn(NodeId) -> Option<f64>) -> Opti
             if tys.grid(*x) != grid || params.iter().any(|p| gain(*p) != Some(0.0)) {
                 return None;
             }
-            let [Some(f), Some(q), Some(db)] = params.map(|p| number_of(tys, p)) else {
+            let [Some(f), Some(q), Some(ratio)] = params.map(|p| number_of(tys, p)) else {
                 return None;
             };
-            let (coeffs, _) = sva_samples::filters::coefficients(*shape, f, q, db, grid.sr());
+            let (coeffs, _) = sva_samples::filters::coefficients(*shape, f, q, ratio, grid.sr());
             Some(gain(*x)? * filter::moved(&coeffs)? * (1.0 + OP))
         }
         _ => None,

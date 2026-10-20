@@ -2,7 +2,7 @@
 
 use sva_formula::filter::Shape;
 
-use crate::biquad::{Coeffs, clamp_cutoff, clamp_q, design, response};
+use crate::biquad::{Coeffs, clamp_cutoff, clamp_gain, clamp_q, design, response};
 
 pub const TRACE_HZ: f64 = 1000.0;
 
@@ -11,7 +11,7 @@ pub struct AutomationFrame {
     pub t_secs: f64,
     pub cutoff: f64,
     pub q: f64,
-    pub gain_db: f64,
+    pub gain: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,11 +50,12 @@ impl FilterTrace {
             t_secs: midpoint,
             cutoff: 0.0,
             q: 1.0,
-            gain_db: 0.0,
+            gain: 1.0,
         });
         let shape = self.shape;
         let cutoff = clamp_cutoff(mid.cutoff, sample_rate).0;
-        let coefficients = design(shape, cutoff, clamp_q(mid.q).0, mid.gain_db, sample_rate);
+        let (q, gain) = (clamp_q(mid.q).0, clamp_gain(mid.gain).0);
+        let coefficients = design(shape, cutoff, q, gain, sample_rate);
         Automation {
             node: self.node.clone(),
             site: self.site,
@@ -84,14 +85,14 @@ fn step(
     x: f64,
     cutoff: f64,
     q: f64,
-    gain_db: f64,
+    gain: f64,
     sr: f64,
     i: i64,
 ) -> f64 {
-    if (cutoff, q, gain_db) != lane.designed_for {
-        let (coeffs, hit) = coefficients(shape, cutoff, q, gain_db, sr);
+    if (cutoff, q, gain) != lane.designed_for {
+        let (coeffs, hit) = coefficients(shape, cutoff, q, gain, sr);
         lane.coeffs = coeffs;
-        lane.designed_for = (cutoff, q, gain_db);
+        lane.designed_for = (cutoff, q, gain);
         *clamped |= hit;
     }
     if i.rem_euclid(stride as i64) == 0 {
@@ -99,7 +100,7 @@ fn step(
             t_secs: i as f64 / sr,
             cutoff,
             q,
-            gain_db,
+            gain,
         });
     }
 
@@ -127,19 +128,26 @@ struct Lane {
     frames: Vec<AutomationFrame>,
 }
 
-pub fn coefficients(shape: Shape, cutoff: f64, q: f64, gain_db: f64, sr: f64) -> (Coeffs, bool) {
+pub fn coefficients(shape: Shape, cutoff: f64, q: f64, gain: f64, sr: f64) -> (Coeffs, bool) {
     let (c, c_clamped) = clamp_cutoff(cutoff, sr);
     let (qq, q_clamped) = clamp_q(q);
-    (design(shape, c, qq, gain_db, sr), c_clamped || q_clamped)
+    let (g, g_clamped) = match shape.takes_gain() {
+        true => clamp_gain(gain),
+        false => (1.0, false),
+    };
+    (
+        design(shape, c, qq, g, sr),
+        c_clamped || q_clamped || g_clamped,
+    )
 }
 
 impl Lane {
-    fn new(shape: Shape, cutoff: f64, q: f64, gain_db: f64, sr: f64) -> (Lane, bool) {
-        let (coeffs, clamped) = coefficients(shape, cutoff, q, gain_db, sr);
+    fn new(shape: Shape, cutoff: f64, q: f64, gain: f64, sr: f64) -> (Lane, bool) {
+        let (coeffs, clamped) = coefficients(shape, cutoff, q, gain, sr);
         let lane = Lane {
             state: crate::biquad::State::default(),
             coeffs,
-            designed_for: (cutoff, q, gain_db),
+            designed_for: (cutoff, q, gain),
             frames: Vec::new(),
         };
         (lane, clamped)
@@ -162,13 +170,13 @@ impl FilterSite {
         width: usize,
         cutoff: &[f64],
         q: &[f64],
-        gain_db: &[f64],
+        gain: &[f64],
         sr: f64,
     ) -> FilterSite {
         let mut lanes = Vec::with_capacity(width);
         let mut clamped = false;
         for c in 0..width.max(1) {
-            let (lane, hit) = Lane::new(shape, part(cutoff, c), part(q, c), part(gain_db, c), sr);
+            let (lane, hit) = Lane::new(shape, part(cutoff, c), part(q, c), part(gain, c), sr);
             lanes.push(lane);
             clamped |= hit;
         }
@@ -188,7 +196,7 @@ impl FilterSite {
         x: &[f64],
         cutoff: &[f64],
         q: &[f64],
-        gain_db: &[f64],
+        gain: &[f64],
         out: &mut [f64],
         sr: f64,
         i: i64,
@@ -204,7 +212,7 @@ impl FilterSite {
                 part(x, c),
                 part(cutoff, c),
                 part(q, c),
-                part(gain_db, c),
+                part(gain, c),
                 sr,
                 i,
             );

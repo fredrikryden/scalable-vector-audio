@@ -245,7 +245,7 @@ mod tests {
             (Shape::OnePole, 200.0, 0.707),
         ];
         for (shape, cutoff, q) in shapes {
-            let c = design(shape, cutoff, q, 0.0, 48_000.0);
+            let c = design(shape, cutoff, q, 1.0, 48_000.0);
             let mut state = sva_samples::biquad::State::default();
             let summed: f64 = (0..1_000_000)
                 .map(|n| state.step(&c, if n == 0 { 1.0 } else { 0.0 }).abs())

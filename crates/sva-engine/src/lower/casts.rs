@@ -145,6 +145,11 @@ impl Lowering<'_> {
             })
         };
         let arguments = [written(0, "cutoff"), written(1, "q"), written(2, "gain")];
+        if shape.takes_gain()
+            && let Some(gain) = arguments[2]
+        {
+            self.ratio_argument(crate::vocabulary::shape_name(shape), "gain", gain, cx, span)?;
+        }
 
         let piece = self.walk(signal, cx, var)?;
         let source = self.seal(piece, var, None)?;
@@ -161,7 +166,7 @@ impl Lowering<'_> {
                 cx,
                 var,
             )?; 3];
-            for (slot, key, fallback) in [(1, "q", shape.default_q()), (2, "gain", 0.0)] {
+            for (slot, key, fallback) in [(1, "q", shape.default_q()), (2, "gain", 1.0)] {
                 held[slot] = match arguments[slot] {
                     Some(x) => {
                         self.automation((crate::vocabulary::shape_name(shape), key), x, cx, var)?
@@ -190,7 +195,7 @@ impl Lowering<'_> {
         let Some(q) = at(1, shape.default_q()) else {
             return Err(self.swept(shape, span));
         };
-        let Some(gain) = at(2, 0.0) else {
+        let Some(gain) = at(2, 1.0) else {
             return Err(self.swept(shape, span));
         };
         if !cutoff.is_finite() {
@@ -214,10 +219,9 @@ impl Lowering<'_> {
                 "engine.filter_without_response",
                 format!(
                     "`{name}` reads `cutoff={cutoff:?}`, `q={q:?}` and `gain={gain:?}`, and its \
-                     response has no finite pole, zero or gain there: q divides the damping, \
-                     and a gain in dB is raised to a power."
+                     response has no finite pole, zero or gain there: q divides the damping."
                 ),
-                "write a q that is not zero and a gain whose power of ten is a finite number",
+                "write a q that is not zero",
                 Some(span),
             ));
         }

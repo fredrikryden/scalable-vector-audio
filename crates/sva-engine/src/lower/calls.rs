@@ -67,12 +67,18 @@ impl Lowering<'_> {
             let [seed, ..] = numbers.as_slice() else {
                 return Err(EngineError::BadArity(name.to_string()));
             };
+            if let Some(Arg::Named(_, color)) = args
+                .iter()
+                .find(|a| matches!(a, Arg::Named(k, _) if k == "color"))
+            {
+                self.ratio_argument(name, "color", color, cx, span)?;
+            }
             self.note_call(name, span, positional_named(name, &numbers, &named), chosen);
             return Ok(Piece::ClosedForm(Body::Series(Box::new(
                 sva_formula::noise(
                     *seed as u64,
                     named_or(&view, "period", 1.0),
-                    named_or(&view, "color", 0.0),
+                    named_or(&view, "color", 1.0),
                 ),
             ))));
         }
@@ -375,6 +381,31 @@ impl Lowering<'_> {
                 "`{name}` reads `{key}={}`, which is {v}, and an argument is a finite number",
                 sva_ast::render_expr(written)
             ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// A level is the amplitude ratio `db` writes, so one that folds to zero or below names no
+    /// decibel: `-6`, a level written as a bare number in dB, is refused, never read as a ratio.
+    pub(super) fn ratio_argument(
+        &self,
+        name: &str,
+        key: &str,
+        written: &Expr,
+        cx: Cx,
+        span: ByteSpan,
+    ) -> Result<(), EngineError> {
+        match crate::loops::amount(self.inst, written, cx) {
+            Some(v) if v <= 0.0 => Err(self.refused_at(
+                "engine.level_not_a_ratio",
+                format!(
+                    "`{name}` reads `{key}={}`: `{key}` is an amplitude ratio, and {v} is at \
+                     or below zero, where no level in dB is",
+                    sva_ast::render_expr(written)
+                ),
+                &format!("write the level in db, as `{key}=-6db`; a bare number is a ratio"),
+                Some(span),
+            )),
             _ => Ok(()),
         }
     }

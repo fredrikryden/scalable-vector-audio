@@ -101,7 +101,7 @@ fn noise_through_a_bandpass_is_a_pair_with_shaped_lines() {
     let g = graph_of(
         "shaped",
         &[
-            ("flat", "noise(11, period=1, color=0)\n"),
+            ("flat", "noise(11, period=1, color=0db)\n"),
             ("band", "bandpass(@flat, cutoff=1200, q=2)\n"),
         ],
     );
@@ -124,7 +124,7 @@ fn noise_through_a_bandpass_is_a_pair_with_shaped_lines() {
         panic!("one series, not {} of them", lane.series.len());
     };
     let shaped = sva_formula::lines(series, 20_000.0, -200.0, 0.0).expect("shaped lines");
-    let flat = sva_formula::lines(&sva_formula::noise(11, 1.0, 0.0), 20_000.0, -200.0, 0.0)
+    let flat = sva_formula::lines(&sva_formula::noise(11, 1.0, 1.0), 20_000.0, -200.0, 0.0)
         .expect("flat lines");
     assert!(shaped.taken.len() > 100, "{} lines", shaped.taken.len());
 

@@ -170,9 +170,9 @@ fn a_render_over_an_unusable_cache_answers_and_logs_why() {
 
 const HEADER: &str = "; Models: x | Neglects: y | IO: (t) -> amplitude | Tags: t\n";
 const TONE: &str = "crop(lowpass(sin(2*pi*220*t), 880), 0s, 0.05s)";
-const HISS: &str = "crop(lowpass(sample(crop(noise(1, period=0.5, color=1), 0s, 0.05s)), \
+const HISS: &str = "crop(lowpass(sample(crop(noise(1, period=0.5, color=1db), 0s, 0.05s)), \
                     880 + 400*sin(2*pi*t)), 0s, 0.05s)";
-const SOURCE: &str = "sample(crop(noise(1, period=0.5, color=1), 0s, 0.05s))";
+const SOURCE: &str = "sample(crop(noise(1, period=0.5, color=1db), 0s, 0.05s))";
 const READER: &str = "crop(lowpass(@src/n(t), 880 + 400*sin(2*pi*t)), 0s, 0.05s)";
 
 /// Files of one composition, each a path and a body.
@@ -198,7 +198,7 @@ fn reading(out: &Output) -> String {
 #[test]
 fn every_framing_of_a_value_reads_the_entry_its_original_stored() {
     let lifted = "hz = 220\ncrop(lowpass(sin(2*pi*hz*t), 4*hz), 0s, 0.05s)".to_string();
-    let reordered = HISS.replace("period=0.5, color=1", "color=1, period=0.5");
+    let reordered = HISS.replace("period=0.5, color=1db", "color=1db, period=0.5");
     let split = vec![("hiss", READER.to_string()), ("src/n", SOURCE.to_string())];
     let sum = "sample(crop(lowpass(sin(2*pi*220*t) + 0.5*sin(2*pi*330*t), 880), 0s, 0.05s))";
     let swapped = "sample(crop(lowpass(0.5*sin(2*pi*330*t) + sin(2*pi*220*t), 880), 0s, 0.05s))";

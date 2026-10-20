@@ -941,7 +941,7 @@ fn two_windows_state_one_energy_weighted_tail() {
 fn noise_alone_sums_its_lines() {
     let law = form(
         Var::T,
-        Body::Series(Box::new(sva_formula::noise(1, 0.4, 0.0))),
+        Body::Series(Box::new(sva_formula::noise(1, 0.4, 1.0))),
     );
     let (buffer, label) =
         render(&law, RATE, whole_second(), &PSYCHOACOUSTIC_V1).expect("a noise series");
@@ -952,7 +952,7 @@ fn noise_alone_sums_its_lines() {
     assert!(*summed > 1_000, "{summed} lines under the ceiling");
 
     let placed = sva_formula::lines(
-        &sva_formula::noise(1, 0.4, 0.0),
+        &sva_formula::noise(1, 0.4, 1.0),
         4_096.0,
         -20.0,
         PSYCHOACOUSTIC_V1.half_lsb(),
@@ -977,7 +977,7 @@ fn noise_alone_sums_its_lines() {
 /// each contributes, added.
 #[test]
 fn noise_plus_a_sine_is_the_sum_of_its_parts() {
-    let hiss = Body::Series(Box::new(sva_formula::noise(1, 0.4, 0.0)));
+    let hiss = Body::Series(Box::new(sva_formula::noise(1, 0.4, 1.0)));
     let tone = cosine(554.365, 0.06);
     let (alone, alone_label) = render(
         &form(Var::T, hiss.clone()),
@@ -1027,7 +1027,7 @@ fn a_cropped_noise_series_evaluates_only_its_window() {
     let law = form(
         Var::T,
         Body::Crop {
-            of: part(Body::Series(Box::new(sva_formula::noise(3, 0.25, 0.0)))),
+            of: part(Body::Series(Box::new(sva_formula::noise(3, 0.25, 1.0)))),
             l: Edge::at(0.21),
             r: Edge::at(0.29),
             rise: 0.0,
@@ -1059,7 +1059,7 @@ fn a_shoulder_over_a_noise_series_keeps_a_pair() {
     let law = form(
         Var::T,
         Body::Crop {
-            of: part(Body::Series(Box::new(sva_formula::noise(3, 0.25, 0.0)))),
+            of: part(Body::Series(Box::new(sva_formula::noise(3, 0.25, 1.0)))),
             l: Edge::at(0.2),
             r: Edge::at(0.4),
             rise: 0.01,
@@ -1136,7 +1136,7 @@ fn a_law_scaled_to_nothing_collapses_to_silence() {
         Var::T,
         Body::Mul(vec![
             part(constant(0.0)),
-            part(Body::Series(Box::new(sva_formula::noise(1, 0.5, 0.0)))),
+            part(Body::Series(Box::new(sva_formula::noise(1, 0.5, 1.0)))),
         ]),
     );
     let (buffer, label) =
@@ -1153,7 +1153,7 @@ fn a_law_scaled_to_nothing_collapses_to_silence() {
 #[test]
 fn a_gain_outside_a_cropped_series_keeps_the_window() {
     let cropped = Body::Crop {
-        of: part(Body::Series(Box::new(sva_formula::noise(3, 0.25, 0.0)))),
+        of: part(Body::Series(Box::new(sva_formula::noise(3, 0.25, 1.0)))),
         l: Edge::at(0.2),
         r: Edge::at(0.4),
         rise: 0.0,

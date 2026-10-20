@@ -7,7 +7,7 @@ use sva_samples::{Extent, PSYCHOACOUSTIC_V1, Source};
 const RATE: u32 = 48_000;
 
 fn hiss() -> Body {
-    Body::Series(Box::new(noise(1, 0.5, 0.0)))
+    Body::Series(Box::new(noise(1, 0.5, 1.0)))
 }
 
 fn form(body: Body) -> ClosedForm {

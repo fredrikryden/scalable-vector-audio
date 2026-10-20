@@ -178,7 +178,7 @@ fn a_tail_no_bound_sums_names_no_lines() {
 
 #[test]
 fn noise_spacing_is_the_reciprocal_period() {
-    let answer = enumerate(&noise(7, 2.0, 0.0), 40.0).expect("noise lines");
+    let answer = enumerate(&noise(7, 2.0, 1.0), 40.0).expect("noise lines");
     let mut hz: Vec<f64> = answer
         .taken
         .iter()
@@ -194,7 +194,7 @@ fn noise_spacing_is_the_reciprocal_period() {
 
 #[test]
 fn noise_lines_are_conjugate_symmetric() {
-    let answer = enumerate(&noise(7, 2.0, -3.0), 20.0).expect("noise lines");
+    let answer = enumerate(&noise(7, 2.0, 10f64.powf(-3.0 / 20.0)), 20.0).expect("noise lines");
     for line in &answer.taken {
         let mirror = answer
             .taken

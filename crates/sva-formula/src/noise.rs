@@ -7,11 +7,12 @@ use crate::complex::C64;
 
 pub const LINE: IndexId = IndexId(u32::MAX);
 
-pub fn noise(seed: u64, period: f64, color_db_per_octave: f64) -> Series {
+/// `color` is a ratio per octave, as `-3db`: line `k` is `k^log2(color)`, a summable power.
+pub fn noise(seed: u64, period: f64, color: f64) -> Series {
     let amplitude = Body::Apply(
         Unary::Exp,
         Part::bare(Body::Mul(vec![
-            Part::bare(Body::Const(C64::real(exponent(color_db_per_octave)))),
+            Part::bare(Body::Const(C64::real(color.log2()))),
             Part::bare(Body::Apply(Unary::Log, Part::bare(Body::Index(LINE)))),
         ])),
     );
@@ -39,9 +40,4 @@ pub fn noise(seed: u64, period: f64, color_db_per_octave: f64) -> Series {
             )),
         ])),
     }
-}
-
-/// `10^(color * log2(k) / 20)` is `k^e`: a power of the index, so the series is summable.
-fn exponent(color_db_per_octave: f64) -> f64 {
-    color_db_per_octave / (20.0 * 2f64.log10())
 }

@@ -68,7 +68,7 @@ fn rand_is_rate_free() {
 #[test]
 fn noise_has_a_dual() {
     assert!(
-        ty_of("noise", "noise(3, period=0.25, color=-3)\n").has_dual(),
+        ty_of("noise", "noise(3, period=0.25, color=-3db)\n").has_dual(),
         "a noise realization is a line spectrum on the 1/period grid"
     );
 }

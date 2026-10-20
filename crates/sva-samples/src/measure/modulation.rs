@@ -257,7 +257,7 @@ pub fn measure(
         size,
         rate,
         sample_rate,
-        smoothing: design(Shape::OnePole, SMOOTHING_HZ, 0.0, 0.0, sample_rate),
+        smoothing: design(Shape::OnePole, SMOOTHING_HZ, 0.0, 1.0, sample_rate),
         lowpass: &lowpass,
     };
     let tracks = Group::ALL
@@ -776,7 +776,7 @@ mod tests {
                 size: 1,
                 rate: 100.0,
                 sample_rate,
-                smoothing: design(Shape::OnePole, SMOOTHING_HZ, 0.0, 0.0, sample_rate),
+                smoothing: design(Shape::OnePole, SMOOTHING_HZ, 0.0, 1.0, sample_rate),
                 lowpass: &lowpass,
             };
             let v: Vec<f64> = (1..=2000)

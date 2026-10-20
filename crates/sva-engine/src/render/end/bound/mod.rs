@@ -568,7 +568,7 @@ mod tests {
 
     /// A noise series through `depth` filters, each a form of its own, under a falling window.
     fn breath(depth: usize) -> Vec<(String, String)> {
-        let mut x = "noise(9, period=8/185, color=-3)".to_string();
+        let mut x = "noise(9, period=8/185, color=-3db)".to_string();
         for k in 0..depth {
             x = format!("lowpass({x}, {}, 0.7)", 11_000 - 100 * k);
         }

@@ -1,4 +1,4 @@
-// Concern: designs RBJ biquad coefficients and their magnitude response | Non-concern: the shapes and their H(s) (sva-formula), dispatch (filters.rs) | IO: (Shape, cutoff, q, gain_db, sr) -> Coeffs
+// Concern: designs RBJ biquad coefficients and their magnitude response | Non-concern: the shapes and their H(s) (sva-formula), dispatch (filters.rs) | IO: (Shape, cutoff, q, gain, sr) -> Coeffs
 
 use sva_formula::filter::Shape;
 
@@ -56,6 +56,16 @@ pub fn clamp_cutoff(hz: f64, sr: f64) -> (f64, bool) {
     }
 }
 
+/// -120 dB; a ratio at or under 0 has no root.
+pub const MIN_GAIN: f64 = 1e-6;
+
+pub fn clamp_gain(gain: f64) -> (f64, bool) {
+    match gain < MIN_GAIN {
+        true => (MIN_GAIN, true),
+        false => (gain, false),
+    }
+}
+
 pub fn clamp_q(q: f64) -> (f64, bool) {
     if q < MIN_Q {
         (MIN_Q, true)
@@ -66,8 +76,8 @@ pub fn clamp_q(q: f64) -> (f64, bool) {
     }
 }
 
-/// The RBJ Audio EQ Cookbook's bilinear-transform designs, normalized by `a0`.
-pub fn design(shape: Shape, cutoff: f64, q: f64, gain_db: f64, sr: f64) -> Coeffs {
+/// The RBJ Audio EQ Cookbook's designs, normalized by `a0`; `gain` is a ratio.
+pub fn design(shape: Shape, cutoff: f64, q: f64, gain: f64, sr: f64) -> Coeffs {
     if shape == Shape::OnePole {
         let rc = 1.0 / (2.0 * std::f64::consts::PI * cutoff);
         let dt = 1.0 / sr;
@@ -85,7 +95,7 @@ pub fn design(shape: Shape, cutoff: f64, q: f64, gain_db: f64, sr: f64) -> Coeff
     let cs = w0.cos();
     let sn = w0.sin();
     let alpha = sn / (2.0 * q);
-    let a = 10f64.powf(gain_db / 40.0);
+    let a = gain.sqrt();
     let sqrt_a = a.sqrt();
 
     let (b0, b1, b2, a0, a1, a2) = match shape {

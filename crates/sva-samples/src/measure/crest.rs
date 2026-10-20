@@ -77,7 +77,7 @@ pub fn analyze(planes: &[&[f64]], sample_rate: f64) -> Crest {
 fn band(planes: &[&[f64]], sample_rate: f64, lo: f64, hi: f64) -> BandCrest {
     let centre = (lo * hi).sqrt();
     let q = centre / (hi - lo);
-    let coeffs = design(Shape::Bandpass, centre, q, 0.0, sample_rate);
+    let coeffs = design(Shape::Bandpass, centre, q, 1.0, sample_rate);
     let settle = settle_secs(centre, q) * sample_rate;
     let len = planes[0].len();
     let skip = (settle.round() as usize).min(len);
