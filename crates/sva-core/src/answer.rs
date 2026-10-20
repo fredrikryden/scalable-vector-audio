@@ -17,6 +17,7 @@ use sva_engine::harmony::inharmonicity::{self, Inharmonicity, Series, Weighted};
 use sva_engine::harmony::tonnetz::{self, Quality, TonalDistance, Triad};
 use sva_engine::harmony::voice_leading::{self, VoiceLeading};
 use sva_engine::modulation::{self, Modulation};
+use sva_engine::partials::{self, Partials};
 use sva_engine::periodicity::{self, Periodicity, Track, Window};
 use sva_engine::pitch as pitch_names;
 use sva_engine::self_similarity::{self, SelfSimilarity};
@@ -644,6 +645,57 @@ fn numbers(values: &[f64]) -> String {
     format!("[{}]", held.join(", "))
 }
 
+/// A knot table both as arrays and as the knots `pwl(t, ...)` takes, `unit` after each value.
+fn knots_json(c: &partials::Curve, unit: &str) -> String {
+    let table: Vec<String> = c
+        .times
+        .iter()
+        .zip(&c.values)
+        .map(|(t, v)| format!("{}s, {}{unit}", num(*t), num(*v)))
+        .collect();
+    format!(
+        "{{ \"times\": {}, \"values\": {}, \"knots\": \"{}\", \"error\": {} }}",
+        numbers(&c.times),
+        numbers(&c.values),
+        table.join(", "),
+        num(c.error)
+    )
+}
+
+fn partial_json(t: &partials::Track) -> String {
+    format!(
+        "\n    {{ \"kind\": \"{}\", \"hz\": {}, \"frequency\": {}, \"amplitude\": {}, \
+         \"phase\": {}, \"flutter_db\": {}, \"coherence\": {}, \"bandwidth_hz\": {}, \
+         \"bound\": {{ \"resolution_hz\": {}, \"resolution_secs\": {}, \"residual_db\": {} }} }}",
+        t.kind.key(),
+        num(t.hz),
+        knots_json(&t.frequency, "hz"),
+        knots_json(&t.amplitude, ""),
+        maybe(t.phase),
+        num(t.flutter_db),
+        num(t.coherence),
+        maybe(t.bandwidth_hz),
+        num(t.resolution_hz),
+        num(t.resolution_secs),
+        maybe(t.residual_db)
+    )
+}
+
+fn partials_json(p: &Partials) -> String {
+    format!(
+        "{{ \"model\": \"{}\", \"frame_secs\": {}, \"window_secs\": {}, \"hop_secs\": {}, \
+         \"floor_db\": {}, \"detected\": {}, \"residual_db\": {}, \"tracks\": {} }}",
+        escape(partials::MODEL),
+        num(p.frame_secs),
+        num(p.window_secs),
+        num(p.hop_secs),
+        num(p.floor_db),
+        p.detected,
+        maybe(p.residual_db),
+        list(&p.tracks, partial_json)
+    )
+}
+
 fn self_similarity_cell_json(c: &self_similarity::Cell) -> String {
     format!(
         "\n    {{ \"t\": {}, \"from\": {}, \"to\": {}, \"chroma\": {}, \"levels_db\": {} }}",
@@ -827,6 +879,7 @@ pub fn value_json(output: &Output, limit: Option<usize>, skim: bool) -> String {
         Output::Periodicity(p) => periodicity_json(p),
         Output::Modulation(m) => modulation_json(m),
         Output::SelfSimilarity(s) => self_similarity_json(s),
+        Output::Partials(p) => partials_json(p),
         Output::Bindings(b) => list(b, binding_json),
         Output::Arguments(a) => list(a, arguments_json),
         Output::Envelope(frames) => list(frames, |f: &EnvelopeFrame| {

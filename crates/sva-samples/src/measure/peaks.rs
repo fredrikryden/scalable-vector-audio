@@ -25,7 +25,7 @@ pub fn peaks(mags: &[f64], bin_hz: f64, max_peaks: usize) -> Vec<Peak> {
 }
 
 /// Loudest first by amplitude: `db` floors.
-fn located(mags: &[f64], bin_hz: f64) -> Vec<(usize, Peak)> {
+pub(crate) fn located(mags: &[f64], bin_hz: f64) -> Vec<(usize, Peak)> {
     let mut found: Vec<(f64, usize, Peak)> = Vec::new();
     for k in 1..mags.len().saturating_sub(1) {
         if mags[k] <= mags[k - 1] || mags[k] < mags[k + 1] || mags[k] <= 0.0 {

@@ -130,6 +130,7 @@ fn analyze_takes_only_the_readings_a_buffer_answers() {
             "loudness",
             "modulation",
             "onsets",
+            "partials",
             "periodicity",
             "pitch",
             "samples",
@@ -564,5 +565,66 @@ fn breathy_speech_reads_its_fundamental_not_its_octave() {
             (median / known - 1.0).abs() < 0.12,
             "{name}: median fundamental {median} Hz, not {known} Hz, over {fundamentals:?}"
         );
+    }
+}
+
+/// What a seed reads off `partials`: every argument it ran with, defaults spelled, and per
+/// track knot tables a node pastes into `pwl` and `pwl_integral`, with the flag, the
+/// measures behind it and the bounds.
+#[test]
+fn partials_prints_its_arguments_and_tracks_a_node_pastes() {
+    let rate = 16_000u32;
+    let path = written("analyze-partials", rate, &[&tone(rate, 440.0, 0.6)]);
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sva-cli"))
+        .args([
+            "analyze",
+            &path.display().to_string(),
+            "--representation",
+            "partials",
+        ])
+        .output()
+        .expect("the binary runs");
+    let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one envelope");
+    let reading = &printed["data"]["representations"]["partials"];
+    assert_eq!(
+        reading["args"],
+        serde_json::json!({
+            "frame": "100ms",
+            "window": "500ms",
+            "hop": "5ms",
+            "floor": "-70db",
+            "peaks": 120
+        }),
+        "{reading}"
+    );
+    let tracks = reading["value"]["tracks"]["items"]
+        .as_array()
+        .expect("a track list");
+    assert_eq!(tracks.len(), 1, "{reading}");
+    let track = &tracks[0];
+    assert_eq!(track["kind"], "tonal");
+    assert!(
+        (track["hz"].as_f64().expect("hz") - 440.0).abs() < 0.01,
+        "{track}"
+    );
+    for (curve, unit) in [("frequency", "hz"), ("amplitude", "")] {
+        let held = &track[curve];
+        let times = held["times"].as_array().expect("times");
+        let values = held["values"].as_array().expect("values");
+        assert_eq!(times.len(), values.len(), "{held}");
+        let knots: Vec<String> = times
+            .iter()
+            .zip(values)
+            .map(|(t, v)| format!("{t}s, {v}{unit}"))
+            .collect();
+        assert_eq!(held["knots"], knots.join(", "), "{held}");
+        assert!(held["error"].as_f64().is_some(), "{held}");
+    }
+    assert!(track["phase"].as_f64().is_some(), "{track}");
+    assert!(track["flutter_db"].as_f64().is_some(), "{track}");
+    assert!(track["coherence"].as_f64().is_some(), "{track}");
+    assert!(track["bandwidth_hz"].is_null(), "{track}");
+    for bound in ["resolution_hz", "resolution_secs", "residual_db"] {
+        assert!(track["bound"][bound].as_f64().is_some(), "{track}");
     }
 }

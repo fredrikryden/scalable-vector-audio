@@ -10,6 +10,7 @@ pub mod ledger;
 pub mod loudness;
 pub mod modulation;
 pub mod onsets;
+pub mod partials;
 pub mod peaks;
 pub mod periodicity;
 pub mod pitch;

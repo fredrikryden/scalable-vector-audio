@@ -7,8 +7,10 @@ use sva_engine::{
     DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB, DEFAULT_FRAME_SECS,
     DEFAULT_LEDGER_DEPTH, DEFAULT_LOUDNESS_WINDOW_SECS, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS,
     DEFAULT_MODULATION_WINDOW_SECS, DEFAULT_NOVELTY_WINDOW_SECS, DEFAULT_OVERSAMPLE,
-    DEFAULT_PERIODICITY_WINDOW_SECS, DEFAULT_SAMPLE_RATE, DEFAULT_SMOOTH_SECS, PSYCHOACOUSTIC_V1,
-    READINGS, Reads, self_similarity::MAX_CELLS, spectrum,
+    DEFAULT_PARTIALS_FLOOR_DB, DEFAULT_PARTIALS_FRAME_SECS, DEFAULT_PARTIALS_HOP_SECS,
+    DEFAULT_PARTIALS_TRACKS, DEFAULT_PARTIALS_WINDOW_SECS, DEFAULT_PERIODICITY_WINDOW_SECS,
+    DEFAULT_SAMPLE_RATE, DEFAULT_SMOOTH_SECS, PSYCHOACOUSTIC_V1, READINGS, Reads,
+    self_similarity::MAX_CELLS, spectrum,
 };
 
 /// Read off the constants the parser itself defaults to, so a printed default cannot drift
@@ -644,16 +646,18 @@ DEFAULTS:
                        Default {DEFAULT_LEDGER_DEPTH}.
   (peaks=<n>)          peaks a `spectrum` keeps, notes a `pitch`, formants a
                        `formants`, stripes and novelty peaks a `self_similarity`
-                       lists per view. Default {DEFAULT_MAX_PEAKS}.
+                       lists per view. Default {DEFAULT_MAX_PEAKS}; `partials`'
+                       own is below.
   alias(oversample=<n>) the multiple `alias` re-renders at to hear what folded.
                        Default {DEFAULT_OVERSAMPLE}.
   (frame=<t>)          the step a framed reading advances by, in seconds.
                        Default {DEFAULT_FRAME_SECS}, except `spectrum`, which sizes
-                       its own transform to the range unless it is set.
+                       its own transform to the range unless it is set, and
+                       `partials`, below.
   (floor=<db>)         the amplitude, as `-40db`, under which a harmonic reading
                        or `self_similarity` drops a partial, and under which
                        `self_similarity` counts a band level as zero.
-                       Default {DEFAULT_FLOOR_DB}db.
+                       Default {DEFAULT_FLOOR_DB}db; `partials`' own is below.
   voice_leading(norm=<l1|l2>) how a voice leading's moves add up. Default l1.
   dissonance(pairs=<n>) the most partial pairs one frame sums before it refuses.
                        Default {DEFAULT_MAX_PAIRS}.
@@ -688,6 +692,21 @@ DEFAULTS:
                        Default {DEFAULT_NOVELTY_WINDOW_SECS}.
   self_similarity(curve=<0|1>) `1` adds every cell's chroma and band levels and
                        each view's matrix. Default 0.
+  partials(frame=<t>)  the Hann frame `partials` finds peaks in, in seconds: two
+                       partials closer than some 2 / frame Hz are one peak.
+                       Default {DEFAULT_PARTIALS_FRAME_SECS}.
+  partials(window=<t>) the span of samples whose frames' power `partials`
+                       averages at each hop before picking peaks, so a noise's
+                       chance peaks average away; a glide crossing a frame's
+                       resolution within it smears, so read one with a window
+                       as short as the frame. Default {DEFAULT_PARTIALS_WINDOW_SECS}.
+  partials(hop=<t>)    how often `partials` reads each track, its knots' finest
+                       spacing. Default {DEFAULT_PARTIALS_HOP_SECS}.
+  partials(floor=<db>) the amplitude under which `partials` picks no peak and
+                       a track reads silent. Default {DEFAULT_PARTIALS_FLOOR_DB}db.
+  partials(peaks=<n>)  the most tracks `partials` keeps, those of most energy;
+                       each costs its own reads of its band, in time and memory.
+                       Default {DEFAULT_PARTIALS_TRACKS}.
   bindings(node=@<path>) the instance whose bindings are read; required. An
                        instance is named exactly as the render spells it; any
                        other spelling refuses, listing its file's instances.

@@ -307,6 +307,19 @@ impl Asked {
             | R::Onsets
             | R::Bindings
             | R::Arguments => Vec::new(),
+            R::Partials {
+                frame_secs,
+                window_secs,
+                hop_secs,
+                floor_db,
+                tracks,
+            } => vec![
+                (Arg::Frame, secs(frame_secs)),
+                (Arg::Window, secs(window_secs)),
+                (Arg::Hop, secs(hop_secs)),
+                (Arg::Floor, db(floor_db)),
+                (Arg::Peaks, count(tracks)),
+            ],
         };
         let buffer = match &self.dest {
             Some(Destination::Alsa { buffer_secs, .. }) => secs(*buffer_secs),
@@ -353,14 +366,16 @@ impl Asked {
                     )));
                 }
             };
-            if *arg == Arg::Frame && (secs * f64::from(rate)).round() < 1.0 {
+            if matches!(arg, Arg::Frame | Arg::Hop) && (secs * f64::from(rate)).round() < 1.0 {
                 return Err(CliError::usage(
                     "query.bad_value",
                     format!(
-                        "`{}(frame={})` is {secs}s, under half a sample at {rate} Hz, and a \
-                         frame steps by whole samples, rounded; ask at least {}s, half a sample",
+                        "`{}({}={})` is {secs}s, under half a sample at {rate} Hz, and a \
+                         {} steps by whole samples, rounded; ask at least {}s, half a sample",
                         self.name,
+                        arg.key(),
                         time.written,
+                        arg.key(),
                         0.5 / f64::from(rate)
                     ),
                 ));
@@ -383,6 +398,7 @@ impl Asked {
                 Arg::Window => given.window = Some(secs),
                 Arg::Cell => given.cell_secs = secs,
                 Arg::Smooth => given.smooth_secs = secs,
+                Arg::Hop => given.hop = Some(secs),
                 _ => unreachable!("only a time argument is held as a time"),
             }
         }
@@ -430,9 +446,9 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
             ));
         };
         match arg {
-            Arg::Peaks => given.peaks = count(raw, key)?,
+            Arg::Peaks => given.peaks = Some(count(raw, key)?),
             Arg::Depth => given.depth = count(raw, key)?,
-            Arg::Frame | Arg::Window | Arg::Cell | Arg::Smooth => {
+            Arg::Frame | Arg::Window | Arg::Cell | Arg::Smooth | Arg::Hop => {
                 times.push((*arg, time(raw, key)?));
             }
             Arg::Oversample => given.oversample = factor(raw)?,
@@ -440,7 +456,7 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
             Arg::Skim => skim = switch(raw, key)?,
             Arg::Node => node = Some(self::node(raw)?),
             Arg::Buffer => buffer = Some(microseconds(raw, key)?),
-            Arg::Floor => given.floor_db = decibels(raw, key)?,
+            Arg::Floor => given.floor_db = Some(decibels(raw, key)?),
             Arg::Norm => given.norm = norm(raw)?,
             Arg::Pairs => given.max_pairs = count(raw, key)?,
             Arg::Curve => given.curve = switch(raw, key)?,

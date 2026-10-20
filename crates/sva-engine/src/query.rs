@@ -6,6 +6,7 @@ use sva_samples::measure::harmony::inharmonicity::Inharmonicity;
 use sva_samples::measure::harmony::tonnetz::TonalDistance;
 use sva_samples::measure::harmony::voice_leading::{Norm, VoiceLeading};
 use sva_samples::measure::modulation::Modulation;
+use sva_samples::measure::partials::Partials;
 use sva_samples::measure::periodicity::Periodicity;
 use sva_samples::measure::self_similarity::SelfSimilarity;
 use sva_samples::{
@@ -39,6 +40,13 @@ pub const DEFAULT_CELL_SECS: f64 = 0.5;
 pub const DEFAULT_SMOOTH_SECS: f64 = 4.0;
 /// The whole width of `self_similarity`'s novelty kernel.
 pub const DEFAULT_NOVELTY_WINDOW_SECS: f64 = 8.0;
+/// A Hann this long parts partials some 20 Hz apart.
+pub const DEFAULT_PARTIALS_FRAME_SECS: f64 = 0.1;
+/// A short note's length, over which a noise's chance peaks average away.
+pub const DEFAULT_PARTIALS_WINDOW_SECS: f64 = 0.5;
+pub const DEFAULT_PARTIALS_HOP_SECS: f64 = 0.005;
+pub const DEFAULT_PARTIALS_FLOOR_DB: f64 = -70.0;
+pub const DEFAULT_PARTIALS_TRACKS: usize = 120;
 
 /// Every named argument a reading may take; the engine reads only those `Given` holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +67,7 @@ pub enum Arg {
     Bpm,
     Cell,
     Smooth,
+    Hop,
 }
 
 impl Arg {
@@ -80,6 +89,7 @@ impl Arg {
             Arg::Bpm => "bpm",
             Arg::Cell => "cell",
             Arg::Smooth => "smooth",
+            Arg::Hop => "hop",
         }
     }
 }
@@ -87,13 +97,15 @@ impl Arg {
 /// The arguments a `Representation` is built from, each at its default until written.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Given {
-    pub peaks: usize,
+    /// `None` until written: each reading then takes its own default.
+    pub peaks: Option<usize>,
     /// `None` until written: `spectrum` then sizes its transform to the range, and every
     /// other framed reading steps by `DEFAULT_FRAME_SECS`.
     pub frame: Option<f64>,
     pub depth: usize,
     pub oversample: u32,
-    pub floor_db: f64,
+    /// `None` until written: each reading then takes its own default.
+    pub floor_db: Option<f64>,
     pub norm: Norm,
     pub max_pairs: usize,
     /// `None` until written: each windowed reading then takes its own default.
@@ -102,16 +114,17 @@ pub struct Given {
     pub bpm: Option<f64>,
     pub cell_secs: f64,
     pub smooth_secs: f64,
+    pub hop: Option<f64>,
 }
 
 impl Default for Given {
     fn default() -> Given {
         Given {
-            peaks: DEFAULT_MAX_PEAKS,
+            peaks: None,
             frame: None,
             depth: DEFAULT_LEDGER_DEPTH,
             oversample: DEFAULT_OVERSAMPLE,
-            floor_db: DEFAULT_FLOOR_DB,
+            floor_db: None,
             norm: Norm::L1,
             max_pairs: DEFAULT_MAX_PAIRS,
             window: None,
@@ -119,6 +132,7 @@ impl Default for Given {
             bpm: None,
             cell_secs: DEFAULT_CELL_SECS,
             smooth_secs: DEFAULT_SMOOTH_SECS,
+            hop: None,
         }
     }
 }
@@ -200,7 +214,7 @@ static SPECTRUM: Reading = Reading {
            anywhere within half a bin of its own: a bound where the frame is stationary \
            sinusoids at the kept peaks",
     build: |g| Representation::Spectrum {
-        max_peaks: g.peaks,
+        max_peaks: g.peaks.unwrap_or(DEFAULT_MAX_PEAKS),
         frame_secs: g.frame,
     },
 };
@@ -252,7 +266,7 @@ static PITCH: Reading = Reading {
            fundamental is read within half a bin of its root's peak, the rate over the samples \
            its Hann spans",
     build: |g| Representation::Pitch {
-        max_notes: g.peaks,
+        max_notes: g.peaks.unwrap_or(DEFAULT_MAX_PEAKS),
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
     },
 };
@@ -266,7 +280,7 @@ static FORMANTS: Reading = Reading {
            of rate, at most 64: a frame or target holding no more samples than its order \
            refuses, and a tail frame reads zero past its end",
     build: |g| Representation::Formants {
-        max_formants: g.peaks,
+        max_formants: g.peaks.unwrap_or(DEFAULT_MAX_PEAKS),
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
     },
 };
@@ -340,7 +354,7 @@ static DISSONANCE: Reading = Reading {
             max_pairs: g.max_pairs,
         },
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
-        floor_db: g.floor_db,
+        floor_db: g.floor_db.unwrap_or(DEFAULT_FLOOR_DB),
     },
 };
 
@@ -353,7 +367,7 @@ static VOICE_LEADING: Reading = Reading {
     build: |g| Representation::Harmony {
         reading: Harmonic::VoiceLeading { norm: g.norm },
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
-        floor_db: g.floor_db,
+        floor_db: g.floor_db.unwrap_or(DEFAULT_FLOOR_DB),
     },
 };
 
@@ -366,7 +380,7 @@ static TONAL_DISTANCE: Reading = Reading {
     build: |g| Representation::Harmony {
         reading: Harmonic::TonalDistance,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
-        floor_db: g.floor_db,
+        floor_db: g.floor_db.unwrap_or(DEFAULT_FLOOR_DB),
     },
 };
 
@@ -380,7 +394,7 @@ static INHARMONICITY: Reading = Reading {
     build: |g| Representation::Harmony {
         reading: Harmonic::Inharmonicity,
         frame_secs: g.frame.unwrap_or(DEFAULT_FRAME_SECS),
-        floor_db: g.floor_db,
+        floor_db: g.floor_db.unwrap_or(DEFAULT_FLOOR_DB),
     },
 };
 
@@ -439,9 +453,27 @@ static SELF_SIMILARITY: Reading = Reading {
         cell_secs: g.cell_secs,
         smooth_secs: g.smooth_secs,
         window_secs: g.window.unwrap_or(DEFAULT_NOVELTY_WINDOW_SECS),
-        floor_db: g.floor_db,
-        listed: g.peaks,
+        floor_db: g.floor_db.unwrap_or(DEFAULT_FLOOR_DB),
+        listed: g.peaks.unwrap_or(DEFAULT_MAX_PEAKS),
         curve: g.curve,
+    },
+};
+
+static PARTIALS: Reading = Reading {
+    name: "partials",
+    takes: &[Arg::Frame, Arg::Window, Arg::Hop, Arg::Floor, Arg::Peaks],
+    reads: Reads::Samples,
+    help: "each partial as a track: its frequency and amplitude as knot tables for `pwl` and \
+           `pwl_integral`, tonal or breathy by its amplitude's flutter and its band's \
+           coherence, each with its resolution and the residual its tables leave; peaks \
+           of `frame` Hann frames' power averaged over `window`, found every `hop` over the \
+           floor, the `peaks` tracks of most energy kept; every channel's samples averaged",
+    build: |g| Representation::Partials {
+        frame_secs: g.frame.unwrap_or(DEFAULT_PARTIALS_FRAME_SECS),
+        window_secs: g.window.unwrap_or(DEFAULT_PARTIALS_WINDOW_SECS),
+        hop_secs: g.hop.unwrap_or(DEFAULT_PARTIALS_HOP_SECS),
+        floor_db: g.floor_db.unwrap_or(DEFAULT_PARTIALS_FLOOR_DB),
+        tracks: g.peaks.unwrap_or(DEFAULT_PARTIALS_TRACKS),
     },
 };
 
@@ -462,7 +494,7 @@ static ARGUMENTS: Reading = Reading {
 };
 
 /// Every reading a caller may ask for, in the order a listing prints them.
-pub static READINGS: [&Reading; 24] = [
+pub static READINGS: [&Reading; 25] = [
     &LINES,
     &ATOMS,
     &SPECTRUM,
@@ -485,6 +517,7 @@ pub static READINGS: [&Reading; 24] = [
     &PERIODICITY,
     &MODULATION,
     &SELF_SIMILARITY,
+    &PARTIALS,
     &BINDINGS,
     &ARGUMENTS,
 ];
@@ -555,6 +588,13 @@ pub enum Representation {
         listed: usize,
         curve: bool,
     },
+    Partials {
+        frame_secs: f64,
+        window_secs: f64,
+        hop_secs: f64,
+        floor_db: f64,
+        tracks: usize,
+    },
     Bindings,
     Arguments,
 }
@@ -599,6 +639,7 @@ pub enum Output {
     Periodicity(Box<Periodicity>),
     Modulation(Box<Modulation>),
     SelfSimilarity(Box<SelfSimilarity>),
+    Partials(Box<Partials>),
     Bindings(Vec<Binding>),
     Arguments(Vec<Arguments>),
 }
@@ -679,6 +720,7 @@ impl Representation {
             Representation::Periodicity { .. } => &PERIODICITY,
             Representation::Modulation { .. } => &MODULATION,
             Representation::SelfSimilarity { .. } => &SELF_SIMILARITY,
+            Representation::Partials { .. } => &PARTIALS,
             Representation::Bindings => &BINDINGS,
             Representation::Arguments => &ARGUMENTS,
         }

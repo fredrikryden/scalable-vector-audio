@@ -4,9 +4,24 @@ use std::f64::consts::TAU;
 
 /// One twiddle table serves every stage.
 pub fn fft(re: &mut [f64], im: &mut [f64]) {
+    fft_with(re, im, &twiddles(re.len()));
+}
+
+/// e^(-2 pi i k / n), k under n / 2: computed once for many transforms of one length.
+pub fn twiddles(n: usize) -> Vec<(f64, f64)> {
+    (0..n / 2)
+        .map(|k| {
+            let angle = -TAU * k as f64 / n as f64;
+            (angle.cos(), angle.sin())
+        })
+        .collect()
+}
+
+pub fn fft_with(re: &mut [f64], im: &mut [f64], twiddle: &[(f64, f64)]) {
     let n = re.len();
     assert_eq!(n, im.len(), "one real and one imaginary plane");
     assert!(n.is_power_of_two(), "radix-2 needs a power-of-two length");
+    assert_eq!(twiddle.len(), n / 2, "the twiddles of this length");
     let mut j = 0usize;
     for i in 1..n {
         let mut bit = n >> 1;
@@ -20,13 +35,6 @@ pub fn fft(re: &mut [f64], im: &mut [f64]) {
             im.swap(i, j);
         }
     }
-
-    let twiddle: Vec<(f64, f64)> = (0..n / 2)
-        .map(|k| {
-            let angle = -TAU * k as f64 / n as f64;
-            (angle.cos(), angle.sin())
-        })
-        .collect();
 
     let mut len = 2;
     while len <= n {
@@ -48,10 +56,14 @@ pub fn fft(re: &mut [f64], im: &mut [f64]) {
 }
 
 pub fn ifft(re: &mut [f64], im: &mut [f64]) {
+    ifft_with(re, im, &twiddles(re.len()));
+}
+
+pub fn ifft_with(re: &mut [f64], im: &mut [f64], twiddle: &[(f64, f64)]) {
     for x in im.iter_mut() {
         *x = -*x;
     }
-    fft(re, im);
+    fft_with(re, im, twiddle);
     let scale = 1.0 / re.len() as f64;
     for x in re.iter_mut() {
         *x *= scale;

@@ -39,8 +39,10 @@ pub use query::{
     Answer, Arg, Ask, Atom, DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB,
     DEFAULT_FRAME_SECS, DEFAULT_LEDGER_DEPTH, DEFAULT_LOUDNESS_WINDOW_SECS, DEFAULT_MAX_PAIRS,
     DEFAULT_MAX_PEAKS, DEFAULT_MODULATION_WINDOW_SECS, DEFAULT_NOVELTY_WINDOW_SECS,
-    DEFAULT_OVERSAMPLE, DEFAULT_PERIODICITY_WINDOW_SECS, DEFAULT_SMOOTH_SECS, Given, Harmonic,
-    Output, READINGS, Reading, Reads, Representation,
+    DEFAULT_OVERSAMPLE, DEFAULT_PARTIALS_FLOOR_DB, DEFAULT_PARTIALS_FRAME_SECS,
+    DEFAULT_PARTIALS_HOP_SECS, DEFAULT_PARTIALS_TRACKS, DEFAULT_PARTIALS_WINDOW_SECS,
+    DEFAULT_PERIODICITY_WINDOW_SECS, DEFAULT_SMOOTH_SECS, Given, Harmonic, Output, READINGS,
+    Reading, Reads, Representation,
 };
 pub use refs::{identity, nodes_in, spectral_sum_of};
 pub use render::until::{Cmp, Term};
@@ -53,7 +55,7 @@ pub use render::{
 pub use schedule::{Order, Schedule, schedule_from};
 pub use sva_formula::{C64, Codomain, Held, Line, NodeId, SpectralSum, Ty, Var};
 pub use sva_samples::measure::{
-    bands, harmony, modulation, periodicity, pitch, self_similarity, sliding, spectrum,
+    bands, harmony, modulation, partials, periodicity, pitch, self_similarity, sliding, spectrum,
 };
 pub use sva_samples::resample;
 pub use sva_samples::{

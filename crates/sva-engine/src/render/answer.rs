@@ -8,7 +8,7 @@ use sva_samples::measure::harmony::{
     self, Framing, Moment, chords, dissonance, inharmonicity, measured as framed, tonnetz,
     voice_leading,
 };
-use sva_samples::measure::{modulation, periodicity, self_similarity, sliding};
+use sva_samples::measure::{modulation, partials, periodicity, self_similarity, sliding};
 use sva_samples::{
     Buffer, Consumes, Extent, Peak, PitchFrame, Profile, Source, measure::bands, measure::crest,
     measure::envelope, measure::formants, measure::loudness, measure::onsets, measure::pitch,
@@ -1049,6 +1049,22 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
             Output::SelfSimilarity(Box::new(
                 self_similarity::measure(&planes, sr, start, asked).map_err(NoReading::Unfit)?,
             ))
+        }
+        Representation::Partials {
+            frame_secs,
+            window_secs,
+            hop_secs,
+            floor_db,
+            tracks,
+        } => {
+            let asked = partials::Asked {
+                frame_secs,
+                window_secs,
+                hop_secs,
+                floor_db,
+                tracks,
+            };
+            Output::Partials(Box::new(partials::measure(&planes, sr, start, asked)))
         }
         _ => return Err(NoReading::NeedsAGraph),
     })

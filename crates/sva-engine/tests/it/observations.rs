@@ -661,6 +661,7 @@ fn one_table_says_what_every_named_reading_consumes() {
         "periodicity",
         "modulation",
         "self_similarity",
+        "partials",
         "bindings",
         "arguments",
     ];
