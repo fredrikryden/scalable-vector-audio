@@ -1,6 +1,8 @@
-// Concern: opens or records a sound, plays and crops it, reads the crop with sva-wasm in a worker | Non-concern: the layout (bench.html), the readings (sva-wasm) | IO: (a file or a share) -> a .json.gz
+// Concern: opens or records a sound, plays and crops it, reads the crop with sva-wasm in a worker, saves both | Non-concern: the layout (bench.html), pruning | IO: (a file or share) -> .json.gz, sound
 
 import { capture } from "./capture.js";
+import { pruned } from "./prune.js";
+import { wav } from "./wav.js";
 import { clamped, panned, pinched, revealed, showing, visible, zoomed } from "./view.js";
 
 const RATE = 48000;
@@ -47,13 +49,13 @@ async function worker() {
     postMessage({ run, done: true });
   };
   const sampled = readings().filter((r) => (r.reads === "samples" || r.reads === "either") && !RAW.has(r.name));
-  postMessage({ readings: sampled.map((r) => ({ name: r.name, window: r.takes.includes("window"), prune: r.takes.includes("prune") })) });
+  postMessage({ readings: sampled.map((r) => ({ name: r.name, window: r.takes.includes("window") })) });
 }
 
 function page() {
   const $ = (id) => document.getElementById(id);
   const canvas = $("wave");
-  const state = { selection: matchMedia("(pointer: coarse)").matches ? null : { start: 0, end: 0 }, run: 0, audio: null, file: "", by: "", peaks: null, readings: null, results: new Map(), calls: null, pruned: new Map(), crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
+  const state = { selection: matchMedia("(pointer: coarse)").matches ? null : { start: 0, end: 0 }, run: 0, audio: null, file: "", original: null, by: "", peaks: null, readings: null, results: new Map(), calls: null, crop: null, playing: null, anchor: null, scrub: null, hover: null, view: { from: 0, span: 1 } };
   let context = null;
 
   function failed(error) {
@@ -477,7 +479,7 @@ function page() {
       if (ticket === opening) loaded(file.name, null, "", `${file.name} does not decode in this browser: ${error.message}`);
       return;
     }
-    if (ticket === opening) loaded(file.name, audio, "decodeAudioData, which resamples to the AudioContext's rate; the file's own rate is not read");
+    if (ticket === opening) loaded(file.name, audio, "decodeAudioData, which resamples to the AudioContext's rate; the file's own rate is not read", "", file);
   }
 
   // Null when idle, "asking" while the picker is open, then the capture until it is stopped. Opening a file waits for it.
@@ -508,7 +510,7 @@ function page() {
     $("file").disabled = false;
     $("record").textContent = "Record";
     $("file").value = "";
-    const name = `recording-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}`;
+    const name = `recording-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}.wav`;
     if (!planes[0]?.length) return loaded(name, null, "", "Nothing was recorded.");
     const span = audible(planes);
     if (!span) return loaded(name, null, "", `The recording is silent: nothing rose above ${FLOOR_DB} dBFS.`);
@@ -540,14 +542,14 @@ function page() {
     return [Math.max(0, first - margin), Math.min(planes[0].length, last + 1 + margin)];
   }
 
-  // A sound that did not open leaves none open and says why; a failure of the page itself stays shown.
-  function loaded(file, audio, by, failure = "") {
+  // A sound that did not open leaves none open and says why; a failure of the page itself stays shown. A recording has no `original`: it saves as a wav.
+  function loaded(file, audio, by, failure = "", original = null) {
     const fatal = document.body.dataset.state === "failed";
     if (!fatal) $("failure").textContent = failure;
     state.run += 1;
     cancelAnimationFrame(coast);
     coast = null;
-    Object.assign(state, { audio, file, by, crop: null, selection: framed() ? null : { start: 0, end: 0 }, peaks: null, results: new Map(), calls: null });
+    Object.assign(state, { audio, file, original, by, crop: null, selection: framed() ? null : { start: 0, end: 0 }, peaks: null, results: new Map(), calls: null });
     if (audio) viewed({ from: 0, span: Infinity });
     $("download").disabled = true;
     shown();
@@ -563,16 +565,7 @@ function page() {
     const [start, end] = cropped();
     const length = secs(end - start);
     const call = (r, args) => (args.length ? `${r.name}(${args.join(", ")})` : r.name);
-    state.calls = [];
-    state.pruned = new Map();
-    for (const r of state.readings) {
-      const args = r.window ? [`window=${length}s`] : [];
-      state.calls.push(call(r, args));
-      if (r.prune) {
-        state.calls.push(call(r, [...args, "prune=1"]));
-        state.pruned.set(call(r, args), call(r, [...args, "prune=1"]));
-      }
-    }
+    state.calls = state.readings.map((r) => call(r, r.window ? [`window=${length}s`] : []));
     state.results = new Map();
     state.run += 1;
     state.crop = { start, end };
@@ -614,8 +607,10 @@ function page() {
     }
   }
 
+  const prunable = () => state.results.get("bands")?.data;
+
   $("download").addEventListener("click", () => {
-    if (!state.pruned.size) return saved(false);
+    if (!prunable()) return saved(false);
     $("save").returnValue = "";
     $("save").showModal();
   });
@@ -624,13 +619,17 @@ function page() {
     if (["pruned", "full"].includes($("save").returnValue)) saved($("save").returnValue === "pruned");
   });
 
-  // Each reading that prunes is saved once: its pruned call, or the full one it stands for.
-  function saved(pruned) {
-    const left = new Set(pruned ? state.pruned.keys() : state.pruned.values());
+  // The readings, `bands` pruned if asked, then the sound as it was opened, or a recording as a wav.
+  function saved(prune) {
     const readings = {};
-    for (const call of state.calls.filter((c) => !left.has(c))) {
+    for (const call of state.calls) {
       const held = state.results.get(call);
-      readings[call] = held.refusal ? { refusal: held.refusal } : { ...held.data, representations: printed(held.data.representations) };
+      if (held.refusal) {
+        readings[call] = { refusal: held.refusal };
+        continue;
+      }
+      const representations = prune && call === "bands" ? { bands: { ...held.data.representations.bands, value: pruned(held.data.representations.bands.value) } } : held.data.representations;
+      readings[call] = { ...held.data, representations: printed(representations) };
     }
     const output = {
       printed: PRINTED,
@@ -639,13 +638,17 @@ function page() {
       crop: { start_secs: secs(state.crop.start), end_secs: secs(state.crop.end), samples: state.crop.end - state.crop.start },
       readings,
     };
-    const gzipped = new Blob([JSON.stringify(output)]).stream().pipeThrough(new CompressionStream("gzip"));
-    new Response(gzipped).blob().then((bytes) => {
+    const offered = (bytes, name) => {
       const link = document.createElement("a");
-      link.href = URL.createObjectURL(new Blob([bytes], { type: "application/gzip" }));
-      link.download = `${state.file.replace(/\.[^.]*$/, "")}-${fixed(secs(state.crop.start))}-${fixed(secs(state.crop.end))}s${pruned ? "-pruned" : ""}.json.gz`;
+      link.href = URL.createObjectURL(bytes);
+      link.download = name;
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 0);
+    };
+    const gzipped = new Blob([JSON.stringify(output)]).stream().pipeThrough(new CompressionStream("gzip"));
+    new Response(gzipped).blob().then((bytes) => {
+      offered(new Blob([bytes], { type: "application/gzip" }), `${state.file.replace(/\.[^.]*$/, "")}-${fixed(secs(state.crop.start))}-${fixed(secs(state.crop.end))}s${prune ? "-pruned" : ""}.json.gz`);
+      offered(state.original ?? wav(state.audio), state.file);
     }, failed);
   }
 }

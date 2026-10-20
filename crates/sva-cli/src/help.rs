@@ -4,11 +4,11 @@ use sva_core::DEFAULT_STORE_BYTES;
 use sva_core::solve;
 use sva_engine::resample;
 use sva_engine::{
-    DEFAULT_BAND_FLOOR_DB, DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB,
-    DEFAULT_FRAME_SECS, DEFAULT_LEDGER_DEPTH, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS,
-    DEFAULT_MODULATION_WINDOW_SECS, DEFAULT_NOVELTY_WINDOW_SECS, DEFAULT_OVERSAMPLE,
-    DEFAULT_PERIODICITY_WINDOW_SECS, DEFAULT_PRUNE_DB, DEFAULT_SAMPLE_RATE, DEFAULT_SMOOTH_SECS,
-    PSYCHOACOUSTIC_V1, READINGS, Reads, self_similarity::MAX_CELLS, spectrum,
+    DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB, DEFAULT_FRAME_SECS,
+    DEFAULT_LEDGER_DEPTH, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS, DEFAULT_MODULATION_WINDOW_SECS,
+    DEFAULT_NOVELTY_WINDOW_SECS, DEFAULT_OVERSAMPLE, DEFAULT_PERIODICITY_WINDOW_SECS,
+    DEFAULT_SAMPLE_RATE, DEFAULT_SMOOTH_SECS, PSYCHOACOUSTIC_V1, READINGS, Reads,
+    self_similarity::MAX_CELLS, spectrum,
 };
 
 /// Read off the constants the parser itself defaults to, so a printed default cannot drift
@@ -27,6 +27,10 @@ pub fn help_text() -> String {
     );
     let (passband, stopband) = (resample::PASSBAND, resample::STOPBAND);
     let bound = format!("{} dB", 20.0 * resample::BOUND.log10());
+    let formats = crate::recording::READS
+        .map(|e| format!("`.{e}`"))
+        .join(", ");
+    let unreadable = crate::recording::UNREADABLE;
     format!(
         r#"USAGE:
   sva-cli (render | analyze | solve | lint | trace | builtins | outline | new) [arguments]
@@ -150,10 +154,10 @@ RENDER:
   `"peaks": 16, "frame": "50ms"`), a default written out and a `spectrum`
   frame left to fit the range as the frame it fitted. Null is an argument that
   did not apply: a frame read exactly off the math, `modulation`'s unwritten
-  `bpm`, `bands`' `floor` unpruned, `samples`' `buffer` with no device. Its
-  `args` written back as `name(key=value, ...)`, nulls left out, ask the same
-  reading. It states its `source` (exact or measured), the conformance profile
-  it ran under, and its rate; `analyze` prints the same.
+  `bpm`, `samples`' `buffer` with no device. Its `args` written back as
+  `name(key=value, ...)`, nulls left out, ask the same reading. It states its
+  `source` (exact or measured), the conformance profile it ran under, and its
+  rate; `analyze` prints the same.
 
   The target's own ref may read an interval: `@piano4([0, 2b], f0=C4,
   vel=0.5, release=1s)`, where `release` is the instrument's own parameter. Its ends are the language's literals (`s`, `ms`, `b`,
@@ -165,17 +169,19 @@ RENDER:
   a `crop`. A target that samples its one ref read, `sample(@piano4([0, 2b],
   f0=C4))`, reads that ref's interval and binds and the same node values.
 
-  `sample("<path>")` is a recording: a `.wav` file, relative to the directory
-  sva-cli runs in or absolute; keep it outside the composition, where it would
-  be read as a node. It is the file's samples at the render's rate, one
-  component per channel as `join` makes them, silent outside the file's span. At
-  its own rate every sample passes unchanged. At another a cos^16-windowed sinc
-  reads it: a tone up to {passband} of the lower rate reads within {bound} of
-  itself, and one from {stopband} of it at most {bound} of its level, a bound
-  proven for the kernel that the label states under `resampled` beside the rate
-  it came from. The path is the language's one string, in double quotes and
-  only as `sample`'s one argument; one naming no file refuses as `not_found`. A
-  store keys a recording by its samples and rate, never its path.
+  `sample("<path>")` is a recording: a file relative to the directory sva-cli
+  runs in, or absolute, read as `analyze` reads one (ANALYZE); keep it outside
+  the composition, where it would be read as a node. It is the file's samples
+  at the render's rate, one component per channel as `join` makes them, silent
+  outside the file's span. At its own rate every sample passes unchanged. At
+  another a cos^16-windowed sinc reads it: a tone up to {passband} of the lower
+  rate reads within {bound} of itself, and one from {stopband} of it at most
+  {bound} of its level, a bound proven for the kernel that the label states
+  under `resampled` beside the rate it came from. The path is the language's
+  one string, in double quotes and only as `sample`'s one argument; one naming
+  no file refuses as `not_found`, and one `analyze` cannot read as
+  `{unreadable}`. A store keys a recording by its samples and rate, never its
+  path.
 
   Every node is computed over its support met with what reads it, and nowhere
   else: outside its support a node is exactly zero. A closed interval renders
@@ -372,23 +378,23 @@ SOLVE:
   reading with one set of arguments subtract to a residual vector:
 {rules}
   A level is floored at {floor} dB before it subtracts. A residual inside both
-  sides' stated bounds counts as zero; of these readings only `onsets` and
-  pruned `bands` state one. Then `norm(v)` (the root of the sum of squares),
-  `sum(v)`, `max(v)`, `abs(x)` (each value's magnitude), `dot([w1, w2, ...], v)`
-  (one literal weight per value), numbers, `+`, `-`, `*` and `/` make one
-  number. A reading left unsubtracted, a vector left unreduced and a leaf of
-  any other reading refuse before anything renders. In a node, `repr` and
-  `load_json` are names the language does not know and refuse as any such
-  name does, with a help naming `solve`.
+  sides' stated bounds counts as zero; of these readings only `onsets` states
+  one. Then `norm(v)` (the root of the sum of squares), `sum(v)`, `max(v)`,
+  `abs(x)` (each value's magnitude), `dot([w1, w2, ...], v)` (one literal
+  weight per value), numbers, `+`, `-`, `*` and `/` make one number. A reading
+  left unsubtracted, a vector left unreduced and a leaf of any other reading
+  refuse before anything renders. In a node, `repr` and `load_json` are names
+  the language does not know and refuse as any such name does, with a help
+  naming `solve`.
 
   `load_json("<file>", "<jq path>")` is a leaf read off a JSON file instead of
   a render: plain JSON, so a `.json.gz` is unpacked first (`gunzip -k`). The
   path is relative to the directory sva-cli runs in, or absolute, as
   `sample("<path>")`'s is. The jq path is steps only, none of jq's filters:
   `.name`, `[3]`, and a key that is not a plain name in single quotes,
-  `['bands(prune=1)']`, so it needs no escaping in the cost's double quotes:
-  `load_json("../crop.json", ".readings['periodicity(window=5.08s)']")`. A
-  number there loads as a number and a list of numbers as a vector, both
+  `['envelope(frame=10ms)']`, so it needs no escaping in the cost's double
+  quotes: `load_json("../crop.json", ".readings['periodicity(window=5.08s)']")`.
+  A number there loads as a number and a list of numbers as a vector, both
   usable as weights and in reducers. An object loads only as the other side of
   a subtraction from a `repr.` leaf, and is a reading as `analyze` prints its
   `data` (the object holding `interval` and `representations`): from a bench
@@ -411,8 +417,8 @@ SOLVE:
   node lives under `fits/`, and `lint` reads nothing there. `--vary` and the
   other flags stay on the command line:
     ; Models: the lead's bands against the bench crop | Neglects: pitch | IO: (cutoff) -> cost | Tags: fit
-    norm(repr.bands(@lead([0, 5.083291666666667s]), prune=1)
-         - load_json("../crop.json", ".readings['bands(prune=1)']"))
+    norm(repr.bands(@lead([0, 5.083291666666667s]))
+         - load_json("../crop.json", ".readings.bands"))
 
   `--vary <name>=<lo>..<hi>[/<step>][,log]`, once per variable, names a file
   `variables/<name>` holding one number and the box it moves in, both bounds in
@@ -462,13 +468,21 @@ SOLVE:
   far.
 
 ANALYZE:
-  sva-cli analyze <file.wav> --representation <list> [--confirm]
+  sva-cli analyze <file> --representation <list> [--confirm]
 
-  Runs the same readings over a whole external `.wav` at its own rate, never
-  resampled. Only the readings a buffer answers alone apply, each listed under
-  REPRESENTATIONS as `measured` or `exact off a closed form, measured off
-  samples`; the rest need the graph behind it. Each reading states its
-  `representation` and `args` as `render`'s do, a time in seconds.
+  Runs the same readings over a whole recording at its own rate, never
+  resampled. It reads these formats:
+    {formats}
+  `.wav` is read exactly as written; the rest decode in sva-cli itself, an
+  MP4's encoder delay and padding trimmed as its edit list states (a bare
+  `.aac` keeps them). A lossy decode may differ slightly from a browser's
+  decoding of the same file, so its readings may differ slightly from a page's
+  readings of it. Any other format, or a file that does not decode, refuses
+  as `{unreadable}`, naming the formats it reads. Only the readings a
+  buffer answers alone apply, each listed under REPRESENTATIONS as `measured` or
+  `exact off a closed form, measured off samples`; the rest need the graph
+  behind it. Each reading states its `representation` and `args` as
+  `render`'s do, a time in seconds.
 
 LINT:
   sva-cli lint ['<expression>'] [--format <json|text>]
@@ -631,11 +645,6 @@ DEFAULTS:
                        or `self_similarity` drops a partial, and under which
                        `self_similarity` counts a band level as zero.
                        Default {DEFAULT_FLOOR_DB}db.
-  bands(prune=<0|1|db>) the level, as `0.5db`, each band's knots stay within
-                       of its track at every source sample; `1` is
-                       {DEFAULT_PRUNE_DB}db. Default 0: every band's 2 kHz track.
-  bands(floor=<db>)    under each band's peak, as `-80db`, where a pruned track
-                       is cut. Default {DEFAULT_BAND_FLOOR_DB}db.
   voice_leading(norm=<l1|l2>) how a voice leading's moves add up. Default l1.
   dissonance(pairs=<n>) the most partial pairs one frame sums before it refuses.
                        Default {DEFAULT_MAX_PAIRS}.

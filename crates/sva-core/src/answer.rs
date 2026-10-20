@@ -6,8 +6,8 @@ use sva_engine::{
     Alias, AliasBand, Answer, Arguments, BandCrest, BandTrack, Bands, Binding, Boot, BootPhase,
     Buffer, CacheStats, Counters, Crest, CuttingBelowSilenceThreshold, Detail, EngineStats,
     EnvelopeFrame, FormantFrame, Kind, Label, LedgerEntry, Loudness, LoudnessFrame, Onsets,
-    Outcome, Output, PayloadKind, Phase, PrunedBand, PrunedBands, Source, SpectralSum, Spectrum,
-    StereoFrame, StereoImage, Work, Worked,
+    Outcome, Output, PayloadKind, Phase, Source, SpectralSum, Spectrum, StereoFrame, StereoImage,
+    Work, Worked,
 };
 
 use sva_engine::harmony::Framing;
@@ -162,52 +162,6 @@ fn bands_json(b: &Bands, limit: Option<usize>) -> String {
         num(b.rate_hz),
         num(b.start_secs),
         list(&b.bands, |band| band_json(
-            band,
-            b.start_secs,
-            b.rate_hz,
-            limit
-        ))
-    )
-}
-
-fn pruned_band_json(b: &PrunedBand, start_secs: f64, rate_hz: f64, limit: Option<usize>) -> String {
-    let shown = limit.map_or(b.knots.len(), |cap| b.knots.len().min(cap));
-    format!(
-        "\n    {{ \"centre_hz\": {}, \"cam\": {}, \"erb_hz\": {}, \"q\": {}, \"peak\": {}, \
-         \"time_to_peak_secs\": {}, \"rise_10_90_secs\": {}, \
-         \"floor\": {{ \"peak\": {}, \"time_to_peak_secs\": {}, \"rise_10_90_secs\": {} }}, \
-         \"floor_db\": {}, \"max_error_db\": {}, \"knots\": {} }}",
-        num(b.centre_hz),
-        num(b.cam),
-        num(b.erb_hz),
-        num(b.q),
-        num(b.peak),
-        maybe(b.time_to_peak_secs),
-        maybe(b.rise_10_90_secs),
-        num(b.floor.peak),
-        num(b.floor.time_to_peak_secs),
-        maybe(b.floor.rise_10_90_secs),
-        maybe(b.floor_db),
-        num(b.max_error_db),
-        capped(
-            &b.knots,
-            shown,
-            |n| start_secs + b.knots[n].0 as f64 / rate_hz,
-            |(at, db)| format!("[{at}, {}]", num(*db)),
-        )
-    )
-}
-
-fn pruned_bands_json(b: &PrunedBands, limit: Option<usize>) -> String {
-    format!(
-        "{{ \"model\": \"{}\", \"rate_hz\": {}, \"start_secs\": {}, \"eps_db\": {}, \
-         \"floor_db\": {}, \"bands\": {} }}",
-        escape(sva_engine::bands::PRUNED_MODEL),
-        num(b.rate_hz),
-        num(b.start_secs),
-        num(b.prune.eps_db),
-        num(b.prune.floor_db),
-        list(&b.bands, |band| pruned_band_json(
             band,
             b.start_secs,
             b.rate_hz,
@@ -859,7 +813,6 @@ pub fn value_json(output: &Output, limit: Option<usize>, skim: bool) -> String {
         Output::Spectrum(s) => spectrum_json(s),
         Output::Stereo(image) => stereo_json(image),
         Output::Bands(b) => bands_json(b, limit),
-        Output::PrunedBands(b) => pruned_bands_json(b, limit),
         Output::Loudness(l) => loudness_json(l, limit),
         Output::Crest(c) => crest_json(c),
         Output::Onsets(o) => onsets_json(o),

@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn each_argument_mistake_answers_its_own_code_naming_the_text() {
         let render = |tail: &[&'static str]| [&["render", "@a"][..], tail].concat();
-        let cases: [(Vec<&str>, &str, &str); 15] = [
+        let cases: [(Vec<&str>, &str, &str); 14] = [
             (
                 render(&["--representation", "spectre"]),
                 "query.unknown_representation",
@@ -327,11 +327,6 @@ mod tests {
                 vec!["analyze", "/tmp/a.wav", "--representation", "ledger"],
                 "query.not_analyzable",
                 "`ledger`",
-            ),
-            (
-                vec!["analyze", "/tmp/a.flac", "--representation", "bands"],
-                "analyze.not_wav",
-                "`/tmp/a.flac`",
             ),
         ];
         for (parts, code, text) in cases {
@@ -806,35 +801,6 @@ mod tests {
             "--representation",
             "self_similarity(smooth=x)",
         ]);
-    }
-
-    #[test]
-    fn bands_prunes_at_one_db_or_the_level_written_and_cuts_only_a_pruned_track() {
-        let bands = |call: &str| {
-            rendered(&["render", "@a", "--representation", call]).asked[0]
-                .representation(sva_engine::DEFAULT_SAMPLE_RATE, None)
-                .unwrap()
-        };
-        let pruned = |eps_db, floor_db| sva_engine::Representation::Bands {
-            prune: Some(sva_engine::Prune { eps_db, floor_db }),
-        };
-        let none = sva_engine::Representation::Bands { prune: None };
-        assert_eq!(bands("bands"), none);
-        assert_eq!(bands("bands(prune=0)"), none);
-        assert_eq!(bands("bands(prune=1)"), pruned(1.0, -80.0));
-        assert_eq!(
-            bands("bands(prune=0.25db, floor=-60db)"),
-            pruned(0.25, -60.0)
-        );
-        for call in [
-            "bands(floor=-60db)",
-            "bands(prune=1, floor=0db)",
-            "bands(prune=0.1)",
-            "bands(prune=-1db)",
-            "bands(prune=0.0000001db)",
-        ] {
-            refused(&["render", "@a", "--representation", call]);
-        }
     }
 
     #[test]

@@ -1,4 +1,4 @@
-// Concern: exercises `analyze` over a written WAV, the one reading path with no graph behind it | Non-concern: rendering one (render_integration.rs) | IO: (a .wav) -> an Answer or CliError
+// Concern: exercises `analyze` over a recording, the one reading path with no graph behind it | Non-concern: rendering one (render_integration.rs) | IO: (a recording) -> an Answer or CliError
 
 use crate::helpers::{fixture, scratch};
 
@@ -47,7 +47,7 @@ fn onset_times(json: &str) -> Vec<f64> {
 }
 
 fn decoded(path: &std::path::Path) -> Buffer {
-    let (planes, rate) = sva_cli::read_channels(path).expect("a readable wav");
+    let (planes, rate) = sva_cli::read_recording(path).expect("a readable wav");
     Buffer::of_planes(
         rate,
         planes
@@ -109,7 +109,7 @@ fn a_reading_that_needs_a_graph_refuses_off_a_file() {
 
 /// Argv says which readings a file answers at all, before a byte of it is read.
 #[test]
-fn analyze_takes_only_the_readings_a_buffer_answers_and_needs_a_wav() {
+fn analyze_takes_only_the_readings_a_buffer_answers() {
     let answered: Vec<&str> = sva_engine::READINGS
         .iter()
         .filter(|row| row.reads.off_samples(true))
@@ -153,15 +153,6 @@ fn analyze_takes_only_the_readings_a_buffer_answers_and_needs_a_wav() {
             "`{name}` needs a rendered graph"
         );
     }
-    assert!(
-        parse_args(&argv(&[
-            "analyze",
-            "/tmp/a.flac",
-            "--representation",
-            "bands"
-        ]))
-        .is_err()
-    );
 }
 
 /// Two components in, two components read: an interleaved file decodes back to the planes
@@ -520,7 +511,7 @@ fn a_strike_is_an_onset_after_a_swell_before_its_crest_and_at_the_end() {
 #[test]
 fn a_missing_wav_is_not_found() {
     let absent = scratch("absent-wav").join("never-written.wav");
-    let Err(refused) = sva_cli::read_channels(&absent) else {
+    let Err(refused) = sva_cli::read_recording(&absent) else {
         panic!("a wav that was never written cannot be read");
     };
     assert_eq!(refused.code(), "not_found");

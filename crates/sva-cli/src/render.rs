@@ -12,8 +12,9 @@ use crate::args::{AnalyzeArgs, RenderArgs};
 use crate::destination::{Framing, refuse_inside, refuse_replacing, write};
 use crate::device::Hearing;
 use crate::directory::Directory;
+use crate::recording::read_recording;
 use crate::store::wait;
-use crate::wav::{SampleEncoding, read_channels};
+use crate::wav::SampleEncoding;
 use sva_core::success_envelope;
 
 /// Only the nodes the target reaches are read; its interval and `--until` decide its range.
@@ -180,7 +181,7 @@ fn briefed(answer: Answer) -> Answer {
     }
 }
 
-/// The same routing over a decoded external WAV instead of a rendered graph: the file's own
+/// The same routing over a decoded recording instead of a rendered graph: the file's own
 /// rate stands, and it is read whole.
 pub fn analyze(args: &AnalyzeArgs) -> Result<String, CliError> {
     let dir = cwd()?;
@@ -191,7 +192,7 @@ pub fn analyze(args: &AnalyzeArgs) -> Result<String, CliError> {
         }
         refuse_replacing(dest, args.confirm)?;
     }
-    let (planes, rate) = read_channels(&args.path)?;
+    let (planes, rate) = read_recording(&args.path)?;
     let target = args.path.display().to_string();
     let buffer = Buffer::of_planes(
         rate,

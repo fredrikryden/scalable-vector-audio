@@ -36,11 +36,11 @@ pub use cast::Cast;
 pub use error::{BindingFault, Diagnostic, EngineError, Located, REGISTRY};
 pub use meaning::{Meaning, meaning};
 pub use query::{
-    Answer, Arg, Ask, Atom, DEFAULT_BAND_FLOOR_DB, DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS,
-    DEFAULT_FLOOR_DB, DEFAULT_FRAME_SECS, DEFAULT_LEDGER_DEPTH, DEFAULT_MAX_PAIRS,
-    DEFAULT_MAX_PEAKS, DEFAULT_MODULATION_WINDOW_SECS, DEFAULT_NOVELTY_WINDOW_SECS,
-    DEFAULT_OVERSAMPLE, DEFAULT_PERIODICITY_WINDOW_SECS, DEFAULT_PRUNE_DB, DEFAULT_SMOOTH_SECS,
-    Given, Harmonic, Output, READINGS, Reading, Reads, Representation,
+    Answer, Arg, Ask, Atom, DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB,
+    DEFAULT_FRAME_SECS, DEFAULT_LEDGER_DEPTH, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS,
+    DEFAULT_MODULATION_WINDOW_SECS, DEFAULT_NOVELTY_WINDOW_SECS, DEFAULT_OVERSAMPLE,
+    DEFAULT_PERIODICITY_WINDOW_SECS, DEFAULT_SMOOTH_SECS, Given, Harmonic, Output, READINGS,
+    Reading, Reads, Representation,
 };
 pub use refs::{identity, nodes_in, spectral_sum_of};
 pub use render::until::{Cmp, Term};
@@ -59,10 +59,9 @@ pub use sva_samples::resample;
 pub use sva_samples::{
     Alias, AliasBand, BAND_COUNT, BandCrest, BandTrack, Bands, Buffer, Crest,
     CuttingBelowSilenceThreshold, Detail, EnvelopeFrame, Extent, FormantFrame, Frames, IoiBucket,
-    LEAST_PRUNE_DB, Label, LedgerEntry, Loudness, LoudnessFrame, MAX_PINNED_FRAME, Note, Onset,
-    Onsets, PEAK_NOTE, PSYCHOACOUSTIC_V1, PitchFrame, Profile, Prune, PrunedBand, PrunedBands,
-    Resampled, Rule, SignalKind, Source, Spectrum, StereoFrame, StereoImage, fitted_frame,
-    measure_alias, pinned_frame,
+    Label, LedgerEntry, Loudness, LoudnessFrame, MAX_PINNED_FRAME, Note, Onset, Onsets, PEAK_NOTE,
+    PSYCHOACOUSTIC_V1, PitchFrame, Profile, Resampled, Rule, SignalKind, Source, Spectrum,
+    StereoFrame, StereoImage, fitted_frame, measure_alias, pinned_frame,
 };
 pub use threads::default_threads;
 pub use trace::{Traced, Up, trace};

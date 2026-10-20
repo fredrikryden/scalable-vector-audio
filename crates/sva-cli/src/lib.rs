@@ -14,6 +14,7 @@ mod new;
 mod output;
 mod panic;
 mod rates;
+mod recording;
 mod render;
 mod solve;
 mod store;
@@ -35,6 +36,7 @@ pub use lint::{Finding, LintReport, lint};
 pub use new::{FILES, NEXT, Scaffolded, scaffold};
 pub use output::{help_data, lint_data, new_data, trace_data, version_data};
 pub use panic::{Stopped, caught, stopped};
+pub use recording::{READS, read_recording};
 pub use render::{analyze, render};
 pub use solve::solve;
 pub use sva_core::{
@@ -42,7 +44,7 @@ pub use sva_core::{
 };
 pub use terminal::{colored, diagnostics_text};
 pub use trace::{Traceable, trace};
-pub use wav::{SampleEncoding, read_channels, read_wav, write_channels, write_wav};
+pub use wav::{SampleEncoding, write_channels, write_wav};
 
 pub const NAME: &str = "sva-cli";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

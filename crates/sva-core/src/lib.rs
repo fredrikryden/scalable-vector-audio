@@ -31,7 +31,7 @@ pub use output::{
 };
 pub use query::{
     Asked, Call, Destination, RETIRED, Spelled, Taken, asked, asked_all, call, calls, is_wav,
-    retired, seconds, wav_path,
+    retired, seconds,
 };
 pub use set::{overlaid, set};
 pub use song::{as_lane, sung};
@@ -60,6 +60,7 @@ pub use sva_engine::{
 
 pub const ROOT: &str = "master";
 pub const PROBE: &str = "probe";
+pub const RECORDING_UNREADABLE: &str = "recording.unreadable";
 
 pub struct Rendered {
     pub config: RenderConfig,
@@ -162,8 +163,11 @@ fn settle(job: &Job) -> Result<(Graph, RenderConfig, Song), CliError> {
             ))
         })
         .map_err(hinted)?;
-    let parsed = sva_ast::resolve_recordings(&parsed, job.source)
-        .map_err(|unheld| CliError::NotFound(unheld.message()))?;
+    let parsed =
+        sva_ast::resolve_recordings(&parsed, job.source).map_err(|unheld| match unheld.why {
+            None => CliError::NotFound(unheld.message()),
+            Some(_) => CliError::usage(RECORDING_UNREADABLE, unheld.message()),
+        })?;
     define_probe(&mut graph, parsed)?;
     let rate = job.rate.unwrap_or(DEFAULT_SAMPLE_RATE);
     let per_bar = graph.tempo().map(|tempo| tempo.seconds_per_bar());

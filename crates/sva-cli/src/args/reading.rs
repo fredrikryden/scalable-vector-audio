@@ -4,7 +4,7 @@ use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
 use super::{AnalyzeArgs, CacheAt, Command, RenderArgs, value};
-use sva_core::{Asked, Call, CliError, Destination, asked_all, calls, is_wav, wav_path};
+use sva_core::{Asked, Call, CliError, Destination, asked_all, calls, is_wav};
 
 /// What `render` and `analyze` both read: the calls asked for, and `--confirm`.
 #[derive(Default)]
@@ -119,8 +119,8 @@ pub(super) fn render_args(rest: &[String]) -> Result<Command, CliError> {
 pub(super) fn analyze_args(rest: &[String]) -> Result<Command, CliError> {
     let mut it = rest.iter();
     let path = positional(it.next())
-        .ok_or_else(|| CliError::usage("cli.missing_argument", "missing <file.wav>"))?;
-    let path = wav_path(&path)?;
+        .ok_or_else(|| CliError::usage("cli.missing_argument", "missing <file>"))?;
+    let path = std::path::PathBuf::from(path);
     let mut flags = Flags::default();
     while let Some(flag) = it.next() {
         if flags.read(flag, &mut it)? {

@@ -90,7 +90,8 @@ fn a_solve_answers_each_exit_and_each_mistake_its_code() {
     );
     let cost = envelope_cost(&reference);
     let missing = envelope_cost("/nowhere/at/all.wav");
-    let cases: [(Vec<&str>, &str, i32); 10] = [
+    let unread = envelope_cost("/nowhere/at/all.opus");
+    let cases: [(Vec<&str>, &str, i32); 11] = [
         (vec!["solve", &cost, "--vary", "gain=0..1/0.25"], "", 0),
         (
             vec!["solve", &cost, "--vary", "gain=1..0"],
@@ -127,6 +128,11 @@ fn a_solve_answers_each_exit_and_each_mistake_its_code() {
             vec!["solve", &missing, "--vary", "gain=0..1"],
             "io.no_such_path",
             24,
+        ),
+        (
+            vec!["solve", &unread, "--vary", "gain=0..1"],
+            "recording.unreadable",
+            3,
         ),
         (
             vec!["render", "@reads-repr", "--representation", "loudness"],
@@ -471,7 +477,7 @@ fn sample_of_a_path_is_the_recording_at_the_render_rate() {
         "{}",
         String::from_utf8_lossy(&out.stdout)
     );
-    let planes = |path: &str| sva_cli::read_channels(Path::new(path)).expect("a wav").0;
+    let planes = |path: &str| sva_cli::read_recording(Path::new(path)).expect("a wav").0;
     assert_eq!(planes(&reference), planes(&back.display().to_string()));
 
     let out = sva(

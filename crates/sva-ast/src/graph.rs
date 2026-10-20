@@ -506,7 +506,11 @@ pub fn load_beside(
 /// A body or default reading `sample("<path>")` holds the recording the source answers for.
 fn recorded(mut parsed: Parsed, source: &dyn Source) -> Result<Parsed, crate::diag::Diag> {
     let unheld = |e: crate::recording::Unheld| {
-        crate::diag::Diag::new(DiagCode::MissingRecording, ByteSpan::at(0), e.message())
+        let code = match e.why {
+            None => DiagCode::MissingRecording,
+            Some(_) => DiagCode::Io,
+        };
+        crate::diag::Diag::new(code, ByteSpan::at(0), e.message())
     };
     parsed.expr = crate::recording::resolve_recordings(&parsed.expr, source).map_err(unheld)?;
     for (_, value) in &mut parsed.defaults {

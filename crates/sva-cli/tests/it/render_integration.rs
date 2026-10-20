@@ -266,11 +266,7 @@ fn a_bands_rendering_reports_every_bands_own_impulse_floor_beside_it() {
         assert!(json.contains(field), "missing {field}");
     }
 
-    let Output::Bands(bands) = rendered
-        .answer(PROBE, Representation::Bands { prune: None })
-        .unwrap()
-        .value
-    else {
+    let Output::Bands(bands) = rendered.answer(PROBE, Representation::Bands).unwrap().value else {
         panic!("expected bands");
     };
     assert_eq!(bands.bands.len(), sva_engine::BAND_COUNT);
@@ -728,10 +724,7 @@ fn a_capped_reading_names_the_second_its_items_stop_before() {
         "a plane resumes at the sample after the last one shown"
     );
 
-    for representation in [
-        Representation::Bands { prune: None },
-        Representation::Loudness,
-    ] {
+    for representation in [Representation::Bands, Representation::Loudness] {
         let answer = rendered.answer(PROBE, representation).unwrap();
         let json = sva_core::value_json(&answer.value, Some(3), false);
         let resume = at(&json);

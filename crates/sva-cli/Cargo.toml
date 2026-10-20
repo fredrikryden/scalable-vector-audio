@@ -17,6 +17,7 @@ sva-core = { workspace = true }
 sva-engine = { workspace = true }
 sva-formula = { workspace = true }
 hound = "3.5.1"
+symphonia = { version = "0.6.1", default-features = false, features = ["aac", "flac", "isomp4", "mp3", "ogg", "pcm", "vorbis"] }
 signal-hook = "0.3"
 
 [dev-dependencies]

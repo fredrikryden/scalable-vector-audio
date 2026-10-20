@@ -1,7 +1,6 @@
 // Concern: subtracts two readings of one kind into a residual vector, each kind by its stated rule | Non-concern: taking or reducing them | IO: (Output, Output) -> Vec<f64>
 
 use sva_engine::Output;
-use sva_engine::bands::DECIMATED_HZ;
 
 /// Every level is floored here before it subtracts: the profile's silence threshold.
 pub const FLOOR_DB: f64 = -120.0;
@@ -11,7 +10,7 @@ pub const MISSED_ONSET_SECS: f64 = 1.0;
 pub const MISSED_NOTE_CENTS: f64 = 1200.0;
 
 /// One line per rule, as `--help` prints them.
-pub const RULES: [(&str, &str); 8] = [
+pub const RULES: [(&str, &str); 7] = [
     (
         "envelope",
         "frame by frame, each frame's rms in dB, frame k of one side against frame k of the other",
@@ -23,11 +22,6 @@ pub const RULES: [(&str, &str); 8] = [
     (
         "bands",
         "band by band, then frame by frame along each band's 2 kHz track, in dB",
-    ),
-    (
-        "bands(prune=...)",
-        "band by band, each band's knots joined in dB and read at every 2 kHz sample, then \
-         frame by frame; zero within both bands' `max_error_db`, a band with no knots at the floor",
     ),
     (
         "crest",
@@ -92,33 +86,6 @@ fn sets(a: &[f64], b: &[f64], zone: f64, missed: f64) -> Vec<f64> {
     out
 }
 
-/// A pruned band's polyline at every sample `bands` decimates to, from the read's start to its
-/// last knot; between knots it is the line joining them in dB, as the knots were fitted.
-fn polyline(band: &sva_engine::PrunedBand, rate_hz: f64) -> Vec<f64> {
-    let Some(&(last, _)) = band.knots.last() else {
-        return Vec::new();
-    };
-    let step = (rate_hz / DECIMATED_HZ).round().max(1.0);
-    let mut out = Vec::new();
-    let mut at = 0;
-    for k in 0.. {
-        let x = k as f64 * step;
-        if x > last as f64 {
-            break;
-        }
-        while at + 1 < band.knots.len() && (band.knots[at + 1].0 as f64) < x {
-            at += 1;
-        }
-        let (x0, y0) = band.knots[at];
-        let level = match band.knots.get(at + 1) {
-            Some(&(x1, y1)) if x1 > x0 => y0 + (y1 - y0) * (x - x0 as f64) / (x1 - x0) as f64,
-            _ => y0,
-        };
-        out.push(level.max(FLOOR_DB));
-    }
-    out
-}
-
 fn cents(hz: f64) -> f64 {
     1200.0 * hz.log2()
 }
@@ -150,22 +117,6 @@ pub fn residual(a: &Output, b: &Output) -> Option<Vec<f64>> {
                         .map_or_else(Vec::new, |band| band.rms.iter().map(|v| db(*v)).collect())
                 };
                 out.extend(tracks(&track(a), &track(b)));
-            }
-            out
-        }
-        (Output::PrunedBands(a), Output::PrunedBands(b)) => {
-            let mut out = Vec::new();
-            for k in 0..a.bands.len().max(b.bands.len()) {
-                let (x, y) = (a.bands.get(k), b.bands.get(k));
-                let track = |side: Option<&sva_engine::PrunedBand>, rate| {
-                    side.map_or_else(Vec::new, |band| polyline(band, rate))
-                };
-                let zone = x.map_or(0.0, |x| x.max_error_db) + y.map_or(0.0, |y| y.max_error_db);
-                let held = tracks(&track(x, a.rate_hz), &track(y, b.rate_hz));
-                out.extend(
-                    held.into_iter()
-                        .map(|d| d.signum() * (d.abs() - zone).max(0.0)),
-                );
             }
             out
         }

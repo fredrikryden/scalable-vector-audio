@@ -6,8 +6,8 @@ use sva_ast::SpanUnit;
 use sva_ast::score::{Field, Kind, Reading as Folding, Refused, evaluate};
 use sva_engine::harmony::voice_leading::Norm;
 use sva_engine::{
-    Arg, DEFAULT_BUFFER_SECS, DEFAULT_FRAME_SECS, DEFAULT_PRUNE_DB, Given, Harmonic,
-    LEAST_PRUNE_DB, MAX_PINNED_FRAME, READINGS, Reading, Representation, pinned_frame,
+    Arg, DEFAULT_BUFFER_SECS, DEFAULT_FRAME_SECS, Given, Harmonic, MAX_PINNED_FRAME, READINGS,
+    Reading, Representation, pinned_frame,
 };
 
 use crate::cli_error::CliError;
@@ -73,7 +73,7 @@ pub fn retired(name: &str) -> Option<&'static str> {
 }
 
 /// A comma list of calls; a comma inside a call's parentheses separates its arguments, and
-/// one inside an `alsa:` device name, `hw:1,0`, stays in it where no reading follows it.
+/// one in an `alsa:` device name, `hw:1,0`, stays there if no reading follows it.
 pub fn calls(text: &str) -> Result<Vec<Call>, CliError> {
     let mut joined: Vec<String> = Vec::new();
     for one in split_outside(text, ',')? {
@@ -203,8 +203,7 @@ impl Asked {
     /// Every argument the reading takes, in its table's order, as `--representation` spells
     /// it, each as the reading used it: a default written out, an unwritten `spectrum`
     /// frame the one fitted to the range. `None` where none applies: a frame read exactly,
-    /// `modulation`'s unwritten `bpm`, `bands`' unpruned `floor`, `samples`' `buffer` with no
-    /// device.
+    /// `modulation`'s unwritten `bpm`, `samples`' `buffer` with no device.
     pub fn args(
         &self,
         rate: u32,
@@ -249,15 +248,7 @@ impl Asked {
                 frame_secs,
             } => vec![(Arg::Peaks, count(peaks)), (Arg::Frame, secs(frame_secs))],
             R::Stereo { frame_secs } => vec![(Arg::Frame, secs(frame_secs))],
-            R::Bands { prune } => vec![
-                (
-                    Arg::Prune,
-                    Some(prune.map_or(Spelled::Number("0".to_string()), |p| {
-                        Spelled::Text(format!("{}db", p.eps_db))
-                    })),
-                ),
-                (Arg::Floor, prune.and_then(|p| db(p.floor_db))),
-            ],
+            R::Bands => vec![],
             R::Alias { oversample } => vec![(Arg::Oversample, count(oversample as usize))],
             R::Harmony {
                 reading,
@@ -449,16 +440,12 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
             Arg::Skim => skim = switch(raw, key)?,
             Arg::Node => node = Some(self::node(raw)?),
             Arg::Buffer => buffer = Some(microseconds(raw, key)?),
-            Arg::Floor => given.floor_db = Some(decibels(raw, key)?),
-            Arg::Prune => given.prune_db = prune(raw)?,
+            Arg::Floor => given.floor_db = decibels(raw, key)?,
             Arg::Norm => given.norm = norm(raw)?,
             Arg::Pairs => given.max_pairs = count(raw, key)?,
             Arg::Curve => given.curve = switch(raw, key)?,
             Arg::Bpm => given.bpm = Some(tempo(raw, key)?),
         }
-    }
-    if row.takes.contains(&Arg::Prune) {
-        cut(name, given)?;
     }
     if row.takes.contains(&Arg::Node) && node.is_none() {
         return Err(CliError::usage(
@@ -556,16 +543,6 @@ fn unwritten(text: &str, why: &str) -> CliError {
     )
 }
 
-pub fn wav_path(raw: &str) -> Result<PathBuf, CliError> {
-    match is_wav(Path::new(raw)) {
-        true => Ok(PathBuf::from(raw)),
-        false => Err(CliError::usage(
-            "analyze.not_wav",
-            format!("`{raw}` is no `.wav` file; mp3 and every other format are out of scope"),
-        )),
-    }
-}
-
 fn count(raw: &str, key: &str) -> Result<usize, CliError> {
     raw.parse::<usize>().map_err(|_| {
         CliError::usage(
@@ -648,7 +625,7 @@ impl Spelled {
     }
 }
 
-/// Seconds as a time argument reads them: under a second in `ms` where that is exact,
+/// Seconds as a time argument reads them: under a second in `ms` if exact,
 /// `50ms`, else in `s`, `4s`.
 fn spelled_secs(secs: f64) -> String {
     let ms = secs * 1000.0;
@@ -750,54 +727,6 @@ fn decibels(raw: &str, key: &str) -> Result<f64, CliError> {
             "query.bad_value",
             format!("`{key}` needs a level in decibels, as `-40db`, got `{raw}`"),
         )),
-    }
-}
-
-/// `1` prunes within `DEFAULT_PRUNE_DB`, `0` not at all, and a level in dB within that level.
-fn prune(raw: &str) -> Result<Option<f64>, CliError> {
-    match raw {
-        "1" => return Ok(Some(DEFAULT_PRUNE_DB)),
-        "0" => return Ok(None),
-        _ => {}
-    }
-    let malformed = || {
-        CliError::usage(
-            "query.bad_value",
-            format!("`prune` is `1`, `0` or a level over 0db, as `0.5db`, got `{raw}`"),
-        )
-    };
-    match decibels(raw, "prune").map_err(|_| malformed())? {
-        db if db >= LEAST_PRUNE_DB => Ok(Some(db)),
-        db if db <= 0.0 => Err(malformed()),
-        _ => Err(CliError::usage(
-            "query.bad_value",
-            format!(
-                "`prune={raw}` is under {LEAST_PRUNE_DB}db, finer than an f64 holds a level \
-                 of tens of dB, so no error evaluated in one could certify it; ask at least \
-                 {LEAST_PRUNE_DB}db"
-            ),
-        )),
-    }
-}
-
-/// A floor cuts only a pruned track, and only under the peak it is counted from.
-fn cut(name: &str, given: Given) -> Result<(), CliError> {
-    match (given.prune_db, given.floor_db) {
-        (None, Some(_)) => Err(CliError::usage(
-            "query.missing_argument",
-            format!(
-                "`floor` cuts a pruned track, and this `{name}` prunes none; write \
-                 `{name}(prune=1, floor=...)`, or drop `floor`"
-            ),
-        )),
-        (Some(_), Some(db)) if db >= 0.0 => Err(CliError::usage(
-            "query.bad_value",
-            format!(
-                "`{name}(floor=...)` counts down from each band's peak, so it is under \
-                 0db, as `-80db`, got {db}db"
-            ),
-        )),
-        _ => Ok(()),
     }
 }
 

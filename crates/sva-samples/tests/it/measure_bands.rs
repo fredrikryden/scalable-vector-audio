@@ -1,8 +1,6 @@
 // Concern: states what the ERB envelope bank owes a signal passing through it | Non-concern: the discrete spectrum (src/measure/spectrum.rs) | IO: (samples) -> asserted tracks
 
-use sva_samples::measure::bands::{
-    BAND_COUNT, BandTrack, Bands, Prune, analyze, cam, erb_hz, hz_at_cam, pruned,
-};
+use sva_samples::measure::bands::{BAND_COUNT, BandTrack, Bands, analyze, cam, erb_hz, hz_at_cam};
 
 const SR: f64 = 44100.0;
 
@@ -135,72 +133,4 @@ fn a_rate_that_cannot_hold_the_top_bands_reports_the_ones_it_can() {
     let narrow = analyze(&[&[0.0; 64][..]], 8000.0, 0.0);
     assert!(narrow.bands.len() < BAND_COUNT);
     assert!(narrow.bands.iter().all(|b| b.centre_hz < 3600.0));
-}
-
-/// At 2 kHz the unpruned hop is one sample, so its track is every source sample a pruned
-/// band's knots answer for.
-#[test]
-fn a_pruned_band_stays_within_its_bound_of_every_source_sample_and_reports_the_error_it_reached() {
-    let sr = 2000.0;
-    let mut seed = 7u64;
-    let x: Vec<f64> = (0..6000)
-        .map(|i| {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let noise = (seed >> 11) as f64 / (1u64 << 53) as f64 - 0.5;
-            noise * f64::from(u8::from((i / 700) % 2 == 0)) + 0.3 * (i as f64 * 0.31).sin()
-        })
-        .collect();
-    let full = analyze(&[&x[..]], sr, 0.0);
-    assert_eq!(full.rate_hz, sr);
-    let prune = Prune {
-        eps_db: 0.5,
-        floor_db: -30.0,
-    };
-    let cut = pruned(&[&x[..]], sr, 0.0, prune);
-    for (f, p) in full.bands.iter().zip(&cut.bands) {
-        assert_eq!((f.peak, f.time_to_peak_secs), (p.peak, p.time_to_peak_secs));
-        let floor = p.floor_db.expect("every band sounds");
-        assert_eq!(floor, 20.0 * f.peak.log10() + prune.floor_db);
-        assert!(
-            p.knots.len() < x.len(),
-            "{} Hz kept every sample",
-            f.centre_hz
-        );
-        let mut worst = 0f64;
-        for (i, v) in f.rms.iter().enumerate() {
-            let j = p.knots.partition_point(|k| k.0 < i).max(1);
-            let ((a, ya), (b, yb)) = (p.knots[j - 1], p.knots[j]);
-            let line = ya + (yb - ya) * (i - a) as f64 / (b - a) as f64;
-            worst = worst.max((line - (20.0 * v.log10()).max(floor)).abs());
-        }
-        assert!(
-            worst <= prune.eps_db,
-            "{} Hz strayed {worst} dB",
-            f.centre_hz
-        );
-        assert!(
-            (worst - p.max_error_db).abs() < 1e-9,
-            "{} Hz reported {} dB, reached {worst}",
-            f.centre_hz,
-            p.max_error_db
-        );
-    }
-}
-
-#[test]
-fn a_silent_band_prunes_to_no_knot_and_no_floor() {
-    let cut = pruned(
-        &[&[0.0; 512][..]],
-        SR,
-        0.0,
-        Prune {
-            eps_db: 1.0,
-            floor_db: -80.0,
-        },
-    );
-    assert!(
-        cut.bands
-            .iter()
-            .all(|b| b.knots.is_empty() && b.floor_db.is_none())
-    );
 }

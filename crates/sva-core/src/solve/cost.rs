@@ -661,7 +661,7 @@ impl Parser<'_> {
     /// `load_json("<file>", "<jq path>")`.
     fn load(&mut self, start: usize) -> Result<Node, CliError> {
         let wanted = "`load_json` takes a file and a jq path, as `load_json(\"crop.json\", \
-                      \".readings['bands(prune=1)']\")`";
+                      \".readings['envelope(frame=10ms)']\")`";
         self.expect(&TokenKind::LParen, wanted)?;
         let (file, _) = self.path_text(wanted)?;
         self.expect(&TokenKind::Comma, wanted)?;
@@ -676,7 +676,7 @@ impl Parser<'_> {
                 format!(
                     "`{path_text}` is no jq path: {why}; a path is only `.name` steps, `[3]` \
                      indices and `['any key']` for a key that is not a plain name, as \
-                     `.readings['bands(prune=1)']`, and none of jq's filters"
+                     `.readings['envelope(frame=10ms)']`, and none of jq's filters"
                 ),
             )
         })?;
@@ -821,7 +821,7 @@ pub enum Target {
 pub enum Tree {
     Num(f64),
     Weights(Vec<f64>),
-    /// `call` as `--representation` spells it, `bands(prune=1)`.
+    /// `call` as `--representation` spells it, `envelope(frame=10ms)`.
     Repr {
         call: String,
         target: Target,

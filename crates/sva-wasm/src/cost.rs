@@ -14,7 +14,7 @@ export interface Samples {
 }
 /**
  * One node of a solve's cost; each node holds one key. A number, or a weight vector `[1, 0.5]`;
- * a leaf `{ repr: "bands(prune=1)", target: "@lead([0, 5s])" }`, the reading as `render`'s
+ * a leaf `{ repr: "envelope(frame=10ms)", target: "@lead([0, 5s])" }`, the reading as `render`'s
  * representations spell it and its target a render expression or a recording passed whole;
  * `{ value }`, a number, a list of numbers or a reading's `data` as `analyze` answers it,
  * checked against the leaf it subtracts from; `add`, `sub`, `mul` and `div` over two or more,
@@ -39,7 +39,7 @@ export interface SolveVary {
 }
 "#;
 
-const FORMS: &str = "a number, a list of weights `[1, 0.5]`, `{ repr: \"bands(prune=1)\", target: \
+const FORMS: &str = "a number, a list of weights `[1, 0.5]`, `{ repr: \"envelope(frame=10ms)\", target: \
      \"@lead([0, 5s])\" }`, `{ value: <a number, numbers or a reading's data> }`, `{ add: [a, b] }`, \
      `{ sub: [a, b] }`, `{ mul: [a, b] }`, `{ div: [a, b] }`, `{ neg: a }`, `{ norm: v }`, \
      `{ sum: v }`, `{ max: v }`, `{ abs: x }` or `{ dot: [[1, 0.5], v] }`";
@@ -118,7 +118,7 @@ pub(crate) fn tree_of(value: &JsValue, at: &str) -> Result<Tree, JsValue> {
         let call = field(REPR).and_then(JsValue::as_string).ok_or_else(|| {
             bad(
                 &format!("{at}.{REPR}"),
-                "is no reading's call, as `\"bands(prune=1)\"`".to_string(),
+                "is no reading's call, as `\"envelope(frame=10ms)\"`".to_string(),
             )
         })?;
         let target = field("target")

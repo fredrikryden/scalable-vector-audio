@@ -1,4 +1,4 @@
-// Concern: a composition's node texts beside the files a target or cost names: `.wav` recordings, `load_json` texts | Non-concern: decoding a WAV (wav.rs) | IO: (path) -> text, a recording
+// Concern: a composition's node texts beside the files a target or cost names: recordings, `load_json` texts | Non-concern: decoding a recording (recording.rs) | IO: (path) -> text, a recording
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -48,7 +48,7 @@ impl Source for Heard {
             return Ok(Some(Arc::clone(held)));
         }
         let file = self.cwd.join(path);
-        let (planes, rate) = match crate::wav::read_channels(&file) {
+        let (planes, rate) = match crate::recording::read_recording(&file) {
             Ok(read) => read,
             Err(CliError::NotFound(_)) => return Ok(None),
             Err(e) => return Err(e.message()),

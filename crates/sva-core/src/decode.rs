@@ -6,8 +6,7 @@ use sva_engine::pitch::Note;
 use sva_engine::spectrum::{Band, Peak};
 use sva_engine::{
     BandCrest, BandTrack, Bands, Crest, EnvelopeFrame, IoiBucket, Loudness, LoudnessFrame, Onset,
-    Onsets, Output, PEAK_NOTE, PitchFrame, Prune, PrunedBand, PrunedBands, Representation,
-    Spectrum,
+    Onsets, Output, PEAK_NOTE, PitchFrame, Representation, Spectrum,
 };
 
 /// One place in the JSON, so a refusal names the key it stopped at.
@@ -191,50 +190,6 @@ fn bands(at: At) -> Read<Output> {
     })))
 }
 
-fn pruned_bands(at: At) -> Read<Output> {
-    Ok(Output::PrunedBands(Box::new(PrunedBands {
-        rate_hz: field!(at, "rate_hz").num()?,
-        start_secs: field!(at, "start_secs").num()?,
-        prune: Prune {
-            eps_db: field!(at, "eps_db").num()?,
-            floor_db: field!(at, "floor_db").num()?,
-        },
-        bands: field!(at, "bands").items(|b| {
-            Ok(PrunedBand {
-                centre_hz: field!(b, "centre_hz").num()?,
-                cam: field!(b, "cam").num()?,
-                erb_hz: field!(b, "erb_hz").num()?,
-                q: field!(b, "q").num()?,
-                peak: field!(b, "peak").num()?,
-                time_to_peak_secs: field!(b, "time_to_peak_secs").maybe()?,
-                rise_10_90_secs: field!(b, "rise_10_90_secs").maybe()?,
-                floor: floor(field!(b, "floor"))?,
-                floor_db: field!(b, "floor_db").maybe()?,
-                max_error_db: field!(b, "max_error_db").num()?,
-                knots: field!(b, "knots").items(knot)?,
-            })
-        })?,
-    })))
-}
-
-fn knot(at: At) -> Read<(usize, f64)> {
-    match at.value.as_array().map(Vec::as_slice) {
-        Some([index, db]) => {
-            let path = at.path.clone();
-            let index = At { value: index, path }.count()?;
-            Ok((
-                index,
-                At {
-                    value: db,
-                    path: at.path,
-                }
-                .num()?,
-            ))
-        }
-        _ => Err(at.not("a knot `[index, db]`")),
-    }
-}
-
 fn loudness(at: At) -> Read<Output> {
     let frames = |at: At| {
         at.items(|f| {
@@ -308,8 +263,7 @@ pub fn reading(representation: Representation, value: &Value, path: &str) -> Rea
         Representation::Spectrum { .. } => spectrum(at),
         Representation::Envelope { .. } => envelope(at),
         Representation::Pitch { .. } => pitch(at),
-        Representation::Bands { prune: None } => bands(at),
-        Representation::Bands { prune: Some(_) } => pruned_bands(at),
+        Representation::Bands => bands(at),
         Representation::Loudness => loudness(at),
         Representation::Crest => crest(at),
         Representation::Onsets => onsets(at),

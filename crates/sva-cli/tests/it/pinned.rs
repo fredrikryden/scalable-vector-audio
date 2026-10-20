@@ -82,7 +82,7 @@ const PINNED: &str = r#"
 0 pitch refused "read.lines_need_unwindowed_lines"
 0 formants c69ca8d5601c0673
 0 stereo refused "type.width_mismatch"
-0 bands f282165543317084
+0 bands 31daba8b446b9b4b
 0 crest d19e8705213694a2
 0 loudness 9d458582a7d5015c
 0 onsets 8591adf828334d9e
@@ -100,7 +100,7 @@ const PINNED: &str = r#"
 1 pitch refused "read.lines_need_unwindowed_lines"
 1 formants 9c0a740e28863853
 1 stereo refused "type.width_mismatch"
-1 bands dd859154241dbdac
+1 bands eaf0fefee30334f5
 1 crest d0c45ca2c5895ee0
 1 loudness 334a1c882bbca322
 1 onsets 4edc5e2b278c6d64
@@ -118,7 +118,7 @@ const PINNED: &str = r#"
 2 pitch refused "read.no_spectral_sum"
 2 formants da29f8ca00926a93
 2 stereo refused "type.width_mismatch"
-2 bands a6642cac36d47791
+2 bands dd24cfa06877087e
 2 crest 3d7b669b681b4bff
 2 loudness 1978180633eb2812
 2 onsets 1d134e40445adf6d
@@ -136,7 +136,7 @@ const PINNED: &str = r#"
 3 pitch bc6a1749d2e897fa
 3 formants 643383f1c9a0211e
 3 stereo refused "type.width_mismatch"
-3 bands fdfb3fbaba61c2c1
+3 bands 19bc533210ec4bee
 3 crest 730b41a3cb8b4197
 3 loudness 446c16dcd8e3b41d
 3 onsets bc5f8c0bb2b64780
@@ -154,7 +154,7 @@ const PINNED: &str = r#"
 4 pitch 23d8f7fe797d1fdd
 4 formants 3e09b7c0d8137db1
 4 stereo refused "type.width_mismatch"
-4 bands 253a92b77597e2e0
+4 bands 8dbfb0d201fab405
 4 crest 993fdce04a235b38
 4 loudness 38f36754ea3daf9f
 4 onsets 30c23f7db5058c85
@@ -172,7 +172,7 @@ const PINNED: &str = r#"
 5 pitch f5ce71dc646bdde3
 5 formants b1e6df7f68d86101
 5 stereo refused "type.width_mismatch"
-5 bands fcc6995642234e9d
+5 bands 6b167586548aeff8
 5 crest 22091637c552e761
 5 loudness df9a933b71dc654f
 5 onsets 79ee9a65f18ed5e7
@@ -203,7 +203,7 @@ const PINNED: &str = r#"
 6 pitch d901d3bffdcf9347
 6 formants e63e7ca0dc98367a
 6 stereo refused "type.width_mismatch"
-6 bands f53aecf30f1b731e
+6 bands 64c33f4a07b894e9
 6 crest e33bd368de79b61b
 6 loudness 45a4943a1e029c95
 6 onsets ca75dc267e968000
@@ -221,7 +221,7 @@ const PINNED: &str = r#"
 7 pitch refused "read.lines_need_unwindowed_lines"
 7 formants 791aeba77604f5fc
 7 stereo 253d0243cde6d3f1
-7 bands bf7a3b484b955c7c
+7 bands 9dfbc79489ae92a7
 7 crest 1519d39532b67500
 7 loudness 7ed282b028e76da9
 7 onsets f9e35661305846c9
@@ -239,7 +239,7 @@ const PINNED: &str = r#"
 8 pitch a1bb7d37afebe1e6
 8 formants 86e07d828a1ecb90
 8 stereo be4b410523c86ec8
-8 bands e70776ef58cbe0f6
+8 bands 3350bb1fb97145a5
 8 crest 88972155a19a1f8a
 8 loudness 9de3a82615bc2604
 8 onsets 51f50b95db85dea6
@@ -257,7 +257,7 @@ const PINNED: &str = r#"
 9 pitch refused "read.lines_need_unwindowed_lines"
 9 formants 06a381f537a91883
 9 stereo refused "type.width_mismatch"
-9 bands 32adceae93ba5829
+9 bands 6a7ea5058a747528
 9 crest 4f9afb40d9743f97
 9 loudness 9dd07af91a7b9f8f
 9 onsets 3252466726aa0382
@@ -275,7 +275,7 @@ const PINNED: &str = r#"
 10 pitch refused "read.lines_need_unwindowed_lines"
 10 formants 260f058916b5fc84
 10 stereo refused "type.width_mismatch"
-10 bands cb2cedfc8f2fced5
+10 bands e6cff8668ca40a64
 10 crest d4ef22eb0b7406c3
 10 loudness 8f019b20224e1f2b
 10 onsets 31a1ed87ec02eba6
@@ -295,7 +295,7 @@ const PINNED: &str = r#"
 11 pitch ba6b9515a2a23087
 11 formants bef1e458e2e07ab7
 11 stereo refused "type.width_mismatch"
-11 bands 3f79b25654d8f847
+11 bands 454bebdca9c8968c
 11 crest 52cff5a7ddc6a16f
 11 loudness 57cbc72ef803b964
 11 onsets 71fe4202833e1ed8
@@ -314,7 +314,7 @@ const PINNED: &str = r#"
 12 pitch a7d67a2d282a400e
 12 formants 6fd8451367b55901
 12 stereo refused "type.width_mismatch"
-12 bands 98a6d2bff4e6720b
+12 bands 8e7a941f536076e2
 12 crest 957a6a8b36086e5d
 12 loudness 7089b5f34107daff
 12 onsets 6b7b7e25a9172fd8
@@ -333,7 +333,7 @@ const PINNED: &str = r#"
 13 pitch a5d68c6276c001ac
 13 formants 59cd4f12828f164e
 13 stereo refused "type.width_mismatch"
-13 bands 84b2293332e17cac
+13 bands 143bab5e456817e9
 13 crest 84b6249cd8946dd5
 13 loudness 66f7c487262b6f4c
 13 onsets e6f989780d6dc866
@@ -354,7 +354,7 @@ const PINNED: &str = r#"
 14 pitch 79e1e20dc81aa7cf
 14 formants 262a5747f1d4ef9a
 14 stereo refused "type.width_mismatch"
-14 bands 8823b6d1858ce840
+14 bands 1284ba7ee05296f9
 14 crest b6a0116e3a0d48b2
 14 loudness b3ee23a298f89c67
 14 onsets f6f528e1301c1970
@@ -372,7 +372,7 @@ const PINNED: &str = r#"
 15 pitch refused "read.lines_need_unwindowed_lines"
 15 formants 8d09e70266acee51
 15 stereo refused "type.width_mismatch"
-15 bands 56f951adf32cd187
+15 bands a76f482badc1128e
 15 crest c8567555d4d503f3
 15 loudness 2fca583e2138915e
 15 onsets 000ddb63a79e2c23
@@ -394,7 +394,7 @@ const PINNED: &str = r#"
 16 pitch d1a47852cb7531e8
 16 formants a4d1ae946231ee2c
 16 stereo refused "type.width_mismatch"
-16 bands 2a73dc2a1eef7fe1
+16 bands b01f0eecbb30ab2c
 16 crest 3a46431242db5356
 16 loudness b606acf7d400387a
 16 onsets 007a30876cb59a51
