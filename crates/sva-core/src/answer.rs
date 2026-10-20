@@ -5,9 +5,9 @@ use std::path::Path;
 use sva_engine::{
     Alias, AliasBand, Answer, Arguments, BandCrest, BandTrack, Bands, Binding, Boot, BootPhase,
     Buffer, CacheStats, Counters, Crest, CuttingBelowSilenceThreshold, Detail, EngineStats,
-    EnvelopeFrame, FormantFrame, Kind, Label, LedgerEntry, Loudness, LoudnessFrame, Onsets,
-    Outcome, Output, PayloadKind, Phase, Source, SpectralSum, Spectrum, StereoFrame, StereoImage,
-    Work, Worked,
+    EnvelopeFrame, FormantFrame, Kind, Label, LedgerEntry, Loudness, LoudnessFrame, Outcome,
+    Output, PayloadKind, Phase, Source, SpectralSum, Spectrum, StereoFrame, StereoImage, Work,
+    Worked,
 };
 
 use sva_engine::harmony::Framing;
@@ -16,10 +16,13 @@ use sva_engine::harmony::dissonance::{self, Dissonance, Extreme};
 use sva_engine::harmony::inharmonicity::{self, Inharmonicity, Series, Weighted};
 use sva_engine::harmony::tonnetz::{self, Quality, TonalDistance, Triad};
 use sva_engine::harmony::voice_leading::{self, VoiceLeading};
+use sva_engine::loudness_pattern::{self, LoudnessPattern};
 use sva_engine::modulation::{self, Modulation};
+use sva_engine::panel::{self, Axes, Panel};
 use sva_engine::partials::{self, Partials};
 use sva_engine::periodicity::{self, Periodicity, Track, Window};
 use sva_engine::pitch as pitch_names;
+use sva_engine::score::{self, Score};
 use sva_engine::self_similarity::{self, SelfSimilarity};
 use sva_engine::sliding::Stats;
 
@@ -226,21 +229,99 @@ fn crest_json(c: &Crest) -> String {
     )
 }
 
-fn onsets_json(o: &Onsets) -> String {
+fn score_json(s: &Score) -> String {
+    let voice = |v: &score::Voiced| {
+        format!(
+            "\n      {{ \"hz\": {}, \"tone\": \"{}\", \"new\": {}, \"share\": {}, \"db\": {}, \
+             \"bend_cents\": {}, \"coherence\": {}, \"partials\": {} }}",
+            num(v.hz),
+            v.tone.key(),
+            v.new,
+            num(v.share),
+            num(v.db),
+            maybe(v.bend_cents),
+            maybe(v.coherence),
+            list(&v.partials, |p| format!(
+                "{{ \"hz\": {}, \"db\": {}, \"harmonic\": {} }}",
+                num(p.hz),
+                num(p.db),
+                p.harmonic
+            ))
+        )
+    };
+    let event = |e: &score::Event| {
+        format!(
+            "\n    {{ \"at_secs\": {}, \"end_secs\": {}, \"next_secs\": {}, \"kind\": \"{}\", \
+             \"cue\": \"{}\", \"sound\": \"{}\", \"hit\": {}, \"attack_secs\": {}, \
+             \"level_db\": {}, \"period_hz\": {}, \"periodicity\": {}, \"main\": {}, \
+             \"voices\": {} }}",
+            num(e.at_secs),
+            num(e.end_secs),
+            num(e.next_secs),
+            e.kind.key(),
+            e.cue.key(),
+            e.sound.key(),
+            e.hit
+                .map_or_else(|| NONE.to_string(), |h| format!("\"{}\"", h.key())),
+            num(e.attack_secs),
+            num(e.level_db),
+            maybe(e.period.map(|p| p.0)),
+            maybe(e.period.map(|p| p.1)),
+            counted(e.main),
+            list(&e.voices, voice)
+        )
+    };
     format!(
-        "{{ \"onsets\": {}, \"resolution_secs\": {}, \"ioi_histogram\": {} }}",
-        list(&o.onsets, |t| format!(
-            "{{ \"t_secs\": {}, \"strength\": {} }}",
-            num(t.t_secs),
-            num(t.strength)
-        )),
-        num(o.resolution_secs),
-        list(&o.ioi_histogram, |b| format!(
-            "{{ \"lo_secs\": {}, \"hi_secs\": {}, \"count\": {} }}",
-            num(b.lo_secs),
-            num(b.hi_secs),
-            b.count
-        )),
+        "{{ \"model\": \"{}\", \"resolution_secs\": {}, \"events\": {} }}",
+        escape(score::MODEL),
+        num(s.resolution_secs),
+        list(&s.events, event)
+    )
+}
+
+fn loudness_pattern_json(p: &LoudnessPattern) -> String {
+    format!(
+        "{{ \"model\": \"{}\", \"frame_secs\": {}, \"window_secs\": {}, \"spl_db\": {}, \
+         \"threshold_sone\": {}, \"centres_hz\": {}, \"frames\": {} }}",
+        escape(loudness_pattern::MODEL),
+        num(p.frame_secs),
+        num(p.window_secs),
+        num(p.spl_db),
+        num(p.threshold_sone),
+        numbers(&p.centres_hz),
+        list(&p.frames, |f| format!(
+            "\n    {{ \"t_secs\": {}, \"total_sone\": {}, \"specific\": {} }}",
+            num(f.t_secs),
+            num(f.total_sone),
+            numbers(&f.specific)
+        ))
+    )
+}
+
+fn axes_json(a: &Axes) -> String {
+    format!(
+        "\"sharpness_acum\": {}, \"decay_phon_per_sec\": {}, \"beating_phon\": {}, \
+         \"attack_secs\": {}",
+        maybe(a.sharpness_acum),
+        maybe(a.decay_phon_per_sec),
+        maybe(a.beating_phon),
+        maybe(a.attack_secs)
+    )
+}
+
+fn panel_json(p: &Panel) -> String {
+    format!(
+        "{{ \"model\": \"{}\", \"spl_db\": {}, \"whole\": {{ {} }}, \"notes\": {} }}",
+        escape(panel::MODEL),
+        num(p.spl_db),
+        axes_json(&p.whole),
+        list(&p.notes, |n| format!(
+            "\n    {{ \"at_secs\": {}, \"length_secs\": {}, \"pitches_hz\": {}, {} }}",
+            num(n.at_secs),
+            num(n.length_secs),
+            numbers(&n.pitches_hz),
+            axes_json(&n.axes)
+        ))
     )
 }
 
@@ -872,7 +953,7 @@ pub fn value_json(output: &Output, limit: Option<usize>, skim: bool) -> String {
         Output::Bands(b) => bands_json(b, limit),
         Output::Loudness(l) => loudness_json(l, limit),
         Output::Crest(c) => crest_json(c),
-        Output::Onsets(o) => onsets_json(o),
+        Output::Score(s) => score_json(s),
         Output::Alias(a) => alias_json(a),
         Output::Dissonance(d) => dissonance_json(d),
         Output::VoiceLeading(v) => voice_leading_json(v),
@@ -882,6 +963,8 @@ pub fn value_json(output: &Output, limit: Option<usize>, skim: bool) -> String {
         Output::Modulation(m) => modulation_json(m),
         Output::SelfSimilarity(s) => self_similarity_json(s),
         Output::Partials(p) => partials_json(p),
+        Output::LoudnessPattern(p) => loudness_pattern_json(p),
+        Output::Panel(p) => panel_json(p),
         Output::Bindings(b) => list(b, binding_json),
         Output::Arguments(a) => list(a, arguments_json),
         Output::Envelope(frames) => list(frames, |f: &EnvelopeFrame| {

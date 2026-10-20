@@ -26,24 +26,47 @@ fn written(name: &str, rate: u32, planes: &[&[f32]]) -> std::path::PathBuf {
     path
 }
 
-/// The `t_secs` of every item in the answer's own `onsets` collection, in order.
-fn onset_times(json: &str) -> Vec<f64> {
-    let from = json
-        .find("\"onsets\": { \"items\": [")
-        .expect("an onsets collection");
-    let listed = &json[from..];
-    let to = listed.find(']').expect("a closed array");
-    listed[..to]
-        .split("\"t_secs\": ")
-        .skip(1)
-        .map(|tail| {
-            tail.split([',', ' ', '}'])
-                .next()
-                .expect("a number")
-                .parse()
-                .expect("a number")
-        })
+/// `analyze <path> --representation <readings>` as the binary prints it.
+fn printed(path: &std::path::Path, readings: &str) -> serde_json::Value {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sva-cli"))
+        .args([
+            "analyze",
+            &path.display().to_string(),
+            "--representation",
+            readings,
+        ])
+        .output()
+        .expect("the binary runs");
+    serde_json::from_slice(&out.stdout).expect("one envelope")
+}
+
+/// Every event's `at_secs` in the `score` a file reads as, in order.
+fn event_times(path: &std::path::Path) -> Vec<f64> {
+    let read = printed(path, "score");
+    read["data"]["representations"]["score"]["value"]["events"]["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("an event list: {read}"))
+        .iter()
+        .map(|e| e["at_secs"].as_f64().expect("a time"))
         .collect()
+}
+
+/// A 440 Hz strike with a 1.5 ms rise and a `decay` fall, `secs` long, at each of `struck`.
+fn strikes(rate: u32, len_secs: f64, struck: &[f64], (decay, secs): (f64, f64)) -> Vec<f32> {
+    let sr = f64::from(rate);
+    let mut samples = vec![0.0f32; (sr * len_secs) as usize];
+    for at in struck {
+        let from = (at * sr) as usize;
+        for n in 0..(sr * secs) as usize {
+            let t = n as f64 / sr;
+            let shape = (1.0 - (-t / 0.0015).exp()) * (-t / decay).exp();
+            let wave = (std::f64::consts::TAU * 440.0 * t).sin();
+            if let Some(s) = samples.get_mut(from + n) {
+                *s += (0.7 * shape * wave) as f32;
+            }
+        }
+    }
+    samples
 }
 
 fn decoded(path: &std::path::Path) -> Buffer {
@@ -128,12 +151,14 @@ fn analyze_takes_only_the_readings_a_buffer_answers() {
             "formants",
             "inharmonicity",
             "loudness",
+            "loudness_pattern",
             "modulation",
-            "onsets",
+            "panel",
             "partials",
             "periodicity",
             "pitch",
             "samples",
+            "score",
             "self_similarity",
             "spectrum",
             "stereo",
@@ -281,43 +306,22 @@ fn a_frame_past_the_transform_bound_refuses_on_both_paths() {
     assert!(printed.contains("past the"), "{printed}");
 }
 
-/// BRIEF section 9 gates a groove on onsets to 1 ms. A frame says which transient, never
-/// when: the flux names the frame and the samples inside it say where the strike is.
+/// BRIEF section 9 gates a groove on onsets to 1 ms. A hop says which strike, never when:
+/// the novelty names the hop and the samples about it say where the strike rises.
 #[test]
-fn onsets_of_a_grid_land_within_one_millisecond() {
+fn a_scores_events_land_within_one_millisecond_of_a_grid() {
     let rate = 48_000u32;
     let struck = [0.25f64, 0.5, 0.75];
-    let len = (f64::from(rate) * 1.0) as usize;
-    let mut samples = vec![0.0f32; len];
-    for at in struck {
-        let from = (at * f64::from(rate)) as usize;
-        for n in 0..(f64::from(rate) * 0.08) as usize {
-            let t = n as f64 / f64::from(rate);
-            let shape = (1.0 - (-t / 0.0015).exp()) * (-t / 0.02).exp();
-            let wave = (std::f64::consts::TAU * 440.0 * t).sin();
-            if let Some(s) = samples.get_mut(from + n) {
-                *s += (0.7 * shape * wave) as f32;
-            }
-        }
-    }
-    let path = written("onset-grid", rate, &[&samples]);
-
-    let parsed = parse_args(&argv(&[
-        "analyze",
-        &path.display().to_string(),
-        "--representation",
-        "onsets",
-    ]))
-    .expect("an onset request");
-    let sva_cli::Command::Analyze(args) = parsed else {
-        panic!("expected an analyze command");
-    };
-    let json = sva_cli::analyze(&args).expect("an onset reading");
-    let found = onset_times(&json);
+    let path = written(
+        "score-grid",
+        rate,
+        &[&strikes(rate, 1.0, &struck, (0.02, 0.08))],
+    );
+    let found = event_times(&path);
     assert_eq!(
         found.len(),
         struck.len(),
-        "four strikes, four onsets: {found:?}"
+        "three strikes, three events: {found:?}"
     );
     for (heard, wanted) in found.iter().zip(struck) {
         assert!(
@@ -325,78 +329,40 @@ fn onsets_of_a_grid_land_within_one_millisecond() {
             "{heard} is more than a millisecond from {wanted}"
         );
     }
-    let resolution: f64 = json
-        .split("\"resolution_secs\": ")
-        .nth(1)
-        .and_then(|tail| tail.split([',', ' ', '}']).next())
-        .and_then(|n| n.parse().ok())
-        .expect("a resolution");
-    assert!(
-        resolution == 0.002875,
-        "a detector states the hop its flux was read at, not the sample period: {json}"
+    let read = printed(&path, "score");
+    let score = &read["data"]["representations"]["score"];
+    assert_eq!(
+        score["value"]["resolution_secs"], 0.005,
+        "a reader states the hop its novelty was read at, not the sample period: {score}"
     );
-    assert!(
-        json.contains("\"source\": \"measured\""),
-        "a detector's answer is measured, whatever its resolution"
-    );
+    assert_eq!(score["source"], "measured", "{score}");
 
-    let dest = path.with_file_name("onsets.json");
-    let parsed = parse_args(&argv(&[
-        "analyze",
-        &path.display().to_string(),
-        "--representation",
-        &format!("onsets={}", dest.display()),
-    ]))
-    .expect("an onset request");
-    let sva_cli::Command::Analyze(args) = parsed else {
-        panic!("expected an analyze command");
-    };
-    let json = sva_cli::analyze(&args).expect("an onset reading");
-    assert!(
-        json.contains(&format!("\"path\": \"{}\"", dest.display())),
-        "a destination is named in `written`: {json}"
+    let dest = path.with_file_name("score.json");
+    let read = printed(&path, &format!("score={}", dest.display()));
+    assert_eq!(
+        read["data"]["written"]["items"][0]["path"],
+        dest.display().to_string(),
+        "a destination is named in `written`: {read}"
     );
-    assert!(
-        onset_times(&std::fs::read_to_string(&dest).expect("a written reading")).len()
-            == struck.len(),
-        "the reading went to the file the caller named"
-    );
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&dest).expect("a written reading"))
+            .expect("JSON");
+    let events = &file["data"]["representations"]["score"]["value"]["events"];
+    assert_eq!(events["pagination"]["count"], struck.len(), "{file}");
 }
 
-fn onsets_of(path: &std::path::Path) -> Vec<f64> {
-    let parsed = parse_args(&argv(&[
-        "analyze",
-        &path.display().to_string(),
-        "--representation",
-        "onsets",
-    ]))
-    .expect("an onset request");
-    let sva_cli::Command::Analyze(args) = parsed else {
-        panic!("expected an analyze command");
-    };
-    onset_times(&sva_cli::analyze(&args).expect("an onset reading"))
-}
-
-/// A flux detector needs a frame before the one it scores, and the buffer's first frame has
-/// none. A buffer that opens at silence in its first sample and sounds in its first frame
-/// saw the strike that started it, so a silent frame stands before the start.
+/// A novelty needs a frame before the one it scores, and the target's first has none: a
+/// target that opens at silence and sounds in its first frame saw the strike that started it.
 #[test]
-fn a_strike_at_zero_is_an_onset() {
+fn a_strike_at_zero_is_an_event() {
     let rate = 48_000u32;
     let struck = [0.0f64, 0.25, 0.5];
-    let mut samples = vec![0.0f32; (f64::from(rate) * 0.8) as usize];
-    for at in struck {
-        let from = (at * f64::from(rate)) as usize;
-        for n in 0..(f64::from(rate) * 0.08) as usize {
-            let t = n as f64 / f64::from(rate);
-            let shape = (1.0 - (-t / 0.0015).exp()) * (-t / 0.02).exp();
-            let wave = (std::f64::consts::TAU * 440.0 * t).sin();
-            if let Some(s) = samples.get_mut(from + n) {
-                *s += (0.7 * shape * wave) as f32;
-            }
-        }
-    }
-    let found = onsets_of(&written("onset-at-zero", rate, &[&samples]));
+    let path = written(
+        "score-at-zero",
+        rate,
+        &[&strikes(rate, 0.8, &struck, (0.02, 0.08))],
+    );
+    let found = event_times(&path);
     assert_eq!(found.len(), struck.len(), "a strike at zero too: {found:?}");
     for (heard, wanted) in found.iter().zip(struck) {
         assert!(
@@ -406,12 +372,10 @@ fn a_strike_at_zero_is_an_onset() {
     }
 }
 
-/// A window's own leakage moves the magnitudes between frames of a steady tone, and a rise
-/// that small is no strike. The tone swells in over a quarter second so the buffer opens
-/// below the floor: a buffer that opens ON sound reports its own edge, because no reading can
-/// see what came before it, and that edge is what `a_strike_at_zero_is_an_onset` asserts.
+/// A tone swelling in is one note: whatever its window's leakage moves between frames of
+/// it held after is no strike.
 #[test]
-fn a_sustained_tone_has_no_onsets() {
+fn a_held_tone_is_one_event_where_it_starts() {
     let rate = 48_000u32;
     let held: Vec<f32> = (0..(f64::from(rate) * 2.0) as usize)
         .map(|i| {
@@ -420,14 +384,17 @@ fn a_sustained_tone_has_no_onsets() {
             (swell * (std::f64::consts::TAU * 440.0 * t).sin() * 0.5) as f32
         })
         .collect();
-    let found = onsets_of(&written("onset-sustained", rate, &[&held]));
-    assert!(found.is_empty(), "a steady tone strikes nothing: {found:?}");
+    let found = event_times(&written("score-held", rate, &[&held]));
+    assert!(
+        found.len() <= 1 && found.iter().all(|t| *t < 0.25),
+        "a held tone strikes nothing past its start: {found:?}"
+    );
 }
 
-/// The same tone one quarter turn along: nothing about an onset may turn on which phase the
-/// buffer's first sample happens to hold.
+/// The same tone one quarter turn along: no event may come or go, or move past the 1 ms
+/// gate, on which phase the target's first sample happens to hold.
 #[test]
-fn a_sustained_tones_opening_phase_changes_no_onset() {
+fn a_held_tones_opening_phase_changes_no_event() {
     let rate = 48_000u32;
     let at_phase = |quarter: f64| {
         let held: Vec<f32> = (0..(f64::from(rate) * 2.0) as usize)
@@ -437,74 +404,189 @@ fn a_sustained_tones_opening_phase_changes_no_onset() {
                 (swell * (std::f64::consts::TAU * 440.0 * t + quarter).sin() * 0.5) as f32
             })
             .collect();
-        onsets_of(&written("onset-phase", rate, &[&held]))
+        event_times(&written("score-phase", rate, &[&held]))
     };
-    assert_eq!(at_phase(0.0), at_phase(std::f64::consts::FRAC_PI_2));
+    let (zero, quarter) = (at_phase(0.0), at_phase(std::f64::consts::FRAC_PI_2));
+    assert_eq!(zero.len(), quarter.len(), "{zero:?} against {quarter:?}");
+    for (a, b) in zero.iter().zip(&quarter) {
+        assert!((a - b).abs() <= 0.001, "{zero:?} against {quarter:?}");
+    }
 }
 
-/// Strikes a hair past the minimum gap are still separate transients: nothing about one may
-/// fold into its neighbour.
+/// Strikes 80 ms apart, past the 60 ms within which two candidates are one strike, are each
+/// their own event: nothing about one may fold into its neighbour.
 #[test]
-fn strikes_close_to_the_minimum_gap_are_each_their_own_onset() {
+fn strikes_past_the_one_strike_span_are_each_their_own_event() {
     let rate = 44_100u32;
     let gap = 0.08f64;
     let struck: Vec<f64> = (0..12).map(|k| f64::from(k) * gap).collect();
-    let mut samples = vec![0.0f32; (f64::from(rate) * (gap * 12.0 + 0.2)) as usize];
-    for at in &struck {
-        let from = (at * f64::from(rate)) as usize;
-        for n in 0..(f64::from(rate) * 0.06) as usize {
-            let t = n as f64 / f64::from(rate);
-            let shape = (1.0 - (-t / 0.0015).exp()) * (-t / 0.012).exp();
-            let wave = (std::f64::consts::TAU * 440.0 * t).sin();
-            if let Some(s) = samples.get_mut(from + n) {
-                *s += (0.7 * shape * wave) as f32;
-            }
-        }
-    }
-    let found = onsets_of(&written("onset-dense", rate, &[&samples]));
+    let samples = strikes(rate, gap * 12.0 + 0.2, &struck, (0.012, 0.06));
+    let found = event_times(&written("score-dense", rate, &[&samples]));
     assert_eq!(found.len(), struck.len(), "every strike: {found:?}");
 }
 
-/// A strike is where the sound jumps, whatever it does next or stood on: one whose loudest
-/// swing lands 16 ms in, one landing on a swell that climbed to 9 dB under it, and one the
-/// buffer ends 5 ms after are each an onset, where it struck.
+fn keys(value: &serde_json::Value) -> Vec<&str> {
+    let mut held: Vec<&str> = value
+        .as_object()
+        .unwrap_or_else(|| panic!("an object: {value}"))
+        .keys()
+        .map(String::as_str)
+        .collect();
+    held.sort_unstable();
+    held
+}
+
+/// The JSON a fit reads: each reading's fields, its events', voices', frames' and notes', and
+/// the arguments it spells. A consumer outside this repository parses these names.
 #[test]
-fn a_strike_is_an_onset_after_a_swell_before_its_crest_and_at_the_end() {
+fn score_loudness_pattern_and_panel_print_the_fields_a_fit_reads() {
     let rate = 48_000u32;
     let sr = f64::from(rate);
-    let mut samples = vec![0.0f32; (sr * 1.005) as usize];
-    let mut burst = |at: f64, secs: f64, gain: f64| {
-        for n in 0..(sr * secs) as usize {
-            let t = n as f64 / sr;
-            let shape = (1.0 - (-t / 0.0005).exp()) * (-t / 0.02).exp();
-            if let Some(s) = samples.get_mut((at * sr) as usize + n) {
-                *s += (gain * shape * (std::f64::consts::TAU * 440.0 * t).sin()) as f32;
-            }
-        }
-    };
-    burst(0.25, 0.08, 0.3);
-    burst(0.266, 0.08, 0.7);
-    burst(0.6, 0.08, 0.7);
-    burst(1.0, 0.005, 0.7);
-    let swell = (0.5 * sr) as usize..(0.5985 * sr) as usize;
-    for (n, s) in samples
-        .iter_mut()
-        .enumerate()
-        .take(swell.end)
-        .skip(swell.start)
-    {
-        let t = n as f64 / sr;
-        let level = 0.25 * (-(0.5985 - t) / 0.03).exp();
-        *s += (level * (std::f64::consts::TAU * 1500.0 * t).sin()) as f32;
-    }
-    let found = onsets_of(&written("onset-swell-end", rate, &[&samples]));
-    let struck = [0.25, 0.6, 1.0];
-    assert_eq!(found.len(), struck.len(), "every strike: {found:?}");
-    for (heard, wanted) in found.iter().zip(struck) {
-        assert!(
-            (heard - wanted).abs() <= 0.001,
-            "{heard} is more than a millisecond from {wanted}"
-        );
+    let chord: Vec<f32> = (0..(sr * 1.2) as usize)
+        .map(|i| {
+            let t = i as f64 / sr;
+            let note = |hz: f64, at: f64| {
+                let u = t - at;
+                if u < 0.0 {
+                    return 0.0;
+                }
+                (1..=4)
+                    .map(|k| {
+                        let k = f64::from(k);
+                        (std::f64::consts::TAU * hz * k * u).sin() / k
+                    })
+                    .sum::<f64>()
+                    * (1.0 - (-u / 0.002).exp())
+                    * (-u / 0.4).exp()
+            };
+            (0.2 * (note(220.0, 0.05) + note(277.18, 0.05) + note(330.0, 0.6))) as f32
+        })
+        .collect();
+    let path = written("score-shape", rate, &[&chord]);
+    let read = printed(&path, "score,loudness_pattern,panel");
+    let held = &read["data"]["representations"];
+
+    let score = &held["score"];
+    assert_eq!(score["args"], serde_json::json!({}), "{score}");
+    assert_eq!(
+        keys(&score["value"]),
+        ["events", "model", "resolution_secs"]
+    );
+    let event = &score["value"]["events"]["items"][0];
+    assert_eq!(
+        keys(event),
+        [
+            "at_secs",
+            "attack_secs",
+            "cue",
+            "end_secs",
+            "hit",
+            "kind",
+            "level_db",
+            "main",
+            "next_secs",
+            "period_hz",
+            "periodicity",
+            "sound",
+            "voices",
+        ]
+    );
+    let voice = &event["voices"]["items"][0];
+    assert_eq!(
+        keys(voice),
+        [
+            "bend_cents",
+            "coherence",
+            "db",
+            "hz",
+            "new",
+            "partials",
+            "share",
+            "tone"
+        ]
+    );
+    assert_eq!(
+        keys(&voice["partials"]["items"][0]),
+        ["db", "harmonic", "hz"]
+    );
+    let events = score["value"]["events"]["items"]
+        .as_array()
+        .expect("events");
+    assert_eq!(events.len(), 2, "two strikes: {score}");
+    assert!(
+        events[0]["voices"]["items"]
+            .as_array()
+            .expect("voices")
+            .len()
+            >= 2,
+        "a chord is several voices: {score}"
+    );
+
+    let pattern = &held["loudness_pattern"];
+    assert_eq!(
+        pattern["args"],
+        serde_json::json!({ "frame": "10ms", "spl": "100db" }),
+        "{pattern}"
+    );
+    assert_eq!(
+        keys(&pattern["value"]),
+        [
+            "centres_hz",
+            "frame_secs",
+            "frames",
+            "model",
+            "spl_db",
+            "threshold_sone",
+            "window_secs"
+        ]
+    );
+    let frame = &pattern["value"]["frames"]["items"][0];
+    assert_eq!(keys(frame), ["specific", "t_secs", "total_sone"]);
+    assert_eq!(
+        frame["specific"].as_array().expect("bands").len(),
+        pattern["value"]["centres_hz"]
+            .as_array()
+            .expect("centres")
+            .len()
+    );
+
+    let panel = &held["panel"];
+    assert_eq!(
+        panel["args"],
+        serde_json::json!({ "spl": "100db" }),
+        "{panel}"
+    );
+    assert_eq!(keys(&panel["value"]), ["model", "notes", "spl_db", "whole"]);
+    let axes = [
+        "attack_secs",
+        "beating_phon",
+        "decay_phon_per_sec",
+        "sharpness_acum",
+    ];
+    assert_eq!(keys(&panel["value"]["whole"]), axes);
+    let note = &panel["value"]["notes"]["items"][0];
+    let mut fields = axes.to_vec();
+    fields.extend(["at_secs", "length_secs", "pitches_hz"]);
+    fields.sort_unstable();
+    assert_eq!(keys(note), fields);
+}
+
+/// The codes a caller branches on: a reading gone, a value it cannot read, an argument a
+/// reading does not take.
+#[test]
+fn the_score_and_perceptual_readings_refuse_with_stable_codes() {
+    for (asked, code) in [
+        ("onsets", "query.retired"),
+        ("panel(spl=loud)", "query.bad_value"),
+        ("loudness_pattern(spl=90)", "query.bad_value"),
+        ("score(frame=10ms)", "query.unknown_argument"),
+        ("panel(frame=10ms)", "query.unknown_argument"),
+    ] {
+        let refused = parse_args(&argv(&["analyze", "/tmp/a.wav", "--representation", asked]))
+            .err()
+            .unwrap_or_else(|| panic!("`{asked}` refuses"));
+        let codes: Vec<String> = refused.diagnostics().into_iter().map(|d| d.code).collect();
+        assert_eq!(codes, [code], "`{asked}`: {refused}");
     }
 }
 

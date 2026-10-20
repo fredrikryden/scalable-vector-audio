@@ -55,15 +55,16 @@ pub use render::{
 pub use schedule::{Order, Schedule, schedule_from};
 pub use sva_formula::{C64, Codomain, Held, Line, NodeId, SpectralSum, Ty, Var};
 pub use sva_samples::measure::{
-    bands, harmony, modulation, partials, periodicity, pitch, self_similarity, sliding, spectrum,
+    bands, harmony, loudness_pattern, modulation, panel, partials, periodicity, pitch, score,
+    self_similarity, sliding, spectrum,
 };
 pub use sva_samples::resample;
 pub use sva_samples::{
     Alias, AliasBand, BAND_COUNT, BandCrest, BandTrack, Bands, Buffer, Crest,
-    CuttingBelowSilenceThreshold, Detail, EnvelopeFrame, Extent, FormantFrame, Frames, IoiBucket,
-    Label, LedgerEntry, Loudness, LoudnessFrame, MAX_PINNED_FRAME, Note, Onset, Onsets, PEAK_NOTE,
-    PSYCHOACOUSTIC_V1, PitchFrame, Profile, Resampled, Rule, SignalKind, Source, Spectrum,
-    StereoFrame, StereoImage, fitted_frame, measure_alias, pinned_frame,
+    CuttingBelowSilenceThreshold, Detail, EnvelopeFrame, Extent, FormantFrame, Frames, Label,
+    LedgerEntry, Loudness, LoudnessFrame, MAX_PINNED_FRAME, Note, PEAK_NOTE, PSYCHOACOUSTIC_V1,
+    PitchFrame, Profile, Resampled, Rule, Score, SignalKind, Source, Spectrum, StereoFrame,
+    StereoImage, fitted_frame, measure_alias, pinned_frame,
 };
 pub use threads::default_threads;
 pub use trace::{Traced, Up, trace};

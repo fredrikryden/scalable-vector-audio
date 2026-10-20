@@ -5,13 +5,15 @@ use sva_samples::measure::harmony::dissonance::Dissonance;
 use sva_samples::measure::harmony::inharmonicity::Inharmonicity;
 use sva_samples::measure::harmony::tonnetz::TonalDistance;
 use sva_samples::measure::harmony::voice_leading::{Norm, VoiceLeading};
+use sva_samples::measure::loudness_pattern::LoudnessPattern;
 use sva_samples::measure::modulation::Modulation;
+use sva_samples::measure::panel::Panel;
 use sva_samples::measure::partials::Partials;
 use sva_samples::measure::periodicity::Periodicity;
 use sva_samples::measure::self_similarity::SelfSimilarity;
 use sva_samples::{
     Alias, Bands, Buffer, Consumes, Crest, EnvelopeFrame, FormantFrame, LedgerEntry, Loudness,
-    Onsets, PitchFrame, Source, Spectrum, StereoImage,
+    PitchFrame, Score, Source, Spectrum, StereoImage,
 };
 
 use crate::arguments::Arguments;
@@ -47,6 +49,9 @@ pub const DEFAULT_PARTIALS_WINDOW_SECS: f64 = 0.5;
 pub const DEFAULT_PARTIALS_HOP_SECS: f64 = 0.005;
 pub const DEFAULT_PARTIALS_FLOOR_DB: f64 = -70.0;
 pub const DEFAULT_PARTIALS_TRACKS: usize = 120;
+/// A loudness pattern's frames step as the panel's do.
+pub const DEFAULT_PATTERN_FRAME_SECS: f64 = sva_samples::measure::panel::FRAME_SECS;
+pub use sva_samples::measure::loudness_pattern::DEFAULT_SPL_DB;
 
 /// Every named argument a reading may take; the engine reads only those `Given` holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +73,7 @@ pub enum Arg {
     Cell,
     Smooth,
     Hop,
+    Spl,
 }
 
 impl Arg {
@@ -90,6 +96,7 @@ impl Arg {
             Arg::Cell => "cell",
             Arg::Smooth => "smooth",
             Arg::Hop => "hop",
+            Arg::Spl => "spl",
         }
     }
 }
@@ -115,6 +122,8 @@ pub struct Given {
     pub cell_secs: f64,
     pub smooth_secs: f64,
     pub hop: Option<f64>,
+    /// `None` until written: the level a full-scale sine plays at, `DEFAULT_SPL_DB`.
+    pub spl_db: Option<f64>,
 }
 
 impl Default for Given {
@@ -133,6 +142,7 @@ impl Default for Given {
             cell_secs: DEFAULT_CELL_SECS,
             smooth_secs: DEFAULT_SMOOTH_SECS,
             hop: None,
+            spl_db: None,
         }
     }
 }
@@ -324,13 +334,46 @@ static LOUDNESS: Reading = Reading {
     },
 };
 
-static ONSETS: Reading = Reading {
-    name: "onsets",
+static SCORE: Reading = Reading {
+    name: "score",
     takes: &[],
     reads: Reads::Samples,
-    help: "onset times, their strength and the spacing between them, each channel's spectral \
-           flux summed",
-    build: |_| Representation::Onsets,
+    help: "its events as a score: each one's onset, placed at the sample its strike rises, its \
+           end and the next, new, a re-strike or held from the start, tonal, noisy-pitched or \
+           noisy, an unpitched hit's kind, its attack, level and periodicity, and its voices, \
+           several where a chord sounds, each with its f0, tonal or noisy, whether it sounds \
+           newly there, its bend and its partials, the loudest new one its main; every \
+           channel's samples averaged",
+    build: |_| Representation::Score,
+};
+
+static LOUDNESS_PATTERN: Reading = Reading {
+    name: "loudness_pattern",
+    takes: &[Arg::Frame, Arg::Spl],
+    reads: Reads::Samples,
+    help: "specific loudness in sone per Cam, band by band every `frame`, and each frame's \
+           total, after the ear's transfer and the excitation's spread, so a sound another \
+           masks adds little, a full-scale sine at `spl` dB SPL; every channel's power per \
+           bin averaged",
+    build: |g| Representation::LoudnessPattern {
+        frame_secs: g.frame.unwrap_or(DEFAULT_PATTERN_FRAME_SECS),
+        spl_db: g.spl_db.unwrap_or(DEFAULT_SPL_DB),
+    },
+};
+
+static PANEL: Reading = Reading {
+    name: "panel",
+    takes: &[Arg::Spl],
+    reads: Reads::Samples,
+    help: "the perceptual axes per note of `score` and over the whole: sharpness in acum, \
+           decay in phon/s, beating in phon, the 10-90 % attack, and each note's pitch to \
+           under a cent; its notes and their pitch off every channel's samples averaged, \
+           every other axis off `loudness_pattern` at its default frame and every channel's \
+           power averaged; a cost subtracting two reads each axis in its just-noticeable \
+           differences",
+    build: |g| Representation::Panel {
+        spl_db: g.spl_db.unwrap_or(DEFAULT_SPL_DB),
+    },
 };
 
 static ALIAS: Reading = Reading {
@@ -494,7 +537,7 @@ static ARGUMENTS: Reading = Reading {
 };
 
 /// Every reading a caller may ask for, in the order a listing prints them.
-pub static READINGS: [&Reading; 25] = [
+pub static READINGS: [&Reading; 27] = [
     &LINES,
     &ATOMS,
     &SPECTRUM,
@@ -508,7 +551,7 @@ pub static READINGS: [&Reading; 25] = [
     &BANDS,
     &CREST,
     &LOUDNESS,
-    &ONSETS,
+    &SCORE,
     &ALIAS,
     &DISSONANCE,
     &VOICE_LEADING,
@@ -518,6 +561,8 @@ pub static READINGS: [&Reading; 25] = [
     &MODULATION,
     &SELF_SIMILARITY,
     &PARTIALS,
+    &LOUDNESS_PATTERN,
+    &PANEL,
     &BINDINGS,
     &ARGUMENTS,
 ];
@@ -555,7 +600,7 @@ pub enum Representation {
     Loudness {
         window_secs: f64,
     },
-    Onsets,
+    Score,
     Alias {
         oversample: u32,
     },
@@ -595,6 +640,13 @@ pub enum Representation {
         floor_db: f64,
         tracks: usize,
     },
+    LoudnessPattern {
+        frame_secs: f64,
+        spl_db: f64,
+    },
+    Panel {
+        spl_db: f64,
+    },
     Bindings,
     Arguments,
 }
@@ -629,7 +681,7 @@ pub enum Output {
     Bands(Box<Bands>),
     Crest(Box<Crest>),
     Loudness(Box<Loudness>),
-    Onsets(Box<Onsets>),
+    Score(Box<Score>),
     Alias(Box<Alias>),
     Ledger(Vec<LedgerEntry>),
     Dissonance(Box<Dissonance>),
@@ -640,6 +692,8 @@ pub enum Output {
     Modulation(Box<Modulation>),
     SelfSimilarity(Box<SelfSimilarity>),
     Partials(Box<Partials>),
+    LoudnessPattern(Box<LoudnessPattern>),
+    Panel(Box<Panel>),
     Bindings(Vec<Binding>),
     Arguments(Vec<Arguments>),
 }
@@ -709,7 +763,7 @@ impl Representation {
             Representation::Bands => &BANDS,
             Representation::Crest => &CREST,
             Representation::Loudness { .. } => &LOUDNESS,
-            Representation::Onsets => &ONSETS,
+            Representation::Score => &SCORE,
             Representation::Alias { .. } => &ALIAS,
             Representation::Harmony { reading, .. } => match reading {
                 Harmonic::Dissonance { .. } => &DISSONANCE,
@@ -721,6 +775,8 @@ impl Representation {
             Representation::Modulation { .. } => &MODULATION,
             Representation::SelfSimilarity { .. } => &SELF_SIMILARITY,
             Representation::Partials { .. } => &PARTIALS,
+            Representation::LoudnessPattern { .. } => &LOUDNESS_PATTERN,
+            Representation::Panel { .. } => &PANEL,
             Representation::Bindings => &BINDINGS,
             Representation::Arguments => &ARGUMENTS,
         }

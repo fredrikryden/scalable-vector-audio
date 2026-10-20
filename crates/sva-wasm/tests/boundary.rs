@@ -462,7 +462,7 @@ fn every_representation_name_the_cli_answers_crosses_and_the_removed_ones_refuse
         "stereo",
         "bands",
         "crest",
-        "onsets",
+        "score",
         "alias",
         "bindings",
     ] {

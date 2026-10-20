@@ -257,13 +257,13 @@ RENDER:
   per `frame`; for the spectrum at one instant, read a range one frame long.
   A measured `envelope` is framed too, and reads every channel: a frame's
   `rms` is the root mean square of all its channels' samples together, its
-  `peak` the largest magnitude in any channel. `onsets` reads every channel
-  as well: a frame's flux is the sum of each channel's, and a strike's energy
-  that of all channels' samples together, so opposite phases cancel nothing.
-  Every other measured reading but `stereo` reads every channel in power, as
+  `peak` the largest magnitude in any channel. `score` and `partials` read
+  every channel's samples averaged, one mono signal, as `panel` reads its
+  notes and their pitch; its other axes read power. Every
+  other measured reading but `stereo` reads every channel in power, as
   `envelope` reads a level: a spectrum's power per bin (`spectrum`, `pitch`,
   the partials `dissonance`, `voice_leading`, `tonal_distance`,
-  `inharmonicity` and `self_similarity` pick), a formant frame's
+  `inharmonicity`, `self_similarity` and `loudness_pattern` pick), a formant frame's
   autocorrelation and each auditory band's energy (`bands`, `periodicity`,
   `modulation`, `self_similarity`) are each channel's averaged, so a channel
   copied to two reads as itself; `crest` sets any channel's peak against the
@@ -388,8 +388,9 @@ SOLVE:
   reading with one set of arguments subtract to a residual vector:
 {rules}
   A level is floored at {floor} dB before it subtracts. A residual inside both
-  sides' stated bounds counts as zero; of these readings only `onsets` states
-  one. Then `norm(v)` (the root of the sum of squares), `sum(v)`, `max(v)`,
+  sides' stated bounds counts as zero; of these readings only `score` states
+  one, and `loudness_pattern` counts zero a cell both sides hold under its
+  threshold. Then `norm(v)` (the root of the sum of squares), `sum(v)`, `max(v)`,
   `abs(x)` (each value's magnitude), `dot([w1, w2, ...], v)` (one literal
   weight per value), numbers, `+`, `-`, `*` and `/` make one number. A reading
   left unsubtracted, a vector left unreduced and a leaf of any other reading
@@ -604,8 +605,8 @@ EXAMPLES:
   sva-cli solve 'norm(repr.bands(@master([0, 4s])) - repr.bands(sample("../ref.wav")))
     + 0.5*norm(repr.loudness(@master([0, 4s])) - repr.loudness(sample("../ref.wav")))' \
     --vary gain=0..2/0.25 --vary cutoff=200hz..8000hz/1.25,log --rate 48000
-  sva-cli solve 'sum(abs(repr.onsets(@score/song([0, 8s]))
-    - repr.onsets(sample("/tmp/take.wav"))))' \
+  sva-cli solve 'sum(abs(repr.score(@score/song([0, 8s]))
+    - repr.score(sample("/tmp/take.wav"))))' \
     --vary bpm=100..140/2 --set key=D3 --max-renders 60 --write --confirm
   sva-cli solve 'norm(repr.pitch(@lead([0, 2s])) - load_json("../ref.json", ".data"))' \
     --vary detune=-50ct..50ct/10ct

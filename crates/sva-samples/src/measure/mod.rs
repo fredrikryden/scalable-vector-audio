@@ -8,17 +8,28 @@ pub mod formants;
 pub mod harmony;
 pub mod ledger;
 pub mod loudness;
+pub mod loudness_pattern;
 pub mod modulation;
-pub mod onsets;
+pub mod panel;
 pub mod partials;
 pub mod peaks;
 pub mod periodicity;
 pub mod pitch;
+pub mod score;
 pub mod self_similarity;
 pub mod sliding;
 pub mod spectrum;
 pub mod stereo;
 pub(crate) mod stiff;
+
+pub(crate) fn scaled_pow2(samples_48k: f64, sr: f64) -> usize {
+    let n = (samples_48k * sr / 48_000.0).max(2.0);
+    let below = (n as usize).next_power_of_two() / 2;
+    match below >= 2 && n - below as f64 <= (2 * below) as f64 - n {
+        true => below,
+        false => (2 * below).max(2),
+    }
+}
 
 pub(crate) fn held(planes: &[&[f64]]) -> usize {
     let len = planes

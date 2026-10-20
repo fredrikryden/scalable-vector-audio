@@ -11,8 +11,9 @@ use sva_samples::measure::harmony::{
 use sva_samples::measure::{modulation, partials, periodicity, self_similarity, sliding};
 use sva_samples::{
     Buffer, Consumes, Extent, Peak, PitchFrame, Profile, Source, measure::bands, measure::crest,
-    measure::envelope, measure::formants, measure::loudness, measure::onsets, measure::pitch,
-    measure::spectrum, measure::stereo, measure_alias,
+    measure::envelope, measure::formants, measure::loudness, measure::loudness_pattern,
+    measure::panel, measure::pitch, measure::score, measure::spectrum, measure::stereo,
+    measure_alias,
 };
 
 use crate::error::{Diagnostic, EngineError, Located};
@@ -988,7 +989,15 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
         }
         Representation::Bands => Output::Bands(Box::new(bands::analyze(&planes, sr, start))),
         Representation::Crest => Output::Crest(Box::new(crest::analyze(&planes, sr))),
-        Representation::Onsets => Output::Onsets(Box::new(onsets::detect(&planes, sr, start))),
+        Representation::Score => Output::Score(Box::new(score::measure(&planes, sr, start))),
+        Representation::LoudnessPattern { frame_secs, spl_db } => {
+            Output::LoudnessPattern(Box::new(loudness_pattern::measure(
+                &planes, sr, start, frame_secs, spl_db,
+            )))
+        }
+        Representation::Panel { spl_db } => {
+            Output::Panel(Box::new(panel::measure(&planes, sr, start, spl_db)))
+        }
         Representation::Loudness { window_secs } => Output::Loudness(Box::new(
             loudness::analyze(&planes, sr, start, window_secs).map_err(|why| match why {
                 sva_samples::Unweighted::Rate(held) => NoReading::RateUnder(held),

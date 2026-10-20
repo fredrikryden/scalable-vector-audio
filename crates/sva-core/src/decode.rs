@@ -2,11 +2,14 @@
 
 use serde_json::Value;
 use sva_engine::bands::BandFloor;
+use sva_engine::loudness_pattern::{LoudnessPattern, PatternFrame};
+use sva_engine::panel::{Axes, Note as PanelNote, Panel};
 use sva_engine::pitch::Note;
+use sva_engine::score::{Cue, Event, Hit, Kind, Partial, Score, Sound, Tone, Voiced};
 use sva_engine::spectrum::{Band, Peak};
 use sva_engine::{
-    BandCrest, BandTrack, Bands, Crest, EnvelopeFrame, IoiBucket, Loudness, LoudnessFrame, Onset,
-    Onsets, Output, PEAK_NOTE, PitchFrame, Representation, Spectrum,
+    BandCrest, BandTrack, Bands, Crest, EnvelopeFrame, Loudness, LoudnessFrame, Output, PEAK_NOTE,
+    PitchFrame, Representation, Spectrum,
 };
 
 /// One place in the JSON, so a refusal names the key it stopped at.
@@ -58,6 +61,36 @@ impl<'v> At<'v> {
     fn text(&self) -> Read<String> {
         let held = self.value.as_str().map(str::to_string);
         held.ok_or_else(|| self.not("a string"))
+    }
+
+    fn numbers(&self) -> Read<Vec<f64>> {
+        let Value::Array(list) = self.value else {
+            return Err(self.not("a list"));
+        };
+        list.iter()
+            .enumerate()
+            .map(|(k, value)| {
+                At {
+                    value,
+                    path: format!("{}[{k}]", self.path),
+                }
+                .num()
+            })
+            .collect()
+    }
+
+    /// The one of `all` whose `key` the text names.
+    fn keyed<T: Copy>(&self, all: &[T], key: fn(T) -> &'static str) -> Read<T> {
+        let text = self.text()?;
+        let named = all.iter().copied().find(|k| key(*k) == text);
+        named.ok_or_else(|| {
+            let keys: Vec<&str> = all.iter().map(|k| key(*k)).collect();
+            format!(
+                "`{}` is `{text}`, not one of {}",
+                self.path,
+                keys.join(", ")
+            )
+        })
     }
 
     fn not(&self, wanted: &str) -> String {
@@ -235,20 +268,102 @@ fn crest(at: At) -> Read<Output> {
     })))
 }
 
-fn onsets(at: At) -> Read<Output> {
-    Ok(Output::Onsets(Box::new(Onsets {
-        onsets: field!(at, "onsets").items(|o| {
-            Ok(Onset {
-                t_secs: field!(o, "t_secs").num()?,
-                strength: field!(o, "strength").num()?,
+fn score(at: At) -> Read<Output> {
+    let voice = |v: At| {
+        Ok(Voiced {
+            hz: field!(v, "hz").num()?,
+            tone: field!(v, "tone").keyed(&[Tone::Tonal, Tone::Noisy], Tone::key)?,
+            new: field!(v, "new").flag()?,
+            share: field!(v, "share").num()?,
+            db: field!(v, "db").num()?,
+            bend_cents: field!(v, "bend_cents").maybe()?,
+            coherence: field!(v, "coherence").maybe()?,
+            partials: field!(v, "partials").items(|p| {
+                Ok(Partial {
+                    hz: field!(p, "hz").num()?,
+                    db: field!(p, "db").num()?,
+                    harmonic: field!(p, "harmonic").count()?,
+                })
+            })?,
+        })
+    };
+    let event = |e: At| {
+        let hit = field!(e, "hit");
+        let period = match (
+            field!(e, "period_hz").maybe()?,
+            field!(e, "periodicity").maybe()?,
+        ) {
+            (Some(hz), Some(clarity)) => Some((hz, clarity)),
+            _ => None,
+        };
+        let main = field!(e, "main");
+        Ok(Event {
+            at_secs: field!(e, "at_secs").num()?,
+            end_secs: field!(e, "end_secs").num()?,
+            next_secs: field!(e, "next_secs").num()?,
+            kind: field!(e, "kind").keyed(&[Kind::New, Kind::Restrike, Kind::Held], Kind::key)?,
+            cue: field!(e, "cue")
+                .keyed(&[Cue::Attack, Cue::Partial, Cue::Grid, Cue::Crop], Cue::key)?,
+            sound: field!(e, "sound").keyed(
+                &[Sound::Tonal, Sound::NoisyPitched, Sound::Noisy],
+                Sound::key,
+            )?,
+            hit: match hit.value {
+                Value::Null => None,
+                _ => Some(hit.keyed(&[Hit::Kick, Hit::Snare, Hit::Hat], Hit::key)?),
+            },
+            attack_secs: field!(e, "attack_secs").num()?,
+            level_db: field!(e, "level_db").num()?,
+            period,
+            main: match main.value {
+                Value::Null => None,
+                _ => Some(main.count()?),
+            },
+            voices: field!(e, "voices").items(voice)?,
+        })
+    };
+    Ok(Output::Score(Box::new(Score {
+        resolution_secs: field!(at, "resolution_secs").num()?,
+        events: field!(at, "events").items(event)?,
+    })))
+}
+
+fn loudness_pattern(at: At) -> Read<Output> {
+    Ok(Output::LoudnessPattern(Box::new(LoudnessPattern {
+        frame_secs: field!(at, "frame_secs").num()?,
+        window_secs: field!(at, "window_secs").num()?,
+        spl_db: field!(at, "spl_db").num()?,
+        centres_hz: field!(at, "centres_hz").numbers()?,
+        threshold_sone: field!(at, "threshold_sone").num()?,
+        frames: field!(at, "frames").items(|f| {
+            Ok(PatternFrame {
+                t_secs: field!(f, "t_secs").num()?,
+                total_sone: field!(f, "total_sone").num()?,
+                specific: field!(f, "specific").numbers()?,
             })
         })?,
-        resolution_secs: field!(at, "resolution_secs").num()?,
-        ioi_histogram: field!(at, "ioi_histogram").items(|b| {
-            Ok(IoiBucket {
-                lo_secs: field!(b, "lo_secs").num()?,
-                hi_secs: field!(b, "hi_secs").num()?,
-                count: field!(b, "count").count()?,
+    })))
+}
+
+fn axes(at: &At) -> Read<Axes> {
+    Ok(Axes {
+        sharpness_acum: field!(at, "sharpness_acum").maybe()?,
+        decay_phon_per_sec: field!(at, "decay_phon_per_sec").maybe()?,
+        beating_phon: field!(at, "beating_phon").maybe()?,
+        attack_secs: field!(at, "attack_secs").maybe()?,
+    })
+}
+
+fn panel(at: At) -> Read<Output> {
+    Ok(Output::Panel(Box::new(Panel {
+        spl_db: field!(at, "spl_db").num()?,
+        whole: axes(&field!(at, "whole"))?,
+        notes: field!(at, "notes").items(|n| {
+            Ok(PanelNote {
+                at_secs: field!(n, "at_secs").num()?,
+                length_secs: field!(n, "length_secs").num()?,
+                pitches_hz: field!(n, "pitches_hz").numbers()?,
+                axes: axes(&n)?,
             })
         })?,
     })))
@@ -268,7 +383,9 @@ pub fn reading(representation: Representation, value: &Value, path: &str) -> Rea
         Representation::Bands => bands(at),
         Representation::Loudness { .. } => loudness(at),
         Representation::Crest => crest(at),
-        Representation::Onsets => onsets(at),
+        Representation::Score => score(at),
+        Representation::LoudnessPattern { .. } => loudness_pattern(at),
+        Representation::Panel { .. } => panel(at),
         other => Err(format!("`{other:?}` has no JSON reader")),
     }
 }

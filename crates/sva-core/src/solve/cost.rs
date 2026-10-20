@@ -6,8 +6,16 @@ use crate::cli_error::CliError;
 use crate::query::{Asked, asked, call};
 
 /// The readings a cost subtracts, each by the rule `residual.rs` states for it.
-pub const SUBTRACTS: [&str; 7] = [
-    "envelope", "loudness", "bands", "crest", "spectrum", "onsets", "pitch",
+pub const SUBTRACTS: [&str; 9] = [
+    "envelope",
+    "loudness",
+    "bands",
+    "crest",
+    "spectrum",
+    "score",
+    "pitch",
+    "loudness_pattern",
+    "panel",
 ];
 
 pub const REDUCERS: [&str; 5] = ["norm", "sum", "dot", "max", "abs"];

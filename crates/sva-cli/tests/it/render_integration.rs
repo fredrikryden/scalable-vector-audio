@@ -668,7 +668,7 @@ fn two_readings_at_one_destination_refuse_before_anything_is_rendered() {
         "analyze",
         "in.wav",
         "--representation",
-        "spectrum=/tmp/both.json,onsets=/tmp/both.json",
+        "spectrum=/tmp/both.json,score=/tmp/both.json",
     ]));
     let Err(refused) = mixed else {
         panic!("two readings of a file cannot share a path either");

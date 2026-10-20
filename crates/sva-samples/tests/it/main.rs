@@ -19,7 +19,6 @@ mod measure_inharmonicity;
 mod measure_ledger;
 mod measure_loudness;
 mod measure_modulation;
-mod measure_onsets;
 mod measure_partials;
 mod measure_periodicity;
 mod measure_pitch;

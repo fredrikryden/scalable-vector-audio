@@ -90,3 +90,60 @@ pub fn irfft(bins_re: &[f64], bins_im: &[f64], n: usize) -> Vec<f64> {
     ifft(&mut re, &mut im);
     re
 }
+
+/// The DFT of any length, by Bluestein's chirp z-transform over a power-of-two convolution.
+pub fn dft(re: &[f64], im: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let n = re.len();
+    assert_eq!(n, im.len(), "one real and one imaginary plane");
+    if n.is_power_of_two() {
+        let (mut r, mut i) = (re.to_vec(), im.to_vec());
+        fft(&mut r, &mut i);
+        return (r, i);
+    }
+    let chirp: Vec<(f64, f64)> = (0..n)
+        .map(|k| {
+            let angle = std::f64::consts::PI * ((k * k) % (2 * n)) as f64 / n as f64;
+            (libm::cos(angle), -libm::sin(angle))
+        })
+        .collect();
+    let m = (2 * n - 1).next_power_of_two();
+    let (mut ar, mut ai) = (vec![0.0; m], vec![0.0; m]);
+    let (mut br, mut bi) = (vec![0.0; m], vec![0.0; m]);
+    for k in 0..n {
+        let (wr, wi) = chirp[k];
+        ar[k] = re[k] * wr - im[k] * wi;
+        ai[k] = re[k] * wi + im[k] * wr;
+        br[k] = wr;
+        bi[k] = -wi;
+        if k > 0 {
+            br[m - k] = wr;
+            bi[m - k] = -wi;
+        }
+    }
+    let twiddle = twiddles(m);
+    fft_with(&mut ar, &mut ai, &twiddle);
+    fft_with(&mut br, &mut bi, &twiddle);
+    for k in 0..m {
+        let (r, i) = (ar[k] * br[k] - ai[k] * bi[k], ar[k] * bi[k] + ai[k] * br[k]);
+        ar[k] = r;
+        ai[k] = i;
+    }
+    ifft_with(&mut ar, &mut ai, &twiddle);
+    (0..n)
+        .map(|k| {
+            let (wr, wi) = chirp[k];
+            (ar[k] * wr - ai[k] * wi, ar[k] * wi + ai[k] * wr)
+        })
+        .unzip()
+}
+
+/// The inverse of `dft`, scaled by 1 / n.
+pub fn idft(re: &[f64], im: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let neg: Vec<f64> = im.iter().map(|v| -v).collect();
+    let (r, i) = dft(re, &neg);
+    let scale = 1.0 / re.len() as f64;
+    (
+        r.iter().map(|v| v * scale).collect(),
+        i.iter().map(|v| -v * scale).collect(),
+    )
+}

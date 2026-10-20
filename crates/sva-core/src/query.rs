@@ -12,9 +12,10 @@ use sva_engine::{
 
 use crate::cli_error::CliError;
 
-pub const RETIRED: [(&str, &str); 2] = [
+pub const RETIRED: [(&str, &str); 3] = [
     ("exact-envelope", "envelope, symbolic on a closed form"),
     ("exact-derivative", "derivative, symbolic on a closed form"),
+    ("onsets", "score, each event's `at_secs`"),
 ];
 
 /// One reading written as a call, `spectrum(peaks=8, frame=50ms)=out.json`: its name, its
@@ -304,7 +305,7 @@ impl Asked {
             | R::Derivative
             | R::Samples
             | R::Crest
-            | R::Onsets
+            | R::Score
             | R::Bindings
             | R::Arguments => Vec::new(),
             R::Partials {
@@ -320,6 +321,10 @@ impl Asked {
                 (Arg::Floor, db(floor_db)),
                 (Arg::Peaks, count(tracks)),
             ],
+            R::LoudnessPattern { frame_secs, spl_db } => {
+                vec![(Arg::Frame, secs(frame_secs)), (Arg::Spl, db(spl_db))]
+            }
+            R::Panel { spl_db } => vec![(Arg::Spl, db(spl_db))],
         };
         let buffer = match &self.dest {
             Some(Destination::Alsa { buffer_secs, .. }) => secs(*buffer_secs),
@@ -457,6 +462,7 @@ pub fn asked(call: &Call) -> Result<Asked, CliError> {
             Arg::Node => node = Some(self::node(raw)?),
             Arg::Buffer => buffer = Some(microseconds(raw, key)?),
             Arg::Floor => given.floor_db = Some(decibels(raw, key)?),
+            Arg::Spl => given.spl_db = Some(decibels(raw, key)?),
             Arg::Norm => given.norm = norm(raw)?,
             Arg::Pairs => given.max_pairs = count(raw, key)?,
             Arg::Curve => given.curve = switch(raw, key)?,

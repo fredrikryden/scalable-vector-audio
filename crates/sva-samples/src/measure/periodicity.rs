@@ -1,7 +1,6 @@
 // Concern: how strongly onset strength repeats per sliding window: broadband, low, rest | Non-concern: the band filters (bands.rs), any verdict | IO: (planes, rate, start, hop, window) -> Periodicity
 
 use super::bands::{self, Bands, Smoothing};
-use super::onsets::spectral_flux;
 use super::sliding::{self, Stats, Unread, stats};
 use crate::fft::{fft, ifft};
 use crate::stft::hann_periodic;
@@ -364,4 +363,8 @@ fn summary(windows: &[Window]) -> Summary {
                 .filter_map(|w| w.drift_bpm.map(|d| (w.t_secs, d))),
         ),
     }
+}
+
+fn spectral_flux(prev: &[f64], curr: &[f64]) -> f64 {
+    prev.iter().zip(curr).map(|(&p, &c)| (c - p).max(0.0)).sum()
 }

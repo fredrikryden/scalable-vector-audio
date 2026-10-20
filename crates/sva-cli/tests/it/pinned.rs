@@ -63,7 +63,7 @@ const READINGS: [&str; 15] = [
     "bands",
     "crest",
     "loudness",
-    "onsets",
+    "score",
     "alias",
     "bindings",
     "arguments",
@@ -85,7 +85,7 @@ const PINNED: &str = r#"
 0 bands d296ccdef14df607
 0 crest ae95a217fe01c136
 0 loudness e6a362bb961a8f90
-0 onsets 8591adf828334d9e
+0 score b67d3d3ccded8bee
 0 alias ffd0b296eaeac57b
 0 bindings cca84563df793651
 0 arguments ac479335c0844369
@@ -103,7 +103,7 @@ const PINNED: &str = r#"
 1 bands bc0d3ba2e34e221e
 1 crest d4c9cab1b01a245b
 1 loudness c24836bd41790e95
-1 onsets 441e628e7677f276
+1 score 79f7c5ac79699710
 1 alias 1cbd36f2ce620963
 1 bindings cca84563df793651
 1 arguments ac479335c0844369
@@ -121,7 +121,7 @@ const PINNED: &str = r#"
 2 bands b294c5719c9fe82f
 2 crest b1720ad620406d8f
 2 loudness aa04962e07c4f5e2
-2 onsets 304d125698f275e2
+2 score dacc45c5a24620ba
 2 alias a367e6b444e75c9e
 2 bindings cca84563df793651
 2 arguments 639edc93953a6808
@@ -139,7 +139,7 @@ const PINNED: &str = r#"
 3 bands 2272ce539291a9b7
 3 crest 9fae68afb06d5a49
 3 loudness 9a9579bd56fa81e1
-3 onsets bc5f8c0bb2b64780
+3 score 643f5fd4fdd83f3f
 3 alias c0eeacde04390c3e
 3 bindings f15293e1080c5049
 3 arguments eb3ed92e88f435e1
@@ -157,7 +157,7 @@ const PINNED: &str = r#"
 4 bands f410abcf9fab400b
 4 crest 1e7b0f8cf99beaf1
 4 loudness 16d1e9220d30ef01
-4 onsets 30c23f7db5058c85
+4 score d2376bfc2e54aff5
 4 alias 36e530d2d79e46b1
 4 bindings 5a6d3cadc8d1b9e7
 4 arguments f74b8084fd1b914d
@@ -175,7 +175,7 @@ const PINNED: &str = r#"
 5 bands 0eca3fbcda9ca639
 5 crest 27a91bd8023f6904
 5 loudness f45e25ca544ef233
-5 onsets db11d49e57c0ba35
+5 score ed15546ead69d8de
 5 alias abbc574e635044c1
 5 bindings cca84563df793651
 5 arguments ac479335c0844369
@@ -206,7 +206,7 @@ const PINNED: &str = r#"
 6 bands 7fa7653c5922631c
 6 crest 392023cf91d0234e
 6 loudness 1aa3d241079c6bbc
-6 onsets 39e774d4fbc97fd9
+6 score c2ad9e8059f8f5c9
 6 alias refused "engine.alias_needs_a_closed_form"
 6 bindings f836b683b117cd32
 6 arguments db19184c92016629
@@ -224,7 +224,7 @@ const PINNED: &str = r#"
 7 bands e0f3393595ce6203
 7 crest f3b12fbafbb8cf9d
 7 loudness 5dfa0194c31f6138
-7 onsets f9e35661305846c9
+7 score a912872000d7358e
 7 alias 3646019e5d05ee33
 7 bindings b63bdcd55385e2fe
 7 arguments 7c1d152f8c0e3714
@@ -242,7 +242,7 @@ const PINNED: &str = r#"
 8 bands 1b92efe195aabde1
 8 crest 511440016fbe6578
 8 loudness 8a420d1668a8de02
-8 onsets 2f1fd0ebe3c8ab8c
+8 score 95b4958e24cec744
 8 alias refused "engine.alias_needs_a_closed_form"
 8 bindings 5ce608c3a8b79a86
 8 arguments b642f09606176b94
@@ -260,7 +260,7 @@ const PINNED: &str = r#"
 9 bands 10bf09fbaf30d5a6
 9 crest 4f9afb40d9743f97
 9 loudness f0cf9ce6ed9dea83
-9 onsets 36ec9e908f4fc0b4
+9 score ab15784764a304ba
 9 alias 90dc4309d6c944cf
 9 bindings cca84563df793651
 9 arguments ac479335c0844369
@@ -278,7 +278,7 @@ const PINNED: &str = r#"
 10 bands b9d575d1d199b574
 10 crest c917f5dbb97b8206
 10 loudness a48211676dd3df72
-10 onsets 91eb69e0cc28311d
+10 score b12cce32f6f0074c
 10 alias a0795ab7eaabaebd
 10 bindings 978c10e7996dc9a1
 10 arguments b5457effabd50fe5
@@ -298,7 +298,7 @@ const PINNED: &str = r#"
 11 bands 10dbdd593ce205f1
 11 crest 83b03389a020426b
 11 loudness cf9f60606fc30d24
-11 onsets 67cadd17d68cd24f
+11 score 7b5129f5b25e0c2e
 11 alias refused "engine.alias_needs_a_closed_form"
 11 bindings 193483886e1b97eb
 11 arguments fbff5288f7442249
@@ -317,7 +317,7 @@ const PINNED: &str = r#"
 12 bands b2dd2a0db715cda3
 12 crest ccd71d9c7a289513
 12 loudness 2c3149a83b17ba89
-12 onsets 6b7b7e25a9172fd8
+12 score a5f94c746a15d1bd
 12 alias refused "engine.alias_needs_a_closed_form"
 12 bindings 4a6686d8e212fcf1
 12 arguments 58316c250a5fe29f
@@ -336,7 +336,7 @@ const PINNED: &str = r#"
 13 bands 293691741cf73df3
 13 crest f6062011aec78547
 13 loudness 4c404a9d18601ba5
-13 onsets 225a63ea38598f87
+13 score 5a6dbf8689c81d7f
 13 alias refused "engine.alias_needs_a_closed_form"
 13 bindings 0255ef5c70e74e5e
 13 arguments 0adbeca7c937da37
@@ -357,7 +357,7 @@ const PINNED: &str = r#"
 14 bands f41e10e1acc94e8d
 14 crest a1fa1897a90b31eb
 14 loudness 9b2bbea979a56dc7
-14 onsets f6f528e1301c1970
+14 score 81ba44e8bee61996
 14 alias refused "engine.alias_needs_a_closed_form"
 14 bindings 72871833b56a7987
 14 arguments 566a07fc7cfce2ce
@@ -375,7 +375,7 @@ const PINNED: &str = r#"
 15 bands 453162b22108001c
 15 crest 77a58410efb0e790
 15 loudness 4adf8f9ad435e99c
-15 onsets 000ddb63a79e2c23
+15 score 0673880605028994
 15 alias 6e0059b5f3196535
 15 bindings 1b8e53e12cdbbcab
 15 arguments b6603b7216e51daa
@@ -397,7 +397,7 @@ const PINNED: &str = r#"
 16 bands 8f724102016e18cf
 16 crest 765af78c04829b0a
 16 loudness 75dfbb8d9266b72c
-16 onsets 0c211084e4f7832a
+16 score cf37f0de964c37e2
 16 alias refused "engine.alias_needs_a_closed_form"
 16 bindings 01944f73abd4ed2b
 16 arguments 79995a358f9efc0a
