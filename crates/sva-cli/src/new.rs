@@ -82,8 +82,8 @@ len = 0.5s
     ),
     (
         "perc/hat",
-        r"; Models: a closed hat -- one noise band under a shouldered crop, its 0.5 s period commensurate with this 2 s bar, its gain small because a noise's own rms is the square root of half its line count | Neglects: pitch, which no hat has; a `noise(...)*exp(...)` tail would cost orders of magnitude more | IO: (t, gain) -> amplitude | Tags: percussion, noise
-gain = 0.0005
+        r"; Models: a closed hat -- one noise band under a shouldered crop, its 0.5 s period commensurate with this 2 s bar, its gain small because a flat noise holds half a unit of power a hertz, whatever its period, an rms of 100 under a 20 kHz ceiling | Neglects: pitch, which no hat has; a `noise(...)*exp(...)` tail would cost orders of magnitude more | IO: (t, gain) -> amplitude | Tags: percussion, noise
+gain = 0.0008
 crop(gain*noise(1, period=0.5, color=1db), 0s, 0.4s, rise=0.002s, fall=0.2s)
 ",
     ),

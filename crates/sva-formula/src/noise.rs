@@ -7,15 +7,20 @@ use crate::complex::C64;
 
 pub const LINE: IndexId = IndexId(u32::MAX);
 
-/// `color` is a ratio per octave, as `-3db`: line `k` is `k^log2(color)`, a summable power.
+/// Line `k`, at `f = k/period` Hz, is `f^log2(color)/sqrt(period)`: a level a hertz no
+/// period moves.
 pub fn noise(seed: u64, period: f64, color: f64) -> Series {
-    let amplitude = Body::Apply(
-        Unary::Exp,
-        Part::bare(Body::Mul(vec![
-            Part::bare(Body::Const(C64::real(color.log2()))),
-            Part::bare(Body::Apply(Unary::Log, Part::bare(Body::Index(LINE)))),
-        ])),
-    );
+    let tilt = color.log2();
+    let amplitude = Body::Mul(vec![
+        Part::bare(Body::Const(C64::real(period.powf(-(tilt + 0.5))))),
+        Part::bare(Body::Apply(
+            Unary::Exp,
+            Part::bare(Body::Mul(vec![
+                Part::bare(Body::Const(C64::real(tilt))),
+                Part::bare(Body::Apply(Unary::Log, Part::bare(Body::Index(LINE)))),
+            ])),
+        )),
+    ]);
     let phase = Body::Mul(vec![
         Part::bare(Body::Const(C64::real(TAU))),
         Part::bare(Body::Keyed {

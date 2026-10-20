@@ -73,10 +73,13 @@ pub fn meaning(builtin: &str, key: &str) -> Option<Meaning> {
             "frame advance, a whole number of steps of the rate in use",
             "s",
         ),
-        ("noise", "period") => plain("repeat time; the lines fall every 1/period Hz", "s"),
+        ("noise", "period") => plain(
+            "repeat time; the lines fall every 1/period Hz, and the level a hertz holds stays",
+            "s",
+        ),
         ("noise", "color") => plain(
             "spectral tilt: the amplitude ratio from one octave to the next, written in db \
-             (`-3db` is pink); a bare number is that ratio, 1 flat",
+             (`-3db` is pink), pivoting on 1 Hz; a bare number is that ratio, 1 flat",
             "ratio per octave",
         ),
         _ => return None,

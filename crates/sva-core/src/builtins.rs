@@ -126,9 +126,11 @@ pub const SPECIAL_FORMS: [(&str, &str); 10] = [
     ),
     (
         "noise",
-        "noise(seed, period=, color=) -- one line per 1/period hertz, each of unit \
-         amplitude, so the series' own RMS is the square root of half its line count; scale \
-         it to the level the piece wants",
+        "noise(seed, period=, color=) -- a line every 1/period hertz from 1/period up, each \
+         at a phase its seed draws; its level is a density in hertz that the period never \
+         moves: the line at f Hz has amplitude f^log2(color)/sqrt(period), so the lines hold \
+         power f^(2*log2(color))/2 a hertz, a flat noise B/2 over any B Hz, an RMS of \
+         sqrt(B/2), 100 under a 20 kHz ceiling; scale it to the level the piece wants",
     ),
 ];
 

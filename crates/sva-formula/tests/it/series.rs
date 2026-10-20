@@ -192,6 +192,40 @@ fn noise_spacing_is_the_reciprocal_period() {
     }
 }
 
+/// The power noise's lines hold over 1000 Hz from 500.1 Hz, off every line, both signs summed.
+fn band_power(period: f64, color: f64) -> f64 {
+    let answer = enumerate(&noise(7, period, color), 2_000.0).expect("noise lines");
+    answer
+        .taken
+        .iter()
+        .filter(|l| (500.1..1_500.1).contains(&l.hz.abs()))
+        .map(|l| l.amp.abs().powi(2))
+        .sum()
+}
+
+/// The builtins table's contract: a level a hertz the period never moves, flat noise half a
+/// unit of power a hertz, and a color tilting that density alike at every period.
+#[test]
+fn noise_holds_its_level_a_hertz_whatever_its_period() {
+    for period in [0.25, 1.0, 4.0] {
+        let flat = band_power(period, 1.0);
+        assert!(
+            (flat - 500.0).abs() < 1e-6,
+            "period {period} holds {flat} over 1000 Hz, not 500"
+        );
+    }
+    for color in [10f64.powf(-3.0 / 20.0), 2.0] {
+        let at_one = band_power(1.0, color);
+        for period in [0.25, 4.0] {
+            let db = 10.0 * (band_power(period, color) / at_one).log10();
+            assert!(
+                db.abs() < 0.05,
+                "color {color} at period {period} moves the band {db} dB from period 1"
+            );
+        }
+    }
+}
+
 #[test]
 fn noise_lines_are_conjugate_symmetric() {
     let answer = enumerate(&noise(7, 2.0, 10f64.powf(-3.0 / 20.0)), 20.0).expect("noise lines");
