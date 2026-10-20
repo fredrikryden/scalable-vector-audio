@@ -459,6 +459,16 @@ impl<'a> Sink<'a> {
                 self.i64(b.most);
                 self.i64(b.widest);
             }
+            Body::Knots { at, table } => {
+                self.byte(tag::KNOTS);
+                self.byte(u8::from(table.integral()));
+                self.child(&at.body);
+                self.u64(table.times().len() as u64);
+                for (t, v) in table.times().iter().zip(table.values()) {
+                    self.f64(*t);
+                    self.f64(*v);
+                }
+            }
             Body::Keyed { seed, of } => {
                 self.byte(tag::KEYED);
                 self.u64(*seed);
@@ -520,9 +530,10 @@ mod tag {
     pub const RUN: u8 = 0x28;
     pub const FREE_INDEX: u8 = 0x29;
     pub const BANDED: u8 = 0x2a;
+    pub const KNOTS: u8 = 0x2b;
 
     #[cfg(test)]
-    pub const ALL: [u8; 26] = [
+    pub const ALL: [u8; 27] = [
         CONST,
         LINE,
         BOUND_INDEX,
@@ -549,6 +560,7 @@ mod tag {
         RUN,
         FREE_INDEX,
         BANDED,
+        KNOTS,
     ];
 }
 

@@ -1,10 +1,11 @@
 // Concern: evaluates a written form over a column of instants, each identical subterm once | Non-concern: which row takes it, one atom's value | IO: (&Body, refs, instants) -> each lane's value
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use sva_formula::closed_form::{Fold, Unary};
 use sva_formula::spectral_sum::atom::SpectralAtom;
-use sva_formula::{Banded, Body, C64, IndexId, Run};
+use sva_formula::{Banded, Body, C64, IndexId, Knots, Run};
 
 use super::point::{crop_gain, eval_atom_on, eval_lane_on, lane_of, shoulders, unary};
 use crate::error::CollapseError;
@@ -71,6 +72,14 @@ enum Op {
         on: bool,
         banded: Box<Banded>,
         term: Box<Program>,
+    },
+    /// Read at `at`, or where `by` holds, at the lane's instant plus `by` to the exact side of
+    /// each knot; `on` where that instant is a sample's, which meets a knot as a crop's edge does.
+    Knots {
+        at: usize,
+        by: Option<f64>,
+        on: bool,
+        table: Arc<Knots>,
     },
 }
 
@@ -316,6 +325,23 @@ impl Lowering<'_> {
                 time: cx.time,
                 run: run.clone(),
             }),
+            Body::Knots { at, table } => {
+                let by = match sva_formula::affine::slide(&at.body) {
+                    Some(sva_formula::affine::Coeff::Exact(c)) if c.im == 0.0 => Some(c.re),
+                    _ => None,
+                };
+                let on = cx.on && by.is_some();
+                let at = match by {
+                    Some(_) => cx.time,
+                    None => self.lower(&at.body, cx),
+                };
+                self.push(Op::Knots {
+                    at,
+                    by,
+                    on,
+                    table: table.clone(),
+                })
+            }
             Body::Index(i) => match self.bound.iter().position(|j| j == i) {
                 Some(k) => self.push(Op::Bound(k)),
                 None => self.fail(CollapseError::NotEvaluable(sketch(f))),
@@ -406,7 +432,9 @@ fn key(op: &Op) -> Option<Vec<u64>> {
         Op::Singular { time, order } => vec![13, *time as u64, *order as u64],
         Op::Keyed { seed, of } => vec![14, *seed, *of as u64],
         Op::Bound(k) => vec![15, *k as u64],
-        Op::Fail(_) | Op::Modal { .. } | Op::Run { .. } | Op::Banded { .. } => return None,
+        Op::Fail(_) | Op::Modal { .. } | Op::Run { .. } | Op::Banded { .. } | Op::Knots { .. } => {
+            return None;
+        }
     })
 }
 
@@ -700,6 +728,7 @@ impl Columns<'_> {
                 }
             }
             Op::Bound(k) => out.v[a..b].fill(C64::real(self.bound[*k])),
+            Op::Knots { at, by, on, table } => self.knots((*at, *by, *on), table, out, (a, b)),
             Op::Banded {
                 time,
                 on,
@@ -787,6 +816,43 @@ impl Columns<'_> {
                 }
             }
             out.set(i, held.map_err(Clone::clone));
+        }
+    }
+
+    /// Each lane read off the table. A time `t + by` is summed with its rounding error, so a
+    /// knot it lands on is read from the side the exact sum lies on; a sample near a knot reads
+    /// the side the decimals' sum puts it on, as a crop's edge does.
+    fn knots(
+        &mut self,
+        (at, by, on): (usize, Option<f64>, bool),
+        table: &Knots,
+        out: &mut Col,
+        (a, b): (usize, usize),
+    ) {
+        self.need(at, a, b);
+        let mut hint = 0;
+        for i in a..b {
+            if let Some(e) = self.cols[at].err(i) {
+                out.fail(i, e.clone());
+                continue;
+            }
+            let t = self.cols[at].v[i].re;
+            let (u, below) = match by {
+                Some(c) => {
+                    let u = t + c;
+                    let back = u - t;
+                    (u, (t - (u - back)) + (c - back) < 0.0)
+                }
+                None => (t, false),
+            };
+            let (u, below) = match (self.sample(on, i), by) {
+                (Some((grid, n)), Some(c)) => match near(table, u, c) {
+                    Some(knot) => (knot, n < grid.first_past(knot, c)),
+                    None => (u, below),
+                },
+                _ => (u, below),
+            };
+            out.clean(i, C64::real(table.read(u, below, &mut hint)));
         }
     }
 
@@ -882,6 +948,18 @@ impl RootView<'_> {
     pub(crate) fn get(&self, i: usize) -> Result<C64, &CollapseError> {
         self.col.get(i)
     }
+}
+
+/// The knot a sum `t + c` rounding to `u` may exactly equal: one within a few steps of `u`.
+fn near(table: &Knots, u: f64, c: f64) -> Option<f64> {
+    let times = table.times();
+    let k = times.partition_point(|x| *x < u);
+    let reach = 4.0 * f64::EPSILON * u.abs().max(c.abs());
+    [k.checked_sub(1), Some(k)]
+        .into_iter()
+        .flatten()
+        .filter_map(|j| times.get(j).copied())
+        .find(|x| (x - u).abs() <= reach)
 }
 
 fn power(x: C64, n: i32) -> C64 {

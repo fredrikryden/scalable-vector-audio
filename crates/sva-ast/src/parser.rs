@@ -1,11 +1,14 @@
-// Concern: builds an Expr from one expression string's tokens | Non-concern: lexing, ref resolution, a score's lines (score/) | IO: (&str) -> Expr or a located Diag
+// Concern: builds an Expr from one expression's tokens, and finds knot literals no bound counts | Non-concern: lexing, ref resolution, score lines (score/) | IO: (&str) -> Expr or a located Diag
 
 use crate::diag::{ByteSpan, Diag, DiagCode};
-use crate::expr::{Address, Arg, BinOp, CEIL, Expr, FLOOR, INDEX, Literal};
+use crate::expr::{Address, Arg, BinOp, CEIL, Expr, FLOOR, INDEX, Literal, PWL, PWL_INTEGRAL};
 use crate::filename::SpanUnit;
 use crate::lexer::{Token, TokenKind, tokenize};
 
 pub const MAX_DEPTH: u32 = 128;
+/// A correctness bound, not a cost one: a flat chain such as `1+1+...` nests one level per
+/// operator, and every walk over the tree recurses that deep, so past it a stack overflows.
+/// A knot table's literals nest no deeper as it grows and count against nothing.
 pub const MAX_TOKENS: usize = 4096;
 
 pub fn parse(src: &str) -> Result<Expr, Diag> {
@@ -37,11 +40,14 @@ fn parse_marking(src: &str, marks: Option<Vec<Mark>>) -> Result<(Expr, Option<Ve
             "the expression is empty",
         ));
     }
-    if tokens.len() > MAX_TOKENS {
+    if let Some(past) = past_bound(&tokens) {
         return Err(Diag::new(
             DiagCode::RecursionLimit,
-            tokens[MAX_TOKENS].span,
-            format!("expression exceeds the {MAX_TOKENS}-token size bound"),
+            tokens[past].span,
+            format!(
+                "expression exceeds the {MAX_TOKENS}-token bound on what may nest, a knot \
+                 table's literals apart"
+            ),
         ));
     }
 
@@ -68,6 +74,99 @@ fn parse_marking(src: &str, marks: Option<Vec<Mark>>) -> Result<(Expr, Option<Ve
         return Err(Diag::new(code, t.span, msg));
     }
     Ok((expr, p.marks))
+}
+
+/// The bytes each knot table's flat literals span, which no size bound counts.
+pub fn knot_table_spans(src: &str) -> Vec<ByteSpan> {
+    let Ok(tokens) = tokenize(src) else {
+        return Vec::new();
+    };
+    knot_runs(&tokens)
+        .into_iter()
+        .map(|(start, end)| ByteSpan::new(tokens[start].span.start, tokens[end].span.start))
+        .collect()
+}
+
+/// The first token past `MAX_TOKENS` counted outside every knot table's flat literals.
+fn past_bound(tokens: &[Token]) -> Option<usize> {
+    let runs = knot_runs(tokens);
+    let (mut counted, mut at) = (0usize, 0usize);
+    let mut next = runs.iter().peekable();
+    while at < tokens.len() {
+        if let Some((_, end)) = next.next_if(|(start, _)| *start == at) {
+            at = *end;
+            continue;
+        }
+        if counted == MAX_TOKENS {
+            return Some(at);
+        }
+        counted += 1;
+        at += 1;
+    }
+    None
+}
+
+/// Each `[start, end)` of tokens after `pwl(x,` or `pwl_integral(x,` holding literals alone up
+/// to the closing `)`, in order.
+fn knot_runs(tokens: &[Token]) -> Vec<(usize, usize)> {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for k in 0..tokens.len().saturating_sub(1) {
+        let named = matches!(&tokens[k].kind, TokenKind::Ident(n) if n == PWL || n == PWL_INTEGRAL);
+        if !named || tokens[k + 1].kind != TokenKind::LParen {
+            continue;
+        }
+        let (mut depth, mut at) = (0usize, k + 2);
+        while let Some(t) = tokens.get(at) {
+            match t.kind {
+                TokenKind::LParen | TokenKind::LBracket => depth += 1,
+                TokenKind::RParen | TokenKind::RBracket if depth == 0 => break,
+                TokenKind::RParen | TokenKind::RBracket => depth -= 1,
+                TokenKind::Comma if depth == 0 => break,
+                _ => {}
+            }
+            at += 1;
+        }
+        if tokens.get(at).map(|t| &t.kind) != Some(&TokenKind::Comma) {
+            continue;
+        }
+        let start = at + 1;
+        if let Some(end) = literals(tokens, start) {
+            runs.push((start, end));
+        }
+    }
+    runs.sort_unstable();
+    runs
+}
+
+/// Where a run of literals from `start` closes at its `)`: each item one number, a sign before
+/// it at most, so the run nests no deeper however long it is.
+fn literals(tokens: &[Token], start: usize) -> Option<usize> {
+    let literal = |k: usize| {
+        matches!(
+            tokens.get(k).map(|t| &t.kind),
+            Some(
+                TokenKind::Num(_)
+                    | TokenKind::Time(..)
+                    | TokenKind::Samples(_)
+                    | TokenKind::Log(..)
+            )
+        )
+    };
+    let mut at = start;
+    loop {
+        if tokens.get(at).map(|t| &t.kind) == Some(&TokenKind::Minus) {
+            at += 1;
+        }
+        if !literal(at) {
+            return None;
+        }
+        at += 1;
+        match tokens.get(at).map(|t| &t.kind) {
+            Some(TokenKind::Comma) => at += 1,
+            Some(TokenKind::RParen) => return Some(at),
+            _ => return None,
+        }
+    }
 }
 
 /// The units a time position accepts, in the order a refusal names them.
@@ -606,11 +705,12 @@ impl<'t> Parser<'t> {
         }
     }
 
-    /// `crop`'s bounds and what `idx` rounds are the only time arguments a builtin takes;
-    /// every other slot is a level, a frequency or an index, and a bare number there means what
-    /// it says.
+    /// `crop`'s bounds, a knot's time and what `idx` rounds are the only time arguments a
+    /// builtin takes; every other slot is a level, a frequency or an index, and a bare number
+    /// there means what it says.
     fn refuse_bare_times(&self, name: &str, args: &[Placed]) -> Result<(), Diag> {
-        if name != "crop" && name != INDEX {
+        let knotted = name == PWL || name == PWL_INTEGRAL;
+        if name != "crop" && name != INDEX && !knotted {
             return Ok(());
         }
         let mut at = 0usize;
@@ -619,6 +719,10 @@ impl<'t> Parser<'t> {
                 Arg::Pos(_) if name == INDEX => {
                     at += 1;
                     at == 1
+                }
+                Arg::Pos(_) if knotted => {
+                    at += 1;
+                    at.is_multiple_of(2)
                 }
                 Arg::Pos(_) => {
                     at += 1;
@@ -1094,5 +1198,20 @@ mod tests {
         assert_eq!(parse(&deep).unwrap_err().code, DiagCode::RecursionLimit);
         let flat = format!("1{}", "+1".repeat(MAX_TOKENS));
         assert_eq!(parse(&flat).unwrap_err().code, DiagCode::RecursionLimit);
+    }
+
+    /// A knot table's literals nest no deeper as it grows; an expression among them still counts.
+    #[test]
+    fn a_knot_tables_literals_count_against_no_token_bound() {
+        let knots: String = (0..MAX_TOKENS).map(|k| format!(", {k}s, -{k}")).collect();
+        assert!(parse(&format!("pwl(t{knots})")).is_ok());
+        assert!(parse(&format!("2*pwl_integral(t - 1s{knots}) + 1")).is_ok());
+        for chain in ["+1", "-1"] {
+            let chained: String = (0..MAX_TOKENS)
+                .map(|k| format!(", {k}s, 1{chain}"))
+                .collect();
+            let refused = parse(&format!("pwl(t{chained})")).unwrap_err();
+            assert_eq!(refused.code, DiagCode::RecursionLimit, "{chain}");
+        }
     }
 }

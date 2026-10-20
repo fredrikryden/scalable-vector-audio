@@ -6,9 +6,9 @@ use sva_core::Diagnostic;
 
 use sva_cli::{
     CliError, Command, Finding, Format, NAME, VERSION, analyze, builtins, builtins_data, caught,
-    colored, composition, cwd, diagnostics_text, error_envelope, help_data, help_text, lint,
-    lint_data, located, new_data, parse_args, render, scaffold, solve, stopped, success_envelope,
-    trace, trace_data, version_data,
+    colored, composition, cwd, diagnostics_text, error_envelope, help_data, help_text,
+    lint_bounded, lint_data, located, new_data, parse_args, render, scaffold, solve, stopped,
+    success_envelope, trace, trace_data, version_data,
 };
 
 /// Parsing, lowering and dropping a node's expression all recurse to its depth, which `sum`
@@ -65,7 +65,11 @@ fn run() -> ExitCode {
             }
             Err(e) => Err(e),
         },
-        Ok(Command::Lint { target, format }) => lint_composition(target.as_deref(), format),
+        Ok(Command::Lint {
+            target,
+            format,
+            body_chars,
+        }) => lint_composition(target.as_deref(), format, body_chars),
         Ok(Command::Trace { target }) => trace_node(&target),
         Ok(Command::Builtins) => Ok(success_envelope(&builtins_data(&builtins()), &[])),
         Ok(Command::Outline { text }) => outline(&text),
@@ -100,7 +104,11 @@ fn run() -> ExitCode {
     }
 }
 
-fn lint_composition(target: Option<&str>, format: Format) -> Result<String, CliError> {
+fn lint_composition(
+    target: Option<&str>,
+    format: Format,
+    body_chars: usize,
+) -> Result<String, CliError> {
     let here = composition()?;
     let (dir, target) = match target {
         Some(target) => {
@@ -109,7 +117,7 @@ fn lint_composition(target: Option<&str>, format: Format) -> Result<String, CliE
         }
         None => (here, None),
     };
-    let report = lint(&dir, target.as_deref())?;
+    let report = lint_bounded(&dir, target.as_deref(), body_chars)?;
     let mut found: Vec<Diagnostic> = report.findings.iter().map(Finding::diagnostic).collect();
     found.extend(report.song.iter().map(sva_core::warning_diagnostic));
     if format == Format::Text {

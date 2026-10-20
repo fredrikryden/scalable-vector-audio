@@ -27,8 +27,8 @@ pub use diag::{ByteSpan, Diag, DiagCode};
 pub use dir::Dir;
 pub use doc_comment::{DocComment, parse as parse_doc_comment};
 pub use expr::{
-    Address, Arg, BinOp, Binds, CEIL, Expr, FLOOR, INDEX, JOIN, Literal, SERIES, children,
-    map_children,
+    Address, Arg, BinOp, Binds, CEIL, Expr, FLOOR, INDEX, JOIN, Literal, PWL, PWL_INTEGRAL, SERIES,
+    children, map_children,
 };
 pub use filename::{FileSpan, SpanUnit};
 pub use graph::{
@@ -41,7 +41,7 @@ pub use lexer::{
 };
 pub use outline::{Outline, outline};
 pub use parameters::free_parameters;
-pub use parser::parse as parse_expr;
+pub use parser::{knot_table_spans, parse as parse_expr};
 pub use print::render as render_expr;
 pub use recording::{Recording, Unheld, resolve_recordings};
 pub use refusal::{Location, Refusal};

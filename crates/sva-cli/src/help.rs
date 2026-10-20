@@ -16,6 +16,7 @@ use sva_engine::{
 pub fn help_text() -> String {
     let bits = PSYCHOACOUSTIC_V1.precision_bits;
     let store_gb = DEFAULT_STORE_BYTES >> 30;
+    let body_chars = crate::lint::BODY_CHARS;
     let representations = representations();
     let (min_frame, max_frame) = (spectrum::MIN_FRAME, spectrum::MAX_FRAME);
     let rules = solve_rules();
@@ -239,7 +240,14 @@ RENDER:
   `sample(@x([0, 1s]))`, and an author writes `sample(...)` inside the node.
   A closed form with no exact envelope, such as a crop of a decay, refuses
   `envelope` with the reason rather than measuring it unasked; `sample(...)`
-  asks for the measured one. A measured `spectrum` is one spectrum: whole
+  asks for the measured one. A knot table, `pwl(t, 0s, 0, 5ms, 1, 0.4s, 0)`,
+  is the straight lines through its knots, and `pwl_integral` with the same
+  knots that curve's integral from the first, so `cos(2*pi*pwl_integral(t, 0s,
+  440hz, 1s, 880hz))` glides an octave with an exact phase; either is exact at
+  every instant and holds any number of knots at no cost per sample, but has no
+  atoms, so these exact readings refuse it as `cast.left_algebra` and read it
+  measured off `sample(...)`. `sva-cli builtins` states both.
+  A measured `spectrum` is one spectrum: whole
   windows across the range, averaged, the first at its first sample and the last
   ending at its last, evenly at most half a window apart; a window is `frame`
   rounded up to a power of two samples, at least {min_frame}, or without `frame`
@@ -485,7 +493,7 @@ ANALYZE:
   `render`'s do, a time in seconds.
 
 LINT:
-  sva-cli lint ['<expression>'] [--format <json|text>]
+  sva-cli lint ['<expression>'] [--format <json|text>] [--body-chars <n>]
 
   Checks the current directory without rendering a sample. With no target it
   checks every file under its own rules, and types every entry point, which
@@ -508,8 +516,9 @@ LINT:
                                  `IO: <in> -> <out>` `Tags: <tag>[, <tag>...]`
            long-comment-block    a `;` block over 1000 characters, the line-1
                                  doc comment's own run exempted
-           long-expression-body  a body over 10000 characters, a backstop rather
-                                 than a complexity budget
+           long-expression-body  a body over `--body-chars` characters, a
+                                 backstop rather than a complexity budget; a
+                                 knot table's literals, its data, count none
            literal-sample-rate   a written rate where `sp` belongs
            arity                 a builtin called without an argument it reads,
                                  or with one it does not, as `rand(seed=k)`
@@ -689,6 +698,9 @@ DEFAULTS:
   --format <json|text> how `lint` prints its findings: the envelope, or one
                        terminal line each, colored where stdout is a terminal.
                        The same objects either way. Default json.
+  --body-chars <n>     the most characters a body's expression holds before
+                       `long-expression-body` refuses it, a knot table's literals
+                       apart. Default {body_chars}.
   --cache <path|none>  where the store lives. Default `$XDG_CACHE_HOME/sva`, else
                        `~/.cache/sva`, holding at most {store_gb} GB; `none` keeps
                        no store. A store that fails fails no render: it answers

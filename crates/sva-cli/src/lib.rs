@@ -32,7 +32,7 @@ pub use help::help_text;
 pub fn heard(dir: std::path::PathBuf) -> Result<impl sva_ast::Source, CliError> {
     heard::Heard::at(dir)
 }
-pub use lint::{Finding, LintReport, lint};
+pub use lint::{BODY_CHARS, Finding, LintReport, lint, lint_bounded};
 pub use new::{FILES, NEXT, Scaffolded, scaffold};
 pub use output::{help_data, lint_data, new_data, trace_data, version_data};
 pub use panic::{Stopped, caught, stopped};

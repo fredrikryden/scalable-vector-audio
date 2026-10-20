@@ -166,6 +166,7 @@ pub enum LeftReason {
     NotFinite,
     Overflow,
     Unsubstituted,
+    KnotTable,
 }
 
 impl LeftReason {
@@ -231,6 +232,10 @@ impl LeftReason {
             LeftReason::Unsubstituted => {
                 "a node or a parameter reaches the closed form unsubstituted; the graph resolves one \
                  before it normalizes"
+            }
+            LeftReason::KnotTable => {
+                "a knot table is read by lookup at each instant: its atom sum, a windowed line per \
+                 segment or a parabola per segment of an integral, is not expanded"
             }
         }
     }

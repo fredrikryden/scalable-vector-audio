@@ -111,6 +111,17 @@ fn walk(f: &Body, origin: Origin, var: Var, env: &dyn Env) -> Result<Info, Refus
         Body::Rational(r) => Ok(closed_form(rational_alg(r), var, 1, Codomain::Complex)),
         Body::Series(s) => series(s, origin, var, env),
         Body::Banded(b) => series(&b.series, origin, var, env),
+        Body::Knots { at, .. } => {
+            let mut info = walk(&at.body, at.origin, var, env)?;
+            info.alg = match info.alg.constant {
+                true => info.alg,
+                false => Alg::gone(),
+            };
+            info.ty.codomain = Codomain::Real;
+            info.ty.width = 1;
+            restate(&mut info, var);
+            Ok(info)
+        }
         Body::Modal(_) => Ok(closed_form(
             Alg::atom(AtomClass {
                 factors: Factors {

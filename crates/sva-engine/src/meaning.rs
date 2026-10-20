@@ -53,6 +53,16 @@ pub fn meaning(builtin: &str, key: &str) -> Option<Meaning> {
         ("crop", "end") => plain("where the window closes, the third positional", "s"),
         ("crop", "rise") => plain("raised-cosine fade-in from the window's start", "s"),
         ("crop", "fall") => plain("raised-cosine fade-out into the window's end", "s"),
+        ("pwl" | "pwl_integral", "at") => plain("the time the table is read at", "s"),
+        ("pwl" | "pwl_integral", "t0" | "t1") => plain(
+            "a knot's time, never before the one ahead of it; every later pair is one more knot",
+            "s",
+        ),
+        ("pwl", "v0" | "v1") => plain("the curve's value at that knot", "none"),
+        ("pwl_integral", "v0" | "v1") => plain(
+            "the integrand's value at that knot, as hertz for a phase in cycles",
+            "none",
+        ),
         ("rand", "seed") => plain("which hash the key is drawn through", "none"),
         ("delta", "k") => plain("derivative order of the impulse", "none"),
         ("stft", "window") => plain(

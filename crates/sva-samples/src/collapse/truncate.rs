@@ -612,6 +612,11 @@ impl<'a> Terms<'a> {
                 let (part, exact) = under(base)?;
                 held(Body::Pow(part, *n), exact && *n >= 0)
             }
+            Body::Knots { table, .. } => {
+                let (lo, hi) = table.span(f64::NEG_INFINITY, f64::INFINITY);
+                let reach = lo.abs().max(hi.abs()) + table.rounding();
+                held(Body::Const(C64::real(reach)), true)
+            }
             other if !mentions_line(other) => held(other.clone(), true),
             _ => None,
         }
@@ -689,6 +694,7 @@ fn moving<'f>(
         Body::Apply(Unary::Sin | Unary::Cos, arg) => found.push(&arg.body),
         Body::Apply(_, arg) if mentions_line_read(&arg.body, reads) => *clean = false,
         Body::Warp { .. }
+        | Body::Knots { .. }
         | Body::Series(_)
         | Body::Banded(_)
         | Body::Keyed { .. }

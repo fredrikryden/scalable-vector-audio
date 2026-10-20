@@ -230,7 +230,7 @@ impl std::error::Error for EngineError {}
 
 /// Every code a judgment in this engine can refuse under, with what trips it. The prefix
 /// says which judgment refused, per FORMAT 16.
-pub static REGISTRY: [(&str, &str); 105] = [
+pub static REGISTRY: [(&str, &str); 106] = [
     (
         "type.no_overload",
         "a builtin applied to operand types no row names",
@@ -410,6 +410,11 @@ pub static REGISTRY: [(&str, &str); 105] = [
     (
         "engine.bad_arity",
         "a builtin whose own lowering wanted other arguments",
+    ),
+    (
+        "engine.bad_knots",
+        "a knot table naming no curve: an odd count, under two knots, a knot that moves or is \
+         infinite, a time before the one ahead of it, or no span",
     ),
     (
         "engine.unresolved_bar_literal",

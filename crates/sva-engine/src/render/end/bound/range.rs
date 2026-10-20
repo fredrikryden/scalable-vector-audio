@@ -24,6 +24,7 @@ pub(super) enum Range {
     Shift(Box<Range>, f64),
     Warp(Box<Range>, Box<Range>),
     Wide(Vec<Range>),
+    Knots(Box<Range>, std::sync::Arc<sva_formula::Knots>),
 }
 
 /// One rounding's relative size, with room for the few a single constructor makes.
@@ -119,6 +120,9 @@ impl Range {
                 Range::Run(b.reach, 2.0 * b.reach * rounded)
             }
             Body::Channel(of, _) => Range::Wide(vec![Range::of(&of.body)?]),
+            Body::Knots { at, table } => {
+                Range::Knots(Box::new(Range::time(&at.body)?), table.clone())
+            }
             _ => return Err("a written constructor with no bound"),
         })
     }
@@ -197,7 +201,9 @@ impl Range {
             Range::Map(Unary::Tanh | Unary::Sat | Unary::Sin | Unary::Cos | Unary::Abs, of)
             | Range::Crop(of, ..)
             | Range::Shift(of, _) => Some(rounded(of.moved(moved)?, 1)),
-            Range::Pow(..) | Range::Map(..) | Range::Warp(..) => still().then_some(0.0),
+            Range::Pow(..) | Range::Map(..) | Range::Warp(..) | Range::Knots(..) => {
+                still().then_some(0.0)
+            }
         }
     }
 
@@ -213,6 +219,7 @@ impl Range {
                 a.nodes(out);
                 b.nodes(out);
             }
+            Range::Knots(at, _) => at.nodes(out),
             Range::Pow(a, _) | Range::Map(_, a) | Range::Crop(a, ..) | Range::Shift(a, _) => {
                 a.nodes(out)
             }
@@ -315,6 +322,16 @@ impl Range {
                 let when = at.over(t, to, node)?;
                 let s = of.over(when.lo - when.err, when.hi + when.err, node)?;
                 Some(Span::new(s.lo, s.hi, s.hi - s.lo + s.err))
+            }
+            // The table is read anywhere its time reaches, rounding and all.
+            Range::Knots(at, table) => {
+                let when = at.over(t, to, node)?;
+                let (lo, hi) = table.span(when.lo - when.err, when.hi + when.err);
+                Some(Span::new(
+                    lo,
+                    hi,
+                    table.rounding() + (hi - lo) * f64::from(when.err > 0.0),
+                ))
             }
             Range::Wide(parts) => {
                 let (mut m, mut err) = (0.0f64, 0.0f64);

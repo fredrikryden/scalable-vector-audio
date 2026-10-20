@@ -46,6 +46,9 @@ impl Lowering<'_> {
             .collect();
         crate::overload::check_arity(name, written, &keys)
             .map_err(|m| self.refuse(name, &m, Some(span)))?;
+        if name == sva_ast::PWL || name == sva_ast::PWL_INTEGRAL {
+            return self.knots(name, args, span, cx, var);
+        }
         let mut chosen = Vec::new();
         let named = self.named_values(name, args, span, cx, &mut chosen)?;
         let view: Vec<(&str, f64)> = named.iter().map(|(k, v)| (k.as_str(), *v)).collect();

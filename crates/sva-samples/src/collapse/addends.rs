@@ -86,6 +86,9 @@ fn live(f: &Body, clock: &Clock, span: SampleInterval) -> SampleInterval {
             .iter()
             .fold(span, |held, part| live(&part.body, clock, held)),
         Body::Shift { by, of } => live(&of.body, &clock.shifted(*by), span),
+        Body::Knots { at, table } if matches!(*at.body, Body::Line) => {
+            clock.between(span, table.support())
+        }
         _ => span,
     }
 }
@@ -110,6 +113,16 @@ impl Clock {
             grid: self.grid,
             shifts: [self.shifts.as_slice(), &[by]].concat(),
         }
+    }
+
+    fn between(&self, span: SampleInterval, (l, r): (f64, f64)) -> SampleInterval {
+        let shifts = &self.shifts;
+        let at = |n: i64| shifts.iter().fold(self.grid.instant(n), |t, by| t - by);
+        let interval = match shifts.is_empty() {
+            true => (self.grid.first_at(l), self.grid.first_at(r)),
+            false => active::between(l, r, at),
+        };
+        active::meet(span, interval)
     }
 
     /// Where a crop's gain is not zero: inside `[l, r)` less the instants a shoulder opens at.

@@ -41,17 +41,30 @@ pub struct LintReport {
 /// With no target, every file's own rules and every entry point's types; with one, those of
 /// each file it reaches and the interval a render of it reads.
 pub fn lint(dir: &Path, target: Option<&str>) -> Result<LintReport, CliError> {
+    lint_bounded(dir, target, BODY_CHARS)
+}
+
+/// The same, a body's expression allowed `body_chars` characters.
+pub fn lint_bounded(
+    dir: &Path,
+    target: Option<&str>,
+    body_chars: usize,
+) -> Result<LintReport, CliError> {
     let source = crate::heard::Heard::at(dir)?;
     match target {
-        None => lint_files(&source, prepared(&source)?),
-        Some(target) => lint_reaching(&source, target),
+        None => lint_files(&source, prepared(&source)?, body_chars),
+        Some(target) => lint_reaching(&source, target, body_chars),
     }
 }
 
 /// Every entry point is typed, which types every file it reaches; one that no render can take
 /// whole is left to the render that refuses it. A lint violation refuses before a type does.
-fn lint_files(source: &dyn Source, graph: Graph) -> Result<LintReport, CliError> {
-    let violations = lint_violations(source, &graph);
+fn lint_files(
+    source: &dyn Source,
+    graph: Graph,
+    body_chars: usize,
+) -> Result<LintReport, CliError> {
+    let violations = lint_violations(source, &graph, body_chars);
     let mut song = Vec::new();
     if violations.is_empty() {
         for root in crate::trace::entry_points(&graph) {
@@ -97,12 +110,16 @@ fn verdict(
 
 /// The files the target reaches, each under its own rules, then what a render of it decides:
 /// a lint violation refuses before a structural one.
-fn lint_reaching(source: &dyn Source, target: &str) -> Result<LintReport, CliError> {
+fn lint_reaching(
+    source: &dyn Source,
+    target: &str,
+    body_chars: usize,
+) -> Result<LintReport, CliError> {
     let expr = sva_core::target(target)?.expr;
     let held = sva_core::roots_of(source, &expr)?;
     let roots: Vec<&str> = held.iter().map(String::as_str).collect();
     let graph = settled(sva_ast::load_reaching(source, &roots))?;
-    let violations = lint_violations(source, &graph);
+    let violations = lint_violations(source, &graph, body_chars);
     let mut interval = None;
     let mut song = Vec::new();
     if violations.is_empty() {
@@ -124,11 +141,11 @@ fn lint_reaching(source: &dyn Source, target: &str) -> Result<LintReport, CliErr
 
 /// Refuses with every violation found, not just the first: a tree-wide scan, unlike
 /// `check_arity`/`check_feedback`'s single graph evaluation.
-fn lint_violations(source: &dyn Source, graph: &Graph) -> Vec<LintViolation> {
+fn lint_violations(source: &dyn Source, graph: &Graph, body_chars: usize) -> Vec<LintViolation> {
     let mut violations = Vec::new();
     violations.extend(doc_comment_violations(source, graph));
     violations.extend(long_comment_block_violations(source, graph));
-    violations.extend(long_expression_body_violations(source, graph));
+    violations.extend(long_expression_body_violations(source, graph, body_chars));
     violations.extend(crate::rates::rate_violations(graph));
     violations.extend(crate::arity::arity_violations(graph));
     violations
@@ -281,16 +298,20 @@ fn doc_comment_violations(source: &dyn Source, graph: &Graph) -> Vec<LintViolati
     violations
 }
 
-/// Generous on purpose: today's longest real body is ~5000 chars — a backstop against
-/// runaway generation, not a tight budget on complex physical models.
-const EXPRESSION_BODY_CHARS: usize = 10_000;
+/// Generous on purpose: a backstop against runaway generation that `--body-chars` raises, not
+/// a budget on complex models. A knot table's literals are data and count nothing.
+pub const BODY_CHARS: usize = 10_000;
 
 /// A verbose local `@ref` name is a naming choice, not equation complexity.
 const REF_PLACEHOLDER: &str = "@x";
 
 /// Excludes the leading `;`-comment run, and a score, whose lines are events and no body. A
 /// node over budget gets one recount with ref names collapsed, so a verbose `@ref` cannot trip it.
-fn long_expression_body_violations(source: &dyn Source, graph: &Graph) -> Vec<LintViolation> {
+fn long_expression_body_violations(
+    source: &dyn Source,
+    graph: &Graph,
+    most: usize,
+) -> Vec<LintViolation> {
     let mut violations = Vec::new();
     for path in graph.paths().filter(|path| graph.score(path).is_none()) {
         let Ok(Some(text)) = source.get(path) else {
@@ -301,22 +322,23 @@ fn long_expression_body_violations(source: &dyn Source, graph: &Graph) -> Vec<Li
             .skip_while(|line| line.trim_start().starts_with(';'))
             .collect::<Vec<_>>()
             .join("\n");
+        let body = without_knot_tables(&body);
         let chars = body.chars().count();
-        if chars <= EXPRESSION_BODY_CHARS {
+        if chars <= most {
             continue;
         }
         let (chars, has_refs) = ref_stripped_char_count(&body);
-        if chars > EXPRESSION_BODY_CHARS {
+        if chars > most {
             let message = if has_refs {
                 format!(
                     "`{path}` has a {chars}-character expression body even with every `@ref` \
-                     name collapsed to `{REF_PLACEHOLDER}`, over the \
-                     {EXPRESSION_BODY_CHARS}-character threshold — decompose it into sub-nodes"
+                     name collapsed to `{REF_PLACEHOLDER}`, over the {most}-character \
+                     threshold — decompose it into sub-nodes, or raise it with `--body-chars`"
                 )
             } else {
                 format!(
-                    "`{path}` has a {chars}-character expression body, over the \
-                     {EXPRESSION_BODY_CHARS}-character threshold — decompose it into sub-nodes"
+                    "`{path}` has a {chars}-character expression body, over the {most}-character \
+                     threshold — decompose it into sub-nodes, or raise it with `--body-chars`"
                 )
             };
             violations.push(LintViolation {
@@ -329,6 +351,26 @@ fn long_expression_body_violations(source: &dyn Source, graph: &Graph) -> Vec<Li
         }
     }
     violations
+}
+
+/// One text, comments blanked, so a table across lines is found whole.
+fn without_knot_tables(body: &str) -> String {
+    let flat: String = body
+        .split('\n')
+        .map(|line| {
+            let kept = sva_ast::strip_line_comment(line);
+            kept.to_string() + &" ".repeat(line.len() - kept.len())
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut kept = String::with_capacity(body.len());
+    let mut from = 0;
+    for span in sva_ast::knot_table_spans(&flat) {
+        kept.push_str(&body[from..span.start]);
+        from = span.end;
+    }
+    kept.push_str(&body[from..]);
+    kept
 }
 
 /// Only reached once the raw count already exceeds the cap. Collapses each `@ref`'s `@path`
@@ -767,14 +809,11 @@ mod tests {
         let refs: Vec<String> = std::iter::repeat_n(format!("@{long_name}"), n).collect();
         let body = refs.join(" + ");
         let raw = body.chars().count();
-        assert!(
-            raw > EXPRESSION_BODY_CHARS,
-            "raw count must be over budget: {raw}"
-        );
+        assert!(raw > BODY_CHARS, "raw count must be over budget: {raw}");
 
         let reduced: usize = n * REF_PLACEHOLDER.chars().count() + (n - 1) * 3;
         assert!(
-            reduced <= EXPRESSION_BODY_CHARS,
+            reduced <= BODY_CHARS,
             "reduced count must be under budget: {reduced}"
         );
 
@@ -809,13 +848,10 @@ mod tests {
         let filler = "0".repeat(10_500);
         let body = format!("@{long_name} + @{long_name} + {filler}");
         let raw = body.chars().count();
-        assert!(
-            raw > EXPRESSION_BODY_CHARS,
-            "raw count must be over budget: {raw}"
-        );
+        assert!(raw > BODY_CHARS, "raw count must be over budget: {raw}");
         let reduced = 2 * REF_PLACEHOLDER.chars().count() + 2 * 3 + filler.chars().count();
         assert!(
-            reduced > EXPRESSION_BODY_CHARS,
+            reduced > BODY_CHARS,
             "reduced count must still be over budget: {reduced}"
         );
 

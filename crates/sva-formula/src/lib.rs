@@ -12,6 +12,7 @@ pub mod filter;
 pub mod fourier_dual;
 pub mod hash;
 pub mod infer;
+pub mod knots;
 pub mod modal;
 pub mod noise;
 pub mod origin;
@@ -39,6 +40,7 @@ pub use fourier_dual::{
 };
 pub use hash::{Hash, draw, draw_nearest, either_order, hash_written_with};
 pub use infer::infer;
+pub use knots::{Knots, Unknotted};
 pub use modal::damping::Damping;
 pub use modal::{Geometry, modes};
 pub use noise::noise;

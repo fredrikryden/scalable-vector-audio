@@ -3,8 +3,8 @@
 use sva_ast::BUILTINS;
 use sva_engine::overload::{notation, signature};
 use sva_engine::{
-    Cast, Codomain, Held, MAX_WIDTH, Meaning, REGISTRY, Ty, Var, meaning, named_may_move,
-    recognized_named, shape_name,
+    Cast, Codomain, Held, Meaning, REGISTRY, Ty, Var, meaning, named_may_move, recognized_named,
+    shape_name,
 };
 use sva_formula::filter::{ALL_SHAPES, Shape};
 use sva_formula::{FAMILIES, FOURIER_DUAL_RULES_VERSION};
@@ -14,7 +14,8 @@ use crate::json::{NONE, escape, list, pair_list, strings};
 pub struct Callable {
     pub name: &'static str,
     pub required: usize,
-    pub max_positional: usize,
+    /// `None` where no count is too many.
+    pub max_positional: Option<usize>,
     pub named: &'static [&'static str],
     /// A subset of `named` with no default — a caller who omits one gets a refusal, not a
     /// fallback. Every builtin leaves this empty today.
@@ -65,7 +66,7 @@ pub const NOTE_GRAMMAR: &str = "a bare identifier: a letter A-G, an optional acc
     twelve-tone equal temperament, up to G9 where MIDI's 128 notes end";
 
 /// `(name, its call shape)`.
-pub const SPECIAL_FORMS: [(&str, &str); 8] = [
+pub const SPECIAL_FORMS: [(&str, &str); 10] = [
     (
         "deg",
         "deg(n) -- the tonic in variables/key times the ratio of scale degree n, a whole \
@@ -87,6 +88,27 @@ pub const SPECIAL_FORMS: [(&str, &str); 8] = [
     (
         "join",
         "join(a, b, ...) -- builds one wide value from 2..=8 mono args",
+    ),
+    (
+        "pwl",
+        "pwl(x, t0, v0, t1, v1, ...) -- the straight lines through the knots (tk, vk), read \
+         at the time x: zero before t0 and from the last knot on, two knots at one time a jump \
+         read from its right. Each time is a constant with a unit, never falling, and each \
+         value a constant, so it is linear in its values; any number of knots, found by \
+         bisection or by stepping forward sample to sample, so its length costs nothing per \
+         sample, and a knot table counts against no body's size bound. Exact at every \
+         instant; its support is [t0, tn) and its bound from an instant on the largest |vk| \
+         from there. It holds no atoms: `lines`, `atoms`, `spectrum`, `envelope`, `pitch` \
+         and `derivative` of a form holding one refuse as cast.left_algebra, and read off \
+         sample(...) they are measured",
+    ),
+    (
+        "pwl_integral",
+        "pwl_integral(x, t0, v0, ...) -- the integral of the same pwl from t0 to x, exact: \
+         zero before t0, a parabola on each segment, the whole area from the last knot on. \
+         Its knots in hertz make a phase in cycles: cos(2*pi*pwl_integral(t, 0s, 440hz, 1s, \
+         880hz)) glides an octave in one second; its bound from an instant on is the largest \
+         it reaches from there, and it holds no atoms either",
     ),
     (
         "ch",
@@ -145,11 +167,7 @@ fn plain_callable(name: &'static str) -> Callable {
     Callable {
         name,
         required: sig.required(),
-        max_positional: if sig.variadic {
-            MAX_WIDTH
-        } else {
-            sig.params.len()
-        },
+        max_positional: sig.most(),
         named: sig.named(),
         required_named: &[],
         takes_gain: None,
@@ -173,7 +191,7 @@ fn filter_callable(shape: Shape) -> Callable {
     Callable {
         name: shape_name(shape),
         required: 2,
-        max_positional,
+        max_positional: Some(max_positional),
         named,
         required_named: &[],
         takes_gain: Some(gain),
@@ -249,7 +267,8 @@ pub fn builtins_data(b: &Builtins) -> String {
              \"required_named\": {}, \"takes_gain\": {}, \"arguments\": {}, \"positional\": {} }}",
             escape(c.name),
             c.required,
-            c.max_positional,
+            c.max_positional
+                .map_or_else(|| NONE.to_string(), |n| n.to_string()),
             strings(c.named),
             strings(c.required_named),
             c.takes_gain
@@ -452,11 +471,11 @@ mod tests {
     fn one_pole_alone_has_no_room_for_q_or_gain() {
         let b = builtins();
         let lp = b.callables.iter().find(|c| c.name == "lp").unwrap();
-        assert_eq!(lp.max_positional, 2);
+        assert_eq!(lp.max_positional, Some(2));
         let lowpass = b.callables.iter().find(|c| c.name == "lowpass").unwrap();
-        assert_eq!(lowpass.max_positional, 3);
+        assert_eq!(lowpass.max_positional, Some(3));
         let peaking = b.callables.iter().find(|c| c.name == "peaking").unwrap();
-        assert_eq!(peaking.max_positional, 4);
+        assert_eq!(peaking.max_positional, Some(4));
     }
 
     #[test]

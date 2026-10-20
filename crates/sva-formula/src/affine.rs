@@ -369,7 +369,7 @@ pub fn axis_read(f: &Body, env: &dyn crate::env::Env, reads: &dyn Reads) -> Axis
     let axis = |f: &Body| axis_read(f, env, reads);
     match f {
         Body::Const(c) => Axis::of(*c),
-        Body::Index(_) | Body::Line | Body::Keyed { .. } => Axis::Real,
+        Body::Index(_) | Body::Line | Body::Keyed { .. } | Body::Knots { .. } => Axis::Real,
         Body::Node(id) => reads
             .axis(*id)
             .unwrap_or_else(|| Axis::of_codomain(env.node(*id).codomain)),

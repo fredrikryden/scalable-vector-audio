@@ -8,6 +8,8 @@ pub const INDEX: &str = "idx";
 pub const FLOOR: &str = "floor";
 pub const CEIL: &str = "ceil";
 pub const DEGREE: &str = "deg";
+pub const PWL: &str = "pwl";
+pub const PWL_INTEGRAL: &str = "pwl_integral";
 
 #[derive(Clone, Copy, Debug)]
 pub enum BinOp {

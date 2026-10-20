@@ -1,6 +1,6 @@
 // Concern: decides which names the language owns: reserved words, notes and their pitch, builtins | Non-concern: what a builtin evaluates to, its named arguments | IO: (name) -> bool or a frequency
 
-use crate::expr::{INDEX, JOIN, SERIES};
+use crate::expr::{INDEX, JOIN, PWL, PWL_INTEGRAL, SERIES};
 
 pub const SELF: &str = "self";
 
@@ -23,9 +23,31 @@ pub const RESERVED: [(&str, &str); 6] = [
 
 pub const CHANNEL: &str = "ch";
 
-const ARITHMETIC: [&str; 22] = [
-    "sin", "cos", "exp", "log", "pow", "sqrt", "abs", "tanh", "step", "max", "min", "saw",
-    "square", "triangle", "sat", "crop", "rand", "delta", "pv", SERIES, JOIN, CHANNEL,
+const ARITHMETIC: [&str; 24] = [
+    "sin",
+    "cos",
+    "exp",
+    "log",
+    "pow",
+    "sqrt",
+    "abs",
+    "tanh",
+    "step",
+    "max",
+    "min",
+    "saw",
+    "square",
+    "triangle",
+    "sat",
+    "crop",
+    "rand",
+    "delta",
+    "pv",
+    SERIES,
+    JOIN,
+    CHANNEL,
+    PWL,
+    PWL_INTEGRAL,
 ];
 
 pub const CASTS: [&str; 5] = ["sample", "fourier", "ifourier", "stft", "istft"];

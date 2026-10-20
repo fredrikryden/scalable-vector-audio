@@ -169,6 +169,10 @@ pub(crate) fn lower(
         }
         Body::Rational(r) => Ok(SpectralSum::mono(var, expand(r, origin)?)),
         Body::Banded(_) => Err(left(origin, Factor::Value, LeftReason::Nonlinearity)),
+        Body::Knots { at, table } => match held_constant(at, var, reads) {
+            Some(c) => constant(var, C64::real(table.at(c.re)), origin),
+            None => Err(left(origin, Factor::Value, LeftReason::KnotTable)),
+        },
         Body::Series(s) => Ok(SpectralSum::of(
             var,
             vec![Lane {

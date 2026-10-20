@@ -21,11 +21,19 @@ pub struct Param {
     pub kind: ParamKind,
 }
 
+/// `join` takes two to `MAX_WIDTH` components; a knot table takes as many knots as it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tail {
+    Fixed,
+    Upto(usize),
+    Open,
+}
+
 pub struct Signature {
     pub name: &'static str,
     pub params: &'static [Param],
-    /// `join` takes two to `MAX_WIDTH` components; nothing else takes an open tail.
-    pub variadic: bool,
+    /// The most positionals it takes past its own, where it takes more.
+    pub tail: Tail,
     pub result: fn(&[Ty]) -> Result<Ty, Mismatch>,
 }
 
@@ -37,6 +45,15 @@ impl Signature {
 
     pub fn required(&self) -> usize {
         self.params.iter().filter(|p| p.required).count()
+    }
+
+    /// `None` where no count is too many.
+    pub fn most(&self) -> Option<usize> {
+        match self.tail {
+            Tail::Fixed => Some(self.params.len()),
+            Tail::Upto(n) => Some(n),
+            Tail::Open => None,
+        }
     }
 }
 
@@ -80,6 +97,13 @@ const SERIES_PARAMS: &[Param] = &[
     need("lo", ParamKind::Bound),
     need("hi", ParamKind::Bound),
     need("term", ParamKind::Signal),
+];
+const KNOTTED: &[Param] = &[
+    need("at", ParamKind::Signal),
+    need("t0", ParamKind::Scalar),
+    need("v0", ParamKind::Scalar),
+    need("t1", ParamKind::Scalar),
+    need("v1", ParamKind::Scalar),
 ];
 const CHANNEL_PARAMS: &[Param] = &[need("x", ParamKind::Signal), need("k", ParamKind::Index)];
 const FUNDAMENTAL: &[Param] = &[need("f0", ParamKind::Scalar)];
@@ -181,6 +205,16 @@ fn series(args: &[Ty]) -> Result<Ty, Mismatch> {
     Ok(args.get(3).copied().unwrap_or_else(neutral))
 }
 
+/// One real value whatever its time reads; the knots are numbers.
+fn knotted(args: &[Ty]) -> Result<Ty, Mismatch> {
+    let at = meet(&args[..args.len().min(1)])?;
+    Ok(Ty {
+        width: 1,
+        codomain: Codomain::Real,
+        ..at
+    })
+}
+
 fn joined(args: &[Ty]) -> Result<Ty, Mismatch> {
     let mut width = 0u32;
     let mono: Vec<Ty> = args.iter().map(|t| Ty { width: 1, ..*t }).collect();
@@ -230,7 +264,7 @@ const fn plain(
     Signature {
         name,
         params,
-        variadic: false,
+        tail: Tail::Fixed,
         result,
     }
 }
@@ -274,8 +308,20 @@ pub static SIGNATURES: &[Signature] = &[
     Signature {
         name: "join",
         params: TWO,
-        variadic: true,
+        tail: Tail::Upto(MAX_WIDTH as usize),
         result: joined,
+    },
+    Signature {
+        name: sva_ast::PWL,
+        params: KNOTTED,
+        tail: Tail::Open,
+        result: knotted,
+    },
+    Signature {
+        name: sva_ast::PWL_INTEGRAL,
+        params: KNOTTED,
+        tail: Tail::Open,
+        result: knotted,
     },
     plain("ch", CHANNEL_PARAMS, channel),
     plain("chaigne_askenfelt", FUNDAMENTAL, samples),
@@ -323,11 +369,7 @@ pub fn check_arity(name: &str, positional: usize, named: &[String]) -> Result<()
     let Some(sig) = signature(name) else {
         return Ok(());
     };
-    let ceiling = if sig.variadic {
-        usize::from(MAX_WIDTH)
-    } else {
-        sig.params.len()
-    };
+    let ceiling = sig.most().unwrap_or(usize::MAX);
     for key in named {
         let Some(at) = sig.params.iter().position(|p| p.name == *key) else {
             if sig.named().contains(&key.as_str()) {

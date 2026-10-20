@@ -18,6 +18,7 @@ mod grid;
 mod harmony;
 mod index;
 mod instantiate;
+mod knots;
 mod laws;
 mod ledger;
 mod loops;

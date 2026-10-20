@@ -57,6 +57,7 @@ pub enum Command {
     Lint {
         target: Option<String>,
         format: Format,
+        body_chars: usize,
     },
     Trace {
         target: String,
@@ -185,8 +186,18 @@ fn lint_args(rest: &[String]) -> Result<Command, CliError> {
         _ => None,
     };
     let mut format = Format::default();
+    let mut body_chars = crate::lint::BODY_CHARS;
     while let Some(flag) = it.next() {
         match flag.as_str() {
+            "--body-chars" => {
+                let text = it.next().map(String::as_str).unwrap_or("nothing");
+                body_chars = text.parse().map_err(|_| {
+                    CliError::usage(
+                        "cli.bad_value",
+                        format!("`--body-chars` takes a whole number of characters, not `{text}`"),
+                    )
+                })?;
+            }
             "--format" => {
                 format = match it.next().map(String::as_str) {
                     Some("json") => Format::Json,
@@ -206,14 +217,18 @@ fn lint_args(rest: &[String]) -> Result<Command, CliError> {
                 return Err(CliError::usage(
                     "cli.unknown_argument",
                     format!(
-                        "lint takes only ['<expression>'] and `--format <json|text>`, not \
-                     `{extra}`"
+                        "lint takes only ['<expression>'], `--format <json|text>` and \
+                         `--body-chars <n>`, not `{extra}`"
                     ),
                 ));
             }
         }
     }
-    Ok(Command::Lint { target, format })
+    Ok(Command::Lint {
+        target,
+        format,
+        body_chars,
+    })
 }
 
 /// One positional and nothing else: a trace answers structure, which no option narrows.
@@ -360,6 +375,7 @@ mod tests {
             Command::Lint {
                 target: None,
                 format: Format::Json,
+                body_chars: crate::lint::BODY_CHARS,
             }
         );
         assert_eq!(parse_args(&argv(&["list"])).unwrap(), Command::Builtins);
@@ -815,6 +831,7 @@ mod tests {
             Command::Lint {
                 target: Some("@drums/kick".to_string()),
                 format: Format::Json,
+                body_chars: crate::lint::BODY_CHARS,
             }
         );
         refused(&["lint", "a", "b"]);

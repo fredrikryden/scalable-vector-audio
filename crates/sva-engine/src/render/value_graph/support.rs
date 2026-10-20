@@ -311,6 +311,13 @@ impl<'a> Supports<'a> {
                 self.body(&of.body, grid)
                     .intersect(window(grid, l.value(), r.value()))
             }
+            Body::Knots { at, table } => match knot_shift(&at.body) {
+                Some(by) => {
+                    let (l, r) = held_from(table.support(), by);
+                    window(grid, l, r)
+                }
+                None => Extent::EVERYWHERE,
+            },
             Body::Channel(of, _) => self.body(&of.body, grid),
             _ => Extent::EVERYWHERE,
         };
@@ -467,6 +474,11 @@ impl Supports<'_> {
                 (top + 1.0).exp()
             }
             Body::Crop { of: inner, .. } | Body::Channel(inner, _) => of(&inner.body)?,
+            Body::Knots { at, table } => {
+                let by = knot_shift(&at.body)?;
+                let (least, most) = table.span((lo + by).next_down(), (hi + by).next_up());
+                least.abs().max(most.abs()) + table.rounding()
+            }
             Body::Shift { by, of: inner } => self.bound(&inner.body, lo - by, hi - by)?,
             Body::Node(id) => {
                 let steady = lo.abs().max(hi.abs()) <= STEADY && self.steady(*id);
@@ -847,6 +859,23 @@ fn keeps_zero(op: Unary) -> bool {
         op,
         Unary::Sin | Unary::Tanh | Unary::Abs | Unary::Sqrt | Unary::Sat
     )
+}
+
+/// `c` where a table is read at `t + c`.
+fn knot_shift(at: &Body) -> Option<f64> {
+    match sva_formula::affine::slide(at)? {
+        sva_formula::affine::Coeff::Exact(c) if c.im == 0.0 => Some(c.re),
+        _ => None,
+    }
+}
+
+/// The instants `t` whose `t + by` lands in `[l, r)`, widened a step each way where the sum
+/// rounds: the exact read decides each one inside.
+fn held_from((l, r): (f64, f64), by: f64) -> (f64, f64) {
+    match by == 0.0 {
+        true => (l, r),
+        false => ((l - by).next_down(), (r - by).next_up()),
+    }
 }
 
 /// The samples whose instants lie in a crop's `[l, r)`, by the grid's one edge rule.

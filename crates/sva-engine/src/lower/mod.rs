@@ -3,6 +3,7 @@
 mod calls;
 mod casts;
 mod constant;
+pub(crate) mod knots;
 pub(crate) mod physics;
 mod solvers;
 mod walk;

@@ -241,6 +241,11 @@ pub enum Body {
     Modal(ModalBank),
     Run(Box<crate::run::Run>),
     Banded(Box<crate::banded::Banded>),
+    /// The table read at the instant `at` names, a crop's window read at the free variable.
+    Knots {
+        at: Part,
+        table: std::sync::Arc<crate::knots::Knots>,
+    },
 }
 
 /// The subterms of one node: a walker states its recursion once, and every new variant
@@ -267,7 +272,8 @@ pub fn children(f: &Body) -> Vec<&Part> {
         | Body::Delta { at: of, .. }
         | Body::Shift { of, .. }
         | Body::Deriv { of, .. }
-        | Body::Crop { of, .. } => vec![of],
+        | Body::Crop { of, .. }
+        | Body::Knots { at: of, .. } => vec![of],
         Body::Series(s) => vec![&s.term],
         Body::Banded(b) => vec![&b.series.term],
     }
@@ -309,6 +315,10 @@ pub fn map_children(f: &Body, mut g: impl FnMut(&Part) -> Part) -> Body {
         Body::Deriv { order, of } => Body::Deriv {
             order: *order,
             of: g(of),
+        },
+        Body::Knots { at, table } => Body::Knots {
+            at: g(at),
+            table: table.clone(),
         },
         Body::Crop {
             of,

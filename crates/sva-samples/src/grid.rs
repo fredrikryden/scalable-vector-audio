@@ -1,5 +1,21 @@
 // Concern: the sample grid: a sample's instant, the sample an instant or edge lands on, spans of samples | Non-concern: what a sample holds | IO: (n or t) -> t or n
 
+fn decimal(x: f64) -> Option<(i128, i128)> {
+    const LIMIT: i128 = 1 << 120;
+    let text = format!("{x:e}");
+    let (mantissa, exp) = text.split_once('e')?;
+    let (whole, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits: i128 = format!("{whole}{frac}").parse().ok()?;
+    let shift = exp.parse::<i32>().ok()? - frac.len() as i32;
+    let ten = 10i128
+        .checked_pow(shift.unsigned_abs())
+        .filter(|p| *p < LIMIT)?;
+    match shift >= 0 {
+        true => Some((digits.checked_mul(ten)?, 1)),
+        false => Some((digits, ten)),
+    }
+}
+
 /// No pull, stored chunk or machine block crosses a multiple.
 pub const BLOCK: i64 = 1 << 12;
 
@@ -162,22 +178,30 @@ impl Grid {
 
     /// `ceil(edge * d * rate / a)`, `edge` as the shortest decimal that prints it.
     fn decimal_steps(&self, edge: f64) -> Option<i128> {
-        const LIMIT: i128 = 1 << 120;
-        let text = format!("{edge:e}");
-        let (mantissa, exp) = text.split_once('e')?;
-        let (whole, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-        let digits: i128 = format!("{whole}{frac}").parse().ok()?;
-        let shift = exp.parse::<i32>().ok()? - frac.len() as i32;
-        let ten = 10i128
-            .checked_pow(shift.unsigned_abs())
-            .filter(|p| *p < LIMIT)?;
-        let (num, den) = match shift >= 0 {
-            true => (digits.checked_mul(ten)?, 1),
-            false => (digits, ten),
-        };
+        self.steps(decimal(edge)?)
+    }
+
+    fn steps(&self, (num, den): (i128, i128)) -> Option<i128> {
         let top = num.checked_mul(self.d.checked_mul(i128::from(self.rate))?)?;
         let bottom = den.checked_mul(self.a)?;
         Some(top.div_euclid(bottom) + i128::from(top.rem_euclid(bottom) != 0))
+    }
+
+    /// `first_at` of `edge - by`, the two decimals summed exactly rather than their doubles.
+    pub fn first_past(&self, edge: f64, by: f64) -> i64 {
+        let beyond = if edge - by < 0.0 { i64::MIN } else { i64::MAX };
+        let exact = || {
+            let ((a, p), (b, q)) = (decimal(edge)?, decimal(by)?);
+            let den = p.max(q);
+            let num = a
+                .checked_mul(den / p)?
+                .checked_sub(b.checked_mul(den / q)?)?;
+            self.steps((num, den))
+        };
+        match (edge.is_finite() && by.is_finite()).then(exact).flatten() {
+            Some(n) => i64::try_from(n).unwrap_or(beyond),
+            None => self.first_at(edge - by),
+        }
     }
 
     /// Whether sample `n` lies in `[l, r)` by `first_at`, which only a tie of its instant needs.
