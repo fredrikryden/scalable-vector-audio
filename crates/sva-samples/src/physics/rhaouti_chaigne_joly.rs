@@ -119,7 +119,7 @@ fn build_contact_patch(
                 continue;
             }
             let (dx, dy) = (di as f64 * h, dj as f64 * h);
-            let w = libm::exp(-MALLET_WINDOW_QUARTIC_COEFF_M4 * (dx.powi(4) + dy.powi(4)));
+            let w = sva_formula::exp(-MALLET_WINDOW_QUARTIC_COEFF_M4 * (dx.powi(4) + dy.powi(4)));
             if w < MALLET_WINDOW_WEIGHT_FLOOR {
                 continue;
             }

@@ -603,7 +603,7 @@ impl Unary {
         match self {
             Unary::Sin => libm::sin(x),
             Unary::Cos => libm::cos(x),
-            Unary::Exp => libm::exp(x),
+            Unary::Exp => sva_formula::exp(x),
             Unary::Sqrt => x.sqrt(),
             Unary::Abs => x.abs(),
             Unary::Tanh => libm::tanh(x),

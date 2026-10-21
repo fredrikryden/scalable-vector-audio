@@ -439,7 +439,7 @@ fn a_series_of_warped_terms_takes_the_point_row() {
     for i in 0..buffer.len() {
         let t = i as f64 / f64::from(RATE);
         let want: f64 = (0..counted)
-            .map(|n| 0.5f64.powi(n) * libm::sin(f64::from(n) * libm::exp(t)))
+            .map(|n| 0.5f64.powi(n) * libm::sin(f64::from(n) * sva_formula::exp(t)))
             .sum();
         assert!(
             (buffer.at(0, i) - want).abs() < 1e-9,

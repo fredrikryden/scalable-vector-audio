@@ -74,7 +74,7 @@ fn two_gaussians_multiply_to_one_gaussian() {
         panic!("two Gaussians are one Gaussian");
     };
     assert_eq!(atom.gauss, Some(Gauss { a: 4.0, mu: 1.5 }));
-    let leftover = libm::exp(-(1.0 * 3.0) * 4.0 / 4.0f64);
+    let leftover = sva_formula::exp(-(1.0 * 3.0) * 4.0 / 4.0f64);
     assert!((atom.c.re - leftover).abs() < 1e-12, "{:?}", atom.c);
 }
 

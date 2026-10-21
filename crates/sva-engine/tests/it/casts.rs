@@ -123,7 +123,7 @@ fn a_spectrum_product_under_ifourier_composes() {
     let id = held.id("voiced").expect("the root");
     assert!(held.tys.ty(id).has_dual());
     let buffer = held.output(id).expect("a collapsed pair");
-    let want = libm::exp(-(185.0f64 / 2400.0).powi(2));
+    let want = sva_formula::exp(-(185.0f64 / 2400.0).powi(2));
     let peak = (0..buffer.len())
         .map(|i| buffer.at(0, i).abs())
         .fold(0.0f64, f64::max);

@@ -211,7 +211,7 @@ fn build_source_patch(
                     continue;
                 }
                 let quartic = |d: isize| (d * d * d * d) as f64;
-                let w = libm::exp(-coeff * (quartic(di) + quartic(dj) + quartic(dk)));
+                let w = sva_formula::exp(-coeff * (quartic(di) + quartic(dj) + quartic(dk)));
                 if w < SOURCE_WINDOW_WEIGHT_FLOOR {
                     continue;
                 }

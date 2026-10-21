@@ -63,7 +63,7 @@ pub fn magnitude_upper_bound_from_instant(atom: &SpectralAtom, t: f64) -> Option
             (d.powi(-order), -f64::from(order) * libm::log(d))
         }
     };
-    let factors = [libm::exp(top), libm::exp(gauss), pole];
+    let factors = [crate::exp(top), crate::exp(gauss), pole];
     if factors.iter().all(|f| f.is_normal()) {
         return Some(atom.c.abs() * factors[0] * factors[1] * factors[2]);
     }
@@ -74,7 +74,7 @@ pub fn magnitude_upper_bound_from_instant(atom: &SpectralAtom, t: f64) -> Option
         return Some(0.0);
     }
     let slack = 1.0 + 4.0 * f64::EPSILON * (1.0 + terms.iter().map(|x| x.abs()).sum::<f64>());
-    Some(atom.c.abs() * libm::exp(ln) * slack).filter(|s| !s.is_nan())
+    Some(atom.c.abs() * crate::exp(ln) * slack).filter(|s| !s.is_nan())
 }
 
 pub fn fate(atom: &SpectralAtom) -> Fate {

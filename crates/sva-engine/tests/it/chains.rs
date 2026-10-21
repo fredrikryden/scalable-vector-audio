@@ -83,7 +83,7 @@ fn a_sum_with_a_square_at_each_of_eight_levels() {
 fn an_exponential_window_over_a_sum_twelve_levels_deep() {
     let sum = |p: &str| format!("{p}*0.5 + {p}*0.3 + {p}*0.2");
     let digest = over(TONE, (12, "1s"), sum, "crop(exp(-3*t)*@n12(t), 0s, 1s)");
-    assert_eq!(digest, 0xb065_af8d_5931_0dec);
+    assert_eq!(digest, 0x8a97_d2ea_48d0_2203);
 }
 
 /// Read once per path, each term would be `3^12` copies of the tone.

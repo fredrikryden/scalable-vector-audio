@@ -260,7 +260,7 @@ fn nmr_of(signal: &[f64], alias: &[f64], edges: &[f64]) -> f64 {
 /// Terhardt's threshold in quiet, in a band energy's own units.
 fn quiet_energy(hz: f64) -> f64 {
     let f = (hz / 1000.0).max(0.02);
-    let db_spl = 3.64 * libm::pow(f, -0.8) - 6.5 * libm::exp(-0.6 * (f - 3.3) * (f - 3.3))
+    let db_spl = 3.64 * libm::pow(f, -0.8) - 6.5 * sva_formula::exp(-0.6 * (f - 3.3) * (f - 3.3))
         + 0.001 * f.powi(4);
     libm::pow(10f64, (db_spl - PLAYBACK_DB_SPL) / 10.0)
 }

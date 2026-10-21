@@ -48,8 +48,8 @@ high 0118a0a4c72b636d 6499c72be971da8d
 low 89264ead9dee7bc7 2c1275450e06bdab
 wide c7a9bc56b9bdb57a f009ce5e9f017713
 sweep 94eda0be726cd095 65f1c8dbcfdada21
-tone b39c6b676180771f 3ecd2048cbd265c2
-master 38393608f384a255 ba2ab554083ddd6b
+tone 440e7c4848e5480a 3ecd2048cbd265c2
+master 1e245650ccd9cc7f ba2ab554083ddd6b
 ";
 
 fn fnv(words: impl Iterator<Item = u64>) -> u64 {

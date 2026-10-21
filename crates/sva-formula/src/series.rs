@@ -137,7 +137,7 @@ pub fn ratio(f: &Body, k: IndexId) -> Option<f64> {
         Body::Apply(Unary::Abs, arg) => ratio(&arg.body, k),
         Body::Apply(Unary::Exp, arg) => {
             let (slope, _) = affine_in(&arg.body, Reading::Index(k))?;
-            Some(libm::exp(slope.exact()?.re))
+            Some(crate::exp(slope.exact()?.re))
         }
         Body::Pow(base, n) if *n >= 0 => Some(ratio(&base.body, k)?.powi(*n)),
         _ => None,

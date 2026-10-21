@@ -95,7 +95,7 @@ fn a_factor_past_a_double_s_range_still_bounds_the_product() {
         }),
         ..Factors::NONE
     });
-    let truth = libm::exp(libm::log(0.7f64) - 760.0 + 300.0 * libm::log(10f64));
+    let truth = sva_formula::exp(libm::log(0.7f64) - 760.0 + 300.0 * libm::log(10f64));
     let bound = magnitude_upper_bound_from_instant(&a, 760.0).expect("a bound");
     assert!(truth > 1e-31 && bound >= truth, "{bound} under {truth}");
 }

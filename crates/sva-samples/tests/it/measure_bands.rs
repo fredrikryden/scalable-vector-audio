@@ -70,7 +70,7 @@ fn an_exponential_decay_falls_at_the_rate_it_was_built_with() {
     let x: Vec<f64> = (0..(2.0 * SR) as usize)
         .map(|i| {
             let t = i as f64 / SR;
-            libm::sin(2.0 * std::f64::consts::PI * hz * t) * libm::exp(-t / tau)
+            libm::sin(2.0 * std::f64::consts::PI * hz * t) * sva_formula::exp(-t / tau)
         })
         .collect();
     let bands = analyze(&[&x[..]], SR, 0.0);
@@ -93,7 +93,7 @@ fn a_swept_sine_peaks_in_each_band_when_it_passes_that_bands_centre() {
     let x: Vec<f64> = (0..(secs * SR) as usize)
         .map(|i| {
             let t = i as f64 / SR;
-            let phase = 2.0 * std::f64::consts::PI * lo * (libm::exp(k * t) - 1.0) / k;
+            let phase = 2.0 * std::f64::consts::PI * lo * (sva_formula::exp(k * t) - 1.0) / k;
             libm::sin(phase)
         })
         .collect();

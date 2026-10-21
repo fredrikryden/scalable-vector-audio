@@ -8,7 +8,7 @@ use sva_samples::measure::formants::{
 /// A signal whose envelope is known by construction rather than by another measurement.
 /// Driven by noise and not an impulse: an envelope models a stationary frame.
 fn resonated(x: &[f64], hz: f64, bandwidth_hz: f64, sample_rate: f64) -> Vec<f64> {
-    let r = libm::exp(-std::f64::consts::PI * bandwidth_hz / sample_rate);
+    let r = sva_formula::exp(-std::f64::consts::PI * bandwidth_hz / sample_rate);
     let theta = 2.0 * std::f64::consts::PI * hz / sample_rate;
     let (b1, b2) = (2.0 * r * libm::cos(theta), -r * r);
     let (mut y1, mut y2) = (0.0f64, 0.0f64);

@@ -27,7 +27,7 @@ fn tone(gain: f64) -> Vec<f64> {
         .map(|n| {
             let t = n as f64 / f64::from(RATE);
             let wobbled = t + 0.02 * libm::sin(std::f64::consts::TAU * 0.37 * t);
-            let struck = libm::exp(-12.0 * (wobbled % 0.5));
+            let struck = sva_formula::exp(-12.0 * (wobbled % 0.5));
             let swell = (1.0 + 0.07 * t) * (1.0 + 0.3 * libm::sin(std::f64::consts::TAU * 3.0 * t));
             let partials: f64 = [(1.0, 0.5), (2.0, 0.25), (3.0, 0.125)]
                 .iter()

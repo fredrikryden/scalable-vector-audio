@@ -12,10 +12,10 @@ const FLOOR: f64 = -4096.0;
 
 fn found() -> f64 {
     let (mut zero, mut live) = (FLOOR.to_bits(), (-1.0f64).to_bits());
-    assert!(libm::exp(FLOOR) == 0.0, "exp underflows before {FLOOR}");
+    assert!(crate::exp(FLOOR) == 0.0, "exp underflows before {FLOOR}");
     while zero - live > 1 {
         let mid = live + (zero - live) / 2;
-        match libm::exp(f64::from_bits(mid)) == 0.0 {
+        match crate::exp(f64::from_bits(mid)) == 0.0 {
             true => zero = mid,
             false => live = mid,
         }
@@ -31,5 +31,5 @@ fn nonzero_below(edge: f64) -> Option<f64> {
     const STEPS: u64 = 1 << 16;
     let near = (0..STEPS).map(|k| f64::from_bits(edge.to_bits() + k));
     let far = (0..=STEPS).map(|k| edge + (FLOOR - edge) * (k as f64 / STEPS as f64));
-    near.chain(far).find(|x| libm::exp(*x) != 0.0)
+    near.chain(far).find(|x| crate::exp(*x) != 0.0)
 }

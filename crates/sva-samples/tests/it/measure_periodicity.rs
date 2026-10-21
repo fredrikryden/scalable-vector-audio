@@ -22,7 +22,7 @@ fn burst(out: &mut [f64], at: usize, hz: f64, decay_secs: f64, secs: f64) {
     {
         let t = i as f64 / RATE;
         let rise = (i as f64 / attack).min(1.0);
-        *s += rise * libm::exp(-t / decay_secs) * libm::sin(std::f64::consts::TAU * hz * t);
+        *s += rise * sva_formula::exp(-t / decay_secs) * libm::sin(std::f64::consts::TAU * hz * t);
     }
 }
 
@@ -59,7 +59,8 @@ fn pulses(secs: f64, period_secs: f64) -> Vec<f64> {
             let since = t - (t / period_secs).floor() * period_secs;
             match since < 0.002 {
                 true => {
-                    libm::exp(-since / 0.0005) * libm::sin(std::f64::consts::TAU * 3000.0 * since)
+                    sva_formula::exp(-since / 0.0005)
+                        * libm::sin(std::f64::consts::TAU * 3000.0 * since)
                 }
                 false => 0.0,
             }

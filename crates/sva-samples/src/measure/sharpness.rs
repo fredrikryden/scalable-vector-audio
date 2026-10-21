@@ -67,7 +67,7 @@ fn acum(centres_hz: &[f64], specific: &[f64]) -> f64 {
         .map(|(&hz, &n)| {
             let z = bark(hz);
             let g = match z > 15.8 {
-                true => 0.15 * libm::exp(0.42 * (z - 15.8)) + 0.85,
+                true => 0.15 * sva_formula::exp(0.42 * (z - 15.8)) + 0.85,
                 false => 1.0,
             };
             n * g * z

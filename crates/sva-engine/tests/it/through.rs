@@ -28,7 +28,7 @@ fn a_kink_two_refs_down_splits_the_form_reading_it() {
         ("mid", "@ramp(t)*0.5 + @ramp(t)*0.5\n"),
         ("top", "crop(exp(-3*@mid(t))*sin(2*pi*220*t), 0s, 1s)\n"),
     ];
-    assert_eq!(digest(&files, "top", 1.0), 0x84be_1e53_bd00_d1ac);
+    assert_eq!(digest(&files, "top", 1.0), 0xa99e_a25f_5b5a_ba14);
 }
 
 /// A form no atom sum reaches, read at a time that moves, is its written form at that time.

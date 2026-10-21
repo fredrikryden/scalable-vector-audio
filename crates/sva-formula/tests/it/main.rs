@@ -3,6 +3,7 @@
 mod allocations;
 mod calculus;
 mod duality;
+mod exp;
 mod fixtures;
 mod hashing;
 mod inference;

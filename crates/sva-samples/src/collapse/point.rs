@@ -138,14 +138,14 @@ pub fn lane_of(widths: &[usize], component: usize) -> Option<(usize, usize)> {
 pub fn unary(op: Unary, x: C64) -> C64 {
     match op {
         Unary::Exp => x.exp(),
-        Unary::Sin => C64::new(
-            libm::sin(x.re) * libm::cosh(x.im),
-            libm::cos(x.re) * libm::sinh(x.im),
-        ),
-        Unary::Cos => C64::new(
-            libm::cos(x.re) * libm::cosh(x.im),
-            -libm::sin(x.re) * libm::sinh(x.im),
-        ),
+        Unary::Sin => {
+            let (sin, cos) = libm::sincos(x.re);
+            C64::new(sin * libm::cosh(x.im), cos * libm::sinh(x.im))
+        }
+        Unary::Cos => {
+            let (sin, cos) = libm::sincos(x.re);
+            C64::new(cos * libm::cosh(x.im), -sin * libm::sinh(x.im))
+        }
         Unary::Tanh => C64::real(libm::tanh(x.re)),
         Unary::Sat => C64::real(x.re.clamp(-1.0, 1.0)),
         Unary::Abs => C64::real(x.abs()),

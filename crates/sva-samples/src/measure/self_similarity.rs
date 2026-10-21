@@ -516,7 +516,7 @@ fn novelty(raw: &[Vec<f64>], half: usize) -> Vec<f64> {
     let taper: Vec<f64> = (0..2 * half)
         .map(|a| {
             let u = a as f64 - half as f64 + 0.5;
-            u.signum() * libm::exp(-u * u / (2.0 * (half * half) as f64))
+            u.signum() * sva_formula::exp(-u * u / (2.0 * (half * half) as f64))
         })
         .collect();
     let total: f64 = taper.iter().map(|g| g.abs()).sum::<f64>().powi(2);

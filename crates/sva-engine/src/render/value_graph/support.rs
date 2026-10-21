@@ -471,7 +471,7 @@ impl Supports<'_> {
                         top = top.max(at(vertex));
                     }
                 }
-                libm::exp(top + 1.0)
+                sva_formula::exp(top + 1.0)
             }
             Body::Crop { of: inner, .. } | Body::Channel(inner, _) => of(&inner.body)?,
             Body::Knots { at, table } => {

@@ -210,7 +210,7 @@ fn measured(partials: &[(f64, f64)]) -> Vec<PitchFrame> {
                 .iter()
                 .map(|(hz, a)| a * libm::sin(std::f64::consts::TAU * hz * t))
                 .sum();
-            sum * libm::exp(-2.0 * t)
+            sum * sva_formula::exp(-2.0 * t)
         })
         .collect();
     track(&[&tone[..]], rate, 0.0, 0.05, 16)

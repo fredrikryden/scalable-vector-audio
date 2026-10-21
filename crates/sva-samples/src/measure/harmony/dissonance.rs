@@ -15,7 +15,7 @@ pub const S1: f64 = 0.021;
 pub const S2: f64 = 19.0;
 
 fn d(x: f64) -> f64 {
-    libm::exp(-A * x) - libm::exp(-B * x)
+    sva_formula::exp(-A * x) - sva_formula::exp(-B * x)
 }
 
 fn s(f_low: f64) -> f64 {

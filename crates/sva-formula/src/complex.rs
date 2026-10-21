@@ -69,8 +69,9 @@ impl C64 {
     }
 
     pub fn exp(self) -> C64 {
-        let r = libm::exp(self.re);
-        C64::new(r * libm::cos(self.im), r * libm::sin(self.im))
+        let r = crate::exp(self.re);
+        let (sin, cos) = libm::sincos(self.im);
+        C64::new(r * cos, r * sin)
     }
 
     /// `e^z - 1` without the cancellation `exp() - ONE` meets near zero.
@@ -78,7 +79,7 @@ impl C64 {
         let half = libm::sin(self.im * 0.5);
         C64::new(
             libm::expm1(self.re) * libm::cos(self.im) - 2.0 * half * half,
-            libm::exp(self.re) * libm::sin(self.im),
+            crate::exp(self.re) * libm::sin(self.im),
         )
     }
 

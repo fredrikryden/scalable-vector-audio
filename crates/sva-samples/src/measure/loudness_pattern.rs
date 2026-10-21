@@ -54,7 +54,8 @@ pub struct LoudnessPattern {
 /// Terhardt's threshold in quiet, dB SPL.
 fn quiet_db(hz: f64) -> f64 {
     let f = hz.max(20.0) / 1000.0;
-    3.64 * libm::pow(f, -0.8) - 6.5 * libm::exp(-0.6 * (f - 3.3) * (f - 3.3)) + 1e-3 * f * f * f * f
+    3.64 * libm::pow(f, -0.8) - 6.5 * sva_formula::exp(-0.6 * (f - 3.3) * (f - 3.3))
+        + 1e-3 * f * f * f * f
 }
 
 /// `bands`' Cam scale inverted, its power read through libm so it is one value native and in
@@ -115,7 +116,7 @@ impl Ear {
                             false => p,
                         };
                         let pg = slope * g;
-                        i * (1.0 + pg) * libm::exp(-pg)
+                        i * (1.0 + pg) * sva_formula::exp(-pg)
                     })
                     .sum()
             })

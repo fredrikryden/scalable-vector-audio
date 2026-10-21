@@ -448,7 +448,7 @@ fn a_steep_decay_cropped_at_a_late_onset_reads_its_value_there() {
     let at = |n: usize| samples.plane(0)[3 * 44_100 + n];
     assert!((at(0) - 1.0).abs() < 1e-12, "{}", at(0));
     assert!(
-        (at(1) - libm::exp(-400.0f64 / 44_100.0)).abs() < 1e-12,
+        (at(1) - sva_formula::exp(-400.0f64 / 44_100.0)).abs() < 1e-12,
         "{}",
         at(1)
     );

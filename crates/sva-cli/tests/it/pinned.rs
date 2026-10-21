@@ -73,7 +73,7 @@ const READINGS: [&str; 15] = [
 const PINNED: &str = r#"
 0 stdout e17e3c4311440757
 0 wav 665924a7a274d695
-0 store:3620e0612b5d84925fa1bd15f1b7716e ff884fd063aa9943
+0 store:3620e0612b5d84925fa1bd15f1b7716e ea3e977db857ed56
 0 lines refused "read.lines_need_unwindowed_lines"
 0 spectrum refused "read.lines_need_unwindowed_lines"
 0 envelope refused "cast.left_algebra"
@@ -91,25 +91,25 @@ const PINNED: &str = r#"
 0 arguments ac479335c0844369
 1 stdout e17e3c4311440757
 1 wav 26291e77cc78e829
-1 store:90af903a105917870539e1943a4b72c7 e486b7fa427b50f1
+1 store:90af903a105917870539e1943a4b72c7 0bc3be1db3e75393
 1 lines refused "read.lines_need_unwindowed_lines"
 1 spectrum refused "read.lines_need_unwindowed_lines"
 1 envelope refused "cast.left_algebra"
 1 derivative 2f6bf49684a384e3
 1 ledger da2a64d875d1c69d
 1 pitch refused "read.lines_need_unwindowed_lines"
-1 formants fbaa5c1382ef6c79
+1 formants 6fcc8e939d79a079
 1 stereo refused "type.width_mismatch"
-1 bands b161e6ee73e55b4c
-1 crest 7ca68c4a6796ad38
-1 loudness 7071e3c0a828fe27
-1 score f5178d99e46f5db1
-1 alias 348141409e4cefb5
+1 bands bf8b637340705958
+1 crest f4967b09b37a5548
+1 loudness 80ea3b17ad6e2c1d
+1 score 7d7b3fd002a2e17b
+1 alias 53d5ddd29262646e
 1 bindings cca84563df793651
 1 arguments ac479335c0844369
 2 stdout e17e3c4311440757
 2 wav 968e2e9858e90ed9
-2 store:29c7e17ebaef85e9ff784832c3108192 3cd3a5b9c477837b
+2 store:29c7e17ebaef85e9ff784832c3108192 64ba01261c867f14
 2 lines refused "read.no_spectral_sum"
 2 spectrum refused "read.no_spectral_sum"
 2 envelope refused "read.no_spectral_sum"
@@ -127,7 +127,7 @@ const PINNED: &str = r#"
 2 arguments 639edc93953a6808
 3 stdout 71f4f9a9b3cd9d30
 3 wav 64318e943f03cc25
-3 store:273d32d1fbc24d73b322a79899449566 f18cd7bc7d2b5fcc
+3 store:273d32d1fbc24d73b322a79899449566 0a86db1aee7cd415
 3 lines ef35f29de2cc8837
 3 spectrum d76d6d5aa41272bc
 3 envelope 508733913bd67342
@@ -145,7 +145,7 @@ const PINNED: &str = r#"
 3 arguments eb3ed92e88f435e1
 4 stdout 5b546f69552c55f0
 4 wav d8d646db74dc9cb2
-4 store:7d17584ff33a1d5714e10c35ba698e01 d615f99e44169e0c
+4 store:7d17584ff33a1d5714e10c35ba698e01 f555292f9e4017f2
 4 lines fba1b60d66f0321f
 4 spectrum dba0d0713ae772d8
 4 envelope c554c0bf3802fe1a
@@ -163,7 +163,7 @@ const PINNED: &str = r#"
 4 arguments f74b8084fd1b914d
 5 stdout e17e3c4311440757
 5 wav 177aed0c28183ef5
-5 store:52690610e792cbd9ec87410effce6ac0 0d3844afd44cffac
+5 store:52690610e792cbd9ec87410effce6ac0 1077062bdc53bb5b
 5 lines 65ef389a409cc7a3
 5 spectrum 6b1a5e9ec974b0d4
 5 envelope 8c1c2bc6da6a2f6d
@@ -181,20 +181,20 @@ const PINNED: &str = r#"
 5 arguments ac479335c0844369
 6 stdout 9108e37d0b7327c6
 6 wav 72bce77b8424e0c6
-6 store:0aa625a325ad009e42736fb0b55da15e 7f22ded8ab77b43e
-6 store:11c136c343d5887a356999a4fc86e8f7 2055e96176a337a1
-6 store:14f6414df6fcdd24e3ba1efa6b601e02 a10c53bea5fa6fb4
-6 store:2a812a178319a3d66188660d033eee56 71120361e4bc1ebd
-6 store:2b1dfb572460ba3c3e8a08891ad3feda ad4fe9b5b4e89580
-6 store:2cc1e056c0cd5c6013c986cb46ea8680 c711cde7c6a2c601
-6 store:57a6b91a9d6ee92c9f220a471c761060 1b8588905109966f
-6 store:6e22a9b54e73a673f2f7252c439f5d3c 9737e0b409c99287
-6 store:6f9bcd032cb9677f874eba226b581950 0e5750eea070fb4c
-6 store:d18c8f806552ff35a1cabe95f566fe2e c73410db5fa71ee6
-6 store:d4b554f1adbd1e2708edf6cef39dd919 39b950300dd0ea43
-6 store:dfbe3e234fa8c68c2717f78df327e90f 6873865c1459d01f
-6 store:e41ecc22b1d8d907ef9ba75bd804e1e7 d407455edbe2c9de
-6 store:e51a27e86bcbd36a2c884364cb358a1e 58d09cfcf4f76f06
+6 store:0aa625a325ad009e42736fb0b55da15e a87179effc2a07a4
+6 store:11c136c343d5887a356999a4fc86e8f7 d780dba7ffd0b862
+6 store:14f6414df6fcdd24e3ba1efa6b601e02 009e09db8149f3a2
+6 store:2a812a178319a3d66188660d033eee56 8fcb89bf134034e9
+6 store:2b1dfb572460ba3c3e8a08891ad3feda 24a6ca636aebaf08
+6 store:2cc1e056c0cd5c6013c986cb46ea8680 30c1f201257d26f8
+6 store:57a6b91a9d6ee92c9f220a471c761060 7cd3d7c91d92021a
+6 store:6e22a9b54e73a673f2f7252c439f5d3c 4222675fc7ec835b
+6 store:6f9bcd032cb9677f874eba226b581950 b0b15995ec511e73
+6 store:d18c8f806552ff35a1cabe95f566fe2e d9f3c3c2f1ca4597
+6 store:d4b554f1adbd1e2708edf6cef39dd919 72982ab649740218
+6 store:dfbe3e234fa8c68c2717f78df327e90f 9a973a17d33aaf35
+6 store:e41ecc22b1d8d907ef9ba75bd804e1e7 315299c2be735118
+6 store:e51a27e86bcbd36a2c884364cb358a1e 258d11fd9790270f
 6 lines refused "type.samples_in_closed_form"
 6 spectrum 82e214032e137ddc
 6 envelope 87ffd87017994a9c
@@ -212,7 +212,7 @@ const PINNED: &str = r#"
 6 arguments db19184c92016629
 7 stdout 71454a132807dddb
 7 wav 3372a403bff9f10a
-7 store:48cc333eda6f48499d525bb87ae7a03c 0c4bda04efdbfa06
+7 store:48cc333eda6f48499d525bb87ae7a03c 7be1a019af88f354
 7 lines refused "read.lines_need_unwindowed_lines"
 7 spectrum refused "read.lines_need_unwindowed_lines"
 7 envelope refused "cast.left_algebra"
@@ -230,7 +230,7 @@ const PINNED: &str = r#"
 7 arguments 7c1d152f8c0e3714
 8 stdout bb69bdf6de9adeb8
 8 wav 083e3fdfa6fd2b2d
-8 store:0435c2987fec5f6fa5f7bc60ed42587e 81921a3b9bd9659e
+8 store:0435c2987fec5f6fa5f7bc60ed42587e 201e5a1b953b1596
 8 lines refused "type.samples_in_closed_form"
 8 spectrum 7c295c6f1eda017e
 8 envelope 318124550bf22b6d
@@ -248,83 +248,83 @@ const PINNED: &str = r#"
 8 arguments b642f09606176b94
 9 stdout e17e3c4311440757
 9 wav 3a9ca1a53a5fa42a
-9 store:3180ee7f5ba55875b73514cbc66c3107 153c0b83c44a5e90
+9 store:3180ee7f5ba55875b73514cbc66c3107 e2443f6c6011c229
 9 lines refused "read.lines_need_unwindowed_lines"
 9 spectrum refused "read.lines_need_unwindowed_lines"
 9 envelope refused "cast.left_algebra"
 9 derivative d877ae4e9f8f299f
 9 ledger 10db306f97c70e03
 9 pitch refused "read.lines_need_unwindowed_lines"
-9 formants b1f285b9dc70a44c
+9 formants e686a895868a3680
 9 stereo refused "type.width_mismatch"
-9 bands d14f7a29e1719f86
-9 crest 228a7120752264ca
-9 loudness 6598bb4502ec4b88
-9 score f09a3d9a2d219487
-9 alias ed3d46ef4bf5c3c4
+9 bands 5300344cc3ec8a05
+9 crest 1baecc80d1cec51c
+9 loudness 5a5bd8f091cf987e
+9 score dd9fbdbcc6362240
+9 alias 17bda2336c3e9fb3
 9 bindings cca84563df793651
 9 arguments ac479335c0844369
 10 stdout 5687cc05a27c2ec3
 10 wav a9866247325c001f
-10 store:6655845ef1b852c2dfba6667b7a17cb7 871a5e655a7a07d5
+10 store:6655845ef1b852c2dfba6667b7a17cb7 0c63ba3859dd897a
 10 lines refused "read.lines_need_unwindowed_lines"
 10 spectrum refused "read.lines_need_unwindowed_lines"
 10 envelope refused "cast.left_algebra"
 10 derivative 89dc769fdd11eaeb
 10 ledger 80da51e67a8e4884
 10 pitch refused "read.lines_need_unwindowed_lines"
-10 formants d73ea9de84db8418
+10 formants 44d2d3df1a272ac1
 10 stereo refused "type.width_mismatch"
-10 bands 9b12def01a17b6f2
-10 crest 69d62d0f89507f8a
-10 loudness 58c6c8ee21be16b7
-10 score 5e776e1fafc013db
-10 alias 975f208e3e3b0e06
+10 bands 66168bd211722dee
+10 crest 682e3212dce30867
+10 loudness 7c44c2ace74f3943
+10 score cc878c8bcc6490cc
+10 alias 2ff192cf9c5f7e6c
 10 bindings 978c10e7996dc9a1
 10 arguments b5457effabd50fe5
 11 stdout a05558226a6cba5a
 11 wav c187b7408a55ebf7
-11 store:49f4a6817fb359e1ca2669494fe63af2 4855692bd01ab8c4
-11 store:d974ac29049427884f6c2e4f1edbb778 d7ac41564a09891a
-11 store:dc788d72ef609cbfbd531912e37ffe4d fca8bffdc5b295a6
+11 store:49f4a6817fb359e1ca2669494fe63af2 30c3919554c21084
+11 store:d974ac29049427884f6c2e4f1edbb778 0237ab4b36778dac
+11 store:dc788d72ef609cbfbd531912e37ffe4d 2b5a4fc7b18acb78
 11 lines refused "type.samples_in_closed_form"
-11 spectrum ded0d98afdabe1c2
-11 envelope 246ad5cbcea17abc
-11 derivative ebab06da808292f7
-11 ledger 8646598869f22200
-11 pitch 1e07dbc2872bd280
-11 formants df041b146a7886be
+11 spectrum e061e272529f14a8
+11 envelope ec8adb47ba3251d3
+11 derivative 5b69548629e8408c
+11 ledger 3f24c13fa41244ca
+11 pitch 72ed639cdbabf175
+11 formants 0ea69be9e986cc32
 11 stereo refused "type.width_mismatch"
-11 bands c1c37f4949700ea9
-11 crest 1123d4796a36e1ac
-11 loudness 4be0c964d84a5b9b
-11 score 3d381733c132a8aa
+11 bands c7e7e73cf67a3326
+11 crest fc652f37e7307fc0
+11 loudness 19bfcc7fb2c22d2c
+11 score 48d5b121f9dc0f54
 11 alias refused "engine.alias_needs_a_closed_form"
 11 bindings 193483886e1b97eb
 11 arguments fbff5288f7442249
 12 stdout 24a0009133ff612c
 12 wav 3fc9f322aaf6fc5f
-12 store:a754efa011f428d52010e3099bc14cb1 5c08d4bdb6ba6e78
-12 store:b75918a010c072bb16f03119a7dcbf64 06105b935e44745a
+12 store:a754efa011f428d52010e3099bc14cb1 230254c05b6fdecc
+12 store:b75918a010c072bb16f03119a7dcbf64 c8f7f8358b7ff73e
 12 lines refused "type.samples_in_closed_form"
-12 spectrum 825801a3e3836779
-12 envelope 76ebff8097b673e5
-12 derivative 637a4ec822194906
+12 spectrum 538ff998dc74a836
+12 envelope 0e6d3bea7313f6b3
+12 derivative f51c3568ad02a7f1
 12 ledger 018f32977283f40c
-12 pitch 503bb56214bbac0c
-12 formants 6ffd998758cc10c3
+12 pitch 91f424f700ec9178
+12 formants fdae1462a88622ad
 12 stereo refused "type.width_mismatch"
-12 bands 73903e5f0dfb4ddc
-12 crest 06d266c4cdbaab1e
-12 loudness 9aa069ac80d29f9d
-12 score 21a115f2866a09e5
+12 bands 06dab42021a13b5d
+12 crest 40d21e48dc5a96ac
+12 loudness ea3a962882b57c71
+12 score 483830558434d7ed
 12 alias refused "engine.alias_needs_a_closed_form"
 12 bindings 4a6686d8e212fcf1
 12 arguments 58316c250a5fe29f
 13 stdout 189201d106182ae6
 13 wav 256b6dfecab93743
-13 store:995a04465e3289abd658d5254fb949f3 18fda3844d31e332
-13 store:e8cfef4afb2349bb0fe8c2e3f1cea74f 39d5abbd007a308a
+13 store:995a04465e3289abd658d5254fb949f3 29844d15e3e75476
+13 store:e8cfef4afb2349bb0fe8c2e3f1cea74f e48c8a81b8c5ef74
 13 lines refused "type.samples_in_closed_form"
 13 spectrum 2a931325439f7f57
 13 envelope 4fcbb7b86395ee78
@@ -342,28 +342,28 @@ const PINNED: &str = r#"
 13 arguments 0adbeca7c937da37
 14 stdout b6ad884dff66b63b
 14 wav 0c1d8e0ad4b6a019
-14 store:194d57ecf1b72fa62c9b17ec02129d13 d2e61eae8a8edf6e
-14 store:32547f9d11c1e39ed00836d8ff4dbff2 2cd5ff02f727fb11
-14 store:4d307b3a5d05232779527d608b4de3ad acf6806834f89cfb
-14 store:52d1c7bcf24fd65556b3a64eddbd2e59 6b6aa19fe26712a7
+14 store:194d57ecf1b72fa62c9b17ec02129d13 441f876bf82b6c4a
+14 store:32547f9d11c1e39ed00836d8ff4dbff2 eeefd876e9ba1423
+14 store:4d307b3a5d05232779527d608b4de3ad 4eceef3fbb63662d
+14 store:52d1c7bcf24fd65556b3a64eddbd2e59 d1c0b83460286630
 14 lines refused "type.samples_in_closed_form"
-14 spectrum 7cc8578303345247
-14 envelope acf0c3401443618d
-14 derivative 17553d9009052742
-14 ledger 8627764b071b832a
-14 pitch 77a89f607aa5db32
-14 formants 1c54adf534c1860c
+14 spectrum c6cd929113e93db9
+14 envelope 02a6d78aae7d3805
+14 derivative b0774f806492fb00
+14 ledger 99a29ad20967b033
+14 pitch b9ab85a0a5f5a4c3
+14 formants 541a0fed46689da2
 14 stereo refused "type.width_mismatch"
-14 bands eda5bf90ef7aaad4
-14 crest 9372ca6cc136731c
-14 loudness 66e292a929985ca2
-14 score 3143cdf2ac834110
+14 bands 10bdb258dc4ace30
+14 crest 13a188ac91dc1c15
+14 loudness c0474a245816a7f8
+14 score a8278440e77f7d17
 14 alias refused "engine.alias_needs_a_closed_form"
 14 bindings 72871833b56a7987
 14 arguments 566a07fc7cfce2ce
 15 stdout ea658b80403f05b8
 15 wav 82773cac15ff1cca
-15 store:b5146c74a37c137f36a90b33af43d7d6 2ec0bda95398a573
+15 store:b5146c74a37c137f36a90b33af43d7d6 0cfa984999bdafab
 15 lines refused "read.lines_need_unwindowed_lines"
 15 spectrum refused "read.lines_need_unwindowed_lines"
 15 envelope refused "cast.left_algebra"
@@ -381,23 +381,23 @@ const PINNED: &str = r#"
 15 arguments b6603b7216e51daa
 16 stdout 6d9beba6f3f07c0c
 16 wav 9007d5d55c305e67
-16 store:043708e3e666563747bf4fa06e8134c9 ed2ea1c576b8d6b8
-16 store:1523d3727e3560f4c087cc26bcdb92c1 16ca052268dcaca0
-16 store:56d9a9664634a8707c8206366f7ace03 da64376dd1b62d6e
-16 store:b00e0698a765f996175369b4040463f1 bd377884dd05697b
-16 store:e98c8e1e8b33053c9a7f3b9e64d00f51 e19be9607323929d
+16 store:043708e3e666563747bf4fa06e8134c9 8ce6e5d10053534b
+16 store:1523d3727e3560f4c087cc26bcdb92c1 b0ef699a7575627a
+16 store:56d9a9664634a8707c8206366f7ace03 d4253e5a30cc30df
+16 store:b00e0698a765f996175369b4040463f1 211685d26b614879
+16 store:e98c8e1e8b33053c9a7f3b9e64d00f51 203c4edb67790ff7
 16 lines refused "type.samples_in_closed_form"
-16 spectrum 5e8fcac4dca3d486
-16 envelope 3754f67ead52869a
-16 derivative b558f9f1c5c02c8f
-16 ledger 64275943fe91acbc
-16 pitch 99685dbfee49705d
-16 formants 2227659ae84a9f3d
+16 spectrum 9587ed0ec65fc89c
+16 envelope be46752c35732320
+16 derivative e026787c612d76a2
+16 ledger cc4183d12e0d38cb
+16 pitch c94888be50adf123
+16 formants 35e8915032ddf927
 16 stereo refused "type.width_mismatch"
-16 bands 76999a3d81fc8d3f
-16 crest 1a8af9f9c594ab7b
-16 loudness 32ccab095a454402
-16 score 8e8806aa474f19cb
+16 bands 094925986c50b48a
+16 crest 7a7beffbb74e7e02
+16 loudness 517dfeeccb773e54
+16 score adfbaa2e412257fa
 16 alias refused "engine.alias_needs_a_closed_form"
 16 bindings 01944f73abd4ed2b
 16 arguments 79995a358f9efc0a

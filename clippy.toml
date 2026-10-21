@@ -1,4 +1,4 @@
-# Concern: the std float methods no crate calls, so a value takes the same bits native and in wasm | Non-concern: which libm call replaces each, the lint level (pre-commit) | IO: none
+# Concern: the float functions no crate calls, so a value takes the same bits native and in wasm | Non-concern: which libm call replaces each, the lint level (pre-commit) | IO: none
 # std defers these to the platform's libm (glibc native, Rust's own port in wasm), which round differently.
 disallowed-methods = [
     { path = "f64::sin", reason = "platform libm: native and wasm round differently; call libm::sin" },
@@ -14,7 +14,8 @@ disallowed-methods = [
     { path = "f64::asinh", reason = "platform libm: native and wasm round differently; call libm::asinh" },
     { path = "f64::acosh", reason = "platform libm: native and wasm round differently; call libm::acosh" },
     { path = "f64::atanh", reason = "platform libm: native and wasm round differently; call libm::atanh" },
-    { path = "f64::exp", reason = "platform libm: native and wasm round differently; call libm::exp" },
+    { path = "f64::exp", reason = "platform libm: native and wasm round differently; call sva_formula::exp" },
+    { path = "libm::exp", reason = "one exp for every crate, table-driven and faster: call sva_formula::exp" },
     { path = "f64::exp2", reason = "platform libm: native and wasm round differently; call libm::exp2" },
     { path = "f64::exp_m1", reason = "platform libm: native and wasm round differently; call libm::expm1" },
     { path = "f64::ln", reason = "platform libm: native and wasm round differently; call libm::log" },

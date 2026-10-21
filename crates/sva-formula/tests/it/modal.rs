@@ -319,7 +319,7 @@ fn a_struck_bank_is_its_impulse_response_convolved_with_the_force() {
     let rings = |u: f64| -> f64 {
         modes
             .iter()
-            .map(|m| m.amp * libm::exp(-u / m.tau) * libm::cos(m.omega * u + m.phase))
+            .map(|m| m.amp * sva_formula::exp(-u / m.tau) * libm::cos(m.omega * u + m.phase))
             .sum()
     };
     let force = |s: f64| f0 * 0.5 * (1.0 - libm::cos(TAU * (s - t0) / contact));

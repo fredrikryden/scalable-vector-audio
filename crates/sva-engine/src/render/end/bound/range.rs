@@ -398,7 +398,7 @@ fn exp(s: Span) -> Span {
     }
     let g = |x: f64| {
         let d = err + rel * x.abs();
-        libm::exp(x + d) * (d + OP)
+        sva_formula::exp(x + d) * (d + OP)
     };
     let mut most = g(s.hi);
     if s.lo < 0.0 {
@@ -410,7 +410,7 @@ fn exp(s: Span) -> Span {
         }
     }
     let most = if most.is_nan() { f64::INFINITY } else { most };
-    Span::new(libm::exp(s.lo), libm::exp(s.hi), most)
+    Span::new(sva_formula::exp(s.lo), sva_formula::exp(s.hi), most)
 }
 
 /// A run is summed by its own evaluator, so its lines' atoms never stand for it.
@@ -532,7 +532,11 @@ fn mapped(op: Unary, s: Span) -> Option<Span> {
         Some(Span::new(lo, hi, slope * err + OP * reach))
     };
     match op {
-        Unary::Exp => next(libm::exp(lo), libm::exp(hi), libm::exp(hi + err)),
+        Unary::Exp => next(
+            sva_formula::exp(lo),
+            sva_formula::exp(hi),
+            sva_formula::exp(hi + err),
+        ),
         Unary::Tanh | Unary::Sat | Unary::Sin | Unary::Cos => {
             let (lo, hi) = match op {
                 Unary::Tanh => (libm::tanh(lo), libm::tanh(hi)),

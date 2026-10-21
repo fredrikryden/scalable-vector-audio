@@ -599,7 +599,7 @@ fn claims(
                             .iter()
                             .map(|&(hz, amp)| {
                                 let d = (hz - curves[g][k]) / sigmas[g];
-                                amp * libm::exp(-0.5 * d * d)
+                                amp * sva_formula::exp(-0.5 * d * d)
                             })
                             .fold(0.0, f64::max);
                         CLAIM_MARGIN * leak
@@ -818,7 +818,7 @@ impl Reader<'_> {
         for bin in first..=last {
             let f = bin as f64 * bin_hz;
             let off = (flat.0 - f).max(f - flat.1).max(0.0);
-            let w = libm::exp(-0.5 * (off / widest) * (off / widest)) * gain;
+            let w = sva_formula::exp(-0.5 * (off / widest) * (off / widest)) * gain;
             let j = (bin as isize - b.centre_bin as isize).rem_euclid(m as isize) as usize;
             re[j] += whole.re[bin] * w;
             im[j] += whole.im[bin] * w;
@@ -879,7 +879,7 @@ impl Reader<'_> {
 }
 
 fn gaussian(sigma: f64) -> impl Fn(f64) -> f64 {
-    move |f| libm::exp(-0.5 * (f / sigma) * (f / sigma))
+    move |f| sva_formula::exp(-0.5 * (f / sigma) * (f / sigma))
 }
 
 fn brickwall(half: f64) -> impl Fn(f64) -> f64 {

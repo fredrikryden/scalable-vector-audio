@@ -50,7 +50,7 @@ fn a_decaying_tone_falls_frame_by_frame() {
     let decaying: Vec<f64> = (0..len)
         .map(|i| {
             let t = i as f64 / RATE;
-            libm::exp(-t / 0.1) * libm::sin(std::f64::consts::TAU * 440.0 * t)
+            sva_formula::exp(-t / 0.1) * libm::sin(std::f64::consts::TAU * 440.0 * t)
         })
         .collect();
     let frames = trace(&[&decaying], RATE, 0.0, 0.05);

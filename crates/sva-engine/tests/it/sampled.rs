@@ -103,7 +103,7 @@ fn a_one_pole_smoother_written_with_sp_renders_at_two_rates() {
             .expect("a rendered loop")
             .at(0, rate as usize / 100)
     };
-    let settled = 1.0 - libm::exp(-1.0f64);
+    let settled = 1.0 - sva_formula::exp(-1.0f64);
     let (low, high) = (level(RATE), level(12_000));
     for (rate, held) in [(RATE, low), (12_000, high)] {
         let apart = 20.0 * libm::log10(held / settled);

@@ -59,7 +59,7 @@ fn strikes(rate: u32, len_secs: f64, struck: &[f64], (decay, secs): (f64, f64)) 
         let from = (at * sr) as usize;
         for n in 0..(sr * secs) as usize {
             let t = n as f64 / sr;
-            let shape = (1.0 - libm::exp(-t / 0.0015)) * libm::exp(-t / decay);
+            let shape = (1.0 - sva_formula::exp(-t / 0.0015)) * sva_formula::exp(-t / decay);
             let wave = libm::sin(std::f64::consts::TAU * 440.0 * t);
             if let Some(s) = samples.get_mut(from + n) {
                 *s += (0.7 * shape * wave) as f32;
@@ -483,8 +483,8 @@ fn score_loudness_pattern_sharpness_and_beating_print_the_fields_a_fit_reads() {
                         libm::sin(std::f64::consts::TAU * hz * k * u) / k
                     })
                     .sum::<f64>()
-                    * (1.0 - libm::exp(-u / 0.002))
-                    * libm::exp(-u / 0.4)
+                    * (1.0 - sva_formula::exp(-u / 0.002))
+                    * sva_formula::exp(-u / 0.4)
             };
             (0.2 * (note(220.0, 0.05) + note(277.18, 0.05) + note(330.0, 0.6))) as f32
         })

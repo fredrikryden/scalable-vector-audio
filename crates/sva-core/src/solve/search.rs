@@ -70,7 +70,7 @@ impl Axis {
 
     fn value(&self, u: f64) -> f64 {
         match self.log {
-            true => libm::exp(u).clamp(libm::exp(self.lo), libm::exp(self.hi)),
+            true => sva_formula::exp(u).clamp(sva_formula::exp(self.lo), sva_formula::exp(self.hi)),
             false => u,
         }
     }

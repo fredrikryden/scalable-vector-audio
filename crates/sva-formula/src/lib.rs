@@ -8,6 +8,7 @@ pub mod closed_form;
 pub mod complex;
 mod content_hash;
 pub mod env;
+mod exp;
 pub mod filter;
 pub mod fourier_dual;
 pub mod hash;
@@ -34,6 +35,7 @@ pub use closed_form::{
 pub use complex::C64;
 pub use content_hash::{ContentHasher, HashDomain};
 pub use env::{Env, NodeId, ParamId};
+pub use exp::exp;
 pub use filter::{ALL_SHAPES, Shape, design};
 pub use fourier_dual::{
     FAMILIES, FOURIER_DUAL_RULES_VERSION, dual, dual_read, inverse, inverse_read, reflect,
