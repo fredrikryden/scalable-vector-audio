@@ -2,6 +2,7 @@
 
 pub mod alias;
 pub mod bands;
+pub mod beating;
 pub mod crest;
 pub mod envelope;
 pub mod formants;
@@ -10,13 +11,13 @@ pub mod ledger;
 pub mod loudness;
 pub mod loudness_pattern;
 pub mod modulation;
-pub mod panel;
 pub mod partials;
 pub mod peaks;
 pub mod periodicity;
 pub mod pitch;
 pub mod score;
 pub mod self_similarity;
+pub mod sharpness;
 pub mod sliding;
 pub mod spectrum;
 pub mod stereo;

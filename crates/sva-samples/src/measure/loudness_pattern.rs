@@ -212,24 +212,3 @@ pub fn measure(
         frames,
     }
 }
-
-/// DIN 45692's weighted first moment over Bark (Traunmüller's), in acum; `None` where silent.
-pub fn sharpness(centres_hz: &[f64], specific: &[f64]) -> Option<f64> {
-    let total: f64 = specific.iter().sum();
-    if total <= 0.0 {
-        return None;
-    }
-    let moment: f64 = centres_hz
-        .iter()
-        .zip(specific)
-        .map(|(&hz, &n)| {
-            let z = 26.81 * hz / (1960.0 + hz) - 0.53;
-            let g = match z > 15.8 {
-                true => 0.15 * libm::exp(0.42 * (z - 15.8)) + 0.85,
-                false => 1.0,
-            };
-            n * g * z
-        })
-        .sum();
-    Some(0.11 * moment / total)
-}

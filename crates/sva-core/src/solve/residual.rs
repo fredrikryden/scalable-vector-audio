@@ -6,24 +6,11 @@ use sva_engine::Output;
 pub const FLOOR_DB: f64 = -120.0;
 /// What an event with no partner on the other side counts, in seconds.
 pub const MISSED_ONSET_SECS: f64 = 1.0;
-/// What a panel's note with no partner counts, in just-noticeable differences.
-pub const MISSED_NOTE_JNDS: f64 = 10.0;
-/// Each panel axis's just-noticeable difference, after PERCEPTUAL's provisional table.
-pub const PITCH_JND_CENTS: (f64, f64) = (5.0, 10.0);
-pub const SHORT_NOTE_SECS: f64 = 0.1;
-pub const LOW_NOTE_HZ: f64 = 100.0;
-/// Two voices further apart than this are no partners: a voicing differs, not a pitch.
-pub const PARTNER_CENTS: f64 = 600.0;
-pub const SHARPNESS_JND_PCT: f64 = 5.0;
-pub const DECAY_JND_PCT: f64 = 15.0;
-pub const DECAYING_PHON_PER_SEC: f64 = -5.0;
-pub const ATTACK_JND_PCT: f64 = 25.0;
-pub const BEATING_JND_PHON: f64 = 0.3;
 /// What a note with no partner in its frame counts, in cents: an octave.
 pub const MISSED_NOTE_CENTS: f64 = 1200.0;
 
 /// One line per rule, as `--help` prints them.
-pub const RULES: [(&str, &str); 9] = [
+pub const RULES: [(&str, &str); 10] = [
     (
         "envelope",
         "frame by frame, each frame's rms in dB, frame k of one side against frame k of the other",
@@ -63,13 +50,14 @@ pub const RULES: [(&str, &str); 9] = [
          lacks read as silent",
     ),
     (
-        "panel",
-        "in just-noticeable differences, the whole's axes, then each note paired as `score` \
-         pairs events: each voice's pitch paired nearest first within 600 cents, in cents over \
-         5 (10 for a note under 100 ms or a voice under 100 Hz), \
-         sharpness 100 ln(a / b) over 5 %, decay 100 ln(a / b) over 15 % where both fall \
-         faster than 5 phon/s, attack 100 ln(a / b) over 25 %, beating a - b over 0.3 phon; \
-         an axis either side lacks counts zero, each note left unpaired 10",
+        "sharpness",
+        "frame by frame, 100 ln(a / b) in percent, zero where either frame is silent or one \
+         side lacks it",
+    ),
+    (
+        "beating",
+        "window by window, a - b in phon, zero where either window reads null or one side \
+         lacks it",
     ),
 ];
 
@@ -123,57 +111,20 @@ fn sets(a: &[f64], b: &[f64], zone: f64, missed: f64) -> Vec<f64> {
     out
 }
 
-/// `100 ln(a / b)` over `jnd` percent, where both sides hold the axis.
-fn ratio(a: Option<f64>, b: Option<f64>, jnd: f64) -> f64 {
-    match (a, b) {
-        (Some(a), Some(b)) if a > 0.0 && b > 0.0 => 100.0 * libm::log(a / b) / jnd,
-        _ => 0.0,
-    }
-}
-
-fn axes(a: &sva_engine::panel::Axes, b: &sva_engine::panel::Axes) -> [f64; 4] {
-    let decaying = |d: Option<f64>| d.filter(|v| *v < DECAYING_PHON_PER_SEC).map(|v| -v);
-    let beating = match (a.beating_phon, b.beating_phon) {
-        (Some(a), Some(b)) => (a - b) / BEATING_JND_PHON,
-        _ => 0.0,
-    };
-    [
-        ratio(a.sharpness_acum, b.sharpness_acum, SHARPNESS_JND_PCT),
-        ratio(
-            decaying(a.decay_phon_per_sec),
-            decaying(b.decay_phon_per_sec),
-            DECAY_JND_PCT,
-        ),
-        ratio(a.attack_secs, b.attack_secs, ATTACK_JND_PCT),
-        beating,
-    ]
-}
-
-/// Each voice paired nearest first within half an octave, in cents over the pitch JND.
-fn pitches(a: &sva_engine::panel::Note, b: &sva_engine::panel::Note) -> Vec<f64> {
-    let short = a.length_secs.min(b.length_secs) < SHORT_NOTE_SECS;
-    let at = |n: &sva_engine::panel::Note| -> Vec<f64> {
-        n.pitches_hz.iter().map(|hz| cents(*hz)).collect()
-    };
-    let (x, y) = (at(a), at(b));
-    let (pairs, _) = paired(&x, &y);
-    pairs
-        .into_iter()
-        .filter(|p| p.2 <= PARTNER_CENTS)
-        .map(|(i, j, _)| {
-            let low = a.pitches_hz[i].min(b.pitches_hz[j]) < LOW_NOTE_HZ;
-            let jnd = if short || low {
-                PITCH_JND_CENTS.1
-            } else {
-                PITCH_JND_CENTS.0
-            };
-            (x[i] - y[j]) / jnd
-        })
-        .collect()
-}
-
 fn cents(hz: f64) -> f64 {
     1200.0 * libm::log2(hz)
+}
+
+/// Frame k against frame k where both sides hold it, zero elsewhere.
+fn held_pairs(a: &[Option<f64>], b: &[Option<f64>], apart: impl Fn(f64, f64) -> f64) -> Vec<f64> {
+    (0..a.len().max(b.len()))
+        .map(
+            |k| match (a.get(k).copied().flatten(), b.get(k).copied().flatten()) {
+                (Some(x), Some(y)) => apart(x, y),
+                _ => 0.0,
+            },
+        )
+        .collect()
 }
 
 /// `None` where the two are not one kind; the cost's typing already refused that.
@@ -264,19 +215,17 @@ pub fn residual(a: &Output, b: &Output) -> Option<Vec<f64>> {
             }
             out
         }
-        (Output::Panel(a), Output::Panel(b)) => {
-            let mut out = axes(&a.whole, &b.whole).to_vec();
-            let times = |p: &sva_engine::panel::Panel| -> Vec<f64> {
-                p.notes.iter().map(|n| n.at_secs).collect()
+        (Output::Sharpness(a), Output::Sharpness(b)) => {
+            let acum = |s: &sva_engine::sharpness::Sharpness| -> Vec<Option<f64>> {
+                s.frames.iter().map(|f| f.acum).collect()
             };
-            let (pairs, left) = paired(&times(a), &times(b));
-            for (i, j, _) in pairs {
-                let (x, y) = (&a.notes[i], &b.notes[j]);
-                out.extend(pitches(x, y));
-                out.extend(axes(&x.axes, &y.axes));
-            }
-            out.extend(std::iter::repeat_n(MISSED_NOTE_JNDS, left));
-            out
+            held_pairs(&acum(a), &acum(b), |x, y| 100.0 * libm::log(x / y))
+        }
+        (Output::Beating(a), Output::Beating(b)) => {
+            let phon = |s: &sva_engine::beating::Beating| -> Vec<Option<f64>> {
+                s.windows.iter().map(|w| w.phon).collect()
+            };
+            held_pairs(&phon(a), &phon(b), |x, y| x - y)
         }
         (Output::Pitch(a), Output::Pitch(b)) => {
             let mut out = Vec::new();

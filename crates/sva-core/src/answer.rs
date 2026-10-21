@@ -10,6 +10,7 @@ use sva_engine::{
     Worked,
 };
 
+use sva_engine::beating::{self, Beating};
 use sva_engine::harmony::Framing;
 use sva_engine::harmony::chords::{self, Chord};
 use sva_engine::harmony::dissonance::{self, Dissonance, Extreme};
@@ -18,12 +19,12 @@ use sva_engine::harmony::tonnetz::{self, Quality, TonalDistance, Triad};
 use sva_engine::harmony::voice_leading::{self, VoiceLeading};
 use sva_engine::loudness_pattern::{self, LoudnessPattern};
 use sva_engine::modulation::{self, Modulation};
-use sva_engine::panel::{self, Axes, Panel};
 use sva_engine::partials::{self, Partials};
 use sva_engine::periodicity::{self, Periodicity, Track, Window};
 use sva_engine::pitch as pitch_names;
 use sva_engine::score::{self, Score};
 use sva_engine::self_similarity::{self, SelfSimilarity};
+use sva_engine::sharpness::{self, Sharpness};
 use sva_engine::sliding::Stats;
 
 use crate::cli_error::CliError;
@@ -298,29 +299,36 @@ fn loudness_pattern_json(p: &LoudnessPattern) -> String {
     )
 }
 
-fn axes_json(a: &Axes) -> String {
+fn sharpness_json(s: &Sharpness) -> String {
     format!(
-        "\"sharpness_acum\": {}, \"decay_phon_per_sec\": {}, \"beating_phon\": {}, \
-         \"attack_secs\": {}",
-        maybe(a.sharpness_acum),
-        maybe(a.decay_phon_per_sec),
-        maybe(a.beating_phon),
-        maybe(a.attack_secs)
+        "{{ \"model\": \"{}\", \"frame_secs\": {}, \"window_secs\": {}, \"spl_db\": {}, \
+         \"frames\": {} }}",
+        escape(sharpness::MODEL),
+        num(s.frame_secs),
+        num(s.window_secs),
+        num(s.spl_db),
+        list(&s.frames, |f| format!(
+            "\n    {{ \"t_secs\": {}, \"acum\": {} }}",
+            num(f.t_secs),
+            maybe(f.acum)
+        ))
     )
 }
 
-fn panel_json(p: &Panel) -> String {
+fn beating_json(b: &Beating) -> String {
     format!(
-        "{{ \"model\": \"{}\", \"spl_db\": {}, \"whole\": {{ {} }}, \"notes\": {} }}",
-        escape(panel::MODEL),
-        num(p.spl_db),
-        axes_json(&p.whole),
-        list(&p.notes, |n| format!(
-            "\n    {{ \"at_secs\": {}, \"length_secs\": {}, \"pitches_hz\": {}, {} }}",
-            num(n.at_secs),
-            num(n.length_secs),
-            numbers(&n.pitches_hz),
-            axes_json(&n.axes)
+        "{{ \"model\": \"{}\", \"frame_secs\": {}, \"window_secs\": {}, \"spl_db\": {}, \
+         \"windows\": {} }}",
+        escape(beating::MODEL),
+        num(b.frame_secs),
+        num(b.window_secs),
+        num(b.spl_db),
+        list(&b.windows, |w| format!(
+            "\n    {{ \"t_secs\": {}, \"from_secs\": {}, \"to_secs\": {}, \"phon\": {} }}",
+            num(w.t_secs),
+            num(w.from_secs),
+            num(w.to_secs),
+            maybe(w.phon)
         ))
     )
 }
@@ -964,7 +972,8 @@ pub fn value_json(output: &Output, limit: Option<usize>, skim: bool) -> String {
         Output::SelfSimilarity(s) => self_similarity_json(s),
         Output::Partials(p) => partials_json(p),
         Output::LoudnessPattern(p) => loudness_pattern_json(p),
-        Output::Panel(p) => panel_json(p),
+        Output::Sharpness(s) => sharpness_json(s),
+        Output::Beating(b) => beating_json(b),
         Output::Bindings(b) => list(b, binding_json),
         Output::Arguments(a) => list(a, arguments_json),
         Output::Envelope(frames) => list(frames, |f: &EnvelopeFrame| {

@@ -230,7 +230,7 @@ impl std::error::Error for EngineError {}
 
 /// Every code a judgment in this engine can refuse under, with what trips it. The prefix
 /// says which judgment refused, per FORMAT 16.
-pub static REGISTRY: [(&str, &str); 106] = [
+pub static REGISTRY: [(&str, &str); 107] = [
     (
         "type.no_overload",
         "a builtin applied to operand types no row names",
@@ -502,6 +502,10 @@ pub static REGISTRY: [(&str, &str); 106] = [
     (
         "read.frame_under_order",
         "a formant frame holding fewer samples than its all-pole fit's lags",
+    ),
+    (
+        "read.window_under_frames",
+        "a beating window holding fewer frames than a band's trend is fitted over",
     ),
     (
         "read.target_under_order",

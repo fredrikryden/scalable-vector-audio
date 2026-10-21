@@ -2,10 +2,11 @@
 
 use serde_json::Value;
 use sva_engine::bands::BandFloor;
+use sva_engine::beating::{Beating, BeatingWindow};
 use sva_engine::loudness_pattern::{LoudnessPattern, PatternFrame};
-use sva_engine::panel::{Axes, Note as PanelNote, Panel};
 use sva_engine::pitch::Note;
 use sva_engine::score::{Cue, Event, Hit, Kind, Partial, Score, Sound, Tone, Voiced};
+use sva_engine::sharpness::{Sharpness, SharpnessFrame};
 use sva_engine::spectrum::{Band, Peak};
 use sva_engine::{
     BandCrest, BandTrack, Bands, Crest, EnvelopeFrame, Loudness, LoudnessFrame, Output, PEAK_NOTE,
@@ -345,25 +346,31 @@ fn loudness_pattern(at: At) -> Read<Output> {
     })))
 }
 
-fn axes(at: &At) -> Read<Axes> {
-    Ok(Axes {
-        sharpness_acum: field!(at, "sharpness_acum").maybe()?,
-        decay_phon_per_sec: field!(at, "decay_phon_per_sec").maybe()?,
-        beating_phon: field!(at, "beating_phon").maybe()?,
-        attack_secs: field!(at, "attack_secs").maybe()?,
-    })
+fn sharpness(at: At) -> Read<Output> {
+    Ok(Output::Sharpness(Box::new(Sharpness {
+        frame_secs: field!(at, "frame_secs").num()?,
+        window_secs: field!(at, "window_secs").num()?,
+        spl_db: field!(at, "spl_db").num()?,
+        frames: field!(at, "frames").items(|f| {
+            Ok(SharpnessFrame {
+                t_secs: field!(f, "t_secs").num()?,
+                acum: field!(f, "acum").maybe()?,
+            })
+        })?,
+    })))
 }
 
-fn panel(at: At) -> Read<Output> {
-    Ok(Output::Panel(Box::new(Panel {
+fn beating(at: At) -> Read<Output> {
+    Ok(Output::Beating(Box::new(Beating {
+        frame_secs: field!(at, "frame_secs").num()?,
+        window_secs: field!(at, "window_secs").num()?,
         spl_db: field!(at, "spl_db").num()?,
-        whole: axes(&field!(at, "whole"))?,
-        notes: field!(at, "notes").items(|n| {
-            Ok(PanelNote {
-                at_secs: field!(n, "at_secs").num()?,
-                length_secs: field!(n, "length_secs").num()?,
-                pitches_hz: field!(n, "pitches_hz").numbers()?,
-                axes: axes(&n)?,
+        windows: field!(at, "windows").items(|w| {
+            Ok(BeatingWindow {
+                t_secs: field!(w, "t_secs").num()?,
+                from_secs: field!(w, "from_secs").num()?,
+                to_secs: field!(w, "to_secs").num()?,
+                phon: field!(w, "phon").maybe()?,
             })
         })?,
     })))
@@ -385,7 +392,8 @@ pub fn reading(representation: Representation, value: &Value, path: &str) -> Rea
         Representation::Crest => crest(at),
         Representation::Score => score(at),
         Representation::LoudnessPattern { .. } => loudness_pattern(at),
-        Representation::Panel { .. } => panel(at),
+        Representation::Sharpness { .. } => sharpness(at),
+        Representation::Beating { .. } => beating(at),
         other => Err(format!("`{other:?}` has no JSON reader")),
     }
 }

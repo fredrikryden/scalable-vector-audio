@@ -8,12 +8,13 @@ use sva_samples::measure::harmony::{
     self, Framing, Moment, chords, dissonance, inharmonicity, measured as framed, tonnetz,
     voice_leading,
 };
-use sva_samples::measure::{modulation, partials, periodicity, self_similarity, sliding};
+use sva_samples::measure::{
+    beating, modulation, partials, periodicity, self_similarity, sharpness, sliding,
+};
 use sva_samples::{
     Buffer, Consumes, Extent, Peak, PitchFrame, Profile, Source, measure::bands, measure::crest,
     measure::envelope, measure::formants, measure::loudness, measure::loudness_pattern,
-    measure::panel, measure::pitch, measure::score, measure::spectrum, measure::stereo,
-    measure_alias,
+    measure::pitch, measure::score, measure::spectrum, measure::stereo, measure_alias,
 };
 
 use crate::error::{Diagnostic, EngineError, Located};
@@ -520,6 +521,28 @@ fn under_order(
     })
 }
 
+fn short_window(name: &str, why: beating::ShortWindow) -> EngineError {
+    let beating::ShortWindow {
+        window_secs,
+        frame_secs,
+        least_secs,
+    } = why;
+    let frame = window_secs / beating::LEAST_FRAMES as f64;
+    EngineError::refused(Diagnostic {
+        code: "read.window_under_frames".to_string(),
+        message: format!(
+            "a {window_secs}s window holds under the {} frames of {frame_secs}s a band's trend \
+             is fitted over",
+            beating::LEAST_FRAMES
+        ),
+        location: Located::at(name, None),
+        help: format!(
+            "ask a window of {least_secs}s or longer, as `beating(window={least_secs}s)`, or a \
+             frame of {frame}s or shorter, as `beating(window={window_secs}s, frame={frame}s)`"
+        ),
+    })
+}
+
 /// Names the rate, cell or window that fits and, through `shorter` and `faster`, how to hand
 /// it a target that short or samples that fast.
 fn unfit(
@@ -908,6 +931,7 @@ fn measured(
                 } => block_under(name, (window_secs, samples, rate)),
                 NoReading::UnderOrder(why) => under_order(name, why, longer),
                 NoReading::Unfit(why) => unfit(name, why, shorter, faster),
+                NoReading::ShortWindow(why) => short_window(name, why),
             });
         }
     })
@@ -932,6 +956,7 @@ pub enum NoReading {
         rate: u32,
     },
     UnderOrder(formants::UnderOrder),
+    ShortWindow(beating::ShortWindow),
 }
 
 /// Every reading a buffer answers on its own, with no graph behind it.
@@ -995,9 +1020,17 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
                 &planes, sr, start, frame_secs, spl_db,
             )))
         }
-        Representation::Panel { spl_db } => {
-            Output::Panel(Box::new(panel::measure(&planes, sr, start, spl_db)))
-        }
+        Representation::Sharpness { frame_secs, spl_db } => Output::Sharpness(Box::new(
+            sharpness::measure(&planes, sr, start, frame_secs, spl_db),
+        )),
+        Representation::Beating {
+            frame_secs,
+            window_secs,
+            spl_db,
+        } => Output::Beating(Box::new(
+            beating::measure(&planes, sr, start, (frame_secs, window_secs), spl_db)
+                .map_err(NoReading::ShortWindow)?,
+        )),
         Representation::Loudness { window_secs } => Output::Loudness(Box::new(
             loudness::analyze(&planes, sr, start, window_secs).map_err(|why| match why {
                 sva_samples::Unweighted::Rate(held) => NoReading::RateUnder(held),
@@ -1358,6 +1391,7 @@ pub fn answer_buffer(
             rate,
         } => block_under(name, (window_secs, samples, rate)),
         NoReading::UnderOrder(why) => under_order(name, why, longer),
+        NoReading::ShortWindow(why) => short_window(name, why),
     })?;
     Ok(Answer::whole(
         value,

@@ -144,6 +144,7 @@ fn analyze_takes_only_the_readings_a_buffer_answers() {
         sorted,
         [
             "bands",
+            "beating",
             "crest",
             "derivative",
             "dissonance",
@@ -153,13 +154,13 @@ fn analyze_takes_only_the_readings_a_buffer_answers() {
             "loudness",
             "loudness_pattern",
             "modulation",
-            "panel",
             "partials",
             "periodicity",
             "pitch",
             "samples",
             "score",
             "self_similarity",
+            "sharpness",
             "spectrum",
             "stereo",
             "tonal_distance",
@@ -229,6 +230,32 @@ fn a_two_channel_file_answers_a_stereo_image_a_mono_or_three_channel_one_cannot(
         err.to_string()
             .contains("needs exactly 2 components and the file holds 3"),
         "{err}"
+    );
+}
+
+/// A `beating` window fits each band's trend over at least 20 frames: one holding fewer
+/// refuses, naming the window and the frame that hold them.
+#[test]
+fn a_beating_window_under_twenty_frames_refuses_naming_what_holds_them() {
+    let rate = 48_000u32;
+    let path = written("beating-short-window", rate, &[&tone(rate, 220.0, 0.5)]);
+    let refused = answer_buffer(
+        "in.wav",
+        &decoded(&path),
+        Representation::Beating {
+            frame_secs: 0.01,
+            window_secs: 0.1,
+            spl_db: 100.0,
+        },
+        PSYCHOACOUSTIC_V1.name,
+    )
+    .expect_err("ten frames hold no trend");
+    assert_eq!(refused.code(), "read.window_under_frames");
+    let said = refused.to_string();
+    assert!(said.contains("`beating(window=0.2s)`"), "{said}");
+    assert!(
+        said.contains("`beating(window=0.1s, frame=0.005s)`"),
+        "{said}"
     );
 }
 
@@ -439,7 +466,7 @@ fn keys(value: &serde_json::Value) -> Vec<&str> {
 /// The JSON a fit reads: each reading's fields, its events', voices', frames' and notes', and
 /// the arguments it spells. A consumer outside this repository parses these names.
 #[test]
-fn score_loudness_pattern_and_panel_print_the_fields_a_fit_reads() {
+fn score_loudness_pattern_sharpness_and_beating_print_the_fields_a_fit_reads() {
     let rate = 48_000u32;
     let sr = f64::from(rate);
     let chord: Vec<f32> = (0..(sr * 1.2) as usize)
@@ -463,7 +490,7 @@ fn score_loudness_pattern_and_panel_print_the_fields_a_fit_reads() {
         })
         .collect();
     let path = written("score-shape", rate, &[&chord]);
-    let read = printed(&path, "score,loudness_pattern,panel");
+    let read = printed(&path, "score,loudness_pattern,sharpness,beating");
     let held = &read["data"]["representations"];
 
     let score = &held["score"];
@@ -550,25 +577,45 @@ fn score_loudness_pattern_and_panel_print_the_fields_a_fit_reads() {
             .len()
     );
 
-    let panel = &held["panel"];
+    let frames = pattern["value"]["frames"]["items"]
+        .as_array()
+        .expect("frames")
+        .len();
+
+    let sharpness = &held["sharpness"];
     assert_eq!(
-        panel["args"],
-        serde_json::json!({ "spl": "100db" }),
-        "{panel}"
+        sharpness["args"],
+        serde_json::json!({ "frame": "10ms", "spl": "100db" }),
+        "{sharpness}"
     );
-    assert_eq!(keys(&panel["value"]), ["model", "notes", "spl_db", "whole"]);
-    let axes = [
-        "attack_secs",
-        "beating_phon",
-        "decay_phon_per_sec",
-        "sharpness_acum",
-    ];
-    assert_eq!(keys(&panel["value"]["whole"]), axes);
-    let note = &panel["value"]["notes"]["items"][0];
-    let mut fields = axes.to_vec();
-    fields.extend(["at_secs", "length_secs", "pitches_hz"]);
-    fields.sort_unstable();
-    assert_eq!(keys(note), fields);
+    assert_eq!(
+        keys(&sharpness["value"]),
+        ["frame_secs", "frames", "model", "spl_db", "window_secs"]
+    );
+    let held_frames = sharpness["value"]["frames"]["items"]
+        .as_array()
+        .expect("frames");
+    assert_eq!(held_frames.len(), frames, "a frame per pattern frame");
+    assert_eq!(keys(&held_frames[0]), ["acum", "t_secs"]);
+
+    let beating = &held["beating"];
+    assert_eq!(
+        beating["args"],
+        serde_json::json!({ "frame": "10ms", "window": "500ms", "spl": "100db" }),
+        "{beating}"
+    );
+    assert_eq!(
+        keys(&beating["value"]),
+        ["frame_secs", "model", "spl_db", "window_secs", "windows"]
+    );
+    let windows = beating["value"]["windows"]["items"]
+        .as_array()
+        .expect("windows");
+    assert_eq!(windows.len(), frames, "a window per pattern frame");
+    assert_eq!(
+        keys(&windows[0]),
+        ["from_secs", "phon", "t_secs", "to_secs"]
+    );
 }
 
 /// The codes a caller branches on: a reading gone, a value it cannot read, an argument a
@@ -577,10 +624,12 @@ fn score_loudness_pattern_and_panel_print_the_fields_a_fit_reads() {
 fn the_score_and_perceptual_readings_refuse_with_stable_codes() {
     for (asked, code) in [
         ("onsets", "query.retired"),
-        ("panel(spl=loud)", "query.bad_value"),
+        ("panel", "query.retired"),
+        ("sharpness(spl=loud)", "query.bad_value"),
         ("loudness_pattern(spl=90)", "query.bad_value"),
         ("score(frame=10ms)", "query.unknown_argument"),
-        ("panel(frame=10ms)", "query.unknown_argument"),
+        ("sharpness(window=1s)", "query.unknown_argument"),
+        ("beating(peaks=2)", "query.unknown_argument"),
     ] {
         let refused = parse_args(&argv(&["analyze", "/tmp/a.wav", "--representation", asked]))
             .err()

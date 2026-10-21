@@ -12,10 +12,14 @@ use sva_engine::{
 
 use crate::cli_error::CliError;
 
-pub const RETIRED: [(&str, &str); 3] = [
+pub const RETIRED: [(&str, &str); 4] = [
     ("exact-envelope", "envelope, symbolic on a closed form"),
     ("exact-derivative", "derivative, symbolic on a closed form"),
     ("onsets", "score, each event's `at_secs`"),
+    (
+        "panel",
+        "sharpness,beating,envelope(frame=10ms),pitch(frame=100ms, peaks=1)",
+    ),
 ];
 
 /// One reading written as a call, `spectrum(peaks=8, frame=50ms)=out.json`: its name, its
@@ -321,10 +325,18 @@ impl Asked {
                 (Arg::Floor, db(floor_db)),
                 (Arg::Peaks, count(tracks)),
             ],
-            R::LoudnessPattern { frame_secs, spl_db } => {
+            R::LoudnessPattern { frame_secs, spl_db } | R::Sharpness { frame_secs, spl_db } => {
                 vec![(Arg::Frame, secs(frame_secs)), (Arg::Spl, db(spl_db))]
             }
-            R::Panel { spl_db } => vec![(Arg::Spl, db(spl_db))],
+            R::Beating {
+                frame_secs,
+                window_secs,
+                spl_db,
+            } => vec![
+                (Arg::Frame, secs(frame_secs)),
+                (Arg::Window, secs(window_secs)),
+                (Arg::Spl, db(spl_db)),
+            ],
         };
         let buffer = match &self.dest {
             Some(Destination::Alsa { buffer_secs, .. }) => secs(*buffer_secs),

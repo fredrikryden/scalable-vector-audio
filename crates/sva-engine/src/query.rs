@@ -1,16 +1,17 @@
 // Concern: the one table of observations: names, arguments, defaults, what each reads, help; the answer envelope | Non-concern: taking one reading (answer.rs) | IO: (name, Given) -> Representation
 
 use sva_formula::{C64, Line, SpectralSum, Var};
+use sva_samples::measure::beating::Beating;
 use sva_samples::measure::harmony::dissonance::Dissonance;
 use sva_samples::measure::harmony::inharmonicity::Inharmonicity;
 use sva_samples::measure::harmony::tonnetz::TonalDistance;
 use sva_samples::measure::harmony::voice_leading::{Norm, VoiceLeading};
 use sva_samples::measure::loudness_pattern::LoudnessPattern;
 use sva_samples::measure::modulation::Modulation;
-use sva_samples::measure::panel::Panel;
 use sva_samples::measure::partials::Partials;
 use sva_samples::measure::periodicity::Periodicity;
 use sva_samples::measure::self_similarity::SelfSimilarity;
+use sva_samples::measure::sharpness::Sharpness;
 use sva_samples::{
     Alias, Bands, Buffer, Consumes, Crest, EnvelopeFrame, FormantFrame, LedgerEntry, Loudness,
     PitchFrame, Score, Source, Spectrum, StereoImage,
@@ -49,9 +50,11 @@ pub const DEFAULT_PARTIALS_WINDOW_SECS: f64 = 0.5;
 pub const DEFAULT_PARTIALS_HOP_SECS: f64 = 0.005;
 pub const DEFAULT_PARTIALS_FLOOR_DB: f64 = -70.0;
 pub const DEFAULT_PARTIALS_TRACKS: usize = 120;
-/// A loudness pattern's frames step as the panel's do.
-pub const DEFAULT_PATTERN_FRAME_SECS: f64 = sva_samples::measure::panel::FRAME_SECS;
+/// A loudness pattern's frames step 10 ms: a 20 Hz level swing reads five frames a cycle.
+pub const DEFAULT_PATTERN_FRAME_SECS: f64 = 0.01;
 pub use sva_samples::measure::loudness_pattern::DEFAULT_SPL_DB;
+/// Half a second of frames: a swing at 4 Hz turns twice in it, a note's fall stays its trend.
+pub const DEFAULT_BEATING_WINDOW_SECS: f64 = 0.5;
 
 /// Every named argument a reading may take; the engine reads only those `Given` holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -361,17 +364,31 @@ static LOUDNESS_PATTERN: Reading = Reading {
     },
 };
 
-static PANEL: Reading = Reading {
-    name: "panel",
-    takes: &[Arg::Spl],
+static SHARPNESS: Reading = Reading {
+    name: "sharpness",
+    takes: &[Arg::Frame, Arg::Spl],
     reads: Reads::Samples,
-    help: "the perceptual axes per note of `score` and over the whole: sharpness in acum, \
-           decay in phon/s, beating in phon, the 10-90 % attack, and each note's pitch to \
-           under a cent; its notes and their pitch off every channel's samples averaged, \
-           every other axis off `loudness_pattern` at its default frame and every channel's \
-           power averaged; a cost subtracting two reads each axis in its just-noticeable \
-           differences",
-    build: |g| Representation::Panel {
+    help: "sharpness in acum every `frame`, DIN 45692's weighting over the specific loudness \
+           `loudness_pattern` reads at the same `frame` and `spl`, null where the frame is \
+           silent; every channel's power per bin averaged",
+    build: |g| Representation::Sharpness {
+        frame_secs: g.frame.unwrap_or(DEFAULT_PATTERN_FRAME_SECS),
+        spl_db: g.spl_db.unwrap_or(DEFAULT_SPL_DB),
+    },
+};
+
+static BEATING: Reading = Reading {
+    name: "beating",
+    takes: &[Arg::Frame, Arg::Window, Arg::Spl],
+    reads: Reads::Samples,
+    help: "how far each band's level swings about its own quadratic trend over a `window` \
+           centred on every `frame`, in phon, the bands weighted by their loudness: beating \
+           and tremolo, a note's rise and fall left in the trend; off the specific loudness \
+           `loudness_pattern` reads at the same `frame` and `spl`, every channel's power per \
+           bin averaged",
+    build: |g| Representation::Beating {
+        frame_secs: g.frame.unwrap_or(DEFAULT_PATTERN_FRAME_SECS),
+        window_secs: g.window.unwrap_or(DEFAULT_BEATING_WINDOW_SECS),
         spl_db: g.spl_db.unwrap_or(DEFAULT_SPL_DB),
     },
 };
@@ -537,7 +554,7 @@ static ARGUMENTS: Reading = Reading {
 };
 
 /// Every reading a caller may ask for, in the order a listing prints them.
-pub static READINGS: [&Reading; 27] = [
+pub static READINGS: [&Reading; 28] = [
     &LINES,
     &ATOMS,
     &SPECTRUM,
@@ -562,7 +579,8 @@ pub static READINGS: [&Reading; 27] = [
     &SELF_SIMILARITY,
     &PARTIALS,
     &LOUDNESS_PATTERN,
-    &PANEL,
+    &SHARPNESS,
+    &BEATING,
     &BINDINGS,
     &ARGUMENTS,
 ];
@@ -644,7 +662,14 @@ pub enum Representation {
         frame_secs: f64,
         spl_db: f64,
     },
-    Panel {
+    Sharpness {
+        frame_secs: f64,
+        spl_db: f64,
+    },
+    /// Windows of `window_secs` centred on every frame of the pattern `frame_secs` steps.
+    Beating {
+        frame_secs: f64,
+        window_secs: f64,
         spl_db: f64,
     },
     Bindings,
@@ -693,7 +718,8 @@ pub enum Output {
     SelfSimilarity(Box<SelfSimilarity>),
     Partials(Box<Partials>),
     LoudnessPattern(Box<LoudnessPattern>),
-    Panel(Box<Panel>),
+    Sharpness(Box<Sharpness>),
+    Beating(Box<Beating>),
     Bindings(Vec<Binding>),
     Arguments(Vec<Arguments>),
 }
@@ -776,7 +802,8 @@ impl Representation {
             Representation::SelfSimilarity { .. } => &SELF_SIMILARITY,
             Representation::Partials { .. } => &PARTIALS,
             Representation::LoudnessPattern { .. } => &LOUDNESS_PATTERN,
-            Representation::Panel { .. } => &PANEL,
+            Representation::Sharpness { .. } => &SHARPNESS,
+            Representation::Beating { .. } => &BEATING,
             Representation::Bindings => &BINDINGS,
             Representation::Arguments => &ARGUMENTS,
         }

@@ -4,12 +4,13 @@ use sva_core::DEFAULT_STORE_BYTES;
 use sva_core::solve;
 use sva_engine::resample;
 use sva_engine::{
-    DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB, DEFAULT_FRAME_SECS,
-    DEFAULT_LEDGER_DEPTH, DEFAULT_LOUDNESS_WINDOW_SECS, DEFAULT_MAX_PAIRS, DEFAULT_MAX_PEAKS,
-    DEFAULT_MODULATION_WINDOW_SECS, DEFAULT_NOVELTY_WINDOW_SECS, DEFAULT_OVERSAMPLE,
-    DEFAULT_PARTIALS_FLOOR_DB, DEFAULT_PARTIALS_FRAME_SECS, DEFAULT_PARTIALS_HOP_SECS,
-    DEFAULT_PARTIALS_TRACKS, DEFAULT_PARTIALS_WINDOW_SECS, DEFAULT_PERIODICITY_WINDOW_SECS,
-    DEFAULT_SAMPLE_RATE, DEFAULT_SMOOTH_SECS, PSYCHOACOUSTIC_V1, READINGS, Reads,
+    DEFAULT_BEATING_WINDOW_SECS, DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB,
+    DEFAULT_FRAME_SECS, DEFAULT_LEDGER_DEPTH, DEFAULT_LOUDNESS_WINDOW_SECS, DEFAULT_MAX_PAIRS,
+    DEFAULT_MAX_PEAKS, DEFAULT_MODULATION_WINDOW_SECS, DEFAULT_NOVELTY_WINDOW_SECS,
+    DEFAULT_OVERSAMPLE, DEFAULT_PARTIALS_FLOOR_DB, DEFAULT_PARTIALS_FRAME_SECS,
+    DEFAULT_PARTIALS_HOP_SECS, DEFAULT_PARTIALS_TRACKS, DEFAULT_PARTIALS_WINDOW_SECS,
+    DEFAULT_PATTERN_FRAME_SECS, DEFAULT_PERIODICITY_WINDOW_SECS, DEFAULT_SAMPLE_RATE,
+    DEFAULT_SMOOTH_SECS, DEFAULT_SPL_DB, PSYCHOACOUSTIC_V1, READINGS, Reads,
     self_similarity::MAX_CELLS, spectrum,
 };
 
@@ -258,12 +259,12 @@ RENDER:
   A measured `envelope` is framed too, and reads every channel: a frame's
   `rms` is the root mean square of all its channels' samples together, its
   `peak` the largest magnitude in any channel. `score` and `partials` read
-  every channel's samples averaged, one mono signal, as `panel` reads its
-  notes and their pitch; its other axes read power. Every
+  every channel's samples averaged, one mono signal. Every
   other measured reading but `stereo` reads every channel in power, as
   `envelope` reads a level: a spectrum's power per bin (`spectrum`, `pitch`,
   the partials `dissonance`, `voice_leading`, `tonal_distance`,
-  `inharmonicity`, `self_similarity` and `loudness_pattern` pick), a formant frame's
+  `inharmonicity`, `self_similarity`, `loudness_pattern`, `sharpness` and
+  `beating` pick), a formant frame's
   autocorrelation and each auditory band's energy (`bands`, `periodicity`,
   `modulation`, `self_similarity`) are each channel's averaged, so a channel
   copied to two reads as itself; `crest` sets any channel's peak against the
@@ -653,8 +654,12 @@ DEFAULTS:
                        Default {DEFAULT_OVERSAMPLE}.
   (frame=<t>)          the step a framed reading advances by, in seconds.
                        Default {DEFAULT_FRAME_SECS}, except `spectrum`, which sizes
-                       its own transform to the range unless it is set, and
-                       `partials`, below.
+                       its own transform to the range unless it is set,
+                       `loudness_pattern`, `sharpness` and `beating`, which step
+                       {DEFAULT_PATTERN_FRAME_SECS}, and `partials`, below.
+  (spl=<db>)           the level in dB SPL a full-scale sine plays at, as
+                       `90db`, for `loudness_pattern`, `sharpness` and `beating`.
+                       Default {DEFAULT_SPL_DB}db.
   (floor=<db>)         the amplitude, as `-40db`, under which a harmonic reading
                        or `self_similarity` drops a partial, and under which
                        `self_similarity` counts a band level as zero.
@@ -681,6 +686,10 @@ DEFAULTS:
                        Default {DEFAULT_MODULATION_WINDOW_SECS}.
   modulation(bpm=<n>)  a tempo, as `140`, adding each rate's period in beats.
                        Default none.
+  beating(window=<t>)  the span of frames one window fits each band's trend
+                       over, in seconds, at least 20 frames; a swing slower
+                       than the window reads as trend.
+                       Default {DEFAULT_BEATING_WINDOW_SECS}.
   self_similarity(cell=<t>) the side of one matrix cell, in seconds, a whole
                        number of frames holding a sample of the band
                        envelopes; the target may span at most

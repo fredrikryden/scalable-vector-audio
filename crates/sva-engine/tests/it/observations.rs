@@ -663,7 +663,8 @@ fn one_table_says_what_every_named_reading_consumes() {
         "self_similarity",
         "partials",
         "loudness_pattern",
-        "panel",
+        "sharpness",
+        "beating",
         "bindings",
         "arguments",
     ];
