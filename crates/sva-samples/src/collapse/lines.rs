@@ -8,6 +8,7 @@ use sva_formula::spectral_sum::atom::{Exp, Factors, Singular, SpectralAtom, Spec
 use sva_formula::{C64, Lane, Line, Origin, Reads, Run, SpectralSum, Var, lines_read, modal};
 
 use super::active::{self, SampleInterval};
+use super::period::Period;
 use super::truncate::Audible;
 use crate::error::CollapseError;
 use crate::grid::Grid;
@@ -226,6 +227,7 @@ fn ladders(
 pub(crate) struct Direct {
     level: f64,
     runs: Vec<Run>,
+    period: Option<Period>,
 }
 
 impl Direct {
@@ -237,7 +239,29 @@ impl Direct {
         Some(Direct {
             level: dc.iter().map(|l| l.amp.re).sum(),
             runs: Run::of(&moving),
+            period: None,
         })
+    }
+
+    /// What it holds, roughly: its amplitudes and its period's samples.
+    pub(crate) fn bytes(&self) -> usize {
+        let lines: usize = self.runs.iter().map(Run::len).sum();
+        lines * size_of::<C64>() + self.period.as_ref().map_or(0, Period::bytes)
+    }
+
+    pub(crate) fn parts(&self) -> (f64, &[Run]) {
+        (self.level, &self.runs)
+    }
+
+    pub(crate) fn period(&self) -> Option<&Period> {
+        self.period.as_ref()
+    }
+
+    pub(crate) fn with_period(self, period: Period) -> Direct {
+        Direct {
+            period: Some(period),
+            ..self
+        }
     }
 
     /// Every moving line's frequency.

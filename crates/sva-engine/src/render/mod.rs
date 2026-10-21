@@ -457,8 +457,12 @@ fn ranged(
     let built: BTreeSet<NodeId> = schedule.wanted.iter().chain(&tallied).copied().collect();
     let built: Vec<NodeId> = built.into_iter().collect();
     let root = (held.root, built.as_slice());
-    let mut value_graph =
-        ValueGraph::bounded(&held.tys, root, &held.config.profile, (found, hits))?;
+    let mut value_graph = ValueGraph::bounded(
+        &held.tys,
+        root,
+        &held.config.profile,
+        (found, hits, &held.memory),
+    )?;
     value_graph.tallying(&built, &tallied);
     value_graph.refuse_endless(held.range.expect("a range was decided"))?;
     held.value_graph = Some(value_graph);

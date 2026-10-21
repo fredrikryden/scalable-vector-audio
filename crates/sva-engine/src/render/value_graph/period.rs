@@ -8,14 +8,32 @@ use crate::time::{Lattice, Q};
 /// Undamped commensurate lines repeat after `1/gcd`, a written `(a*t + b) % P` after `P/|a|`;
 /// in samples, the numerator of `P*rate/step`.
 pub(crate) fn period(form: Option<&ClosedForm>, rows: &Rows, grid: Grid) -> Option<i64> {
-    let seconds = match rows.lines() {
-        Some(hz) => lines(&hz)?,
-        None => wrapped(&form?.body)?,
-    };
+    match rows.lines() {
+        Some(hz) => lines_period(&hz, grid),
+        None => samples(wrapped(&form?.body)?, grid),
+    }
+}
+
+/// The samples after which lines at `hz` repeat, where they do.
+pub(crate) fn lines_period(hz: &[f64], grid: Grid) -> Option<i64> {
+    samples(lines(hz)?, grid)
+}
+
+fn samples(seconds: Q, grid: Grid) -> Option<i64> {
     let samples = seconds
         .mul(Q::int(i64::from(grid.rate)))?
         .div(grid.step())?;
     i64::try_from(samples.num()).ok().filter(|n| *n > 0)
+}
+
+/// The whole number of cycles a line at `hz` turns over `n` samples, signed as `hz`.
+pub(crate) fn bin(hz: f64, n: i64, grid: Grid) -> Option<i64> {
+    let cycles = written(hz.abs())?
+        .mul(Q::int(n))?
+        .mul(grid.step())?
+        .div(Q::int(i64::from(grid.rate)))?;
+    let whole = i64::try_from(cycles.num()).ok()?;
+    cycles.is_integer().then_some(whole * hz.signum() as i64)
 }
 
 fn lines(hz: &[f64]) -> Option<Q> {

@@ -28,7 +28,7 @@ pub use watch::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use sva_samples::{Buffer, Frames, Grid, Label, MachineState, Profile};
+use sva_samples::{Buffer, Frames, Grid, Label, MachineState, Profile, Rows};
 
 /// A value's segments, a stateful value's run, or one analysis of a value, each shared: a clone
 /// hands out the same samples, never a copy of them.
@@ -37,6 +37,22 @@ pub enum Payload {
     Segments(Vec<Arc<Buffer>>),
     Frames(Arc<Frames>),
     Run(Arc<Run>),
+    Rows(Arc<Built>),
+}
+
+/// A closed form's rows as a grid takes them, and the samples it repeats after: memory's alone,
+/// never written to a disk.
+#[derive(Debug)]
+pub struct Built {
+    pub rows: Rows,
+    pub period: Option<i64>,
+}
+
+/// One build is equal only to itself.
+impl PartialEq for Built {
+    fn eq(&self, other: &Built) -> bool {
+        std::ptr::eq(self, other)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +60,7 @@ pub enum PayloadKind {
     Segments,
     Frames,
     Run,
+    Rows,
 }
 
 /// One segment of a run: samples, marked states, and the segment before it.
@@ -86,6 +103,7 @@ pub enum Expected {
     Segments { rate: u32, width: usize },
     Frames,
     Run { rate: u32, width: usize },
+    Rows,
 }
 
 impl Expected {
@@ -94,6 +112,7 @@ impl Expected {
             Expected::Segments { .. } => PayloadKind::Segments,
             Expected::Frames => PayloadKind::Frames,
             Expected::Run { .. } => PayloadKind::Run,
+            Expected::Rows => PayloadKind::Rows,
         }
     }
 }
@@ -118,6 +137,7 @@ impl Payload {
             Payload::Segments(_) => PayloadKind::Segments,
             Payload::Frames(_) => PayloadKind::Frames,
             Payload::Run(_) => PayloadKind::Run,
+            Payload::Rows(_) => PayloadKind::Rows,
         }
     }
 
@@ -129,6 +149,7 @@ impl Payload {
                 .sum(),
             Payload::Frames(f) => f.width * f.frames * f.bins * 2 * size_of::<f64>(),
             Payload::Run(run) => run.bytes(),
+            Payload::Rows(built) => built.rows.bytes(),
         }
     }
 
@@ -137,7 +158,7 @@ impl Payload {
             (Payload::Segments(parts), Expected::Segments { rate, width }) => {
                 parts.iter().all(|b| b.rate == rate && b.width() == width)
             }
-            (Payload::Frames(_), Expected::Frames) => true,
+            (Payload::Frames(_), Expected::Frames) | (Payload::Rows(_), Expected::Rows) => true,
             (Payload::Run(run), Expected::Run { rate, width }) => {
                 run.samples.rate == rate && run.samples.width() == width
             }
@@ -158,6 +179,7 @@ pub(crate) struct Question<'p> {
 pub(crate) enum Shape {
     Samples,
     Frames { window: usize, hop: usize },
+    Rows,
 }
 
 /// What a value computes and what is asked of it, never where a reader places it.
@@ -177,6 +199,7 @@ pub(crate) fn key(identity: Hash, question: &Question) -> Hash {
     let shape = match shape {
         Shape::Samples => [0, 0, 0],
         Shape::Frames { window, hop } => [1, window as u64, hop as u64],
+        Shape::Rows => [2, 0, 0],
     };
     let tag = [0x6b_65_79_00_00_00_00_01];
     mixed(

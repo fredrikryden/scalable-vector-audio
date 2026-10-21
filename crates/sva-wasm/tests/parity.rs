@@ -42,14 +42,14 @@ const NODES: [(&str, &str); 8] = [
 
 /// `<node> <FNV-1a of its f64 sample bits> <of its f32 ones>`.
 const PINNED: &str = "
-src 0dd11846683765de 495eea335ff9d34b
-narrow f20a08d8b1366486 b2ab02a84621d739
-high 0118a0a4c72b636d 6499c72be971da8d
-low 89264ead9dee7bc7 2c1275450e06bdab
-wide c7a9bc56b9bdb57a f009ce5e9f017713
-sweep 94eda0be726cd095 65f1c8dbcfdada21
+src c7558063189a4793 495eea335ff9d34b
+narrow b4a2c3742a439c53 b2ab02a84621d739
+high 016a982bca75dfaa 1e0204de279281e0
+low 8a37493aa0bc518a 2c1275450e06bdab
+wide 3f78c9949f00e4d1 375891442ebd5894
+sweep bcb0ba7039101cbe 65f1c8dbcfdada21
 tone 440e7c4848e5480a 3ecd2048cbd265c2
-master 1e245650ccd9cc7f ba2ab554083ddd6b
+master 489036ff27546ff7 53d876dd19b06e0c
 ";
 
 fn fnv(words: impl Iterator<Item = u64>) -> u64 {

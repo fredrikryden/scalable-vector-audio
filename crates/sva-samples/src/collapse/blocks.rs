@@ -6,6 +6,7 @@ use sva_formula::{ClosedForm, Lane, Opaque, Reads, SpectralSum, Var, normalize_c
 use super::active::{self, SampleInterval};
 use super::column::{self, Program};
 use super::lines::{self, Direct};
+use super::period::Period;
 use super::truncate::{self, Audible};
 use super::{addends, atoms, point, tail};
 use crate::error::CollapseError;
@@ -107,6 +108,32 @@ impl Rows {
         Some(lanes.iter().flatten().flat_map(Direct::hz).collect())
     }
 
+    /// What its direct sums hold, roughly; a written form's programs count nothing.
+    pub fn bytes(&self) -> usize {
+        let mut out = size_of::<Rows>();
+        directs(&self.row, &mut |d| out += d.bytes());
+        out
+    }
+
+    /// The lines every direct sum of this row adds, as hertz.
+    pub fn summed_lines(&self) -> Vec<f64> {
+        let mut out = Vec::new();
+        directs(&self.row, &mut |d| out.extend(d.hz()));
+        out
+    }
+
+    /// Each direct sum repeating after `n` samples, every line on a bin `bin` names, summed
+    /// over that period by one transform where `Period` takes it.
+    pub fn on_period(self, n: i64, bin: &dyn Fn(f64) -> Option<i64>) -> Rows {
+        Rows {
+            row: periodic(self.row, &|d| match Period::of(&d, n, bin) {
+                Some(period) => d.with_period(period),
+                None => d,
+            }),
+            ..self
+        }
+    }
+
     /// `[from, to)` of every component, on the grid's own index.
     pub fn planes(&self, from: i64, to: i64) -> Result<Vec<Vec<f64>>, CollapseError> {
         (0..self.width)
@@ -127,6 +154,46 @@ impl Rows {
 }
 
 type Labelled = (Row, (Source, Detail));
+
+fn directs(row: &Row, each: &mut dyn FnMut(&Direct)) {
+    match row {
+        Row::Lines(lanes) => lanes.iter().flatten().for_each(each),
+        Row::Grouped(lanes) => lanes
+            .iter()
+            .flatten()
+            .filter_map(|g| g.direct.as_ref())
+            .for_each(each),
+        Row::Added(parts) => parts.iter().for_each(|(part, ..)| directs(part, each)),
+        Row::Sweep { .. } | Row::Point { .. } => {}
+    }
+}
+
+fn periodic(row: Row, with: &dyn Fn(Direct) -> Direct) -> Row {
+    match row {
+        Row::Lines(lanes) => Row::Lines(lanes.into_iter().map(|d| d.map(with)).collect()),
+        Row::Grouped(lanes) => Row::Grouped(
+            lanes
+                .into_iter()
+                .map(|groups| {
+                    groups
+                        .into_iter()
+                        .map(|g| Group {
+                            direct: g.direct.map(with),
+                            ..g
+                        })
+                        .collect()
+                })
+                .collect(),
+        ),
+        Row::Added(parts) => Row::Added(
+            parts
+                .into_iter()
+                .map(|(part, width, reach)| (periodic(part, with), width, reach))
+                .collect(),
+        ),
+        row @ (Row::Sweep { .. } | Row::Point { .. }) => row,
+    }
+}
 
 /// One factor, the interval outside which it zeroes a finite sum, and its lines.
 struct Group {
@@ -404,6 +471,9 @@ fn summed(direct: Option<&Direct>, (from, to): SampleInterval, grid: Grid) -> Ve
     let Some(direct) = direct else {
         return vec![0.0; (to - from).max(0) as usize];
     };
+    if let Some(period) = direct.period() {
+        return (from..to).map(|n| 0.0 + period.at(n)).collect();
+    }
     let mut out = Vec::with_capacity((to - from).max(0) as usize);
     for at in (from..to).step_by(CHUNK as usize) {
         let t: Vec<f64> = (at..(at + CHUNK).min(to))

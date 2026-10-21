@@ -12,7 +12,7 @@ use sva_samples::{Buffer, Extent, Label};
 
 use super::stats::{Outcome, Recording};
 use super::stored::{Header, Samples};
-use super::{Entry, Expected, Payload, PayloadKind, Run, Stored, joined};
+use super::{Built, Entry, Expected, Payload, PayloadKind, Run, Stored, joined};
 
 pub const DEFAULT_CACHE_BYTES: u64 = 2 << 30;
 
@@ -293,7 +293,7 @@ impl State {
         match payload {
             Payload::Segments(parts) => parts.iter().all(|part| stored.holds(part.extent())),
             Payload::Run(run) => stored.holds(run.samples.extent()),
-            Payload::Frames(_) => false,
+            Payload::Frames(_) | Payload::Rows(_) => false,
         }
     }
 
@@ -1150,6 +1150,17 @@ impl Memory {
             }
             state.bounded();
         }
+    }
+
+    pub(crate) fn built(&self, key: Hash) -> Option<Arc<Built>> {
+        match self.entry(key, Expected::Rows)?.payload {
+            Payload::Rows(built) => Some(built),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn keep_built(&self, key: Hash, built: Arc<Built>) {
+        self.merge(key, Payload::Rows(built), None, None);
     }
 
     /// The nodes read after `since`, least recent first, and the clock now.

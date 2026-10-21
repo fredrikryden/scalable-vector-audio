@@ -1220,6 +1220,7 @@ fn stats_with(stats: &CacheStats, extra: &str) -> String {
                 PayloadKind::Segments => "segments",
                 PayloadKind::Frames => "frames",
                 PayloadKind::Run => "run",
+                PayloadKind::Rows => "rows",
             }
         )
     });

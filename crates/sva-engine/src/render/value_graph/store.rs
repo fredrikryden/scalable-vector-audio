@@ -4,14 +4,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use sva_formula::{Hash, Held as Representation, NodeId};
-use sva_samples::{Buffer, Extent, Machine, MachineState, NodeRenderer};
+use sva_samples::{Buffer, Extent, Grid, Machine, MachineState, NodeRenderer, Profile};
 
 use super::ValueGraph;
 use super::eval::Marks;
 use super::segments::Segments;
 use super::value::{Holding, Kind, Value};
 use crate::cache::{
-    Cut, Expected, Facts, Keep, Memory, Offered, Payload, PayloadKind, Recording, Run, Stored,
+    Built, Cut, Expected, Facts, Keep, Memory, Offered, Payload, PayloadKind, Question, Recording,
+    Run, Shape, Stored,
 };
 use crate::typing::Typing;
 
@@ -82,6 +83,25 @@ impl Place {
 
 /// What memory holds of `value`, laid in beside what it holds itself; `false` where memory
 /// answered nothing. A node memory answered takes what `hold` asks that it lacks, each time.
+/// Memory's alone: rows are remade from the form, never read off a disk.
+pub(crate) fn built(memory: &Memory, asked: (Hash, Grid, &Profile)) -> Option<Arc<Built>> {
+    memory.built(rows_key(asked))
+}
+
+pub(crate) fn keep_built(memory: &Memory, asked: (Hash, Grid, &Profile), built: Arc<Built>) {
+    memory.keep_built(rows_key(asked), built);
+}
+
+fn rows_key((identity, grid, profile): (Hash, Grid, &Profile)) -> Hash {
+    let question = Question {
+        grid,
+        width: 0,
+        profile,
+        shape: Shape::Rows,
+    };
+    crate::cache::key(identity, &question)
+}
+
 pub(crate) fn load(
     value: &mut Value,
     place: &mut Place,
@@ -152,6 +172,7 @@ fn loaded(value: &mut Value, place: &Place, (memory, seen): (&Memory, &mut Recor
             true
         }
         Payload::Run(_) => false,
+        Payload::Rows(_) => unreachable!("rows are asked for as rows"),
     }
 }
 

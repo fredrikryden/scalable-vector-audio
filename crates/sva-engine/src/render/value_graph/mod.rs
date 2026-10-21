@@ -27,7 +27,7 @@ pub(crate) use demand::Need;
 pub(crate) use value::{Holding, Key, Kind, Value};
 pub(crate) use values::Values;
 
-use crate::cache::{Gauge, Memory, Question, Recording, Shape, Stored};
+use crate::cache::{Built, Gauge, Memory, Question, Recording, Shape, Stored};
 use crate::cast::Cast;
 use crate::error::EngineError;
 use crate::refs;
@@ -57,6 +57,8 @@ pub(crate) struct ValueGraph {
     /// What a build made and named, until settled or let go.
     draft: Draft,
     slotted: BTreeMap<NodeId, Hash>,
+    /// Where a build finds and keeps the rows of each form it builds.
+    memory: Option<Memory>,
 }
 
 #[derive(Default)]
@@ -84,6 +86,7 @@ impl ValueGraph {
             silenced: Vec::new(),
             draft: Draft::default(),
             slotted: BTreeMap::new(),
+            memory: None,
         }
     }
 
@@ -94,10 +97,11 @@ impl ValueGraph {
         tys: &Typing,
         (root, wanted): (NodeId, &[NodeId]),
         profile: &Profile,
-        (found, hits): (Memo, &BTreeMap<NodeId, Arc<Stored>>),
+        (found, hits, memory): (Memo, &BTreeMap<NodeId, Arc<Stored>>, &Memory),
     ) -> Result<ValueGraph, EngineError> {
         let mut value_graph = ValueGraph::new(profile);
         value_graph.supports = found;
+        value_graph.memory = Some(memory.clone());
         value_graph.built(tys, (root, wanted), (1, true, hits), false)
     }
 
@@ -1269,14 +1273,27 @@ impl Building<'_> {
         let tys = self.tys;
         let reads = written.is_some_and(|form| !refs::nodes_in(&form.body).is_empty());
         let free = written.filter(|_| !reads);
-        let rows = rows(tys, (sum.as_ref(), free), grid, self.profile);
         let refused = |e: &sva_samples::CollapseError| eval::collapse_refused(&value.name, e);
-        let form = match (rows, written.filter(|_| reads)) {
-            (Some(Ok(rows)), _) => {
-                value.width = rows.width();
-                value.period = period::period(free, &rows, grid);
-                value.label = Some(rows.label(self.profile));
-                value.kind = Kind::Rows(Arc::new(rows));
+        let memory = self.value_graph.memory.as_ref();
+        let asked = (value.key.identity, grid, self.profile);
+        let built = match memory.and_then(|memory| store::built(memory, asked)) {
+            Some(built) => Some(Ok(built)),
+            None => rows(tys, (sum.as_ref(), free), grid, self.profile).map(|rows| {
+                rows.map(|rows| {
+                    let built = Arc::new(on_period(rows, free, grid));
+                    if let Some(memory) = memory {
+                        store::keep_built(memory, asked, Arc::clone(&built));
+                    }
+                    built
+                })
+            }),
+        };
+        let form = match (built, written.filter(|_| reads)) {
+            (Some(Ok(built)), _) => {
+                value.width = built.rows.width();
+                value.period = built.period;
+                value.label = Some(built.rows.label(self.profile));
+                value.kind = Kind::Rows(built);
                 return Ok(value);
             }
             (Some(Err(e)), None) => return Err(refused(&e)),
@@ -1633,6 +1650,16 @@ pub(super) fn rows(
         (None, Some(form)) => Some(Rows::of(form, on, profile)),
         (None, None) => None,
     }
+}
+
+/// A form's rows, the samples it repeats after, and each direct sum over its lines' period.
+fn on_period(rows: Rows, free: Option<&ClosedForm>, grid: Grid) -> Built {
+    let period = period::period(free, &rows, grid);
+    let rows = match period::lines_period(&rows.summed_lines(), grid) {
+        Some(n) => rows.on_period(n, &|hz| period::bin(hz, n, grid)),
+        None => rows,
+    };
+    Built { rows, period }
 }
 
 /// The rate a grid's step makes, where it is a whole one.

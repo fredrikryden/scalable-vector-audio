@@ -73,7 +73,7 @@ const READINGS: [&str; 15] = [
 const PINNED: &str = r#"
 0 stdout e17e3c4311440757
 0 wav 665924a7a274d695
-0 store:3620e0612b5d84925fa1bd15f1b7716e ea3e977db857ed56
+0 store:3620e0612b5d84925fa1bd15f1b7716e 64065f1fd529e141
 0 lines refused "read.lines_need_unwindowed_lines"
 0 spectrum refused "read.lines_need_unwindowed_lines"
 0 envelope refused "cast.left_algebra"
@@ -91,7 +91,7 @@ const PINNED: &str = r#"
 0 arguments ac479335c0844369
 1 stdout e17e3c4311440757
 1 wav 26291e77cc78e829
-1 store:90af903a105917870539e1943a4b72c7 0bc3be1db3e75393
+1 store:90af903a105917870539e1943a4b72c7 1a0ed0f32991d363
 1 lines refused "read.lines_need_unwindowed_lines"
 1 spectrum refused "read.lines_need_unwindowed_lines"
 1 envelope refused "cast.left_algebra"
@@ -109,7 +109,7 @@ const PINNED: &str = r#"
 1 arguments ac479335c0844369
 2 stdout e17e3c4311440757
 2 wav 968e2e9858e90ed9
-2 store:29c7e17ebaef85e9ff784832c3108192 64ba01261c867f14
+2 store:29c7e17ebaef85e9ff784832c3108192 950494b9265a06d4
 2 lines refused "read.no_spectral_sum"
 2 spectrum refused "read.no_spectral_sum"
 2 envelope refused "read.no_spectral_sum"
@@ -127,7 +127,7 @@ const PINNED: &str = r#"
 2 arguments 639edc93953a6808
 3 stdout 71f4f9a9b3cd9d30
 3 wav 64318e943f03cc25
-3 store:273d32d1fbc24d73b322a79899449566 0a86db1aee7cd415
+3 store:273d32d1fbc24d73b322a79899449566 81afe0dc42e2e1ef
 3 lines ef35f29de2cc8837
 3 spectrum d76d6d5aa41272bc
 3 envelope 508733913bd67342
@@ -145,7 +145,7 @@ const PINNED: &str = r#"
 3 arguments eb3ed92e88f435e1
 4 stdout 5b546f69552c55f0
 4 wav d8d646db74dc9cb2
-4 store:7d17584ff33a1d5714e10c35ba698e01 f555292f9e4017f2
+4 store:7d17584ff33a1d5714e10c35ba698e01 045cf64ccca37967
 4 lines fba1b60d66f0321f
 4 spectrum dba0d0713ae772d8
 4 envelope c554c0bf3802fe1a
@@ -163,7 +163,7 @@ const PINNED: &str = r#"
 4 arguments f74b8084fd1b914d
 5 stdout e17e3c4311440757
 5 wav 177aed0c28183ef5
-5 store:52690610e792cbd9ec87410effce6ac0 1077062bdc53bb5b
+5 store:52690610e792cbd9ec87410effce6ac0 2522be41483fae0d
 5 lines 65ef389a409cc7a3
 5 spectrum 6b1a5e9ec974b0d4
 5 envelope 8c1c2bc6da6a2f6d
@@ -181,20 +181,20 @@ const PINNED: &str = r#"
 5 arguments ac479335c0844369
 6 stdout 9108e37d0b7327c6
 6 wav 72bce77b8424e0c6
-6 store:0aa625a325ad009e42736fb0b55da15e a87179effc2a07a4
-6 store:11c136c343d5887a356999a4fc86e8f7 d780dba7ffd0b862
-6 store:14f6414df6fcdd24e3ba1efa6b601e02 009e09db8149f3a2
-6 store:2a812a178319a3d66188660d033eee56 8fcb89bf134034e9
-6 store:2b1dfb572460ba3c3e8a08891ad3feda 24a6ca636aebaf08
-6 store:2cc1e056c0cd5c6013c986cb46ea8680 30c1f201257d26f8
-6 store:57a6b91a9d6ee92c9f220a471c761060 7cd3d7c91d92021a
-6 store:6e22a9b54e73a673f2f7252c439f5d3c 4222675fc7ec835b
-6 store:6f9bcd032cb9677f874eba226b581950 b0b15995ec511e73
-6 store:d18c8f806552ff35a1cabe95f566fe2e d9f3c3c2f1ca4597
-6 store:d4b554f1adbd1e2708edf6cef39dd919 72982ab649740218
-6 store:dfbe3e234fa8c68c2717f78df327e90f 9a973a17d33aaf35
-6 store:e41ecc22b1d8d907ef9ba75bd804e1e7 315299c2be735118
-6 store:e51a27e86bcbd36a2c884364cb358a1e 258d11fd9790270f
+6 store:0aa625a325ad009e42736fb0b55da15e 68bd8715d82f4ed3
+6 store:11c136c343d5887a356999a4fc86e8f7 fe0f34b51c8c37f3
+6 store:14f6414df6fcdd24e3ba1efa6b601e02 a582b63bfbbc32f9
+6 store:2a812a178319a3d66188660d033eee56 120c430ae633cbf8
+6 store:2b1dfb572460ba3c3e8a08891ad3feda 36ba97a808c358e6
+6 store:2cc1e056c0cd5c6013c986cb46ea8680 17797924c40c6396
+6 store:57a6b91a9d6ee92c9f220a471c761060 004a2bb993fdcb9c
+6 store:6e22a9b54e73a673f2f7252c439f5d3c 7248e5306bab0bd7
+6 store:6f9bcd032cb9677f874eba226b581950 e985045b7824543c
+6 store:d18c8f806552ff35a1cabe95f566fe2e caad63ef99df71df
+6 store:d4b554f1adbd1e2708edf6cef39dd919 e24590f2523b063c
+6 store:dfbe3e234fa8c68c2717f78df327e90f 990f0c62cf2fbc57
+6 store:e41ecc22b1d8d907ef9ba75bd804e1e7 ebd3d21ba7afaf4c
+6 store:e51a27e86bcbd36a2c884364cb358a1e ef95a11a26dc8f91
 6 lines refused "type.samples_in_closed_form"
 6 spectrum 82e214032e137ddc
 6 envelope 87ffd87017994a9c
@@ -212,7 +212,7 @@ const PINNED: &str = r#"
 6 arguments db19184c92016629
 7 stdout 71454a132807dddb
 7 wav 3372a403bff9f10a
-7 store:48cc333eda6f48499d525bb87ae7a03c 7be1a019af88f354
+7 store:48cc333eda6f48499d525bb87ae7a03c 5479ab3a4006d5f9
 7 lines refused "read.lines_need_unwindowed_lines"
 7 spectrum refused "read.lines_need_unwindowed_lines"
 7 envelope refused "cast.left_algebra"
@@ -230,7 +230,7 @@ const PINNED: &str = r#"
 7 arguments 7c1d152f8c0e3714
 8 stdout bb69bdf6de9adeb8
 8 wav 083e3fdfa6fd2b2d
-8 store:0435c2987fec5f6fa5f7bc60ed42587e 201e5a1b953b1596
+8 store:0435c2987fec5f6fa5f7bc60ed42587e 589ca7315988d01f
 8 lines refused "type.samples_in_closed_form"
 8 spectrum 7c295c6f1eda017e
 8 envelope 318124550bf22b6d
@@ -248,7 +248,7 @@ const PINNED: &str = r#"
 8 arguments b642f09606176b94
 9 stdout e17e3c4311440757
 9 wav 3a9ca1a53a5fa42a
-9 store:3180ee7f5ba55875b73514cbc66c3107 e2443f6c6011c229
+9 store:3180ee7f5ba55875b73514cbc66c3107 ec4c5c56a52d8ef2
 9 lines refused "read.lines_need_unwindowed_lines"
 9 spectrum refused "read.lines_need_unwindowed_lines"
 9 envelope refused "cast.left_algebra"
@@ -266,7 +266,7 @@ const PINNED: &str = r#"
 9 arguments ac479335c0844369
 10 stdout 5687cc05a27c2ec3
 10 wav a9866247325c001f
-10 store:6655845ef1b852c2dfba6667b7a17cb7 0c63ba3859dd897a
+10 store:6655845ef1b852c2dfba6667b7a17cb7 1d0dd4db508178d9
 10 lines refused "read.lines_need_unwindowed_lines"
 10 spectrum refused "read.lines_need_unwindowed_lines"
 10 envelope refused "cast.left_algebra"
@@ -284,9 +284,9 @@ const PINNED: &str = r#"
 10 arguments b5457effabd50fe5
 11 stdout a05558226a6cba5a
 11 wav c187b7408a55ebf7
-11 store:49f4a6817fb359e1ca2669494fe63af2 30c3919554c21084
-11 store:d974ac29049427884f6c2e4f1edbb778 0237ab4b36778dac
-11 store:dc788d72ef609cbfbd531912e37ffe4d 2b5a4fc7b18acb78
+11 store:49f4a6817fb359e1ca2669494fe63af2 008d37c5eed9f05e
+11 store:d974ac29049427884f6c2e4f1edbb778 7f26570614c665f7
+11 store:dc788d72ef609cbfbd531912e37ffe4d 454727a4cc31b522
 11 lines refused "type.samples_in_closed_form"
 11 spectrum e061e272529f14a8
 11 envelope ec8adb47ba3251d3
@@ -304,8 +304,8 @@ const PINNED: &str = r#"
 11 arguments fbff5288f7442249
 12 stdout 24a0009133ff612c
 12 wav 3fc9f322aaf6fc5f
-12 store:a754efa011f428d52010e3099bc14cb1 230254c05b6fdecc
-12 store:b75918a010c072bb16f03119a7dcbf64 c8f7f8358b7ff73e
+12 store:a754efa011f428d52010e3099bc14cb1 00ef65f3c39f7583
+12 store:b75918a010c072bb16f03119a7dcbf64 eb8f05273ec5ed57
 12 lines refused "type.samples_in_closed_form"
 12 spectrum 538ff998dc74a836
 12 envelope 0e6d3bea7313f6b3
@@ -323,8 +323,8 @@ const PINNED: &str = r#"
 12 arguments 58316c250a5fe29f
 13 stdout 189201d106182ae6
 13 wav 256b6dfecab93743
-13 store:995a04465e3289abd658d5254fb949f3 29844d15e3e75476
-13 store:e8cfef4afb2349bb0fe8c2e3f1cea74f e48c8a81b8c5ef74
+13 store:995a04465e3289abd658d5254fb949f3 e9a98203e890cddb
+13 store:e8cfef4afb2349bb0fe8c2e3f1cea74f 7786da5294625d8f
 13 lines refused "type.samples_in_closed_form"
 13 spectrum 2a931325439f7f57
 13 envelope 4fcbb7b86395ee78
@@ -342,10 +342,10 @@ const PINNED: &str = r#"
 13 arguments 0adbeca7c937da37
 14 stdout b6ad884dff66b63b
 14 wav 0c1d8e0ad4b6a019
-14 store:194d57ecf1b72fa62c9b17ec02129d13 441f876bf82b6c4a
-14 store:32547f9d11c1e39ed00836d8ff4dbff2 eeefd876e9ba1423
-14 store:4d307b3a5d05232779527d608b4de3ad 4eceef3fbb63662d
-14 store:52d1c7bcf24fd65556b3a64eddbd2e59 d1c0b83460286630
+14 store:194d57ecf1b72fa62c9b17ec02129d13 b093ccc1b22afc47
+14 store:32547f9d11c1e39ed00836d8ff4dbff2 a851941ef22e4f93
+14 store:4d307b3a5d05232779527d608b4de3ad 78ac776f298094df
+14 store:52d1c7bcf24fd65556b3a64eddbd2e59 fb6abdddd01f7477
 14 lines refused "type.samples_in_closed_form"
 14 spectrum c6cd929113e93db9
 14 envelope 02a6d78aae7d3805
@@ -363,7 +363,7 @@ const PINNED: &str = r#"
 14 arguments 566a07fc7cfce2ce
 15 stdout ea658b80403f05b8
 15 wav 82773cac15ff1cca
-15 store:b5146c74a37c137f36a90b33af43d7d6 0cfa984999bdafab
+15 store:b5146c74a37c137f36a90b33af43d7d6 deebcf6f4e565737
 15 lines refused "read.lines_need_unwindowed_lines"
 15 spectrum refused "read.lines_need_unwindowed_lines"
 15 envelope refused "cast.left_algebra"
@@ -381,11 +381,11 @@ const PINNED: &str = r#"
 15 arguments b6603b7216e51daa
 16 stdout 6d9beba6f3f07c0c
 16 wav 9007d5d55c305e67
-16 store:043708e3e666563747bf4fa06e8134c9 8ce6e5d10053534b
-16 store:1523d3727e3560f4c087cc26bcdb92c1 b0ef699a7575627a
-16 store:56d9a9664634a8707c8206366f7ace03 d4253e5a30cc30df
-16 store:b00e0698a765f996175369b4040463f1 211685d26b614879
-16 store:e98c8e1e8b33053c9a7f3b9e64d00f51 203c4edb67790ff7
+16 store:043708e3e666563747bf4fa06e8134c9 717b52524979bc3b
+16 store:1523d3727e3560f4c087cc26bcdb92c1 b9dcfd9f8afa197c
+16 store:56d9a9664634a8707c8206366f7ace03 745d2d564d63e78e
+16 store:b00e0698a765f996175369b4040463f1 780ddf85338b2a88
+16 store:e98c8e1e8b33053c9a7f3b9e64d00f51 15c2b643f04af58b
 16 lines refused "type.samples_in_closed_form"
 16 spectrum 9587ed0ec65fc89c
 16 envelope be46752c35732320

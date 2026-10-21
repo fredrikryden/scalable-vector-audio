@@ -74,10 +74,11 @@ fn evaluated(held: &mut Vec<Extent>, segment: Extent) {
 }
 
 fn rows(value: &Value, segment: Extent) -> Result<Buffer, EngineError> {
-    let Kind::Rows(rows) = &value.kind else {
+    let Kind::Rows(built) = &value.kind else {
         unreachable!("a value of rows");
     };
-    let planes = rows
+    let planes = built
+        .rows
         .planes(segment.start, segment.end)
         .map_err(|e| collapse_refused(&value.name, &e))?;
     finite(&value.name, planes.iter().flatten())?;

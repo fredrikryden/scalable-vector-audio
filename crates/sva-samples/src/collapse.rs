@@ -6,6 +6,7 @@ mod atoms;
 mod blocks;
 mod column;
 mod lines;
+mod period;
 mod point;
 pub mod run;
 mod tail;

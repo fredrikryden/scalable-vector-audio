@@ -3,7 +3,7 @@
 use sva_formula::{Hash, NodeId};
 use sva_samples::machine::ops::Layout;
 use sva_samples::{
-    Buffer, Extent, Frames, Grid, Label, Machine, NodeRenderer, Rows, SampleView, Spanned,
+    Buffer, Extent, Frames, Grid, Label, Machine, NodeRenderer, SampleView, Spanned,
 };
 
 use std::sync::Arc;
@@ -18,7 +18,7 @@ pub(crate) struct Key {
 }
 
 pub(crate) enum Kind {
-    Rows(Arc<Rows>),
+    Rows(Arc<crate::cache::Built>),
     MachineRun(Box<MachineRun>),
     Frames {
         window: usize,
