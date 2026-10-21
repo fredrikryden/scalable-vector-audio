@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
-use sva_formula::affine::{Axis, axis_read, exact_constant_at, exact_constant_read};
+use sva_formula::affine::{Axis, ConstantAt, axis_read, exact_constant_read};
 use sva_formula::closed_form::{Bound, Series, children, map_children};
 use sva_formula::fourier_dual::series::{Shape, read_with};
 use sva_formula::series::{falls, mentions, mentions_line_read, ratio, substitute};
@@ -457,9 +457,9 @@ impl<'a> Terms<'a> {
     fn precise(&self, s: &Series, band: Audible) -> Option<usize> {
         let bound = self.bound(&s.term.body, band)?;
         let ratio = ratio(&bound.body, s.index).filter(|r| *r < 1.0 && bound.exact)?;
+        let term = ConstantAt::of(&bound.body, s.index, self.reads);
         for i in 0..MAX_EXPANDED_TERMS {
-            let at = (s.lo + i as i64) as f64;
-            let held = exact_constant_at(&bound.body, s.index, at, self.reads)?.abs();
+            let held = term.at((s.lo + i as i64) as f64)?.abs();
             if held / (1.0 - ratio) <= band.precision {
                 return Some(i.max(1));
             }
@@ -550,7 +550,8 @@ impl<'a> Terms<'a> {
         let Some(bound) = self.bound(weight, band).filter(|w| w.exact) else {
             return;
         };
-        let at = |n: i64| Some(exact_constant_at(&bound.body, k, n as f64, self.reads)?.abs());
+        let term = ConstantAt::of(&bound.body, k, self.reads);
+        let at = |n: i64| Some(term.at(n as f64)?.abs());
         b.reach = (lo..lo + b.widest)
             .try_fold(0.0, |held, n| Some(held + at(n)?))
             .unwrap_or(f64::INFINITY);
@@ -648,7 +649,8 @@ impl<'a> Terms<'a> {
     /// A geometric series sums to its first bound over `1 - ratio`; any other to what it keeps.
     fn total(&self, s: &Series, band: Audible) -> Option<f64> {
         let bound = self.bound(&s.term.body, band).filter(|b| b.exact)?.body;
-        let at = |i: i64| Some(exact_constant_at(&bound, s.index, i as f64, self.reads)?.abs());
+        let term = ConstantAt::of(&bound, s.index, self.reads);
+        let at = |i: i64| Some(term.at(i as f64)?.abs());
         if let (Bound::Infinite, Some(r)) = (s.hi, ratio(&bound, s.index).filter(|r| *r < 1.0)) {
             return Some(at(s.lo)? / (1.0 - r));
         }

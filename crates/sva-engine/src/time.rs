@@ -50,7 +50,11 @@ impl Q {
         let exp: i32 = exp.parse().ok()?;
         let (whole, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
         let digits: i128 = format!("{whole}{frac}").parse().ok()?;
-        let shift = exp - frac.len() as i32;
+        Q::digits(digits, exp - frac.len() as i32)
+    }
+
+    /// `digits * 10^shift`.
+    pub fn digits(digits: i128, shift: i32) -> Option<Q> {
         let ten = |k: u32| 10i128.checked_pow(k).filter(|p| *p < LIMIT);
         match shift >= 0 {
             true => Q::new(digits.checked_mul(ten(shift as u32)?)?, 1),

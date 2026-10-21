@@ -2,7 +2,7 @@
 
 use std::f64::consts::TAU;
 
-use crate::affine::{Axis, Reading, affine_in, affine_read, axis_read, exact_constant_at};
+use crate::affine::{Axis, ConstantAt, Reading, affine_in, affine_read, axis_read};
 use crate::closed_form::{
     Body, Bound, IndexId, Part, Series, Unary, children, map_children, read_at,
 };
@@ -314,9 +314,16 @@ fn walk(
         .map(|(_, weight)| decay(weight, s.index))
         .collect();
     let truncates = band.is_none() && s.hi == Bound::Infinite;
-    let unread = |f: &Body| at_index(f, s.index, s.lo, reads).is_none();
+    let terms: Vec<(ConstantAt, ConstantAt)> = voices
+        .iter()
+        .map(|(place, weight)| {
+            let at = |f: &Body| ConstantAt::of(f, s.index, reads);
+            (at(place), at(weight))
+        })
+        .collect();
+    let unread = |f: &ConstantAt| f.at(s.lo as f64).is_none();
     if truncates
-        && voices
+        && terms
             .iter()
             .any(|(place, weight)| unread(place) || unread(weight))
     {
@@ -341,11 +348,9 @@ fn walk(
     let mut left = None;
     for k in s.lo..=hi {
         let mut here = Vec::new();
-        for ((place, weight), ladder) in voices.iter().zip(&ladders) {
-            let (Some(hz), Some(amp)) = (
-                at_index(place, s.index, k, reads).map(|c| c.re),
-                at_index(weight, s.index, k, reads),
-            ) else {
+        for ((place, weight), ladder) in terms.iter().zip(&ladders) {
+            let (Some(hz), Some(amp)) = (place.at(k as f64).map(|c| c.re), weight.at(k as f64))
+            else {
                 continue;
             };
             let rung = ladder.map(|(offset, step)| Rung { offset, step, k });
@@ -484,10 +489,6 @@ fn leaves_band(place: &Body, k: IndexId, ceiling: f64, reads: &dyn Reads) -> Opt
 }
 
 const MAX_TERMS: i64 = 1 << 20;
-
-fn at_index(f: &Body, k: IndexId, value: i64, reads: &dyn Reads) -> Option<C64> {
-    exact_constant_at(f, k, value as f64, reads)
-}
 
 pub fn substitute(f: &Body, k: IndexId, value: f64) -> Body {
     match f {
