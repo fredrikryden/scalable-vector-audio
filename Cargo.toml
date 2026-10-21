@@ -12,20 +12,20 @@ members = [
 ]
 
 [workspace.package]
-version = "0.14.32"
+version = "0.14.33"
 license = "MIT"
 repository = "https://github.com/fredrikryden/scalable-vector-audio"
 edition = "2024"
 
 # cargo publish needs a version on each path dep; keep it the one above.
 [workspace.dependencies]
-sva-ast = { path = "crates/sva-ast", version = "0.14.32" }
-sva-formula = { path = "crates/sva-formula", version = "0.14.32" }
-sva-samples = { path = "crates/sva-samples", version = "0.14.32" }
-sva-engine = { path = "crates/sva-engine", version = "0.14.32" }
-sva-core = { path = "crates/sva-core", version = "0.14.32" }
-sva-cli = { path = "crates/sva-cli", version = "0.14.32" }
-sva-wasm = { path = "crates/sva-wasm", version = "0.14.32" }
+sva-ast = { path = "crates/sva-ast", version = "0.14.33" }
+sva-formula = { path = "crates/sva-formula", version = "0.14.33" }
+sva-samples = { path = "crates/sva-samples", version = "0.14.33" }
+sva-engine = { path = "crates/sva-engine", version = "0.14.33" }
+sva-core = { path = "crates/sva-core", version = "0.14.33" }
+sva-cli = { path = "crates/sva-cli", version = "0.14.33" }
+sva-wasm = { path = "crates/sva-wasm", version = "0.14.33" }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 libm = "0.2.16"
 
