@@ -258,7 +258,8 @@ pub fn evaluate(
     })
 }
 
-/// Each line's least-squares gain on the reference's third-octave mean squares at its gain 1.
+/// Each line's least-squares gain on the reference's third-octave mean squares at its gain 1, as
+/// the amplitude whose square is that fit's power ratio.
 pub fn scales(fit: &Fit, s: &State) -> Result<Vec<f64>, CliError> {
     let mut unit = s.clone();
     for root in s.root.iter().flatten() {
@@ -281,9 +282,11 @@ pub fn scales(fit: &Fit, s: &State) -> Result<Vec<f64>, CliError> {
             den += e1 * e1;
         }
         out[*root] = match den > 0.0 {
-            true => (num / den).max(1e-18),
-            false => 1e-18,
-        };
+            true => num / den,
+            false => 0.0,
+        }
+        .max(1e-18)
+        .sqrt();
     }
     Ok(out)
 }

@@ -241,12 +241,8 @@ impl State {
                     continue;
                 };
                 let root = !vars[v].log && vars[v].lo == 0.0 && s.root[i].is_none();
-                let coord = match root {
-                    true => value * value,
-                    false => vars[v].coord(*value),
-                };
                 s.push(
-                    coord,
+                    vars[v].coord(*value),
                     v,
                     Role::Own {
                         line: i,
@@ -353,28 +349,16 @@ impl State {
         }
     }
 
-    /// A gain's coordinate is its power, so a silent line's gradient is no zero.
-    pub fn is_root(&self, slot: Slot) -> bool {
-        matches!(slot, Slot::Own(o) if matches!(self.roles[o], Role::Own { root: true, .. }))
-    }
-
     /// The bounds coordinate `i` is held in.
     pub fn bounds(&self, i: usize) -> (f64, f64) {
         let var = &self.vars[self.var_of[i]];
-        match self.roles[i] {
-            Role::Own { root: true, .. } => (0.0, var.hi * var.hi),
-            _ => (var.lo, var.hi),
-        }
+        (var.lo, var.hi)
     }
 
     /// The value a slot holds, clamped into its bounds.
     pub fn value(&self, slot: Slot) -> f64 {
         match slot {
             Slot::Fixed(v) => v,
-            Slot::Own(o) if self.is_root(slot) => {
-                let (lo, hi) = self.bounds(o);
-                self.x[o].clamp(lo, hi).sqrt()
-            }
             _ => {
                 let var = self.var_of_slot(slot).expect("a varied slot");
                 var.value(

@@ -14,9 +14,6 @@ use super::state::{Slot, State};
 use crate::cli_error::CliError;
 use sva_samples::measure::internal::Grid;
 
-/// A silent gain still plays at this power, -300 dB, so its gradient reaches it.
-pub const SILENT_POWER: f64 = 1e-30;
-
 /// The local index a root default's tangent seeds, past every line's own.
 pub const ROOT_SEED: u32 = 1 << 30;
 
@@ -130,28 +127,10 @@ fn header(line: &str) -> Option<&str> {
         .then_some(name)
 }
 
-/// The value a slot plays, a silent gain at its floor.
-pub fn played(s: &State, slot: Slot) -> f64 {
-    match slot {
-        Slot::Own(o) if s.is_root(slot) => {
-            let (lo, hi) = s.bounds(o);
-            (s.x[o].clamp(lo, hi) + SILENT_POWER).sqrt()
-        }
-        _ => s.value(slot),
-    }
-}
-
 /// How far the played value moves a unit of its coordinate: none where held at a bound.
 pub fn slope(s: &State, slot: Slot) -> f64 {
     match slot {
         Slot::Fixed(_) => 0.0,
-        Slot::Own(o) if s.is_root(slot) => {
-            let (lo, hi) = s.bounds(o);
-            match s.x[o] >= lo && s.x[o] <= hi {
-                true => 0.5 / played(s, slot),
-                false => 0.0,
-            }
-        }
         _ => {
             let var = s.var_of_slot(slot).expect("a varied slot");
             let c = s.coord_of(slot).expect("a coordinate");
@@ -165,7 +144,7 @@ pub fn slope(s: &State, slot: Slot) -> f64 {
 }
 
 fn exact(s: &State, slot: Slot) -> String {
-    let v = played(s, slot);
+    let v = s.value(slot);
     let unit = s.var_of_slot(slot).map_or("", |var| var.unit);
     match unit {
         "" => format!("{v}"),
@@ -428,7 +407,7 @@ pub fn lowered(
         let i = root_slots.iter().position(|(n, _)| n == name)?;
         let slot = root_slots[i].1;
         Some((
-            played(s, slot),
+            s.value(slot),
             (!matches!(slot, Slot::Fixed(_))).then_some(ROOT_SEED + i as u32),
         ))
     };
@@ -460,7 +439,7 @@ pub fn lowered(
             let k = slots.iter().position(|(n, _)| n == name)?;
             let slot = slots[k].1;
             Some((
-                played(s, slot),
+                s.value(slot),
                 (!matches!(slot, Slot::Fixed(_))).then_some(k as u32),
             ))
         };
