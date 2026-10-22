@@ -8,7 +8,7 @@ use crate::spectral_sum::atom::{Factors, Indicator, SpectralAtom};
 
 /// Exact bits only. An epsilon would make equality intransitive, which breaks both the sort
 /// and the hash, and the hash is the cache key.
-pub fn simplify<N: Num>(lane: &mut Lane<N>) {
+pub fn simplify_over<N: Num>(lane: &mut Lane<N>) {
     collect(lane);
     let folded = fold_windows(std::mem::take(&mut lane.atoms));
     lane.atoms = folded;
@@ -108,4 +108,8 @@ fn piece<N: Num>(
         template.sing,
         template.origin,
     )
+}
+
+pub fn simplify(lane: &mut Lane) {
+    simplify_over(lane)
 }

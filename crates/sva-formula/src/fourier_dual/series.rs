@@ -6,7 +6,7 @@ use crate::closed_form::{Body, Part, Series, Unary};
 use crate::complex::{C64, Cx};
 use crate::num::Num;
 use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
-use crate::series::mentions_line_read;
+use crate::series::mentions_line_read_over;
 use crate::through::{Opaque, Reads, Seen, looked};
 
 /// `amp * exp(2*pi*i*freq*u)`, with both written as index expressions rather than numbers.
@@ -39,7 +39,7 @@ fn transform<N: Num>(
     op: impl Fn(Shape<N>) -> Shape<N>,
     reads: &dyn Reads<N>,
 ) -> Result<Series<N>, Left> {
-    let Some(shape) = read_with(&s.term.body, reads) else {
+    let Some(shape) = read_with_over(&s.term.body, reads) else {
         return Err(Left::new(
             s.term.origin,
             AtomSketch::of(Factor::Value),
@@ -135,12 +135,12 @@ pub(crate) fn write<N: Num>(shape: &Shape<N>) -> Body<N> {
     Body::Add(parts)
 }
 
-pub fn read<N: Num>(term: &Body<N>) -> Option<Shape<N>> {
-    read_with(term, &Opaque)
+pub fn read_over<N: Num>(term: &Body<N>) -> Option<Shape<N>> {
+    read_with_over(term, &Opaque)
 }
 
 /// The same, each ref the term holds read as the form `reads` names, one level at a time.
-pub fn read_with<N: Num>(term: &Body<N>, reads: &dyn Reads<N>) -> Option<Shape<N>> {
+pub fn read_with_over<N: Num>(term: &Body<N>, reads: &dyn Reads<N>) -> Option<Shape<N>> {
     read_deltas(term, reads)
         .map(Shape::Deltas)
         .or_else(|| read_lines(term, reads).map(Shape::Lines))
@@ -207,7 +207,7 @@ fn read_wave<N: Num>(
             let mut core = None;
             let mut acc = coeff;
             for p in parts {
-                if mentions_line_read(&p.body, reads) {
+                if mentions_line_read_over(&p.body, reads) {
                     if core.is_some() {
                         return None;
                     }
@@ -219,10 +219,12 @@ fn read_wave<N: Num>(
             read_wave(core?, acc, reads)
         }
         // A shift written round a term is a shift of the term's own free variable.
-        Body::Shift { by, of } => {
-            read_wave(&crate::closed_form::shift_line(&of.body, *by), coeff, reads)
-        }
-        Body::Div(num, den) if !mentions_line_read(&den.body, reads) => read_wave(
+        Body::Shift { by, of } => read_wave(
+            &crate::closed_form::shift_line_over(&of.body, *by),
+            coeff,
+            reads,
+        ),
+        Body::Div(num, den) if !mentions_line_read_over(&den.body, reads) => read_wave(
             &num.body,
             Body::Div(Part::bare(coeff), Part::bare((*den.body).clone())),
             reads,
@@ -287,7 +289,7 @@ fn split_argument<N: Num>(arg: &Body<N>, reads: &dyn Reads<N>) -> Option<(Body<N
             let mut slope = None;
             let mut phase = Body::Const(Cx::ZERO);
             for p in parts {
-                if mentions_line_read(&p.body, reads) {
+                if mentions_line_read_over(&p.body, reads) {
                     if slope.is_some() {
                         return None;
                     }
@@ -310,7 +312,7 @@ fn split_argument<N: Num>(arg: &Body<N>, reads: &dyn Reads<N>) -> Option<(Body<N
             let mut coeff = Body::Const(Cx::ONE);
             let mut core = None;
             for p in parts {
-                if mentions_line_read(&p.body, reads) {
+                if mentions_line_read_over(&p.body, reads) {
                     if core.is_some() {
                         return None;
                     }
@@ -338,7 +340,7 @@ fn strip_line<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<Body<N>> {
             for p in parts {
                 match &*looked(&p.body, reads) {
                     Body::Line if !seen => seen = true,
-                    _ if mentions_line_read(&p.body, reads) => return None,
+                    _ if mentions_line_read_over(&p.body, reads) => return None,
                     _ => rest.push(Part::bare((*p.body).clone())),
                 }
             }
@@ -408,4 +410,12 @@ fn negate<N: Num>(f: Body<N>) -> Body<N> {
         Part::bare(Body::Const(Cx::of(C64::real(-1.0)))),
         Part::bare(f),
     ])
+}
+
+pub fn read(term: &Body) -> Option<Shape> {
+    read_over(term)
+}
+
+pub fn read_with(term: &Body, reads: &dyn Reads) -> Option<Shape> {
+    read_with_over(term, reads)
 }

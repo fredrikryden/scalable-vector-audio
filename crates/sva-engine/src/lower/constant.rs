@@ -1,6 +1,5 @@
 // Concern: folds a written subterm, or one call of numbers, to the number it holds | Non-concern: lowering a closed form (mod.rs) | IO: (&Body, or a call's arguments) -> Option<f64>
 
-use sva_formula::affine::apply_scalar;
 use sva_formula::closed_form::children;
 use sva_formula::{Body, ClosedForm, Cx, Fold, NodeId, Num, Origin, Part, Var};
 
@@ -26,7 +25,7 @@ pub fn constant_value<N: Number>(body: &Body<N>, var: Var) -> Option<N> {
     }
     let form = ClosedForm {
         var,
-        body: sva_formula::series::written_out(body)?,
+        body: N::written_out(body)?,
         origin: Origin::UNKNOWN,
     };
     constant_of(&N::normal(&form).ok()?)
@@ -74,7 +73,7 @@ fn number<N: Num>(x: N) -> Part<N> {
 }
 
 /// A built body of numbers, one infinite, as IEEE arithmetic: no atom holds `inf`.
-pub fn unbounded<N: Num>(body: &Body<N>) -> Option<N> {
+pub fn unbounded<N: Number>(body: &Body<N>) -> Option<N> {
     (is_constant(body) && holds_infinite(body))
         .then(|| scalar(body))
         .flatten()
@@ -82,7 +81,7 @@ pub fn unbounded<N: Num>(body: &Body<N>) -> Option<N> {
 
 /// A sum whose numbers add to `inf` and whose every other term is a real polynomial in the free
 /// variable, finite wherever it reaches up to `reach`: IEEE arithmetic makes it that `inf`.
-pub fn swamped<N: Num>(body: &Body<N>, reach: f64) -> Option<N> {
+pub fn swamped<N: Number>(body: &Body<N>, reach: f64) -> Option<N> {
     let Body::Add(parts) = body else {
         return None;
     };
@@ -92,7 +91,7 @@ pub fn swamped<N: Num>(body: &Body<N>, reach: f64) -> Option<N> {
         .iter()
         .try_fold(N::ZERO, |held, p| Some(held + scalar(&p.body)?))?;
     let finite = |p: &&Part<N>| {
-        let coeffs = sva_formula::affine::polynomial(&p.body)?;
+        let coeffs = N::polynomial(&p.body)?;
         coeffs.iter().enumerate().try_fold(0.0f64, |held, (k, c)| {
             let c = c
                 .exact()
@@ -108,11 +107,11 @@ pub fn swamped<N: Num>(body: &Body<N>, reach: f64) -> Option<N> {
 
 /// The double a two-operand sum or product of reals is in every arithmetic. Not zero (no
 /// atom; a written 0 is one), two negatives' product (imaginary -0) or a quotient.
-pub fn plain<N: Num>(body: &Body<N>) -> Option<N> {
+pub fn plain<N: Number>(body: &Body<N>) -> Option<N> {
     plain_or_zero(body).filter(|v| !v.is_zero())
 }
 
-fn plain_or_zero<N: Num>(body: &Body<N>) -> Option<N> {
+fn plain_or_zero<N: Number>(body: &Body<N>) -> Option<N> {
     let pair = |parts: &[Part<N>]| match parts {
         [a, b] => Some((plain_or_zero(&a.body)?, plain_or_zero(&b.body)?)),
         _ => None,
@@ -133,7 +132,7 @@ pub fn holds_infinite<N: Num>(f: &Body<N>) -> bool {
         || children(f).iter().any(|p| holds_infinite(&p.body))
 }
 
-fn scalar<N: Num>(f: &Body<N>) -> Option<N> {
+fn scalar<N: Number>(f: &Body<N>) -> Option<N> {
     let of = |p: &Part<N>| scalar(&p.body);
     Some(match f {
         Body::Const(c) if c.im.is_zero() => c.re,
@@ -141,7 +140,7 @@ fn scalar<N: Num>(f: &Body<N>) -> Option<N> {
         Body::Mul(parts) => parts.iter().try_fold(N::ONE, |a, p| Some(a * of(p)?))?,
         Body::Div(a, b) => of(a)? / of(b)?,
         Body::Pow(base, n) => of(base)?.powi(*n),
-        Body::Apply(op, x) => apply_scalar(*op, Cx::real(of(x)?)).re,
+        Body::Apply(op, x) => N::apply_scalar(*op, Cx::real(of(x)?)).re,
         Body::Fold(op, parts) => match (op, parts.as_slice()) {
             (Fold::Max, [a, b]) => of(a)?.max(of(b)?),
             (Fold::Min, [a, b]) => of(a)?.min(of(b)?),

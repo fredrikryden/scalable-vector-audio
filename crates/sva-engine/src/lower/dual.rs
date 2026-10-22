@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use sva_ast::Graph;
-use sva_formula::{Body, ClosedForm, Cx, Dual, Left, Num, Origin, Sparse, SpectralSum, Var};
+use sva_formula::{Body, ClosedForm, Cx, Dual, Kernel, Origin, Sparse, Var};
 
 use crate::error::{Diagnostic, EngineError, Located};
 use crate::instantiate::ScopeId;
@@ -13,12 +13,10 @@ use crate::lower::{Lowering, Piece, SelfMode};
 
 /// A render's `f64` builds every node a value needs; a dual lowers one closed form and
 /// refuses by name whatever would make a node of its own, which no tangent reaches.
-pub trait Number: Num {
+pub trait Number: Kernel {
     fn render<'s, 'a>(low: &'s mut Lowering<'a, Self>) -> Option<&'s mut Lowering<'a, f64>>;
     fn lift(piece: Piece<f64>) -> Piece<Self>;
     fn value(piece: Piece<Self>) -> Piece<f64>;
-    /// The normal form, a render's built once in sva-formula.
-    fn normal(form: &ClosedForm<Self>) -> Result<SpectralSum<Self>, Left>;
     fn seeded(held: Self, tangent: &[(u32, f64)]) -> Self;
 }
 
@@ -34,10 +32,6 @@ impl Number for f64 {
     #[inline(always)]
     fn value(piece: Piece<f64>) -> Piece<f64> {
         piece
-    }
-    #[inline(always)]
-    fn normal(form: &ClosedForm) -> Result<SpectralSum, Left> {
-        sva_formula::normalize_closed_form(form)
     }
     fn seeded(_: f64, _: &[(u32, f64)]) -> f64 {
         unreachable!("a render lowers with no seeds")
@@ -59,9 +53,6 @@ impl Number for Dual {
             Piece::ClosedForm(body) => Piece::ClosedForm(sva_formula::closed_form::value(&body)),
             Piece::Value(id) => Piece::Value(id),
         }
-    }
-    fn normal(form: &ClosedForm<Dual>) -> Result<SpectralSum<Dual>, Left> {
-        sva_formula::spectral_sum::build::normalize_closed_form_over(form)
     }
     fn seeded(held: Dual, tangent: &[(u32, f64)]) -> Dual {
         held + Dual::seeded(0.0, tangent)

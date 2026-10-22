@@ -1,6 +1,6 @@
 // Concern: lowers a Body to the canonical atom sum | Non-concern: the atom algebra (product.rs), typing (infer.rs) | IO: (&Body, Var) -> SpectralSum or Left
 
-use crate::affine::{Coeff, apply_scalar, exact_affine_read};
+use crate::affine::{Coeff, apply_scalar_over, exact_affine_read};
 use crate::closed_form::{Body, ClosedForm, Part, Series, Var};
 use crate::complex::Cx;
 use crate::num::Num;
@@ -9,10 +9,10 @@ use crate::rational::expand;
 use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
 use crate::spectral_sum::atom::{Exp, Factors, Indicator, Pole, Singular, SpectralAtom};
 use crate::spectral_sum::image::{
-    affine_atoms, apply, constant, crop, crop_window, delta, derive, fold, held, left, one,
+    affine_atoms, apply, constant, crop_over, crop_window, delta, derive, fold, held, left, one,
     principal_value, shift,
 };
-use crate::spectral_sum::merge::simplify;
+use crate::spectral_sum::merge::simplify_over;
 use crate::spectral_sum::product::times;
 use crate::spectral_sum::{Lane, SpectralSum};
 use crate::spectral_sum::{kink, spread};
@@ -92,7 +92,7 @@ pub(crate) fn lower<N: Num>(
                             series: [x.series, y.series].concat(),
                             modal: [x.modal, y.modal].concat(),
                         };
-                        simplify(&mut lane);
+                        simplify_over(&mut lane);
                         Ok(lane)
                     })?,
                 });
@@ -123,7 +123,7 @@ pub(crate) fn lower<N: Num>(
         Body::Pow(base, n) => power(lower_part(base, var)?, (base.origin, *n, var), reads),
         Body::Apply(op, arg) => match apply(*op, arg, origin, var, reads) {
             Err(left) => match held_constant(arg, var, reads) {
-                Some(c) => constant(var, apply_scalar(*op, c), origin),
+                Some(c) => constant(var, apply_scalar_over(*op, c), origin),
                 None => kinked(f, origin, var, left, reads),
             },
             held => held,
@@ -162,7 +162,7 @@ pub(crate) fn lower<N: Num>(
                 multiply_lanes_over(x, y, reads)
             })
         }
-        Body::Crop { of, l, r, .. } => crop(lower_part(of, var)?, Indicator { l: *l, r: *r }),
+        Body::Crop { of, l, r, .. } => crop_over(lower_part(of, var)?, Indicator { l: *l, r: *r }),
         Body::Join(parts) => {
             let mut lanes = Vec::new();
             for p in parts {
@@ -297,7 +297,7 @@ pub(crate) fn multiply_lanes_over<N: Num>(
                 }
             }
             let mut lane = Lane::of(atoms);
-            simplify(&mut lane);
+            simplify_over(&mut lane);
             Ok(lane)
         }
         (true, false) => scale_lane(y, &x, reads),
@@ -348,7 +348,7 @@ fn scaled<N: Num>(
         return made.remove(0);
     }
     let (body, window) =
-        crate::spectral_sum::image::crop_peeled(&crate::through::looked(&s.term.body, reads));
+        crate::spectral_sum::image::crop_peeled_over(&crate::through::looked(&s.term.body, reads));
     let held = Body::Mul(vec![
         Part::new(origin, Body::Const(gain.c)),
         Part::new(s.term.origin, body),

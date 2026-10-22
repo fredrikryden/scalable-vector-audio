@@ -5,8 +5,10 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::rc::Rc;
 
-use crate::affine::{Axis, Coeff, Reading, key_moves_read, polynomial_read};
-use crate::closed_form::{Body, IndexId, Var, map_children, read_at, read_at_with, shift_line};
+use crate::affine::{Axis, Coeff, Reading, key_moves_read, polynomial_read_over};
+use crate::closed_form::{
+    Body, IndexId, Var, map_children, read_at_over, read_at_with_over, shift_line_over,
+};
 use crate::env::NodeId;
 use crate::hash::{Hash, hash_time};
 use crate::num::Num;
@@ -276,7 +278,7 @@ impl Reads for Through<'_> {
     fn polynomial(&self, id: NodeId, reading: Reading) -> Option<Vec<Coeff>> {
         let (form, _) = self.form(id)?;
         once(&self.kept(id).polynomials, (id, reading), || {
-            polynomial_read(&form, reading, self)
+            polynomial_read_over(&form, reading, self)
         })
     }
 
@@ -299,7 +301,7 @@ impl Reads for Through<'_> {
             return Reads::<f64>::mentions_line(&Opaque, id);
         };
         once(&self.kept(id).mentions_line, id, || {
-            crate::series::mentions_line_read(&form, self)
+            crate::series::mentions_line_read_over(&form, self)
         })
     }
 
@@ -345,7 +347,7 @@ impl Reads for Through<'_> {
             return held;
         }
         let (form, _) = self.form(id)?;
-        let moved = read_at_with(&form, at, &|node| self.moved(node, at));
+        let moved = read_at_with_over(&form, at, &|node| self.moved(node, at));
         let stand = Some(self.stand(moved));
         let mut moving = self.moving.borrow_mut();
         moving.entry(id).or_default().push((at.clone(), stand));
@@ -374,8 +376,8 @@ impl Reads for Through<'_> {
         }
         let seen = Rc::new(match read {
             Read::As => unreachable!("a form read as written is handed out as it stands"),
-            Read::At(at) => read_at(&form, at),
-            Read::By(by) => shift_line(&form, *by),
+            Read::At(at) => read_at_over(&form, at),
+            Read::By(by) => shift_line_over(&form, *by),
         });
         views.borrow_mut().insert((id, key), Rc::clone(&seen));
         Some(Form::Stand(seen))
@@ -384,7 +386,7 @@ impl Reads for Through<'_> {
     fn growth(&self, id: NodeId, at: &Body, k: IndexId) -> Option<IndexGrowth> {
         let (form, _) = self.form(id)?;
         Some(once(&self.kept(id).growths, (id, k, hash_time(at)), || {
-            crate::series::growth(&read_at(&form, at), k, &Within(self))
+            crate::series::growth(&read_at_over(&form, at), k, &Within(self))
         }))
     }
 }

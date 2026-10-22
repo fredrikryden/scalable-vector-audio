@@ -13,7 +13,7 @@ use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
 use crate::spectral_sum::atom::{
     Exp, Factors, Gauss, Indicator, Pole, Poly, Singular, SpectralAtom,
 };
-use crate::spectral_sum::merge::simplify;
+use crate::spectral_sum::merge::simplify_over;
 use crate::spectral_sum::{Lane, SpectralSum};
 use crate::through::{Opaque, Reads};
 use class::{blocked_pair, over_pole_order};
@@ -68,7 +68,7 @@ pub fn dual_read(n: &SpectralSum, reads: &dyn Reads) -> Result<SpectralSum, Left
                 .collect::<Result<_, _>>()?,
             modal: Vec::new(),
         };
-        simplify(&mut out);
+        simplify_over(&mut out);
         lanes.push(out);
     }
     Ok(SpectralSum::of(other(n.var), lanes))
@@ -91,7 +91,7 @@ pub fn reflect_read(n: &SpectralSum, reads: &dyn Reads) -> Result<SpectralSum, L
                 .collect::<Result<_, _>>()?,
             modal: Vec::new(),
         };
-        simplify(&mut out);
+        simplify_over(&mut out);
         lanes.push(out);
     }
     Ok(SpectralSum::of(n.var, lanes))

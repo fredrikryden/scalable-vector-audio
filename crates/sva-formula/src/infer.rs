@@ -1,6 +1,6 @@
 // Concern: decides a ClosedForm's Ty structurally, without normalizing | Non-concern: producing the spectral sum (spectral_sum/) | IO: (&ClosedForm, &Env) -> Ty or Refusal
 
-use crate::affine::{Axis, affine, is_squared};
+use crate::affine::{Axis, affine_over, is_squared_over};
 use crate::alg::{Alg, exponent_growth};
 use crate::closed_form::{Body, Bound, ClosedForm, Part, Rational, Series, Unary, Var};
 use crate::complex::C64;
@@ -62,7 +62,7 @@ fn walk(f: &Body, origin: Origin, var: Var, env: &dyn Env) -> Result<Info, Refus
         )),
         Body::Index(_) => Ok(closed_form(Alg::scalar(), var, 1, Codomain::Real)),
         Body::Keyed { of, .. } => Ok(closed_form(
-            match crate::affine::key_moves(&of.body) {
+            match crate::affine::key_moves_over(&of.body) {
                 true => Alg::gone(),
                 false => Alg::scalar(),
             },
@@ -89,7 +89,7 @@ fn walk(f: &Body, origin: Origin, var: Var, env: &dyn Env) -> Result<Info, Refus
         Body::Pv(at) => singular(at, var, env, false),
         Body::Shift { of, .. } | Body::Deriv { of, .. } => walk(&of.body, of.origin, var, env),
         Body::Warp { at, of }
-            if crate::affine::slide(&at.body).is_some_and(|by| by.axis() == Axis::Real) =>
+            if crate::affine::slide_over(&at.body).is_some_and(|by| by.axis() == Axis::Real) =>
         {
             walk(&of.body, of.origin, var, env)
         }
@@ -281,7 +281,7 @@ fn apply(op: Unary, arg: &Part, var: Var, env: &dyn Env) -> Result<Info, Refusal
     if !inner.ty.is_closed_form() || inner.alg.constant {
         return Ok(inner);
     }
-    let alg = match (op.is_closed(), affine(&arg.body)) {
+    let alg = match (op.is_closed(), affine_over(&arg.body)) {
         (true, Some((slope, _))) => Alg::atom(AtomClass {
             factors: Factors {
                 exp: true,
@@ -290,7 +290,7 @@ fn apply(op: Unary, arg: &Part, var: Var, env: &dyn Env) -> Result<Info, Refusal
             growth: exponent_growth(op, slope),
             ..AtomClass::regular()
         }),
-        (true, None) if op == Unary::Exp && is_squared(&arg.body) => Alg::atom(AtomClass {
+        (true, None) if op == Unary::Exp && is_squared_over(&arg.body) => Alg::atom(AtomClass {
             factors: Factors {
                 gauss: true,
                 exp: true,
@@ -305,7 +305,7 @@ fn apply(op: Unary, arg: &Part, var: Var, env: &dyn Env) -> Result<Info, Refusal
 
 fn singular(at: &Part, var: Var, env: &dyn Env, is_delta: bool) -> Result<Info, Refusal> {
     walk(&at.body, at.origin, var, env)?;
-    let placed = affine(&at.body)
+    let placed = affine_over(&at.body)
         .is_some_and(|(a, b)| a.axis() == Axis::Real && b.axis() == Axis::Real && !a.is_zero());
     if !placed {
         return Err(refuse(

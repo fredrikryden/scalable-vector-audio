@@ -19,7 +19,7 @@ pub mod stft;
 pub use biquad::Coeffs;
 pub use buffer::{Buffer, SampleView};
 pub use collapse::{
-    At, Audible, Evaluator, Rows, crop_gain, dropped_db, eval_spectral_sum_at, form_at, lane_of,
+    At, Audible, Evaluator, Rows, crop_gain, dropped_db, eval_spectral_sum_at, lane_of,
     truncate_spectral_sum, truncate_spectral_sum_read, truncate_written, truncate_written_with,
     unary,
 };

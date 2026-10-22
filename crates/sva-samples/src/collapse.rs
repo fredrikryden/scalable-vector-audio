@@ -5,7 +5,6 @@ mod addends;
 mod atoms;
 mod blocks;
 mod column;
-mod instant;
 mod lines;
 mod period;
 mod point;
@@ -13,13 +12,12 @@ pub mod run;
 mod tail;
 mod truncate;
 
-use sva_formula::{Body, C64, Cx, Num, SpectralSum};
+use sva_formula::{Body, C64, Cx, Kernel, Num, SpectralSum};
 
 use crate::error::CollapseError;
 
 pub use blocks::Rows;
 pub(crate) use column::Program;
-pub use instant::form_at;
 pub use lines::summed_bounds;
 pub use point::{At, crop_gain, lane_of, shoulders, unary};
 pub use truncate::{
@@ -36,15 +34,26 @@ pub fn eval_spectral_sum_at<N: Num>(
     point::eval_spectral_sum_on(sum, component, at)
 }
 
-/// One component of a written form, evaluated at any instant; a node it reads refuses.
-pub struct Evaluator(Program);
+/// One component of a written form, evaluated at any instant; a node it reads refuses. A
+/// dual's form reads through the render's own program.
+pub struct Evaluator<N: Kernel = f64>(Program<N>);
 
 impl Evaluator {
     pub fn of(body: &Body, component: usize) -> Evaluator {
-        Evaluator(Program::of(&[body], &[], component))
+        Evaluator::over(body, component)
     }
 
     pub fn at(&self, at: At) -> Result<C64, CollapseError> {
+        self.read(at)
+    }
+}
+
+impl<N: Kernel> Evaluator<N> {
+    pub fn over(body: &Body<N>, component: usize) -> Evaluator<N> {
+        Evaluator(Program::of(&[body], &[], component))
+    }
+
+    pub fn read(&self, at: At) -> Result<Cx<N>, CollapseError> {
         let mut columns = self.0.columns(1);
         columns.t[0] = at.t();
         if let At::Sample(grid, n) = at {

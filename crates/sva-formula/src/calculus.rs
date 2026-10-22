@@ -5,7 +5,7 @@ use crate::complex::C64;
 use crate::fourier_dual::{dual_read, reflect_read};
 use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
 use crate::spectral_sum::atom::{Exp, Factors, Gauss, Indicator, Pole, Singular, SpectralAtom};
-use crate::spectral_sum::merge::simplify;
+use crate::spectral_sum::merge::simplify_over;
 use crate::spectral_sum::product::times;
 use crate::spectral_sum::{Lane, SpectralSum};
 use crate::through::Reads;
@@ -36,7 +36,7 @@ pub fn d_dt(n: &SpectralSum) -> Result<SpectralSum, Left> {
                 out.atoms.extend(atom.derivative()?);
             }
         }
-        simplify(&mut out);
+        simplify_over(&mut out);
         lanes.push(out);
     }
     Ok(SpectralSum::of(n.var, lanes))
@@ -102,7 +102,7 @@ pub fn hilbert_read(n: &SpectralSum, reads: &dyn Reads) -> Result<SpectralSum, L
             atoms.extend(times_signum(a)?);
         }
         let mut out = Lane::of(atoms);
-        simplify(&mut out);
+        simplify_over(&mut out);
         lanes.push(out);
     }
     reflect_read(
@@ -200,7 +200,7 @@ pub fn analytic_read(n: &SpectralSum, reads: &dyn Reads) -> Result<SpectralSum, 
                 )
                 .collect(),
         );
-        simplify(&mut out);
+        simplify_over(&mut out);
         lanes.push(out);
     }
     Ok(SpectralSum::of(n.var, lanes))
@@ -221,7 +221,7 @@ pub fn envelope_read(n: &SpectralSum, reads: &dyn Reads) -> Result<Envelope, Lef
             }
         }
         let mut out = Lane::of(atoms);
-        simplify(&mut out);
+        simplify_over(&mut out);
         lanes.push(out);
     }
     Ok(Envelope {

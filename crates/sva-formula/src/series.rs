@@ -2,13 +2,13 @@
 
 use std::f64::consts::TAU;
 
-use crate::affine::{Axis, ConstantAt, Reading, affine_in, affine_read, axis_read};
+use crate::affine::{Axis, ConstantAt, Reading, affine_in_over, affine_read_over, axis_read};
 use crate::closed_form::{
-    Body, Bound, IndexId, Part, Series, Unary, children, map_children, read_at,
+    Body, Bound, IndexId, Part, Series, Unary, children, map_children, read_at_over,
 };
 use crate::complex::Cx;
 use crate::env::Env;
-use crate::fourier_dual::series::{Shape, read_with};
+use crate::fourier_dual::series::{Shape, read_with_over};
 use crate::num::Num;
 use crate::spectral_sum::atom::{Exp, Factors, Singular, SpectralAtom};
 use crate::through::{Opaque, Reads};
@@ -30,7 +30,7 @@ pub fn summable(s: &Series, env: &dyn Env) -> bool {
 /// Decided from where the index sits, never by evaluating a term; a ref read at a time the
 /// index moves is its form read there.
 pub fn growth(f: &Body, k: IndexId, env: &dyn Env) -> IndexGrowth {
-    if !mentions(f, k) {
+    if !mentions_over(f, k) {
         return IndexGrowth::Polynomial;
     }
     match f {
@@ -47,12 +47,12 @@ pub fn growth(f: &Body, k: IndexId, env: &dyn Env) -> IndexGrowth {
         Body::Channel(of, _) | Body::Crop { of, .. } => growth(&of.body, k, env),
         Body::Shift { of, .. } | Body::Deriv { of, .. } => growth(&of.body, k, env),
         Body::Warp { at, of } => match &*of.body {
-            Body::Crop { of: inner, .. } => growth(&read_at(&inner.body, &at.body), k, env),
+            Body::Crop { of: inner, .. } => growth(&read_at_over(&inner.body, &at.body), k, env),
             Body::Node(id) => env
                 .reads()
                 .growth(*id, &at.body, k)
                 .unwrap_or(IndexGrowth::Polynomial),
-            other => growth(&read_at(other, &at.body), k, env),
+            other => growth(&read_at_over(other, &at.body), k, env),
         },
         Body::Pv(at) | Body::Delta { at, .. } => growth(&at.body, k, env),
         Body::Series(inner) => growth(&inner.term.body, k, env),
@@ -72,14 +72,14 @@ fn exponential_in(arg: &Part, k: IndexId, env: &dyn Env) -> IndexGrowth {
     if let bounded @ IndexGrowth::Polynomial = bounded_along(arg, k, Axis::Imaginary, env) {
         return bounded;
     }
-    match affine_in(&arg.body, Reading::Index(k)).and_then(|(slope, _)| slope.exact()) {
+    match affine_in_over(&arg.body, Reading::Index(k)).and_then(|(slope, _)| slope.exact()) {
         Some(slope) if slope.re < 0.0 => IndexGrowth::Polynomial,
         _ => IndexGrowth::Unbounded,
     }
 }
 
 fn bounded_along(arg: &Part, k: IndexId, wanted: Axis, env: &dyn Env) -> IndexGrowth {
-    if !mentions(&arg.body, k) || axis_read(&arg.body, env, env.reads()) == wanted {
+    if !mentions_over(&arg.body, k) || axis_read(&arg.body, env, env.reads()) == wanted {
         IndexGrowth::Polynomial
     } else {
         IndexGrowth::Unbounded
@@ -89,7 +89,7 @@ fn bounded_along(arg: &Part, k: IndexId, wanted: Axis, env: &dyn Env) -> IndexGr
 /// An exponent reaching the index only through a logarithm is a power of it.
 fn logarithmic(f: &Body, k: IndexId) -> bool {
     match f {
-        _ if !mentions(f, k) => true,
+        _ if !mentions_over(f, k) => true,
         Body::Apply(Unary::Log, _) => true,
         Body::Add(parts) | Body::Mul(parts) => parts.iter().all(|p| logarithmic(&p.body, k)),
         Body::Div(a, b) => logarithmic(&a.body, k) && logarithmic(&b.body, k),
@@ -107,46 +107,46 @@ impl IndexGrowth {
 }
 
 /// What separates a series term's coefficient from its wave.
-pub fn mentions_line<N: Num>(f: &Body<N>) -> bool {
-    mentions_line_read(f, &Opaque)
+pub fn mentions_line_over<N: Num>(f: &Body<N>) -> bool {
+    mentions_line_read_over(f, &Opaque)
 }
 
-pub fn mentions_line_read<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> bool {
+pub fn mentions_line_read_over<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> bool {
     match f {
         Body::Line => true,
         Body::Node(id) => reads.mentions_line(*id),
         other => children(other)
             .iter()
-            .any(|p| mentions_line_read(&p.body, reads)),
+            .any(|p| mentions_line_read_over(&p.body, reads)),
     }
 }
 
 /// A bound on `|c(k+1)| / |c(k)|` holding at every index.
-pub fn ratio<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
-    if !mentions(f, k) {
+pub fn ratio_over<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
+    if !mentions_over(f, k) {
         return Some(1.0);
     }
     match f {
         Body::Mul(parts) => parts
             .iter()
-            .try_fold(1.0, |held, p| Some(held * ratio(&p.body, k)?)),
+            .try_fold(1.0, |held, p| Some(held * ratio_over(&p.body, k)?)),
         Body::Add(parts) => parts.iter().try_fold(0.0f64, |held, p| match &*p.body {
-            Body::Apply(Unary::Abs, _) => Some(held.max(ratio(&p.body, k)?)),
+            Body::Apply(Unary::Abs, _) => Some(held.max(ratio_over(&p.body, k)?)),
             _ => None,
         }),
-        Body::Div(num, den) if !mentions(&den.body, k) => ratio(&num.body, k),
-        Body::Apply(Unary::Abs, arg) => ratio(&arg.body, k),
+        Body::Div(num, den) if !mentions_over(&den.body, k) => ratio_over(&num.body, k),
+        Body::Apply(Unary::Abs, arg) => ratio_over(&arg.body, k),
         Body::Apply(Unary::Exp, arg) => {
-            let (slope, _) = affine_in(&arg.body, Reading::Index(k))?;
+            let (slope, _) = affine_in_over(&arg.body, Reading::Index(k))?;
             Some(crate::exp(slope.exact()?.re.v()))
         }
-        Body::Pow(base, n) if *n >= 0 => Some(ratio(&base.body, k)?.powi(*n)),
+        Body::Pow(base, n) if *n >= 0 => Some(ratio_over(&base.body, k)?.powi(*n)),
         _ => None,
     }
 }
 
 /// Whether `|f(j)| <= |f(i)|` for every `j >= i >= 1`.
-pub fn falls<N: Num>(f: &Body<N>, k: IndexId) -> bool {
+pub fn falls_over<N: Num>(f: &Body<N>, k: IndexId) -> bool {
     power(f, k).is_some_and(|p| p >= 0.0)
 }
 
@@ -158,7 +158,7 @@ enum Decay {
 }
 
 fn decay<N: Num>(f: &Body<N>, k: IndexId) -> Option<Decay> {
-    if let Some(r) = ratio(f, k).filter(|r| *r < 1.0) {
+    if let Some(r) = ratio_over(f, k).filter(|r| *r < 1.0) {
         return Some(Decay::Geometric(r));
     }
     power(f, k).filter(|p| *p > 1.0).map(Decay::Power)
@@ -192,7 +192,7 @@ fn power<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
         Body::Div(num, den) => Some(power(&num.body, k)? + rises(&den.body, k)?),
         Body::Apply(Unary::Abs, arg) => power(&arg.body, k),
         Body::Pow(base, n) if *n >= 0 => Some(power(&base.body, k)? * f64::from(*n)),
-        _ => ratio(f, k).filter(|r| *r <= 1.0).map(|_| 0.0),
+        _ => ratio_over(f, k).filter(|r| *r <= 1.0).map(|_| 0.0),
     }
 }
 
@@ -205,7 +205,7 @@ fn rises<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
     match f {
         Body::Pow(base, n) if *n >= 0 => Some(rises(&base.body, k)? * f64::from(*n)),
         _ => {
-            let (slope, offset) = affine_in(f, Reading::Index(k))?;
+            let (slope, offset) = affine_in_over(f, Reading::Index(k))?;
             let (a, b) = (slope.exact()?, offset.exact()?);
             let real = a.im.is_zero() && b.im.is_zero();
             let (a, b) = (a.re.v(), b.re.v());
@@ -216,7 +216,7 @@ fn rises<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
 
 /// The `e` with `|f(j)| = |f(i)|*(j/i)^e` exactly for every `i, j >= 1`.
 fn exponent<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
-    if !mentions(f, k) {
+    if !mentions_over(f, k) {
         return Some(0.0);
     }
     match f {
@@ -231,7 +231,7 @@ fn exponent<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
     }
 }
 
-pub fn mentions<N: Num>(f: &Body<N>, k: IndexId) -> bool {
+pub fn mentions_over<N: Num>(f: &Body<N>, k: IndexId) -> bool {
     reaches(f, &|x| matches!(x, Body::Index(i) if *i == k))
 }
 
@@ -291,7 +291,7 @@ fn walk<N: Num>(
     (ceiling, floor_db, precision): (f64, f64, f64),
     reads: &dyn Reads<N>,
 ) -> Option<Lines<N>> {
-    let shape = read_with(&s.term.body, reads)?;
+    let shape = read_with_over(&s.term.body, reads)?;
     let voices = places(&shape);
     let band = voices
         .iter()
@@ -308,7 +308,7 @@ fn walk<N: Num>(
     let ratio = voices
         .iter()
         .try_fold(0.0f64, |held, (_, weight)| {
-            Some(held.max(ratio(weight, s.index)?))
+            Some(held.max(ratio_over(weight, s.index)?))
         })
         .filter(|r| *r < 1.0);
     let decays: Option<Vec<Decay>> = voices
@@ -404,7 +404,7 @@ fn walk<N: Num>(
 }
 
 fn ladder<N: Num>(place: &Body<N>, k: IndexId, reads: &dyn Reads<N>) -> Option<(f64, f64)> {
-    let (slope, offset) = affine_read(place, Reading::Index(k), reads)?;
+    let (slope, offset) = affine_read_over(place, Reading::Index(k), reads)?;
     let (slope, offset) = (slope.exact()?, offset.exact()?);
     let real = slope.im.is_zero() && offset.im.is_zero();
     let (slope, offset) = (slope.re.v(), offset.re.v());
@@ -434,12 +434,12 @@ pub fn line_atoms_over<N: Num>(
     reads: &dyn Reads<N>,
 ) -> Option<Enumerated<N>> {
     let (body, window) =
-        crate::spectral_sum::image::crop_peeled(&crate::through::looked(&s.term.body, reads));
+        crate::spectral_sum::image::crop_peeled_over(&crate::through::looked(&s.term.body, reads));
     let bare = Series {
         term: Part::new(s.term.origin, body),
         ..s.clone()
     };
-    let singular = match read_with(&bare.term.body, reads)? {
+    let singular = match read_with_over(&bare.term.body, reads)? {
         Shape::Deltas(_) => true,
         Shape::Lines(_) => false,
     };
@@ -495,7 +495,7 @@ fn leaves_band<N: Num>(
     ceiling: f64,
     reads: &dyn Reads<N>,
 ) -> Option<i64> {
-    let (slope, offset) = affine_read(place, Reading::Index(k), reads)?;
+    let (slope, offset) = affine_read_over(place, Reading::Index(k), reads)?;
     let (slope, offset) = (slope.exact()?.re.v(), offset.exact()?.re.v());
     if slope == 0.0 {
         return None;
@@ -507,11 +507,11 @@ fn leaves_band<N: Num>(
 
 const MAX_TERMS: i64 = 1 << 20;
 
-pub fn substitute<N: Num>(f: &Body<N>, k: IndexId, value: f64) -> Body<N> {
+pub fn substitute_over<N: Num>(f: &Body<N>, k: IndexId, value: f64) -> Body<N> {
     match f {
         Body::Index(i) if *i == k => Body::Const(Cx::real(N::of(value))),
         other => map_children(other, |p| {
-            Part::new(p.origin, substitute(&p.body, k, value))
+            Part::new(p.origin, substitute_over(&p.body, k, value))
         }),
     }
 }
@@ -519,7 +519,7 @@ pub fn substitute<N: Num>(f: &Body<N>, k: IndexId, value: f64) -> Body<N> {
 const MAX_WRITTEN_TERMS: i64 = 1 << 13;
 
 /// `f`, each finite series summed term by term; `None` where one is infinite or too long.
-pub fn written_out<N: Num>(f: &Body<N>) -> Option<Body<N>> {
+pub fn written_out_over<N: Num>(f: &Body<N>) -> Option<Body<N>> {
     let mut left = MAX_WRITTEN_TERMS;
     within(f, &mut left)
 }
@@ -538,7 +538,7 @@ fn within<N: Num>(f: &Body<N>, left: &mut i64) -> Option<Body<N>> {
             .map(|k| {
                 Some(Part::new(
                     s.term.origin,
-                    within(&substitute(&s.term.body, s.index, k as f64), left)?,
+                    within(&substitute_over(&s.term.body, s.index, k as f64), left)?,
                 ))
             })
             .collect::<Option<Vec<_>>>()?;
@@ -556,4 +556,32 @@ fn within<N: Num>(f: &Body<N>, left: &mut i64) -> Option<Body<N>> {
         }
     });
     whole.then_some(out)
+}
+
+pub fn written_out(f: &Body) -> Option<Body> {
+    written_out_over(f)
+}
+
+pub fn mentions(f: &Body, k: IndexId) -> bool {
+    mentions_over(f, k)
+}
+
+pub fn mentions_line(f: &Body) -> bool {
+    mentions_line_over(f)
+}
+
+pub fn mentions_line_read(f: &Body, reads: &dyn Reads) -> bool {
+    mentions_line_read_over(f, reads)
+}
+
+pub fn substitute(f: &Body, k: IndexId, value: f64) -> Body {
+    substitute_over(f, k, value)
+}
+
+pub fn ratio(f: &Body, k: IndexId) -> Option<f64> {
+    ratio_over(f, k)
+}
+
+pub fn falls(f: &Body, k: IndexId) -> bool {
+    falls_over(f, k)
 }

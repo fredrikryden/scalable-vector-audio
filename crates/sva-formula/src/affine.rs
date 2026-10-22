@@ -1,7 +1,7 @@
 // Concern: reads a formula's polynomial to degree two, and a series term at each index | Non-concern: lowering one to atoms (spectral_sum/build.rs) | IO: (&Body) -> Vec<Coeff>; (&Body, k) -> C64
 
 use crate::closed_form::{Body, IndexId, Unary};
-use crate::complex::Cx;
+use crate::complex::{C64, Cx};
 use crate::num::Num;
 use crate::through::{Opaque, Reads};
 
@@ -109,17 +109,17 @@ pub enum Reading {
     Index(IndexId),
 }
 
-pub fn polynomial<N: Num>(f: &Body<N>) -> Option<Vec<Coeff<N>>> {
-    polynomial_in(f, Reading::Free)
+pub fn polynomial_over<N: Num>(f: &Body<N>) -> Option<Vec<Coeff<N>>> {
+    polynomial_in_over(f, Reading::Free)
 }
 
-pub fn polynomial_in<N: Num>(f: &Body<N>, reading: Reading) -> Option<Vec<Coeff<N>>> {
-    polynomial_read(f, reading, &Opaque)
+pub fn polynomial_in_over<N: Num>(f: &Body<N>, reading: Reading) -> Option<Vec<Coeff<N>>> {
+    polynomial_read_over(f, reading, &Opaque)
 }
 
 /// Ascending coefficients, or nothing above degree two. Read in the free variable, an index
 /// is an unknown real; read in an index, the free variable is not a coefficient at all.
-pub fn polynomial_read<N: Num>(
+pub fn polynomial_read_over<N: Num>(
     f: &Body<N>,
     reading: Reading,
     reads: &dyn Reads<N>,
@@ -201,7 +201,7 @@ impl<N: Num> Tape<N> {
                     Exact::Failed | Exact::Unknown => return Exact::Unknown,
                 },
                 Op::Apply(unary) => match pop(&mut stack) {
-                    Coeff::Exact(x) => Coeff::Exact(apply_scalar(*unary, x)),
+                    Coeff::Exact(x) => Coeff::Exact(apply_scalar_over(*unary, x)),
                     Coeff::Unknown(_) => return Exact::Unknown,
                 },
                 Op::Add(n) => {
@@ -287,7 +287,7 @@ fn compile<N: Num>(
     reads: &dyn Reads<N>,
     ops: &mut Vec<Op<N>>,
 ) -> Option<()> {
-    if !crate::series::mentions(f, k) {
+    if !crate::series::mentions_over(f, k) {
         ops.push(Op::Push(read(f, Reading::Free, reads)?));
         return Some(());
     }
@@ -376,7 +376,7 @@ fn keyed<N: Num>(seed: u64, of: Option<Poly<N>>) -> Poly<N> {
 fn applied<N: Num>(op: Unary, arg: &Poly<N>) -> Option<Poly<N>> {
     match arg.as_slice() {
         [c] => Some(Poly::one(match c.exact() {
-            Some(x) => Coeff::Exact(apply_scalar(op, x)),
+            Some(x) => Coeff::Exact(apply_scalar_over(op, x)),
             None => Coeff::Unknown(unary_axis(op, c.axis())),
         })),
         _ => None,
@@ -436,7 +436,7 @@ fn constant<N: Num>(p: Poly<N>) -> Option<Cx<N>> {
 
 /// Every unary this language folds on a scalar, in one place, so `normalize` and `infer`
 /// cannot disagree about what a constant argument gives.
-pub fn apply_scalar<N: Num>(op: Unary, x: Cx<N>) -> Cx<N> {
+pub fn apply_scalar_over<N: Num>(op: Unary, x: Cx<N>) -> Cx<N> {
     match op {
         Unary::Sin => ((Cx::I * x).exp() - (-Cx::I * x).exp()) / Cx::I.scale(N::of(2.0)),
         Unary::Cos => ((Cx::I * x).exp() + (-Cx::I * x).exp()).scale(N::of(0.5)),
@@ -465,20 +465,20 @@ fn constant_read<N: Num>(f: &Body<N>, reading: Reading, reads: &dyn Reads<N>) ->
     constant(read(f, reading, reads)?)
 }
 
-pub fn affine<N: Num>(f: &Body<N>) -> Option<(Coeff<N>, Coeff<N>)> {
-    affine_in(f, Reading::Free)
+pub fn affine_over<N: Num>(f: &Body<N>) -> Option<(Coeff<N>, Coeff<N>)> {
+    affine_in_over(f, Reading::Free)
 }
 
-pub fn affine_in<N: Num>(f: &Body<N>, reading: Reading) -> Option<(Coeff<N>, Coeff<N>)> {
-    affine_read(f, reading, &Opaque)
+pub fn affine_in_over<N: Num>(f: &Body<N>, reading: Reading) -> Option<(Coeff<N>, Coeff<N>)> {
+    affine_read_over(f, reading, &Opaque)
 }
 
-pub fn affine_read<N: Num>(
+pub fn affine_read_over<N: Num>(
     f: &Body<N>,
     reading: Reading,
     reads: &dyn Reads<N>,
 ) -> Option<(Coeff<N>, Coeff<N>)> {
-    match polynomial_read(f, reading, reads)?[..] {
+    match polynomial_read_over(f, reading, reads)?[..] {
         [b] => Some((Coeff::ZERO, b)),
         [b, a] => Some((a, b)),
         _ => None,
@@ -486,13 +486,13 @@ pub fn affine_read<N: Num>(
 }
 
 /// The offset of a time spelled as the variable plus a constant, an index counting as one.
-pub fn slide<N: Num>(at: &Body<N>) -> Option<Coeff<N>> {
+pub fn slide_over<N: Num>(at: &Body<N>) -> Option<Coeff<N>> {
     slide_read(at, &Opaque)
 }
 
 /// A slope of exactly one, moved by no varied number: anything else stretches time.
 pub(crate) fn slide_read<N: Num>(at: &Body<N>, reads: &dyn Reads<N>) -> Option<Coeff<N>> {
-    match affine_read(at, Reading::Free, reads)? {
+    match affine_read_over(at, Reading::Free, reads)? {
         (Coeff::Exact(slope), offset)
             if slope.re.v() == 1.0 && slope.re.is_constant() && slope.im.is_zero() =>
         {
@@ -502,7 +502,7 @@ pub(crate) fn slide_read<N: Num>(at: &Body<N>, reads: &dyn Reads<N>) -> Option<C
     }
 }
 
-pub fn exact_affine<N: Num>(f: &Body<N>) -> Option<(Cx<N>, Cx<N>)> {
+pub fn exact_affine_over<N: Num>(f: &Body<N>) -> Option<(Cx<N>, Cx<N>)> {
     exact_affine_read(f, &Opaque)
 }
 
@@ -510,21 +510,21 @@ pub(crate) fn exact_affine_read<N: Num>(
     f: &Body<N>,
     reads: &dyn Reads<N>,
 ) -> Option<(Cx<N>, Cx<N>)> {
-    let (a, b) = affine_read(f, Reading::Free, reads)?;
+    let (a, b) = affine_read_over(f, Reading::Free, reads)?;
     Some((a.exact()?, b.exact()?))
 }
 
-pub fn exact_constant<N: Num>(f: &Body<N>) -> Option<Cx<N>> {
+pub fn exact_constant_over<N: Num>(f: &Body<N>) -> Option<Cx<N>> {
     constant_in(f, Reading::Free)
 }
 
-pub fn exact_constant_read<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<Cx<N>> {
+pub fn exact_constant_read_over<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<Cx<N>> {
     constant_read(f, Reading::Free, reads)
 }
 
 /// Whether a hash keyed on this formula names more than one value. The free variable moves
 /// it; so does a node or a parameter, whose own closed form this judgment cannot see.
-pub fn key_moves<N: Num>(f: &Body<N>) -> bool {
+pub fn key_moves_over<N: Num>(f: &Body<N>) -> bool {
     key_moves_read(f, &Opaque)
 }
 
@@ -546,7 +546,7 @@ pub struct Squared<N: Num = f64> {
     pub amplitude: Cx<N>,
 }
 
-pub fn completed_square<N: Num>(f: &Body<N>) -> Option<Squared<N>> {
+pub fn completed_square_over<N: Num>(f: &Body<N>) -> Option<Squared<N>> {
     completed_square_read(f, &Opaque)
 }
 
@@ -554,7 +554,7 @@ pub(crate) fn completed_square_read<N: Num>(
     f: &Body<N>,
     reads: &dyn Reads<N>,
 ) -> Option<Squared<N>> {
-    let [a0, a1, a2] = polynomial_read(f, Reading::Free, reads)?[..] else {
+    let [a0, a1, a2] = polynomial_read_over(f, Reading::Free, reads)?[..] else {
         return None;
     };
     let (a0, a1, a2) = (a0.exact()?, a1.exact()?, a2.exact()?);
@@ -571,8 +571,8 @@ pub(crate) fn completed_square_read<N: Num>(
     })
 }
 
-pub fn is_squared<N: Num>(f: &Body<N>) -> bool {
-    polynomial(f).is_some_and(|p| p.len() == MAX_DEGREE + 1)
+pub fn is_squared_over<N: Num>(f: &Body<N>) -> bool {
+    polynomial_over(f).is_some_and(|p| p.len() == MAX_DEGREE + 1)
 }
 
 /// Where a unary lands a subterm sitting on `of`. A root and a logarithm leave the real
@@ -678,4 +678,60 @@ pub fn step(x: f64) -> f64 {
         true => 1.0,
         false => 0.0,
     }
+}
+
+pub fn polynomial(f: &Body) -> Option<Vec<Coeff>> {
+    polynomial_over(f)
+}
+
+pub fn polynomial_in(f: &Body, reading: Reading) -> Option<Vec<Coeff>> {
+    polynomial_in_over(f, reading)
+}
+
+pub fn polynomial_read(f: &Body, reading: Reading, reads: &dyn Reads) -> Option<Vec<Coeff>> {
+    polynomial_read_over(f, reading, reads)
+}
+
+pub fn apply_scalar(op: Unary, x: C64) -> C64 {
+    apply_scalar_over(op, x)
+}
+
+pub fn affine(f: &Body) -> Option<(Coeff, Coeff)> {
+    affine_over(f)
+}
+
+pub fn affine_in(f: &Body, reading: Reading) -> Option<(Coeff, Coeff)> {
+    affine_in_over(f, reading)
+}
+
+pub fn affine_read(f: &Body, reading: Reading, reads: &dyn Reads) -> Option<(Coeff, Coeff)> {
+    affine_read_over(f, reading, reads)
+}
+
+pub fn slide(at: &Body) -> Option<Coeff> {
+    slide_over(at)
+}
+
+pub fn exact_affine(f: &Body) -> Option<(C64, C64)> {
+    exact_affine_over(f)
+}
+
+pub fn exact_constant(f: &Body) -> Option<C64> {
+    exact_constant_over(f)
+}
+
+pub fn exact_constant_read(f: &Body, reads: &dyn Reads) -> Option<C64> {
+    exact_constant_read_over(f, reads)
+}
+
+pub fn key_moves(f: &Body) -> bool {
+    key_moves_over(f)
+}
+
+pub fn completed_square(f: &Body) -> Option<Squared> {
+    completed_square_over(f)
+}
+
+pub fn is_squared(f: &Body) -> bool {
+    is_squared_over(f)
 }

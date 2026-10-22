@@ -4,7 +4,7 @@ use std::f64::consts::TAU;
 
 use crate::closed_form::{Body, Part, Series, Unary};
 use crate::complex::Cx;
-use crate::fourier_dual::series::{Shape, SymDelta, SymLine, read_with, write};
+use crate::fourier_dual::series::{Shape, SymDelta, SymLine, read_with_over, write};
 use crate::num::Num;
 use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
 use crate::spectral_sum::atom::{Indicator, Singular, SpectralAtom};
@@ -26,8 +26,8 @@ pub fn times_atoms<N: Num>(
         )
     };
     let (body, held) =
-        crate::spectral_sum::image::crop_peeled(&crate::through::looked(&s.term.body, reads));
-    match read_with(&body, reads) {
+        crate::spectral_sum::image::crop_peeled_over(&crate::through::looked(&s.term.body, reads));
+    match read_with_over(&body, reads) {
         Some(Shape::Deltas(_)) if held.is_none() => Ok(vec![times_lines(s, by, reads)?]),
         Some(Shape::Lines(lines)) => by.iter().map(|a| moved(s, &lines, a, held)).collect(),
         _ => Err(refuse()),
@@ -103,7 +103,7 @@ fn times_lines<N: Num>(
             LeftReason::SeriesNonUniform,
         )
     };
-    let Some(Shape::Deltas(deltas)) = read_with(&s.term.body, reads) else {
+    let Some(Shape::Deltas(deltas)) = read_with_over(&s.term.body, reads) else {
         return Err(refuse());
     };
     let mut shaped = Vec::with_capacity(deltas.len());

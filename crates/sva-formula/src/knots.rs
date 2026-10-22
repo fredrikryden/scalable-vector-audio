@@ -183,26 +183,14 @@ impl<N: Num> Knots<N> {
         self.inside(u, k)
     }
 
-    /// The same table over another number, moved by no varied number.
-    pub fn lifted<M: Num>(&self) -> Knots<M> {
-        let of = |xs: &[N]| xs.iter().map(|x| M::of(x.v())).collect();
+    /// The same table, each number written through `num`; its bounds are the values'.
+    pub fn mapped<M: Num>(&self, num: &dyn Fn(N) -> M) -> Knots<M> {
+        let of = |xs: &[N]| xs.iter().map(|x| num(*x)).collect();
         Knots {
             times: of(&self.times),
             values: of(&self.values),
             integral: self.integral,
             prefix: of(&self.prefix),
-            after: self.after.clone(),
-            rounding: self.rounding,
-        }
-    }
-
-    /// The same table, its tangents dropped.
-    pub fn value(&self) -> Knots {
-        Knots {
-            times: self.times.iter().map(|x| x.v()).collect(),
-            values: self.values.iter().map(|x| x.v()).collect(),
-            integral: self.integral,
-            prefix: self.prefix.iter().map(|x| x.v()).collect(),
             after: self.after.clone(),
             rounding: self.rounding,
         }

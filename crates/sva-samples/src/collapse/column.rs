@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use sva_formula::closed_form::{Fold, Unary};
 use sva_formula::spectral_sum::atom::SpectralAtom;
-use sva_formula::{Banded, Body, C64, IndexId, Knots, Run};
+use sva_formula::{Banded, Body, C64, Cx as Complex, IndexId, Kernel, Knots, Run};
 
 use super::point::{crop_gain, eval_atom_on, eval_lane_on, lane_of, shoulders, unary};
 use crate::error::CollapseError;
@@ -14,19 +14,19 @@ use crate::grid::Grid;
 /// One component of a written form as ops, operands before the ops reading them: every
 /// subterm the form, or a form it reads, writes alike in the same time is one op.
 #[derive(Clone, Debug)]
-pub(crate) struct Program {
-    ops: Vec<Op>,
+pub(crate) struct Program<N: Kernel = f64> {
+    ops: Vec<Op<N>>,
     roots: Vec<usize>,
 }
 
 /// Slot 0 is the instant each lane is evaluated at; a time slot holds an instant in `re`.
 #[derive(Clone, Debug)]
-enum Op {
+enum Op<N: Kernel> {
     Time,
-    Const(C64),
+    Const(Complex<N>),
     Fail(CollapseError),
     Line(usize),
-    Shifted(usize, f64),
+    Shifted(usize, N),
     /// A warp's instant: its time's real part, or 0 and the time's refusal, which `Warp` reads.
     Re(usize),
     Warp {
@@ -43,10 +43,10 @@ enum Op {
         time: usize,
         on: bool,
         of: usize,
-        l: f64,
-        r: f64,
-        rise: f64,
-        fall: f64,
+        l: N,
+        r: N,
+        rise: N,
+        fall: N,
     },
     Singular {
         time: usize,
@@ -59,7 +59,7 @@ enum Op {
     Modal {
         time: usize,
         on: bool,
-        atoms: Vec<SpectralAtom>,
+        atoms: Vec<SpectralAtom<N>>,
     },
     Run {
         time: usize,
@@ -70,16 +70,16 @@ enum Op {
     Banded {
         time: usize,
         on: bool,
-        banded: Box<Banded>,
-        term: Box<Program>,
+        banded: Box<Banded<N>>,
+        term: Box<Program<N>>,
     },
     /// Read at `at`, or where `by` holds, at the lane's instant plus `by` to the exact side of
     /// each knot; `on` where that instant is a sample's, which meets a knot as a crop's edge does.
     Knots {
         at: usize,
-        by: Option<f64>,
+        by: Option<N>,
         on: bool,
-        table: Arc<Knots>,
+        table: Arc<Knots<N>>,
     },
 }
 
@@ -93,30 +93,30 @@ struct Cx {
     component: usize,
 }
 
-struct Lowering<'a> {
-    refs: &'a [Body],
+struct Lowering<'a, N: Kernel> {
+    refs: &'a [Body<N>],
     /// Each ref's component count, folded once per ref.
     widths: Vec<usize>,
     bound: Vec<IndexId>,
-    ops: Vec<Op>,
+    ops: Vec<Op<N>>,
     held: HashMap<Vec<u64>, usize>,
     /// Each ref already lowered in a time, by its id.
     read: HashMap<(u32, Cx), usize>,
 }
 
-impl Program {
+impl<N: Kernel> Program<N> {
     /// Each of `roots` at `component`, `Body::Node(k)` in any of them, or in a ref, naming
     /// `refs[k]`; a node past `refs` refuses where it is evaluated.
-    pub(crate) fn of(roots: &[&Body], refs: &[Body], component: usize) -> Program {
+    pub(crate) fn of(roots: &[&Body<N>], refs: &[Body<N>], component: usize) -> Program<N> {
         Program::bound(roots, refs, (component, true), Vec::new())
     }
 
     fn bound(
-        roots: &[&Body],
-        refs: &[Body],
+        roots: &[&Body<N>],
+        refs: &[Body<N>],
         (component, on): (usize, bool),
         bound: Vec<IndexId>,
-    ) -> Program {
+    ) -> Program<N> {
         let mut widths = Vec::with_capacity(refs.len());
         for body in refs {
             widths.push(width_of(body, &widths));
@@ -142,7 +142,7 @@ impl Program {
     }
 
     /// The program's values at `lanes` instants; `Columns::root` evaluates on demand.
-    pub(crate) fn columns(&self, lanes: usize) -> Columns<'_> {
+    pub(crate) fn columns(&self, lanes: usize) -> Columns<'_, N> {
         Columns {
             program: self,
             t: vec![0.0; lanes],
@@ -156,8 +156,8 @@ impl Program {
     }
 }
 
-impl Lowering<'_> {
-    fn push(&mut self, op: Op) -> usize {
+impl<N: Kernel> Lowering<'_, N> {
+    fn push(&mut self, op: Op<N>) -> usize {
         let op = self.folded(op);
         let key = key(&op);
         if let Some(slot) = key.as_ref().and_then(|k| self.held.get(k)) {
@@ -172,7 +172,7 @@ impl Lowering<'_> {
     }
 
     /// An op reading only constants is the value it takes at every instant, or its refusal.
-    fn folded(&self, op: Op) -> Op {
+    fn folded(&self, op: Op<N>) -> Op<N> {
         let args = operands(&op);
         if args.is_empty() || !args.iter().all(|a| matches!(self.ops[*a], Op::Const(_))) {
             return op;
@@ -198,11 +198,11 @@ impl Lowering<'_> {
         self.push(Op::Fail(e))
     }
 
-    fn each(&mut self, parts: &[sva_formula::Part], cx: Cx) -> Vec<usize> {
+    fn each(&mut self, parts: &[sva_formula::Part<N>], cx: Cx) -> Vec<usize> {
         parts.iter().map(|p| self.lower(&p.body, cx)).collect()
     }
 
-    fn lower(&mut self, f: &Body, cx: Cx) -> usize {
+    fn lower(&mut self, f: &Body<N>, cx: Cx) -> usize {
         match f {
             Body::Const(c) if c.is_finite() => self.push(Op::Const(*c)),
             Body::Const(_) => self.fail(INFINITE),
@@ -268,8 +268,8 @@ impl Lowering<'_> {
                     time: cx.time,
                     on: cx.on,
                     of,
-                    l: l.value(),
-                    r: r.value(),
+                    l: l.number(),
+                    r: r.number(),
                     rise: *rise,
                     fall: *fall,
                 })
@@ -308,7 +308,10 @@ impl Lowering<'_> {
             Body::Modal(bank) => self.push(Op::Modal {
                 time: cx.time,
                 on: cx.on,
-                atoms: sva_formula::modal::atoms(bank, sva_formula::Origin::UNKNOWN),
+                atoms: sva_formula::modal::atoms(bank, sva_formula::Origin::UNKNOWN)
+                    .iter()
+                    .map(SpectralAtom::lifted)
+                    .collect(),
             }),
             Body::Node(id) => match self.refs.get(id.0 as usize) {
                 Some(body) => match self.read.get(&(id.0, cx)) {
@@ -326,8 +329,8 @@ impl Lowering<'_> {
                 run: run.clone(),
             }),
             Body::Knots { at, table } => {
-                let by = match sva_formula::affine::slide(&at.body) {
-                    Some(sva_formula::affine::Coeff::Exact(c)) if c.im == 0.0 => Some(c.re),
+                let by = match N::slide(&at.body) {
+                    Some(sva_formula::affine::Coeff::Exact(c)) if c.im.is_zero() => Some(c.re),
                     _ => None,
                 };
                 let on = cx.on && by.is_some();
@@ -368,7 +371,7 @@ impl Lowering<'_> {
 }
 
 /// The value operands of an op that reads nothing but them; empty for any other.
-fn operands(op: &Op) -> Vec<usize> {
+fn operands<N: Kernel>(op: &Op<N>) -> Vec<usize> {
     match op {
         Op::Add(p) | Op::Mul(p) | Op::Fold(_, p) => p.clone(),
         Op::Div(a, b) => vec![*a, *b],
@@ -378,7 +381,7 @@ fn operands(op: &Op) -> Vec<usize> {
 }
 
 /// `op` reading `to` in place of its operands, in `operands`' order.
-fn with_operands(op: Op, to: &[usize]) -> Op {
+fn with_operands<N: Kernel>(op: Op<N>, to: &[usize]) -> Op<N> {
     match op {
         Op::Add(_) => Op::Add(to.to_vec()),
         Op::Mul(_) => Op::Mul(to.to_vec()),
@@ -392,7 +395,9 @@ fn with_operands(op: Op, to: &[usize]) -> Op {
 }
 
 /// What an op computes, numbers by their bits; `None` for one never shared.
-fn key(op: &Op) -> Option<Vec<u64>> {
+/// A number a varied one moves is never shared: only its value would key it.
+fn key<N: Kernel>(op: &Op<N>) -> Option<Vec<u64>> {
+    let bits = |x: &N| x.is_constant().then(|| x.v().to_bits());
     let slots = |tag: u64, s: &[usize]| {
         std::iter::once(tag)
             .chain(s.iter().map(|s| *s as u64))
@@ -400,9 +405,9 @@ fn key(op: &Op) -> Option<Vec<u64>> {
     };
     Some(match op {
         Op::Time => vec![0],
-        Op::Const(c) => vec![1, c.re.to_bits(), c.im.to_bits()],
+        Op::Const(c) => vec![1, bits(&c.re)?, bits(&c.im)?],
         Op::Line(t) => vec![2, *t as u64],
-        Op::Shifted(t, by) => vec![3, *t as u64, by.to_bits()],
+        Op::Shifted(t, by) => vec![3, *t as u64, bits(by)?],
         Op::Re(x) => vec![4, *x as u64],
         Op::Warp { when, of } => vec![5, *when as u64, *of as u64],
         Op::Add(p) => slots(6, p),
@@ -424,10 +429,10 @@ fn key(op: &Op) -> Option<Vec<u64>> {
             *time as u64,
             u64::from(*on),
             *of as u64,
-            l.to_bits(),
-            r.to_bits(),
-            rise.to_bits(),
-            fall.to_bits(),
+            bits(l)?,
+            bits(r)?,
+            bits(rise)?,
+            bits(fall)?,
         ],
         Op::Singular { time, order } => vec![13, *time as u64, *order as u64],
         Op::Keyed { seed, of } => vec![14, *seed, *of as u64],
@@ -439,13 +444,22 @@ fn key(op: &Op) -> Option<Vec<u64>> {
 }
 
 /// One slot's values over the lanes, and each lane's refusal once any lane refused.
-#[derive(Clone, Default)]
-struct Col {
-    v: Vec<C64>,
+#[derive(Clone)]
+struct Col<N: Kernel> {
+    v: Vec<Complex<N>>,
     err: Vec<Option<CollapseError>>,
 }
 
-impl Col {
+impl<N: Kernel> Default for Col<N> {
+    fn default() -> Col<N> {
+        Col {
+            v: Vec::new(),
+            err: Vec::new(),
+        }
+    }
+}
+
+impl<N: Kernel> Col<N> {
     fn err(&self, i: usize) -> Option<&CollapseError> {
         match self.err.is_empty() {
             true => None,
@@ -457,11 +471,11 @@ impl Col {
         if self.err.is_empty() {
             self.err.resize(self.v.len(), None);
         }
-        self.v[i] = C64::ZERO;
+        self.v[i] = Complex::ZERO;
         self.err[i] = Some(e);
     }
 
-    fn set(&mut self, i: usize, v: Result<C64, CollapseError>) {
+    fn set(&mut self, i: usize, v: Result<Complex<N>, CollapseError>) {
         match v {
             Ok(v) if v.is_finite() => self.v[i] = v,
             Ok(_) => self.fail(i, INFINITE),
@@ -470,14 +484,14 @@ impl Col {
     }
 
     /// `set` for a value no refusal reached.
-    fn clean(&mut self, i: usize, v: C64) {
+    fn clean(&mut self, i: usize, v: Complex<N>) {
         match v.is_finite() {
             true => self.v[i] = v,
             false => self.fail(i, INFINITE),
         }
     }
 
-    fn get(&self, i: usize) -> Result<C64, &CollapseError> {
+    fn get(&self, i: usize) -> Result<Complex<N>, &CollapseError> {
         match self.err(i) {
             Some(e) => Err(e),
             None => Ok(self.v[i]),
@@ -487,19 +501,19 @@ impl Col {
 
 /// A program's slots over one column of lanes, each evaluated once a reader needs it, only
 /// over the lanes it needs.
-pub(crate) struct Columns<'p> {
-    program: &'p Program,
+pub(crate) struct Columns<'p, N: Kernel = f64> {
+    program: &'p Program<N>,
     /// Each lane's instant, and its sample where it is one.
     pub(crate) t: Vec<f64>,
     pub(crate) on: Vec<Option<i64>>,
     pub(crate) grid: Grid,
     bound: Vec<f64>,
-    cols: Vec<Col>,
+    cols: Vec<Col<N>>,
     done: Vec<(usize, usize)>,
     lanes: usize,
 }
 
-impl Columns<'_> {
+impl<N: Kernel> Columns<'_, N> {
     /// Forgets every value, to be run again at the instants written since.
     pub(crate) fn again(&mut self) {
         self.done.iter_mut().for_each(|d| *d = (0, 0));
@@ -507,7 +521,7 @@ impl Columns<'_> {
     }
 
     /// Root `k` over lanes `[lo, hi)`: each lane's value or its refusal.
-    pub(crate) fn root(&mut self, k: usize, (lo, hi): (usize, usize)) -> RootView<'_> {
+    pub(crate) fn root(&mut self, k: usize, (lo, hi): (usize, usize)) -> RootView<'_, N> {
         let slot = self.program.roots[k];
         self.need(slot, lo, hi);
         RootView {
@@ -525,7 +539,7 @@ impl Columns<'_> {
         }
         let mut col = std::mem::take(&mut self.cols[s]);
         if col.v.len() != self.lanes {
-            col.v.resize(self.lanes, C64::ZERO);
+            col.v.resize(self.lanes, Complex::ZERO);
         }
         let held = match dlo < dhi {
             true => {
@@ -554,12 +568,12 @@ impl Columns<'_> {
         }
     }
 
-    fn piece(&mut self, s: usize, out: &mut Col, a: usize, b: usize) {
+    fn piece(&mut self, s: usize, out: &mut Col<N>, a: usize, b: usize) {
         let program = self.program;
         match &program.ops[s] {
             Op::Time => {
                 for i in a..b {
-                    out.v[i] = C64::real(self.t[i]);
+                    out.v[i] = Complex::real(N::of(self.t[i]));
                 }
             }
             Op::Const(c) => out.v[a..b].fill(*c),
@@ -568,14 +582,14 @@ impl Columns<'_> {
                 self.need(*t, a, b);
                 let t = &self.cols[*t];
                 for i in a..b {
-                    out.set(i, Ok(C64::real(t.v[i].re)));
+                    out.set(i, Ok(Complex::real(t.v[i].re)));
                 }
             }
             Op::Shifted(t, by) => {
                 self.need(*t, a, b);
                 let t = &self.cols[*t];
                 for i in a..b {
-                    out.v[i] = C64::real(t.v[i].re - by);
+                    out.v[i] = Complex::real(t.v[i].re - *by);
                 }
             }
             Op::Re(x) => {
@@ -585,9 +599,9 @@ impl Columns<'_> {
                     match x.err(i) {
                         Some(e) => {
                             out.fail(i, e.clone());
-                            out.v[i] = C64::ZERO;
+                            out.v[i] = Complex::ZERO;
                         }
-                        None => out.v[i] = C64::real(x.v[i].re),
+                        None => out.v[i] = Complex::real(x.v[i].re),
                     }
                 }
             }
@@ -607,7 +621,7 @@ impl Columns<'_> {
                 let clean = parts.iter().all(|p| self.cols[*p].err.is_empty());
                 match clean {
                     true => {
-                        out.v[a..b].fill(C64::ZERO);
+                        out.v[a..b].fill(Complex::ZERO);
                         for p in parts {
                             let p = &self.cols[*p].v[a..b];
                             for (o, x) in out.v[a..b].iter_mut().zip(p) {
@@ -622,9 +636,9 @@ impl Columns<'_> {
                     }
                     false => {
                         for i in a..b {
-                            let sum = parts
-                                .iter()
-                                .try_fold(C64::ZERO, |held, p| Ok(held + self.cols[*p].get(i)?));
+                            let sum = parts.iter().try_fold(Complex::ZERO, |held, p| {
+                                Ok(held + self.cols[*p].get(i)?)
+                            });
                             out.set(i, sum.map_err(|e: &CollapseError| e.clone()));
                         }
                     }
@@ -650,7 +664,7 @@ impl Columns<'_> {
                     let v = first.and_then(|first| {
                         each.try_fold(first, |acc, v| {
                             let v = v?;
-                            Ok(C64::real(match f {
+                            Ok(Complex::real(match f {
                                 Fold::Max => acc.re.max(v.re),
                                 Fold::Min => acc.re.min(v.re),
                                 Fold::Mod => acc.re.rem_euclid(v.re),
@@ -670,19 +684,19 @@ impl Columns<'_> {
                 fall,
             } => {
                 self.need(*time, a, b);
-                let gains: Vec<f64> = (a..b)
+                let gains: Vec<N> = (a..b)
                     .map(|i| {
                         let t = self.cols[*time].v[i].re;
                         match self.sample(*on, i) {
-                            Some((grid, n)) if grid.inside(n, *l, *r) => {
+                            Some((grid, n)) if grid.inside(n, l.v(), r.v()) => {
                                 shoulders(t, *l, *r, *rise, *fall)
                             }
-                            Some(_) => 0.0,
+                            Some(_) => N::ZERO,
                             None => crop_gain(t, *l, *r, *rise, *fall),
                         }
                     })
                     .collect();
-                let open = |g: &f64| *g != 0.0;
+                let open = |g: &N| g.v() != 0.0;
                 let (lo, hi) = match gains.iter().position(open) {
                     Some(lo) => (lo, gains.iter().rposition(open).expect("one opens") + 1),
                     None => (0, 0),
@@ -690,8 +704,8 @@ impl Columns<'_> {
                 self.need(*of, a + lo, a + hi);
                 let of = &self.cols[*of];
                 for (i, gain) in (a..b).zip(gains) {
-                    match gain == 0.0 {
-                        true => out.v[i] = C64::ZERO,
+                    match gain.v() == 0.0 {
+                        true => out.v[i] = Complex::ZERO,
                         false => out.set(i, of.get(i).map(|v| v.scale(gain)).map_err(Clone::clone)),
                     }
                 }
@@ -699,35 +713,36 @@ impl Columns<'_> {
             Op::Singular { time, order } => {
                 self.need(*time, a, b);
                 for i in a..b {
-                    let at = self.cols[*time].v[i].re;
+                    let at = self.cols[*time].v[i].re.v();
                     out.fail(i, CollapseError::SingularInCt { at, order: *order });
                 }
             }
             Op::Keyed { seed, of } => self.map_or(*of, out, (a, b), |key| {
-                Ok(C64::real(sva_formula::draw_nearest(*seed, key.re).ok_or(
-                    CollapseError::NotEvaluable("a key past any step"),
-                )?))
+                Ok(Complex::real(N::of(
+                    sva_formula::draw_nearest(*seed, key.re.v())
+                        .ok_or(CollapseError::NotEvaluable("a key past any step"))?,
+                )))
             }),
             Op::Modal { time, on, atoms } => {
                 self.need(*time, a, b);
                 for i in a..b {
                     let (t, at) = (self.cols[*time].v[i].re, self.sample(*on, i));
-                    let sum = atoms
-                        .iter()
-                        .try_fold(C64::ZERO, |sum, atom| Ok(sum + eval_atom_on(atom, t, at)?));
+                    let sum = atoms.iter().try_fold(Complex::ZERO, |sum, atom| {
+                        Ok(sum + eval_atom_on(atom, t, at)?)
+                    });
                     out.set(i, sum);
                 }
             }
             Op::Run { time, run } => {
                 self.need(*time, a, b);
-                let t: Vec<f64> = self.cols[*time].v[a..b].iter().map(|t| t.re).collect();
+                let t: Vec<f64> = self.cols[*time].v[a..b].iter().map(|t| t.re.v()).collect();
                 let mut summed = vec![C64::ZERO; b - a];
                 super::run::each(run, &t, &mut summed);
                 for (i, v) in (a..b).zip(summed) {
-                    out.set(i, Ok(v));
+                    out.set(i, Ok(Complex::of(v)));
                 }
             }
-            Op::Bound(k) => out.v[a..b].fill(C64::real(self.bound[*k])),
+            Op::Bound(k) => out.v[a..b].fill(Complex::real(N::of(self.bound[*k]))),
             Op::Knots { at, by, on, table } => self.knots((*at, *by, *on), table, out, (a, b)),
             Op::Banded {
                 time,
@@ -738,7 +753,13 @@ impl Columns<'_> {
         }
     }
 
-    fn map(&mut self, x: usize, out: &mut Col, (a, b): (usize, usize), f: impl Fn(C64) -> C64) {
+    fn map(
+        &mut self,
+        x: usize,
+        out: &mut Col<N>,
+        (a, b): (usize, usize),
+        f: impl Fn(Complex<N>) -> Complex<N>,
+    ) {
         self.need(x, a, b);
         if self.cols[x].err.is_empty() {
             for (i, x) in (a..b).zip(&self.cols[x].v[a..b]) {
@@ -752,9 +773,9 @@ impl Columns<'_> {
     fn map_or(
         &mut self,
         x: usize,
-        out: &mut Col,
+        out: &mut Col<N>,
         (a, b): (usize, usize),
-        f: impl Fn(C64) -> Result<C64, CollapseError>,
+        f: impl Fn(Complex<N>) -> Result<Complex<N>, CollapseError>,
     ) {
         self.need(x, a, b);
         let x = &self.cols[x];
@@ -768,7 +789,7 @@ impl Columns<'_> {
 
     /// A factor reading `+0` exactly zeroes the product whatever any other refused, so a
     /// factor is evaluated only over the lanes no factor before it zeroed.
-    fn product(&mut self, parts: &[usize], out: &mut Col, a: usize, b: usize) {
+    fn product(&mut self, parts: &[usize], out: &mut Col<N>, a: usize, b: usize) {
         let mut zeroed = vec![false; b - a];
         let (mut lo, mut hi) = (a, b);
         for p in parts {
@@ -788,8 +809,8 @@ impl Columns<'_> {
         }
         // Every lane outside `[lo, hi)` is zeroed, and every factor was evaluated inside it.
         if parts.iter().all(|p| self.cols[*p].err.is_empty()) {
-            out.v[a..b].fill(C64::ZERO);
-            let mut held = vec![C64::ONE; hi - lo];
+            out.v[a..b].fill(Complex::ZERO);
+            let mut held = vec![Complex::ONE; hi - lo];
             for p in parts.iter().filter(|_| lo < hi) {
                 for (held, v) in held.iter_mut().zip(&self.cols[*p].v[lo..hi]) {
                     *held = *held * *v;
@@ -804,10 +825,10 @@ impl Columns<'_> {
         }
         for i in a..b {
             if zeroed[i - a] {
-                out.v[i] = C64::ZERO;
+                out.v[i] = Complex::ZERO;
                 continue;
             }
-            let mut held: Result<C64, &CollapseError> = Ok(C64::ONE);
+            let mut held: Result<Complex<N>, &CollapseError> = Ok(Complex::ONE);
             for p in parts {
                 match (self.cols[*p].get(i), &held) {
                     (Ok(v), Ok(acc)) => held = Ok(*acc * v),
@@ -824,9 +845,9 @@ impl Columns<'_> {
     /// the side the decimals' sum puts it on, as a crop's edge does.
     fn knots(
         &mut self,
-        (at, by, on): (usize, Option<f64>, bool),
-        table: &Knots,
-        out: &mut Col,
+        (at, by, on): (usize, Option<N>, bool),
+        table: &Knots<N>,
+        out: &mut Col<N>,
         (a, b): (usize, usize),
     ) {
         self.need(at, a, b);
@@ -836,23 +857,25 @@ impl Columns<'_> {
                 out.fail(i, e.clone());
                 continue;
             }
-            let t = self.cols[at].v[i].re;
+            let held = self.cols[at].v[i].re;
+            let t = held.v();
             let (u, below) = match by {
-                Some(c) => {
-                    let u = t + c;
+                Some(by) => {
+                    let (c, moved) = (by.v(), held + by);
+                    let u = moved.v();
                     let back = u - t;
-                    (u, (t - (u - back)) + (c - back) < 0.0)
+                    (moved, (t - (u - back)) + (c - back) < 0.0)
                 }
-                None => (t, false),
+                None => (held, false),
             };
             let (u, below) = match (self.sample(on, i), by) {
-                (Some((grid, n)), Some(c)) => match near(table, u, c) {
-                    Some(knot) => (knot, n < grid.first_past(knot, c)),
+                (Some((grid, n)), Some(c)) => match near(table, u.v(), c.v()) {
+                    Some(knot) => (u.rebased(knot), n < grid.first_past(knot, c.v())),
                     None => (u, below),
                 },
                 _ => (u, below),
             };
-            out.clean(i, C64::real(table.read(u, below, &mut hint)));
+            out.clean(i, Complex::real(table.read(u, below, &mut hint)));
         }
     }
 
@@ -861,15 +884,15 @@ impl Columns<'_> {
     fn banded(
         &mut self,
         (time, on): (usize, bool),
-        b: &Banded,
-        term: &Program,
-        out: &mut Col,
+        b: &Banded<N>,
+        term: &Program<N>,
+        out: &mut Col<N>,
         (a, z): (usize, usize),
     ) {
         self.need(time, a, z);
         let mut ranges: Vec<Option<(i64, i64)>> = vec![None; z - a];
         for i in a..z {
-            let (t, at) = (self.cols[time].v[i].re, self.sample(on, i));
+            let (t, at) = (self.cols[time].v[i].re.v(), self.sample(on, i));
             let turned =
                 |rate: &sva_formula::SpectralSum| Ok(eval_lane_on(&rate.lanes[0], t, at)?.re);
             let within: Result<_, CollapseError> =
@@ -877,9 +900,9 @@ impl Columns<'_> {
             match within {
                 Ok(Some(range)) => {
                     ranges[i - a] = Some(range);
-                    out.v[i] = C64::ZERO;
+                    out.v[i] = Complex::ZERO;
                 }
-                Ok(None) => out.v[i] = C64::ZERO,
+                Ok(None) => out.v[i] = Complex::ZERO,
                 Err(e) => out.fail(i, e),
             }
         }
@@ -897,7 +920,7 @@ impl Columns<'_> {
         }
         let mut inner = term.columns(z - a);
         for i in a..z {
-            inner.t[i - a] = self.cols[time].v[i].re;
+            inner.t[i - a] = self.cols[time].v[i].re.v();
             inner.on[i - a] = self.on[i];
         }
         inner.grid = self.grid;
@@ -940,18 +963,18 @@ impl Columns<'_> {
 }
 
 /// One root's lanes, each its value or why it has none.
-pub(crate) struct RootView<'c> {
-    col: &'c Col,
+pub(crate) struct RootView<'c, N: Kernel = f64> {
+    col: &'c Col<N>,
 }
 
-impl RootView<'_> {
-    pub(crate) fn get(&self, i: usize) -> Result<C64, &CollapseError> {
+impl<N: Kernel> RootView<'_, N> {
+    pub(crate) fn get(&self, i: usize) -> Result<Complex<N>, &CollapseError> {
         self.col.get(i)
     }
 }
 
 /// The knot a sum `t + c` rounding to `u` may exactly equal: one within a few steps of `u`.
-pub(super) fn near<N: sva_formula::Num>(table: &Knots<N>, u: f64, c: f64) -> Option<f64> {
+pub(super) fn near<N: Kernel>(table: &Knots<N>, u: f64, c: f64) -> Option<f64> {
     let times = table.times();
     let k = times.partition_point(|x| x.v() < u);
     let reach = 4.0 * f64::EPSILON * u.abs().max(c.abs());
@@ -962,7 +985,7 @@ pub(super) fn near<N: sva_formula::Num>(table: &Knots<N>, u: f64, c: f64) -> Opt
         .find(|x| (x - u).abs() <= reach)
 }
 
-pub(super) fn power<N: sva_formula::Num>(x: sva_formula::Cx<N>, n: i32) -> sva_formula::Cx<N> {
+pub(super) fn power<N: Kernel>(x: sva_formula::Cx<N>, n: i32) -> sva_formula::Cx<N> {
     match n {
         0.. => x.powi(n as u32),
         _ => x.powi(n.unsigned_abs()).inv(),
@@ -972,7 +995,7 @@ pub(super) fn power<N: sva_formula::Num>(x: sva_formula::Cx<N>, n: i32) -> sva_f
 /// The component count a written subterm answers for. Only `join` widens, and only `ch` and
 /// a node narrow back.
 /// `refs[k]` the width of the form `Body::Node(k)` names; one past it is one wide.
-pub(crate) fn width_of<N: sva_formula::Num>(f: &Body<N>, refs: &[usize]) -> usize {
+pub(crate) fn width_of<N: Kernel>(f: &Body<N>, refs: &[usize]) -> usize {
     match f {
         Body::Join(parts) => parts.iter().map(|p| width_of(&p.body, refs)).sum(),
         Body::Channel(..) => 1,
@@ -985,7 +1008,7 @@ pub(crate) fn width_of<N: sva_formula::Num>(f: &Body<N>, refs: &[usize]) -> usiz
     }
 }
 
-fn sketch(f: &Body) -> &'static str {
+fn sketch<N: Kernel>(f: &Body<N>) -> &'static str {
     match f {
         Body::Param(_) => "an unsubstituted parameter",
         Body::Index(_) => "a free series index",

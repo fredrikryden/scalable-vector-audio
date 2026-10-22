@@ -3,7 +3,6 @@
 use std::f64::consts::{PI, TAU};
 
 use sva_ast::{Arg, ByteSpan, Expr};
-use sva_formula::affine::exact_constant;
 use sva_formula::{Body, Bound, Cx as Complex, IndexId, Part, Series, Unary, Var};
 
 use crate::error::EngineError;
@@ -44,7 +43,7 @@ impl<N: Number> Lowering<'_, N> {
                 .find(|(k, _)| *k == "phase")
                 .map(|(_, v)| Body::Const(Complex::real(*v))),
         };
-        let pitch = exact_constant(&hz)
+        let pitch = N::exact_constant(&hz)
             .filter(|c| c.im.is_zero() && c.re.v() != 0.0 && c.re.v().is_finite() && var == Var::T);
         let (turned, delay) = match (phase, pitch) {
             (Some(phase), Some(pitch)) => (None, Some(self.delay(phase, pitch.re))),

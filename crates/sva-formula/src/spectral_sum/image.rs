@@ -1,6 +1,6 @@
 // Concern: the atoms each written constructor lowers to, and the window one lifts off | Non-concern: the lane algebra (build.rs) | IO: (a constructor's arguments) -> SpectralSum or a window
 
-use crate::affine::{apply_scalar, completed_square_read, exact_affine_read};
+use crate::affine::{apply_scalar_over, completed_square_read, exact_affine_read};
 use crate::closed_form::{Body, Edge, Fold, Part, Series, Unary, Var};
 use crate::complex::Cx;
 use crate::num::Num;
@@ -9,7 +9,7 @@ use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
 use crate::spectral_sum::atom::{
     Exp, Factors, Gauss, Indicator, Pole, Poly, Singular, SpectralAtom,
 };
-use crate::spectral_sum::merge::simplify;
+use crate::spectral_sum::merge::simplify_over;
 use crate::spectral_sum::{Lane, SpectralSum};
 use crate::through::Reads;
 
@@ -37,7 +37,7 @@ pub fn held<N: Num>(origin: Origin, first: Factor, values: &[N]) -> Result<(), L
 
 pub fn one<N: Num>(var: Var, atom: SpectralAtom<N>) -> SpectralSum<N> {
     let mut lane = Lane::of(vec![atom]);
-    simplify(&mut lane);
+    simplify_over(&mut lane);
     SpectralSum::of(var, vec![lane])
 }
 
@@ -52,7 +52,7 @@ pub fn apply<N: Num>(
     if let Some((a, b)) = affine
         && a.is_zero()
     {
-        return constant(var, apply_scalar(op, b), origin);
+        return constant(var, apply_scalar_over(op, b), origin);
     }
     if let Some((a, b)) = affine {
         held(arg.origin, Factor::Value, &[a.re, a.im, b.re, b.im])?;
@@ -107,7 +107,7 @@ pub fn apply<N: Num>(
         ],
     };
     let mut lane = Lane::of(atoms);
-    simplify(&mut lane);
+    simplify_over(&mut lane);
     Ok(SpectralSum::of(var, vec![lane]))
 }
 
@@ -257,7 +257,7 @@ pub fn shift<N: Num>(n: SpectralSum<N>, by: N) -> Result<SpectralSum<N>, Left> {
     for lane in n.lanes {
         let lane = lane.expanded();
         let mut out = Lane::of(lane.atoms.iter().map(|a| shift_atom(a, by)).collect());
-        simplify(&mut out);
+        simplify_over(&mut out);
         for s in &lane.series {
             out.series.push(shift_series(s, by)?);
         }
@@ -279,7 +279,7 @@ fn shift_series<N: Num>(s: &Series<N>, by: N) -> Result<Series<N>, Left> {
     Ok(Series {
         term: Part::new(
             s.term.origin,
-            crate::closed_form::shift_line(&s.term.body, by),
+            crate::closed_form::shift_line_over(&s.term.body, by),
         ),
         ..s.clone()
     })
@@ -335,7 +335,7 @@ pub fn derive<N: Num>(n: SpectralSum<N>) -> Result<SpectralSum<N>, Left> {
             atoms.extend(atom.derivative()?);
         }
         let mut out = Lane::of(atoms);
-        simplify(&mut out);
+        simplify_over(&mut out);
         lanes.push(out);
     }
     Ok(SpectralSum::of(n.var, lanes))
@@ -343,7 +343,7 @@ pub fn derive<N: Num>(n: SpectralSum<N>) -> Result<SpectralSum<N>, Left> {
 
 /// An indicator is a pointwise factor, so it distributes over a sum however long: a cropped
 /// series is the series of cropped terms, and the window is the same in every term.
-pub fn crop<N: Num>(n: SpectralSum<N>, window: Indicator<N>) -> Result<SpectralSum<N>, Left> {
+pub fn crop_over<N: Num>(n: SpectralSum<N>, window: Indicator<N>) -> Result<SpectralSum<N>, Left> {
     let mut lanes = Vec::with_capacity(n.lanes.len());
     for lane in n.lanes {
         let lane = lane.expanded();
@@ -372,7 +372,7 @@ pub fn crop<N: Num>(n: SpectralSum<N>, window: Indicator<N>) -> Result<SpectralS
             series,
             ..Lane::of(atoms)
         };
-        simplify(&mut out);
+        simplify_over(&mut out);
         lanes.push(out);
     }
     Ok(SpectralSum::of(n.var, lanes))
@@ -380,7 +380,7 @@ pub fn crop<N: Num>(n: SpectralSum<N>, window: Indicator<N>) -> Result<SpectralS
 
 /// A hard-cropped term with its window lifted off: an indicator is a pointwise factor, so
 /// what is under it reads as the closed form it was before the crop. A shoulder is not one.
-pub fn crop_peeled<N: Num>(f: &Body<N>) -> (Body<N>, Option<Indicator<N>>) {
+pub fn crop_peeled_over<N: Num>(f: &Body<N>) -> (Body<N>, Option<Indicator<N>>) {
     let Body::Crop {
         of,
         l,
@@ -394,7 +394,7 @@ pub fn crop_peeled<N: Num>(f: &Body<N>) -> (Body<N>, Option<Indicator<N>>) {
     if !(rise.is_zero() && fall.is_zero()) {
         return (f.clone(), None);
     }
-    let (body, held) = crop_peeled(&of.body);
+    let (body, held) = crop_peeled_over(&of.body);
     let window = Indicator { l: *l, r: *r };
     (body, Some(held.map_or(window, |h| h.meet(window))))
 }
@@ -496,4 +496,12 @@ pub(crate) fn raised_cosine<N: Num>(
         ));
     }
     out
+}
+
+pub fn crop(n: SpectralSum, window: Indicator) -> Result<SpectralSum, Left> {
+    crop_over(n, window)
+}
+
+pub fn crop_peeled(f: &Body) -> (Body, Option<Indicator>) {
+    crop_peeled_over(f)
 }

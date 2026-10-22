@@ -283,104 +283,32 @@ pub enum Body<N: Num = f64> {
 
 /// The same form over another number, moved by no varied number.
 pub fn lifted<N: Num>(f: &Body) -> Body<N> {
-    let part = |p: &Part| Part::new(p.origin, lifted(&p.body));
-    let parts = |ps: &[Part]| ps.iter().map(part).collect();
-    let series = |s: &Series| Series {
-        index: s.index,
-        lo: s.lo,
-        hi: s.hi,
-        term: part(&s.term),
-    };
-    match f {
-        Body::Const(c) => Body::Const(Cx::of(*c)),
-        Body::Line => Body::Line,
-        Body::Index(k) => Body::Index(*k),
-        Body::Keyed { seed, of } => Body::Keyed {
-            seed: *seed,
-            of: part(of),
-        },
-        Body::Param(id) => Body::Param(*id),
-        Body::Node(id) => Body::Node(*id),
-        Body::Add(ps) => Body::Add(parts(ps)),
-        Body::Mul(ps) => Body::Mul(parts(ps)),
-        Body::Div(a, b) => Body::Div(part(a), part(b)),
-        Body::Pow(of, n) => Body::Pow(part(of), *n),
-        Body::Apply(op, of) => Body::Apply(*op, part(of)),
-        Body::Fold(op, ps) => Body::Fold(*op, parts(ps)),
-        Body::Delta { at, order } => Body::Delta {
-            at: part(at),
-            order: *order,
-        },
-        Body::Pv(at) => Body::Pv(part(at)),
-        Body::Shift { by, of } => Body::Shift {
-            by: N::of(*by),
-            of: part(of),
-        },
-        Body::Warp { at, of } => Body::Warp {
-            at: part(at),
-            of: part(of),
-        },
-        Body::Deriv { order, of } => Body::Deriv {
-            order: *order,
-            of: part(of),
-        },
-        Body::Crop {
-            of,
-            l,
-            r,
-            rise,
-            fall,
-        } => Body::Crop {
-            of: part(of),
-            l: Edge::of(*l),
-            r: Edge::of(*r),
-            rise: N::of(*rise),
-            fall: N::of(*fall),
-        },
-        Body::Join(ps) => Body::Join(parts(ps)),
-        Body::Channel(of, k) => Body::Channel(part(of), *k),
-        Body::Rational(r) => Body::Rational(Rational {
-            zeros: r.zeros.iter().map(|z| Cx::of(*z)).collect(),
-            poles: r.poles.iter().map(|p| Cx::of(*p)).collect(),
-            gain: Cx::of(r.gain),
-        }),
-        Body::Series(s) => Body::Series(Box::new(series(s))),
-        Body::Modal(m) => Body::Modal(m.clone()),
-        Body::Run(run) => Body::Run(run.clone()),
-        Body::Banded(b) => Body::Banded(Box::new(crate::banded::Banded {
-            series: series(&b.series),
-            slope: b.slope.clone(),
-            offset: b.offset.clone(),
-            omega: b.omega,
-            most: b.most,
-            widest: b.widest,
-            reach: b.reach,
-            dropped_db: b.dropped_db,
-        })),
-        Body::Knots { at, table } => Body::Knots {
-            at: part(at),
-            table: std::sync::Arc::new(table.lifted()),
-        },
-    }
+    mapped(f, &N::of)
 }
 
 /// The same form, every number's tangent dropped.
 pub fn value<N: Num>(f: &Body<N>) -> Body {
-    let part = |p: &Part<N>| Part::new(p.origin, value(&p.body));
-    let parts = |ps: &[Part<N>]| ps.iter().map(part).collect();
-    let series = |s: &Series<N>| Series {
+    mapped(f, &|x: N| x.v())
+}
+
+/// The same form, each number written through `num`.
+fn mapped<M: Num, N: Num>(f: &Body<M>, num: &dyn Fn(M) -> N) -> Body<N> {
+    let part = |p: &Part<M>| Part::new(p.origin, mapped(&p.body, num));
+    let parts = |ps: &[Part<M>]| ps.iter().map(part).collect();
+    let series = |s: &Series<M>| Series {
         index: s.index,
         lo: s.lo,
         hi: s.hi,
         term: part(&s.term),
     };
-    let edge = |e: Edge<N>| match e {
+    let edge = |e: Edge<M>| match e {
         Edge::NegInf => Edge::NegInf,
-        Edge::At(x) => Edge::At(x.v()),
+        Edge::At(x) => Edge::At(num(x)),
         Edge::PosInf => Edge::PosInf,
     };
+    let complex = |c: Cx<M>| Cx::new(num(c.re), num(c.im));
     match f {
-        Body::Const(c) => Body::Const(c.value()),
+        Body::Const(c) => Body::Const(complex(*c)),
         Body::Line => Body::Line,
         Body::Index(k) => Body::Index(*k),
         Body::Keyed { seed, of } => Body::Keyed {
@@ -401,7 +329,7 @@ pub fn value<N: Num>(f: &Body<N>) -> Body {
         },
         Body::Pv(at) => Body::Pv(part(at)),
         Body::Shift { by, of } => Body::Shift {
-            by: by.v(),
+            by: num(*by),
             of: part(of),
         },
         Body::Warp { at, of } => Body::Warp {
@@ -422,15 +350,15 @@ pub fn value<N: Num>(f: &Body<N>) -> Body {
             of: part(of),
             l: edge(*l),
             r: edge(*r),
-            rise: rise.v(),
-            fall: fall.v(),
+            rise: num(*rise),
+            fall: num(*fall),
         },
         Body::Join(ps) => Body::Join(parts(ps)),
         Body::Channel(of, k) => Body::Channel(part(of), *k),
         Body::Rational(r) => Body::Rational(Rational {
-            zeros: r.zeros.iter().map(|z| z.value()).collect(),
-            poles: r.poles.iter().map(|p| p.value()).collect(),
-            gain: r.gain.value(),
+            zeros: r.zeros.iter().map(|z| complex(*z)).collect(),
+            poles: r.poles.iter().map(|p| complex(*p)).collect(),
+            gain: complex(r.gain),
         }),
         Body::Series(s) => Body::Series(Box::new(series(s))),
         Body::Modal(m) => Body::Modal(m.clone()),
@@ -447,7 +375,7 @@ pub fn value<N: Num>(f: &Body<N>) -> Body {
         })),
         Body::Knots { at, table } => Body::Knots {
             at: part(at),
-            table: std::sync::Arc::new(table.value()),
+            table: std::sync::Arc::new(table.mapped(num)),
         },
     }
 }
@@ -551,8 +479,8 @@ pub fn map_children<N: Num>(f: &Body<N>, mut g: impl FnMut(&Part<N>) -> Part<N>)
 
 /// `1[l,r)(u - by)` reads the free variable too, so a window moves its own bounds; a warp
 /// moves only its time.
-pub fn shift_line<N: Num>(f: &Body<N>, by: N) -> Body<N> {
-    let walk = |p: &Part<N>| Part::new(p.origin, shift_line(&p.body, by));
+pub fn shift_line_over<N: Num>(f: &Body<N>, by: N) -> Body<N> {
+    let walk = |p: &Part<N>| Part::new(p.origin, shift_line_over(&p.body, by));
     match f {
         Body::Line => Body::Add(vec![
             Part::bare(Body::Line),
@@ -584,11 +512,11 @@ pub fn shift_line<N: Num>(f: &Body<N>, by: N) -> Body<N> {
 }
 
 /// An edge holds no formula, so a window is warped whole, and so is a ref.
-pub fn read_at<N: Num>(f: &Body<N>, at: &Body<N>) -> Body<N> {
-    read_at_with(f, at, &|_| None)
+pub fn read_at_over<N: Num>(f: &Body<N>, at: &Body<N>) -> Body<N> {
+    read_at_with_over(f, at, &|_| None)
 }
 
-pub fn read_at_with<N: Num>(
+pub fn read_at_with_over<N: Num>(
     f: &Body<N>,
     at: &Body<N>,
     node: &dyn Fn(NodeId) -> Option<NodeId>,
@@ -601,11 +529,11 @@ pub fn read_at_with<N: Num>(
             of: Part::bare(f.clone()),
         },
         Body::Warp { at: inner, of } => Body::Warp {
-            at: Part::new(inner.origin, read_at_with(&inner.body, at, node)),
+            at: Part::new(inner.origin, read_at_with_over(&inner.body, at, node)),
             of: of.clone(),
         },
         other => map_children(other, |p| {
-            Part::new(p.origin, read_at_with(&p.body, at, node))
+            Part::new(p.origin, read_at_with_over(&p.body, at, node))
         }),
     }
 }
@@ -616,4 +544,16 @@ pub fn shifts_opaquely<N: Num>(f: &Body<N>) -> bool {
         f,
         Body::Param(_) | Body::Rational(_) | Body::Modal(_) | Body::Run(_) | Body::Banded(_)
     ) || children(f).iter().any(|p| shifts_opaquely(&p.body))
+}
+
+pub fn shift_line(f: &Body, by: f64) -> Body {
+    shift_line_over(f, by)
+}
+
+pub fn read_at(f: &Body, at: &Body) -> Body {
+    read_at_over(f, at)
+}
+
+pub fn read_at_with(f: &Body, at: &Body, node: &dyn Fn(NodeId) -> Option<NodeId>) -> Body {
+    read_at_with_over(f, at, node)
 }

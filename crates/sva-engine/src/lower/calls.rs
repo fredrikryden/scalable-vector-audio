@@ -759,7 +759,12 @@ pub(super) fn arithmetic<N: Number>(
     }
 }
 
-fn unary<N: Num>(name: &str, x: Body<N>, named: &[(&str, N)], origin: Origin) -> Option<Body<N>> {
+fn unary<N: Number>(
+    name: &str,
+    x: Body<N>,
+    named: &[(&str, N)],
+    origin: Origin,
+) -> Option<Body<N>> {
     let part = |f: Body<N>| Part::new(origin, f);
     if name == "sat" {
         let drive = Body::Const(Complex::real(named_or(named, "drive", N::ONE)));
@@ -813,8 +818,8 @@ fn beside_infinity<N: Num>(name: &str, pieces: &mut Vec<Piece<N>>) -> Option<Pie
 }
 
 /// Where `a*t + b` with `a > 0` crosses zero, so `step` of it is the crop opening there.
-fn rising_zero<N: Num>(x: &Body<N>) -> Option<N> {
-    let (a, b) = sva_formula::affine::exact_affine(x)?;
+fn rising_zero<N: Number>(x: &Body<N>) -> Option<N> {
+    let (a, b) = N::exact_affine(x)?;
     let (a, b) = (a.is_real().then_some(a.re)?, b.is_real().then_some(b.re)?);
     let at = -b / a;
     (a.v() > 0.0 && !at.v().is_nan()).then_some(at)
