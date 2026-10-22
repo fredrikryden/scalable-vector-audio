@@ -30,7 +30,7 @@ pub fn help_text() -> String {
         solve::DEFAULT_COST_TOL,
     );
     let (steps, rate) = (solve::prox::DEFAULT_STEPS, solve::prox::BITS_PER_JND2);
-    let draws = solve::prox::eval::DRAWS;
+    let draws = solve::prox::draws::DRAWS;
     let (harmonics, lone) = (
         sva_core::seed::LIMITS.harmonics,
         sva_core::seed::LIMITS.lone,
@@ -608,11 +608,13 @@ PRICED FIT:
   each frame's middle, its short-time transform in closed form there (the
   window cut at the line's crop and mirrored at the clip's ends, the master's
   biquads as H(f)); a node's filtered noise is its rendered realisation under
-  H(f). The phases between lines are no part of the model, so the loss is its
-  expectation over them: the residual's bits averaged over {draws} draws, each line whose
-  node reads `ph` offset by its own phase, 2 pi times splitmix64 of
-  (line << 32 | draw) over 2^64, the same draws every solve, the lines summed
-  coherently as the render sums them. Each partial is exact where its
+  H(f). The phases between lines and the noises' realisations are no part of
+  the model, so the loss is its expectation over them: the residual's bits
+  averaged over {draws} draws, each line whose node reads `ph` offset by its own
+  phase, 2 pi times splitmix64 of (line << 32 | draw) over 2^64, and each whose
+  node reads `seed` given its own seed off the same key on a second stream,
+  the same draws every solve, the lines summed coherently as the render sums
+  them. Each partial is exact where its
   amplitude and frequency hold over the 20 ms window; a form with no partial
   in it refuses by name.
   Each number written costs its `--vary`'s bits, log2((hi-lo)/step), or of
@@ -634,7 +636,7 @@ PRICED FIT:
   of one node's lines into another of its kind and the splits of one node's
   lines with a new node of its kind each kept only where the cost falls, and a
   debias holding every zero. `--steps` scales every phase. Each point is
-  then rendered once per draw, each line's `ph` moved by its draw's phase,
+  then rendered once per draw, each line's `ph` and `seed` its draw's,
   and read as `internal`. The answer's `data`: `path`, one point a price with
   its `numbers` and their `bits`, its weighted `cells`, `measured` (off its
   renders) and `predicted` (what the descent lowered), each with its

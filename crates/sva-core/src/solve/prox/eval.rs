@@ -7,6 +7,7 @@ use std::sync::Arc;
 use sva_formula::C64;
 use sva_samples::measure::internal::{Ear, Grid, Internal};
 
+use super::draws::{DRAWS, phase};
 use super::lines::{Adjoint, Bins};
 use super::played::{self, Lowered, ROOT_SEED, Renders};
 use super::state::{Slot, State};
@@ -53,19 +54,6 @@ impl Fit {
     }
 }
 
-/// How many draws of the lines' phases the expected loss is read over.
-pub const DRAWS: usize = 16;
-
-/// Line `line`'s phase offset in draw `draw`: `2 pi` times splitmix64 of `line << 32 | draw`
-/// over `2^64`, the same every solve and target.
-pub fn phase(line: usize, draw: usize) -> f64 {
-    let mut z = ((line as u64) << 32 | draw as u64).wrapping_add(0x9e37_79b9_7f4a_7c15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    z ^= z >> 31;
-    std::f64::consts::TAU * (z >> 11) as f64 / (1u64 << 53) as f64
-}
-
 /// Each element's weight: its set's independent samples per frame.
 pub fn weights(fit: &Fit) -> Vec<f64> {
     let per_set = sva_samples::measure::internal::weights(fit.ear.grid.step_secs());
@@ -109,23 +97,23 @@ pub fn residual(fit: &Fit, w: &[f64], draws: &[Vec<f64>]) -> Residual {
 }
 
 /// A line's bin at a phase offset `(cos, sin)`.
-fn at(b: &Bins, j: usize, (c, s): (f64, f64)) -> C64 {
+fn at(b: &Bins, j: usize, (c, s): (f64, f64), k: usize) -> C64 {
     let tone = b.cos[j].scale(c) - b.quad[j].scale(s);
-    match b.noise.is_empty() {
-        true => tone,
-        false => tone + b.noise[j],
+    match b.noise.len() {
+        0 => tone,
+        n => tone + b.noise[k % n][j],
     }
 }
 
 /// Power per bin with each line coherent and offset by its draw's phase.
-fn power(g: &Grid, reads: &[Vec<Bins>], offsets: &[(f64, f64)]) -> Vec<f64> {
+fn power(g: &Grid, reads: &[Vec<Bins>], offsets: &[(f64, f64)], k: usize) -> Vec<f64> {
     let (bins, scale) = (g.bins(), g.scale());
     let mut p = vec![0.0; g.frames * bins];
     let mut sum = vec![C64::new(0.0, 0.0); g.frames * bins];
     for (read, o) in reads.iter().zip(offsets) {
         for b in read {
             for j in 0..bins {
-                sum[b.m * bins + j] = sum[b.m * bins + j] + at(b, j, *o);
+                sum[b.m * bins + j] = sum[b.m * bins + j] + at(b, j, *o, k);
             }
         }
     }
@@ -179,11 +167,11 @@ pub fn evaluate(
     let reads = sva_engine::each(threads, tasks, |i| low.lines[i].line.bins(&g, &low.master));
     let draws = DRAWS;
     let phased: Vec<bool> = (0..s.model.lines.len())
-        .map(|l| write::phased(s, l))
+        .map(|l| write::line_reads(s, l, "ph"))
         .collect();
     let each = sva_engine::each(threads, (0..draws).collect(), |k| {
         let o = offsets(&phased, k);
-        let f = fit.ear.forward(&power(&g, &reads, &o));
+        let f = fit.ear.forward(&power(&g, &reads, &o, k));
         (o, f)
     });
     let w = weights(fit);
@@ -214,7 +202,7 @@ pub fn evaluate(
             for (read, o) in reads.iter().zip(&each[k].0) {
                 for b in read {
                     for j in 0..bins {
-                        sums[b.m * bins + j] = sums[b.m * bins + j] + at(b, j, *o);
+                        sums[b.m * bins + j] = sums[b.m * bins + j] + at(b, j, *o, k);
                     }
                 }
             }
@@ -232,7 +220,9 @@ pub fn evaluate(
         }
         let mut cos = vec![C64::new(0.0, 0.0); reads[l].len() * bins];
         let mut quad = cos.clone();
-        let mut noise = cos.clone();
+        let per = reads[l].len() * bins;
+        let realisations = reads[l].first().map_or(0, |b| b.noise.len()).max(1);
+        let mut noise = vec![C64::new(0.0, 0.0); realisations * per];
         for k in 0..draws {
             let (c, sn) = each[k].0[l];
             for (i, b) in reads[l].iter().enumerate() {
@@ -240,7 +230,8 @@ pub fn evaluate(
                     let y = totals[k][b.m * bins + j];
                     cos[i * bins + j] = cos[i * bins + j] + y.scale(c);
                     quad[i * bins + j] = quad[i * bins + j] - y.scale(sn);
-                    noise[i * bins + j] = noise[i * bins + j] + y;
+                    let at = (k % realisations) * per + i * bins + j;
+                    noise[at] = noise[at] + y;
                 }
             }
         }
@@ -248,7 +239,7 @@ pub fn evaluate(
         let adj = Adjoint {
             cos: &|m, j| read(&cos, m, j),
             quad: &|m, j| read(&quad, m, j),
-            noise: &|m, j| read(&noise, m, j),
+            noise: &|r, m, j| noise[r * per + frame[m] * bins + j],
         };
         let mut local = Vec::new();
         low.lines[l].line.back(&g, &low.master, &adj, &mut local);
@@ -280,7 +271,7 @@ pub fn scales(fit: &Fit, s: &State) -> Result<Vec<f64>, CliError> {
         let read = low.lines[i].line.bins(&g, &low.master);
         let own = fit
             .ear
-            .thirds(&power(&g, std::slice::from_ref(&read), &[(1.0, 0.0)]));
+            .thirds(&power(&g, std::slice::from_ref(&read), &[(1.0, 0.0)], 0));
         let (mut num, mut den) = (0.0, 0.0);
         for (e1, r) in own.iter().zip(&fit.thirds) {
             num += r * e1;

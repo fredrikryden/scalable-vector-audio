@@ -142,7 +142,7 @@ fn lone() -> String {
 
 fn noisy(seed: u64, (att, dec, sus, rel, lo, hi): (f64, f64, f64, f64, f64, f64)) -> String {
     format!(
-        "att = {}s\ndec = {}s\nsus = {}\nrel = {}s\nlo = {}hz\nhi = {}hz\n",
+        "att = {}s\ndec = {}s\nsus = {}\nrel = {}s\nlo = {}hz\nhi = {}hz\nseed = {seed}\n",
         g(att),
         g(dec),
         g(sus),
@@ -150,7 +150,7 @@ fn noisy(seed: u64, (att, dec, sus, rel, lo, hi): (f64, f64, f64, f64, f64, f64)
         g(lo),
         g(hi)
     ) + &format!(
-        "crop({ENVELOPE}*highpass(lowpass(sample(0.01*noise({seed}, period=8s)), hi, 0.7071), lo, \
+        "crop({ENVELOPE}*highpass(lowpass(sample(0.01*noise(seed, period=8s)), hi, 0.7071), lo, \
          0.7071), 0s, len, fall=min(rel, len))\n"
     )
 }

@@ -5,7 +5,8 @@ use sva_engine::{Abandon, Backend, Output, Session, Tier};
 
 use sva_samples::measure::internal::{self, Ear, Grid, Internal};
 
-use super::eval::{DRAWS, Fit, phase, residual, weights};
+use super::draws::DRAWS;
+use super::eval::{Fit, residual, weights};
 use super::model::Model;
 use super::played::Renders;
 use super::state::{State, Var};
@@ -218,8 +219,7 @@ pub async fn fitted<B: Backend>(
     for point in &mut points {
         let mut draws = Vec::with_capacity(DRAWS);
         for k in 0..DRAWS {
-            let offset = |l: usize| phase(l, k);
-            let files = write::drawn(&point.state, &text, &offset)?;
+            let files = write::drawn(&point.state, &text, k)?;
             let over = sva_ast::Overlay::new(&source, files.into_iter().collect());
             let (rendered, _) = reading.read(&over, &model).await?;
             draws.push(rendered.elements);

@@ -92,9 +92,9 @@ fn folded(s: &State, node: usize) -> (Expr, BTreeSet<String>) {
     (body, read)
 }
 
-/// Whether line `line`'s node, as written, reads a `ph`: the phase a draw moves.
-pub fn phased(s: &State, line: usize) -> bool {
-    folded(s, s.line_node(line)).1.contains("ph")
+/// Whether line `line`'s node, as written, reads `name`: a draw moves its `ph` and `seed`.
+pub fn line_reads(s: &State, line: usize, name: &str) -> bool {
+    folded(s, s.line_node(line)).1.contains(name)
 }
 
 fn node_text(s: &State, node: usize, text: &str) -> String {
@@ -139,7 +139,7 @@ fn field(name: &str, text: String) -> String {
     format!("\"{}\": {text}", crate::json::escape(name))
 }
 
-fn score_text(s: &State, text: &str, offset: &dyn Fn(usize) -> f64) -> Result<String, CliError> {
+fn score_text(s: &State, text: &str, draw: Option<usize>) -> Result<String, CliError> {
     let mut out = String::new();
     for (i, row) in text.lines().enumerate() {
         let lines: Vec<usize> = (0..s.model.lines.len())
@@ -187,9 +187,17 @@ fn score_text(s: &State, text: &str, offset: &dyn Fn(usize) -> f64) -> Result<St
             if !read.contains(&name) {
                 continue;
             }
-            if name == "ph" && offset(line) != 0.0 {
-                parts.push(field(&name, format!("{}", s.value(slot) + offset(line))));
-                continue;
+            match (name.as_str(), draw) {
+                ("ph", Some(k)) => {
+                    let ph = s.value(slot) + super::draws::phase(line, k);
+                    parts.push(field(&name, format!("{ph}")));
+                    continue;
+                }
+                ("seed", Some(k)) => {
+                    parts.push(field(&name, format!("{}", super::draws::seed(line, k))));
+                    continue;
+                }
+                _ => {}
             }
             let text = match slot {
                 Slot::Fused { dev, .. } if s.x[dev] == 0.0 => None,
@@ -223,14 +231,23 @@ pub fn files(
     s: &State,
     text: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Vec<(String, String)>, CliError> {
-    drawn(s, text, &|_| 0.0)
+    written(s, text, None)
 }
 
-/// The same with each score line's `ph` moved by `offset` of its line.
+/// The same as played in draw `k`: each score line's `ph` moved by its phase there and its
+/// `seed` that draw's.
 pub fn drawn(
     s: &State,
     text: &dyn Fn(&str) -> Option<String>,
-    offset: &dyn Fn(usize) -> f64,
+    k: usize,
+) -> Result<Vec<(String, String)>, CliError> {
+    written(s, text, Some(k))
+}
+
+fn written(
+    s: &State,
+    text: &dyn Fn(&str) -> Option<String>,
+    draw: Option<usize>,
 ) -> Result<Vec<(String, String)>, CliError> {
     let mut out = Vec::new();
     for (n, path) in s.nodes.iter().enumerate() {
@@ -257,7 +274,7 @@ pub fn drawn(
     };
     let score = format!("{score}.jsonl");
     let t = text(&score).ok_or_else(|| CliError::NotFound(format!("no score `{score}`")))?;
-    let new = score_text(s, &t, offset)?;
+    let new = score_text(s, &t, draw)?;
     if new != t {
         out.push((score, new));
     }

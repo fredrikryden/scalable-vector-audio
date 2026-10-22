@@ -164,7 +164,8 @@ pub struct Line {
     /// Each frame the line sounds in, and its first instant.
     pub frames: Vec<(usize, usize)>,
     pub tangents: Tangents,
-    pub noise: Option<Arc<Vec<f64>>>,
+    /// Its noise's realisations, one a draw where its seed is drawn; none where it holds none.
+    pub noise: Vec<Arc<Vec<f64>>>,
     pub noise_filters: Vec<Filter>,
 }
 
@@ -231,19 +232,20 @@ fn through(v: &[f64; 3], l: &[f64; 3]) -> f64 {
 }
 
 /// One frame's bins: its tones' `a cos(phase)` and `a sin(phase)`, so a phase offset `p`
-/// reads `cos p * cos - sin p * quad`; its noise, empty where it holds none.
+/// reads `cos p * cos - sin p * quad`; its noise's per realisation, none where it holds none.
 pub struct Bins {
     pub m: usize,
     pub cos: Vec<C64>,
     pub quad: Vec<C64>,
-    pub noise: Vec<C64>,
+    pub noise: Vec<Vec<C64>>,
 }
 
 /// Each part's `gamma` per frame and bin.
 pub struct Adjoint<'a> {
     pub cos: &'a dyn Fn(usize, usize) -> C64,
     pub quad: &'a dyn Fn(usize, usize) -> C64,
-    pub noise: &'a dyn Fn(usize, usize) -> C64,
+    /// Per realisation, frame and bin.
+    pub noise: &'a dyn Fn(usize, usize, usize) -> C64,
 }
 
 /// A tone in one frame at its three instants: `a = amp * sh`, the phase as a cosine's, its
@@ -399,9 +401,9 @@ impl Line {
             let quad: Vec<C64> = (0..g.bins())
                 .map(|j| (z(j) - z(g.n - j).conj()) * C64::new(0.0, -0.5))
                 .collect();
-            let mut bins =
-                vec![C64::new(0.0, 0.0); if self.noise.is_some() { g.bins() } else { 0 }];
-            if let Some(n) = &self.noise {
+            let mut noise = Vec::with_capacity(self.noise.len());
+            for n in &self.noise {
+                let mut bins = vec![C64::new(0.0, 0.0); g.bins()];
                 let spec = noise_frame(n, g, *m, lo, hi);
                 for term in self
                     .terms
@@ -415,12 +417,13 @@ impl Line {
                         bins[j] = bins[j] + (*x * h).scale(e);
                     }
                 }
+                noise.push(bins);
             }
             out.push(Bins {
                 m: *m,
                 cos,
                 quad,
-                noise: bins,
+                noise,
             });
         }
         out
@@ -526,7 +529,8 @@ impl Line {
                 }
             }
         }
-        if let Some(n) = &self.noise {
+        for (r, n) in self.noise.iter().enumerate() {
+            let gamma = &|m: usize, j: usize| gamma(r, m, j);
             for (m, i0) in &self.frames {
                 let tstar = self.instants[i0 + 1];
                 let sh = self.shoulder(tstar);

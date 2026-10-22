@@ -1,5 +1,6 @@
 // Concern: the priced path: an unpriced start, each price's proximal descent, the merges the cost keeps, a debias | Non-concern: one step, one evaluation | IO: (Fit, State, prices) -> Points
 
+pub mod draws;
 pub mod eval;
 pub mod lines;
 pub mod model;

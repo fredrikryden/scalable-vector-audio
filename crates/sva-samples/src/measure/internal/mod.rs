@@ -35,7 +35,9 @@ pub const MODEL: &str = "specific loudness N' per Bark every 10 ms after ISO 532
      (Shannon 1949, Proc. IRE 37, 10-21), no more than 1: an N' band 1, the frames' own rate, \
      the lowpass 2 (2.5 Hz) dt, a band-pass 2 fc dt, Q = 1 putting its bandwidth at fc; the 24 \
      Bark bands count as independent channels, the critical bands being the ear's (Zwicker \
-     and Fastl 2007, 6)";
+     and Fastl 2007, 6). Envelope beats past the frames' 50 Hz Nyquist alias into the \
+     band-passes; a 2 ms envelope read them off at some 0.2 JND per cell less on clip1, for \
+     3 to 5 times a fit's evaluation, so the frames stay 10 ms";
 
 pub const FRAME_SECS: f64 = 0.01;
 pub const WINDOW_SECS: f64 = 0.02;

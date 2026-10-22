@@ -7,6 +7,7 @@ use sva_ast::{Arg, Expr, Literal};
 use sva_engine::Varied;
 use sva_formula::Tangents;
 
+use super::draws::{DRAWS, seed};
 use super::lines::{self, Filter, Line};
 use super::model::constant;
 use super::state::{Slot, State};
@@ -77,8 +78,18 @@ struct Noise {
     filters: Vec<Written>,
 }
 
-/// `e` with its one filtered noise cut out to `1`, the filters' numbers read at no weight so
-/// the node still reads every default it declares.
+/// The names `e` reads, `t` aside.
+fn names(e: &Expr, out: &mut Vec<String>) {
+    match e {
+        Expr::Var(v) if v != "t" && !out.contains(v) => out.push(v.clone()),
+        _ => sva_ast::children(e, sva_ast::Binds::Keep)
+            .into_iter()
+            .for_each(|c| names(c, out)),
+    }
+}
+
+/// `e` with its one filtered noise cut out to `1`, the filters' numbers and the noise's own
+/// names (its seed) read at no weight so the node still reads every default it declares.
 fn cut(e: &Expr, out: &mut Option<Noise>) -> Expr {
     if let Some((chain, source)) = filters(e)
         && holds_noise(source)
@@ -90,6 +101,11 @@ fn cut(e: &Expr, out: &mut Option<Noise>) -> Expr {
             .iter()
             .flat_map(|w| std::iter::once(w.cutoff.clone()).chain(w.q.clone()))
             .fold(num(0.0), |acc, x| bin(sva_ast::BinOp::Add, acc, x));
+        let mut own = Vec::new();
+        names(source, &mut own);
+        let read = own
+            .into_iter()
+            .fold(read, |acc, v| bin(sva_ast::BinOp::Add, acc, Expr::Var(v)));
         *out = Some(Noise {
             source: source.clone(),
             filters: chain,
@@ -248,18 +264,22 @@ fn text(s: &State, source: &dyn Fn(&str) -> Option<String>) -> Result<Text, CliE
 
 type Rendered = BTreeMap<(String, u64), Arc<Vec<f64>>>;
 
-/// Each noise rendered once at the clip's samples, by its text and onset. No number a fit
-/// varies moves an onset or a noise's text, so it holds one render per noisy line.
+/// Each noise rendered once at the clip's samples, by its text, seed and onset. No number a fit
+/// varies moves an onset or a noise's text, so it holds one render per noisy line and seed.
 #[derive(Default)]
 pub struct Renders(Mutex<Rendered>);
 
 fn rendered(
     renders: &Renders,
     source: &Expr,
+    seed: Option<u64>,
     at: f64,
     g: &Grid,
 ) -> Result<Arc<Vec<f64>>, CliError> {
-    let text = sva_ast::render_expr(source);
+    let text = match seed {
+        Some(n) => format!("seed = {n}\n{}", sva_ast::render_expr(source)),
+        None => sva_ast::render_expr(source),
+    };
     let key = (text.clone(), at.to_bits());
     if let Some(x) = renders.0.lock().expect("the noise renders").get(&key) {
         return Ok(Arc::clone(x));
@@ -449,8 +469,11 @@ pub fn lowered(
             None => Vec::new(),
         };
         let noise_samples = match noise {
-            Some(n) => Some(rendered(renders, &n.source, *onset, g)?),
-            None => None,
+            Some(n) if super::write::line_reads(s, i, "seed") => (0..DRAWS)
+                .map(|k| rendered(renders, &n.source, Some(seed(i, k)), *onset, g))
+                .collect::<Result<Vec<_>, _>>()?,
+            Some(n) => vec![rendered(renders, &n.source, None, *onset, g)?],
+            None => Vec::new(),
         };
         let (read, tangents) = Tangents::default().active(|| -> Result<_, CliError> {
             let form = sva_engine::tangents(&graph, &root, rate, path, &varied)
