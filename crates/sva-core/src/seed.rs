@@ -123,19 +123,20 @@ fn harmonic(harmonics: usize) -> String {
         "fg = 0".to_string(),
         "fc = 1000hz".to_string(),
         format!("bw = {}", g(std::f64::consts::LN_2)),
+        "ph = 0".to_string(),
     ];
     head.extend((1..=harmonics).map(|k| format!("h{k} = 0")));
     head.join("\n")
         + &format!(
-            "\ncrop({ENVELOPE}*sum(k, 1, {harmonics}, {law}*sin(2*pi*k*f0*sqrt(1 + inh*k*k)*{BENT})), \
+            "\ncrop({ENVELOPE}*sum(k, 1, {harmonics}, {law}*sin(2*pi*k*f0*sqrt(1 + inh*k*k)*{BENT} + ph)), \
              0s, len, fall=min(rel, len))\n"
         )
 }
 
 fn lone() -> String {
     format!(
-        "att = 0.01s\ndec = 0.4s\nsus = 0.5\nrel = 0.05s\nbnd = 0\nbt = 0.03s\n\
-         crop({ENVELOPE}*sin(2*pi*f0*{BENT}), 0s, len, fall=min(rel, len))\n"
+        "att = 0.01s\ndec = 0.4s\nsus = 0.5\nrel = 0.05s\nbnd = 0\nbt = 0.03s\nph = 0\n\
+         crop({ENVELOPE}*sin(2*pi*f0*{BENT} + ph), 0s, len, fall=min(rel, len))\n"
     )
 }
 

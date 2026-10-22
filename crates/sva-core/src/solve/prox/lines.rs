@@ -230,6 +230,22 @@ fn through(v: &[f64; 3], l: &[f64; 3]) -> f64 {
     v[0] * l[0] + v[1] * l[1] + v[2] * l[2]
 }
 
+/// One frame's bins: its tones' `a cos(phase)` and `a sin(phase)`, so a phase offset `p`
+/// reads `cos p * cos - sin p * quad`; its noise, empty where it holds none.
+pub struct Bins {
+    pub m: usize,
+    pub cos: Vec<C64>,
+    pub quad: Vec<C64>,
+    pub noise: Vec<C64>,
+}
+
+/// Each part's `gamma` per frame and bin.
+pub struct Adjoint<'a> {
+    pub cos: &'a dyn Fn(usize, usize) -> C64,
+    pub quad: &'a dyn Fn(usize, usize) -> C64,
+    pub noise: &'a dyn Fn(usize, usize) -> C64,
+}
+
 /// A tone in one frame at its three instants: `a = amp * sh`, the phase as a cosine's, its
 /// frequency and the master's gain there, conjugated where the phase falls.
 struct Tone {
@@ -354,9 +370,8 @@ impl Line {
         }
     }
 
-    /// Each frame it sounds in, and its bins there: its tones' windowed samples transformed,
-    /// its noise beside, coherent.
-    pub fn bins(&self, g: &Grid, master: &[Filter]) -> Vec<(usize, Vec<C64>)> {
+    /// Each frame it sounds in, and its bins there.
+    pub fn bins(&self, g: &Grid, master: &[Filter]) -> Vec<Bins> {
         let w = hann(g.window);
         let twiddles = sva_samples::fft::twiddles(g.n);
         let (lo, hi) = span(self, g);
@@ -369,12 +384,23 @@ impl Line {
                     continue;
                 };
                 let abs = t.h.abs();
-                self.each_sample(g, *m, tstar, &t, |i, u, c, _| {
-                    re[g.left + i] += w[i] * abs * through(&t.a, &lagrange(u)) * c;
+                self.each_sample(g, *m, tstar, &t, |i, u, c, s| {
+                    let a = w[i] * abs * through(&t.a, &lagrange(u));
+                    re[g.left + i] += a * c;
+                    im[g.left + i] += a * s;
                 });
             }
             sva_samples::fft::fft_with(&mut re, &mut im, &twiddles);
-            let mut bins: Vec<C64> = (0..g.bins()).map(|j| C64::new(re[j], im[j])).collect();
+            let z = |j: usize| C64::new(re[j % g.n], im[j % g.n]);
+            let half = C64::new(0.5, 0.0);
+            let cos: Vec<C64> = (0..g.bins())
+                .map(|j| (z(j) + z(g.n - j).conj()) * half)
+                .collect();
+            let quad: Vec<C64> = (0..g.bins())
+                .map(|j| (z(j) - z(g.n - j).conj()) * C64::new(0.0, -0.5))
+                .collect();
+            let mut bins =
+                vec![C64::new(0.0, 0.0); if self.noise.is_some() { g.bins() } else { 0 }];
             if let Some(n) = &self.noise {
                 let spec = noise_frame(n, g, *m, lo, hi);
                 for term in self
@@ -390,19 +416,20 @@ impl Line {
                     }
                 }
             }
-            out.push((*m, bins));
+            out.push(Bins {
+                m: *m,
+                cos,
+                quad,
+                noise: bins,
+            });
         }
         out
     }
 
-    /// The gradient in local indices from each of its bins' `dL/dRe X + i dL/dIm X`.
-    pub fn back(
-        &self,
-        g: &Grid,
-        master: &[Filter],
-        gamma: &dyn Fn(usize, usize) -> C64,
-        out: &mut Vec<(u32, f64)>,
-    ) {
+    /// The gradient in local indices from each of its bins' `dL/dRe X + i dL/dIm X`, of its
+    /// tones' cosine and quadrature parts and of its noise.
+    pub fn back(&self, g: &Grid, master: &[Filter], adj: &Adjoint, out: &mut Vec<(u32, f64)>) {
+        let gamma = adj.noise;
         let w = hann(g.window);
         let mut leaf_adj: Vec<Vec<f64>> = self.leaves.iter().map(|v| vec![0.0; v.len()]).collect();
         let add_leaf = |l: usize, i: usize, x: f64, adj: &mut Vec<Vec<f64>>| {
@@ -418,7 +445,8 @@ impl Line {
         let (lo, hi) = span(self, g);
         for (m, i0) in &self.frames {
             let tstar = self.instants[i0 + 1];
-            let x = samples_back(g, &w, *m, gamma);
+            let xc = samples_back(g, &w, *m, adj.cos);
+            let xs = samples_back(g, &w, *m, adj.quad);
             for term in &self.terms {
                 let Some(t) = self.tone(term, *i0, master, g.sr) else {
                     continue;
@@ -430,13 +458,13 @@ impl Line {
                 self.each_sample(g, *m, tstar, &t, |i, u, c, s| {
                     let lw = lagrange(u);
                     let a = through(&t.a, &lw);
-                    let xk = x[i];
+                    let (along, across) = (xc[i] * c + xs[i] * s, xs[i] * c - xc[i] * s);
                     for j in 0..3 {
-                        ga[j] += xk * abs * c * lw[j];
-                        gphi[j] -= xk * abs * a * s * lw[j];
+                        ga[j] += along * abs * lw[j];
+                        gphi[j] += across * abs * a * lw[j];
                     }
-                    g_abs += xk * a * c;
-                    g_arg -= xk * abs * a * s;
+                    g_abs += along * a;
+                    g_arg += across * abs * a;
                     if ends.0.is_none() {
                         ends.0 = Some(i);
                     }
@@ -447,20 +475,20 @@ impl Line {
                 if unmirrored {
                     let value = |i: usize| {
                         let u = (((s0 + i as f64) / g.sr) - self.at - tstar) / SPREAD_SECS;
-                        let ph = t.phase(u);
-                        abs * through(&t.a, &lagrange(u)) * libm::cos(ph)
+                        let (sn, cs) = libm::sincos(t.phase(u));
+                        abs * through(&t.a, &lagrange(u)) * (xc[i] * cs + xs[i] * sn)
                     };
                     if let Some(ka) = ends.0
                         && lo > s0
                         && lo.is_finite()
                     {
-                        l_adj -= g.sr * x[ka] * value(ka);
+                        l_adj -= g.sr * value(ka);
                     }
                     if let Some(kb) = ends.1
                         && kb + 1 < g.window
                         && hi < s0 + g.window as f64
                     {
-                        r_adj += g.sr * x[kb + 1] * value(kb + 1);
+                        r_adj += g.sr * value(kb + 1);
                     }
                 }
                 let (_, dhz, dcut) = chain(master, t.hz.abs(), g.sr);

@@ -400,9 +400,8 @@ static INTERNAL: Reading = Reading {
     reads: Reads::Samples,
     help: "the ear's internal representation at 1 Bark by 10 ms: specific loudness by ISO \
            532-1's time-varying stages and each band's level through a modulation filterbank, \
-           every element over its JND, so two subtract into an ideal observer's d' by `norm`, \
-           the model's phases between lines taken as unknown; a full-scale sine at `spl` dB \
-           SPL; every channel averaged",
+           every element over its JND, so two subtract into an ideal observer's d' by `norm`; \
+           a full-scale sine at `spl` dB SPL; every channel averaged",
     build: |g| Representation::Internal {
         spl_db: g.spl_db.unwrap_or(DEFAULT_SPL_DB),
     },

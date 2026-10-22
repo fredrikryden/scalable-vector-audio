@@ -25,7 +25,12 @@ pub const MODEL: &str = "specific loudness N' per Bark every 10 ms after ISO 532
      102): a first-order 2.5 Hz lowpass in the same 1 dB, and complex first-order band-passes \
      of Q = 1 an octave apart from 4 Hz whose upper edge 1.5 fc is under the frames' Nyquist, \
      fed E less the lowpass, each element twice its magnitude over the -26 dB AM depth JND \
-     (Viemeister 1979, JASA 66) in dB, (20/ln 10) 10^(-26/20); every channel averaged";
+     (Viemeister 1979, JASA 66) in dB, (20/ln 10) 10^(-26/20); every channel averaged. The \
+     lowpass's complement feeding the band-passes is this reading's structure, not the papers': \
+     a first-order complex band-pass of Q = 1 passes 1/sqrt(5) of a steady level, which would \
+     read each 1 dB of level as some 2 JND in every band-pass. Cells count as independent \
+     though the window, the decay, the upper slopes and the overlapping filters correlate \
+     neighbours, so the count overstates the independent cells";
 
 pub const FRAME_SECS: f64 = 0.01;
 pub const WINDOW_SECS: f64 = 0.02;

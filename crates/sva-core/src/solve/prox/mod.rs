@@ -37,8 +37,12 @@ pub struct Point {
     pub bits: f64,
     /// The d' the descent lowers: the reading of the render's own lowered lines.
     pub predicted: f64,
-    /// The d' read off its render, as the cost's leaf reads a render.
+    /// The standard errors of `predicted` and `measured` from their draws' spread.
+    pub predicted_error: f64,
+    pub measured_error: Option<f64>,
+    /// The d' read off its renders, as the cost's leaf reads a render.
     pub measured: Option<f64>,
+    pub cells: usize,
     pub state: State,
     pub steps: usize,
 }
@@ -124,6 +128,7 @@ impl Stepping<'_> {
         Ok(Objective {
             total: e.distance + lambda * bits,
             distance: e.distance,
+            error: e.error,
             numbers,
             bits,
         })
@@ -136,6 +141,7 @@ type Split = (f64, State, Adam, Vec<f64>, Vec<f64>);
 struct Objective {
     total: f64,
     distance: f64,
+    error: f64,
     numbers: usize,
     bits: f64,
 }
@@ -434,7 +440,10 @@ pub async fn path(
             numbers: o.numbers,
             bits: o.bits,
             predicted: o.distance,
+            predicted_error: o.error,
             measured: None,
+            measured_error: None,
+            cells: fit.reference.elements.len(),
             state: s.clone(),
             steps,
         });
@@ -444,19 +453,27 @@ pub async fn path(
 
 fn point_json(p: &Point) -> String {
     use crate::json::num;
+    let cell = (p.cells.max(1) as f64).sqrt();
     format!(
         "{{ \"price\": {}, \"numbers\": {}, \"bits\": {}, \"residual_bits\": {}, \"length_bits\": {}, \
-         \"measured\": {}, \"predicted\": {{ \"d_prime\": {}, \"error\": {}, \"objective\": {} }} }}",
+         \"cells\": {}, \"measured\": {}, \"predicted\": {{ \"d_prime\": {}, \"standard_error\": {}, \
+         \"per_cell\": {}, \
+         \"error\": {}, \"objective\": {} }} }}",
         num(p.lambda),
         p.numbers,
         num(p.bits),
         num(p.residual_bits()),
         num(p.length()),
+        p.cells,
         p.measured.map_or("null".to_string(), |m| format!(
-            "{{ \"d_prime\": {} }}",
-            num(m)
+            "{{ \"d_prime\": {}, \"standard_error\": {}, \"per_cell\": {} }}",
+            num(m),
+            num(p.measured_error.unwrap_or(0.0)),
+            num(m / cell)
         )),
         num(p.predicted),
+        num(p.predicted_error),
+        num(p.predicted / cell),
         p.measured
             .map_or("null".to_string(), |m| num(m - p.predicted)),
         num(p.objective()),

@@ -5,7 +5,7 @@ use sva_engine::{Abandon, Backend, Output, Session, Tier};
 
 use sva_samples::measure::internal::{self, Ear, Grid, Internal};
 
-use super::eval::Fit;
+use super::eval::{DRAWS, Fit, draws_error, phase};
 use super::model::Model;
 use super::played::Renders;
 use super::state::{State, Var};
@@ -216,16 +216,23 @@ pub async fn fitted<B: Backend>(
     let text = |p: &str| -> Option<String> { source.get(p).ok().flatten().map(|t| t.into_owned()) };
     let model = format!("@{root}([0, {frames}sp])");
     for point in &mut points {
-        let files = write::files(&point.state, &text)?;
-        let over = sva_ast::Overlay::new(&source, files.into_iter().collect());
-        let (rendered, _) = reading.read(&over, &model).await?;
-        let d2: f64 = rendered
-            .elements
-            .iter()
-            .zip(&fit.reference.elements)
-            .map(|(a, b)| (a - b) * (a - b))
-            .sum();
-        point.measured = Some(d2.sqrt());
+        let mut squares = Vec::with_capacity(DRAWS);
+        for k in 0..DRAWS {
+            let offset = |l: usize| phase(l, k);
+            let files = write::drawn(&point.state, &text, &offset)?;
+            let over = sva_ast::Overlay::new(&source, files.into_iter().collect());
+            let (rendered, _) = reading.read(&over, &model).await?;
+            squares.push(
+                rendered
+                    .elements
+                    .iter()
+                    .zip(&fit.reference.elements)
+                    .map(|(a, b)| (a - b) * (a - b))
+                    .sum::<f64>(),
+            );
+        }
+        point.measured = Some((squares.iter().sum::<f64>() / DRAWS as f64).sqrt());
+        point.measured_error = Some(draws_error(&squares));
     }
     let chosen = chosen(&points);
     let files = match chosen {

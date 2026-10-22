@@ -30,6 +30,7 @@ pub fn help_text() -> String {
         solve::DEFAULT_COST_TOL,
     );
     let (steps, rate) = (solve::prox::DEFAULT_STEPS, solve::prox::BITS_PER_JND2);
+    let draws = solve::prox::eval::DRAWS;
     let (harmonics, lone) = (
         sva_core::seed::LIMITS.harmonics,
         sva_core::seed::LIMITS.lone,
@@ -603,9 +604,12 @@ PRICED FIT:
   each frame's middle, its short-time transform in closed form there (the
   window cut at the line's crop and mirrored at the clip's ends, the master's
   biquads as H(f)); a node's filtered noise is its rendered realisation under
-  H(f). The phases between lines are no part of the model, so its power per
-  bin is their expectation: each line's bins coherent, the lines' powers
-  summed; then the reading's own stages. Each partial is exact where its
+  H(f). The phases between lines are no part of the model, so the loss is its
+  expectation over them: d' squared averaged over {draws} draws, each line whose
+  node reads `ph` offset by its own phase, 2 pi times splitmix64 of
+  (line << 32 | draw) over 2^64, the same draws every solve, the lines summed
+  coherently as the render sums them; the descent lowers the root of that
+  mean. Each partial is exact where its
   amplitude and frequency hold over the 20 ms window; a form with no partial
   in it refuses by name.
   Each number written costs its `--vary`'s bits, log2((hi-lo)/step), or of
@@ -626,12 +630,15 @@ PRICED FIT:
   of one node's lines into another of its kind and the splits of one node's
   lines with a new node of its kind each kept only where the cost falls, and a
   debias holding every zero. `--steps` scales every phase. Each point is
-  then rendered and read as `internal`. The answer's `data`: `path`, one point
-  a price with its `numbers` and their `bits`, `measured` (its render's d')
-  and `predicted` (the d' the descent lowered, its `error` the measured less
-  it), its `residual_bits` (each element of the reading a cell coded as a
-  Gaussian of one JND, {rate:.4} bits per d' squared) and `length_bits`, the
-  two summed; `chosen`, the point of least length; and
+  then rendered once per draw, each line's `ph` moved by its draw's phase,
+  and read as `internal`. The answer's `data`: `path`, one point a price with
+  its `numbers` and their `bits`, its `cells`, `measured` (the root mean
+  square of its renders' d' over the draws) and `predicted` (the same of the
+  d' the descent lowered, its `error` the measured less it), each beside its
+  `standard_error` from the draws' spread and its `per_cell`, the d' over the
+  root of `cells`, in JND per cell, its `residual_bits` (each element of the reading a cell coded as
+  a Gaussian of one JND, {rate:.4} bits per d' squared, the draws' mean) and
+  `length_bits`, the two summed; `chosen`, the point of least length; and
   `files`, the chosen point's text. `--write --confirm` writes the
   chosen point in place: defaults in their node files, score lines without their
   silent ones or the fields their node's default restates. Each step prints a JSON line
