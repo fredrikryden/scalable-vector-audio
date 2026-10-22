@@ -552,21 +552,30 @@ impl Line {
                 }
             }
         }
-        let chains: Vec<_> = match self.noise.is_empty() {
-            true => Vec::new(),
-            false => (0..g.bins())
-                .map(|j| {
-                    let hz = j as f64 * g.sr / g.n as f64;
-                    let (h, _, dcut) = chain(&self.noise_filters, hz, g.sr);
-                    let (hm, _, dmcut) = chain(master, hz, g.sr);
-                    (h, dcut, hm, dmcut)
-                })
-                .collect(),
+        let (chains, shaped) = match self.noise.is_empty() {
+            true => (Vec::new(), Vec::new()),
+            false => (
+                (0..g.bins())
+                    .map(|j| {
+                        let hz = j as f64 * g.sr / g.n as f64;
+                        let (h, _, dcut) = chain(&self.noise_filters, hz, g.sr);
+                        let (hm, _, dmcut) = chain(master, hz, g.sr);
+                        (h, dcut, hm, dmcut)
+                    })
+                    .collect::<Vec<_>>(),
+                self.noise_gains(g, master),
+            ),
         };
-        let shaped = match self.noise.is_empty() {
-            true => Vec::new(),
-            false => self.noise_gains(g, master),
+        // Each cutoff's sum, in any order, is within (n-1)u*sum|term| of exact (Higham 2002, 4.2).
+        let seeds =
+            |filters: &[Filter]| filters.iter().filter_map(|f| f.seed).collect::<Vec<u32>>();
+        let (cut_seeds, mcut_seeds) = match self.noise.is_empty() {
+            true => (Vec::new(), Vec::new()),
+            false => (seeds(&self.noise_filters), seeds(master)),
         };
+        let mut cut_sums = vec![0.0; cut_seeds.len()];
+        let mut mcut_sums = vec![0.0; mcut_seeds.len()];
+        let (mut cut_frame, mut mcut_frame) = (cut_sums.clone(), mcut_sums.clone());
         for (r, n) in self.noise.iter().enumerate() {
             let gamma = &|m: usize, j: usize| gamma(r, m, j);
             for (m, i0) in &self.frames {
@@ -586,17 +595,25 @@ impl Line {
                     let e = self.amp(term, i0 + 1);
                     let e_dt = (self.amp(term, i0 + 2) - self.amp(term, *i0)) / (2.0 * SPREAD_SECS);
                     let mut d_e = 0.0;
+                    cut_frame.fill(0.0);
+                    mcut_frame.fill(0.0);
                     for (j, x) in spec.iter().enumerate() {
                         let (h, dcut, hm, dmcut) = &chains[j];
                         let (h, hm) = (*h, *hm);
                         let cg = gamma(*m, j).conj();
                         d_e += (cg * *x * h * hm).re;
-                        for (s, d) in dcut {
-                            cut_adj.push((*s, (cg * *x * *d * hm).re * e * sh));
+                        for (sum, (_, d)) in cut_frame.iter_mut().zip(dcut) {
+                            *sum += (cg * *x * *d * hm).re;
                         }
-                        for (s, d) in dmcut {
-                            cut_adj.push((*s, (cg * *x * h * *d).re * e * sh));
+                        for (sum, (_, d)) in mcut_frame.iter_mut().zip(dmcut) {
+                            *sum += (cg * *x * h * *d).re;
                         }
+                    }
+                    for (sum, f) in cut_sums.iter_mut().zip(&cut_frame) {
+                        *sum += f * e * sh;
+                    }
+                    for (sum, f) in mcut_sums.iter_mut().zip(&mcut_frame) {
+                        *sum += f * e * sh;
                     }
                     term.amp
                         .back(&|l| self.leaf(l, i0 + 1), d_e * sh, &mut |l, x| {
@@ -636,6 +653,8 @@ impl Line {
             }
         }
         out.extend(cut_adj);
+        out.extend(cut_seeds.into_iter().zip(cut_sums));
+        out.extend(mcut_seeds.into_iter().zip(mcut_sums));
     }
 
     /// The noise's share of `dL/dl` and `dL/dr` in a frame its crop cuts: the sample at each
