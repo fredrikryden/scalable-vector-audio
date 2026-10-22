@@ -101,3 +101,20 @@ fn a_pitch_unit_reads_the_same_bits_in_every_build() {
         );
     }
 }
+
+/// Knot times, a crop's shoulders and a product in a time slot keep their unit.
+#[test]
+fn a_time_slot_keeps_its_unit_through_knots_shoulders_and_products() {
+    for src in [
+        "pwl(k*1s, 1s, 0.5, 2s, 1)",
+        "pwl_integral(t, 0s, 0, 1s, 2)",
+        "crop(@a, 0s, len, fall=min(rel, len))",
+        "crop(@a, 0s, 2*1s, rise=0.01s)",
+        "pwl(2*1s*k, 1s, 0.5, 2s, 1)",
+        "pwl(k*(2*1s), 1s, 0.5, 2s, 1)",
+        "pwl(1s % 2s, 1s, 0.5, 2s, 1)",
+        "pwl(k*1s/2, 1s, 0.5, 2s, 1)",
+    ] {
+        assert_eq!(round_trip(src), src);
+    }
+}

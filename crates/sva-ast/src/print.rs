@@ -1,6 +1,17 @@
 // Concern: writes an Expr back out as source text | Non-concern: parsing it (parser.rs), what a node's text names (sva-engine) | IO: (&Expr) -> String
 
-use crate::expr::{Address, Arg, BinOp, Expr, INDEX, JOIN, Literal};
+use crate::expr::{Address, Arg, BinOp, Expr, INDEX, JOIN, Literal, PWL, PWL_INTEGRAL};
+
+/// 2 for a literal, 1 for a product holding one, else 0.
+fn timed_factor(e: &Expr) -> u8 {
+    match e {
+        Expr::Lit(Literal::Num(_)) => 2,
+        Expr::Bin(BinOp::Mul | BinOp::Div | BinOp::Mod, l, r) => {
+            u8::from(timed_factor(l).max(timed_factor(r)) > 0)
+        }
+        _ => 0,
+    }
+}
 
 /// Parenthesizes by precedence, so a printed argument stays short enough to read.
 pub fn render(e: &Expr) -> String {
@@ -39,13 +50,15 @@ fn write(e: &Expr, outer: u8, time: bool) -> String {
         Expr::Var(name) => name.clone(),
         Expr::Bin(op, l, r) => {
             let p = precedence(*op);
-            let inner = time && p == 1;
-            let body = format!(
-                "{}{}{}",
-                write(l, p, inner),
-                op_text(*op),
-                write(r, p + 1, inner)
-            );
+            let (tl, tr) = match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mod => (time, time),
+                BinOp::Mul => {
+                    let right = timed_factor(r) >= timed_factor(l);
+                    (time && !right, time && right)
+                }
+                BinOp::Div => (time, false),
+            };
+            let body = format!("{}{}{}", write(l, p, tl), op_text(*op), write(r, p + 1, tr));
             if p < outer { format!("({body})") } else { body }
         }
         Expr::Call { name, args, .. } => format!("{name}({})", args_text(name, args, time)),
@@ -90,13 +103,18 @@ fn args_text(name: &str, args: &[Arg], time: bool) -> String {
                 let timed = match name {
                     "crop" => at == 2 || at == 3,
                     INDEX => at == 1,
+                    PWL | PWL_INTEGRAL => at == 1 || at.is_multiple_of(2),
                     _ => false,
                 };
                 write(e, 0, joined || timed)
             }
             Arg::Named(k, e) => format!(
                 "{k}={}",
-                write(e, 0, name == "crop" && (k == "start" || k == "end"))
+                write(
+                    e,
+                    0,
+                    name == "crop" && matches!(k.as_str(), "start" | "end" | "rise" | "fall")
+                )
             ),
         })
         .collect::<Vec<_>>()
