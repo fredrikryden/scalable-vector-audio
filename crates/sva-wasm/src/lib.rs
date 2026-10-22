@@ -654,7 +654,8 @@ impl Composition {
         if fitted.cancelled {
             let data = fitted_data(&fitted, &priced, cost, "");
             let message = "the priced solve was aborted; `refusal.data.path` holds the points it \
-                           finished, and nothing was written";
+                           finished and the one it stopped at, `refusal.data.chosen` the best of \
+                           them by prediction, and nothing was written";
             let error = JsErr::new(message);
             error.set_name("AbortError");
             let envelope = sva_core::error_envelope_with("cancelled", message, &data, &[]);

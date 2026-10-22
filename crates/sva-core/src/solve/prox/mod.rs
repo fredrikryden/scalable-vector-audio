@@ -46,6 +46,8 @@ pub struct Point {
     pub cells: f64,
     pub state: State,
     pub steps: usize,
+    /// The state a cancelled solve stopped at, inside `lambda`'s phases or before any.
+    pub stopped: bool,
 }
 
 impl Point {
@@ -145,6 +147,21 @@ struct Objective {
 }
 
 impl Run<'_> {
+    fn point(&self, s: &State, lambda: f64, stopped: bool) -> Result<Point, CliError> {
+        let o = self.stepping().objective(s, lambda)?;
+        Ok(Point {
+            lambda,
+            numbers: o.numbers,
+            bits: o.bits,
+            predicted: o.residual,
+            measured: None,
+            cells: eval::weights(self.fit).iter().sum(),
+            state: s.clone(),
+            steps: self.steps,
+            stopped,
+        })
+    }
+
     fn stepping(&self) -> Stepping<'_> {
         Stepping {
             fit: self.fit,
@@ -420,10 +437,12 @@ pub async fn path(
         .await?;
     run.weights = price::weights(&s, &run.scales);
     let mut points = Vec::new();
+    let mut at = 0.0;
     for lambda in lambdas {
         if run.cancelled {
             break;
         }
+        at = *lambda;
         run.descend(&mut s, &mut adam, *lambda, steps, None, "descend")
             .await?;
         run.split(&mut s, &mut adam, *lambda).await?;
@@ -432,17 +451,13 @@ pub async fn path(
         let debias = scaled(steps, DEBIAS_STEPS);
         run.descend(&mut s, &mut adam, 0.0, debias, Some(&held), "debias")
             .await?;
-        let o = run.stepping().objective(&s, *lambda)?;
-        points.push(Point {
-            lambda: *lambda,
-            numbers: o.numbers,
-            bits: o.bits,
-            predicted: o.residual,
-            measured: None,
-            cells: eval::weights(fit).iter().sum(),
-            state: s.clone(),
-            steps,
-        });
+        if run.cancelled {
+            break;
+        }
+        points.push(run.point(&s, *lambda, false)?);
+    }
+    if run.cancelled {
+        points.push(run.point(&s, at, true)?);
     }
     Ok((points, run.cancelled))
 }
@@ -462,7 +477,8 @@ fn point_json(p: &Point) -> String {
     use crate::json::num;
     format!(
         "{{ \"price\": {}, \"numbers\": {}, \"bits\": {}, \"residual_bits\": {}, \"length_bits\": {}, \
-         \"cells\": {}, \"objective\": {}, \"measured\": {}, \"predicted\": {}, \"error_bits\": {} }}",
+         \"cells\": {}, \"objective\": {}, \"measured\": {}, \"predicted\": {}, \"error_bits\": {}, \
+         \"stopped\": {} }}",
         num(p.lambda),
         p.numbers,
         num(p.bits),
@@ -476,6 +492,7 @@ fn point_json(p: &Point) -> String {
         residual_json(&p.predicted),
         p.measured
             .map_or("null".to_string(), |m| num(m.bits - p.predicted.bits)),
+        p.stopped,
     )
 }
 

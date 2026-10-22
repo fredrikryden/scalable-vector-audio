@@ -216,7 +216,8 @@ pub async fn fitted<B: Backend>(
     let (mut points, cancelled) = path(&fit, state, &lambdas, steps, abandon, report).await?;
     let text = |p: &str| -> Option<String> { source.get(p).ok().flatten().map(|t| t.into_owned()) };
     let model = format!("@{root}([0, {frames}sp])");
-    for point in &mut points {
+    // A signal stops every render too, so a cancelled path is chosen on its predictions.
+    for point in points.iter_mut().take_while(|_| !cancelled) {
         let mut draws = Vec::with_capacity(DRAWS);
         for k in 0..DRAWS {
             let files = write::drawn(&point.state, &text, k)?;

@@ -645,7 +645,10 @@ PRICED FIT:
   square d over the weighted cells, in JND), `error_bits` the measured less
   the predicted, its `residual_bits` (the measured) and `length_bits`, the
   residual's and the numbers' bits summed; `chosen`, the point of least length; and
-  `files`, the chosen point's text. `--write --confirm` writes the
+  `files`, the chosen point's text. A signal stops the solve: `path` holds
+  the points it finished and, `stopped` true, the state it stopped at (price 0
+  if no price had begun), none rendered, `chosen` the least predicted length,
+  and no file is written. `--write --confirm` writes the
   chosen point in place: defaults in their node files, score lines without their
   silent ones or the fields their node's default restates. Each step prints a JSON line
   on stderr. `sva-cli new <name> --from <clip>` writes a starter to fit.

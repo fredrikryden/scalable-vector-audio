@@ -152,7 +152,8 @@ fn priced_solve(
     if fitted.cancelled {
         let data = fitted_data(&fitted, priced, &problem.cost.text, "");
         let message = "the priced solve was stopped by a signal; `data.path` holds the points it \
-                       finished, and no file was written";
+                       finished and the one it stopped at, `data.chosen` the best of them by \
+                       prediction, and no file was written";
         let json = error_envelope_with("cancelled", message, &data, &warnings);
         return Ok((json, CANCELLED));
     }
