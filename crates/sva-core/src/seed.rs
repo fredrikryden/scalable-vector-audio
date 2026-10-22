@@ -409,7 +409,7 @@ pub fn seed(channels: &[Vec<f32>], rate: f64, clip: &str, limits: Limits) -> See
             .to_string(),
     ));
     let cost = format!(
-        "norm(repr.internal(@master) - repr.internal(sample(\"{}\"))) + 0.001*repr.numbers(@master)",
+        "norm(repr.internal(@master) - repr.internal(sample(\"{}\"))) + repr.numbers(@master)",
         clip.replace('"', "")
     );
     files.push((COST.to_string(), format!("{cost}\n")));

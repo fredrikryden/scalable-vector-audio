@@ -10,7 +10,7 @@ use sva_samples::measure::internal::{Ear, Grid, Internal};
 use super::lines::{Adjoint, Bins};
 use super::played::{self, Lowered, ROOT_SEED, Renders};
 use super::state::{Slot, State};
-use super::write;
+use super::{BITS_PER_JND2, write};
 use crate::cli_error::CliError;
 
 pub struct Fit {
@@ -24,11 +24,21 @@ pub struct Fit {
     pub renders: Renders,
 }
 
-pub struct Evaluated {
-    /// `d'` as the root of its square's mean over the phase draws.
-    pub distance: f64,
-    /// That root's standard error from the draws' spread.
+/// A residual over the phase draws.
+#[derive(Clone, Copy, Debug)]
+pub struct Residual {
+    /// Its description length: each element's `d^2` coded at its weight, the draws' mean.
+    pub bits: f64,
+    /// That mean's standard error from the draws' spread.
     pub error: f64,
+    /// The root of `d'^2`'s mean over the draws, every element unweighted.
+    pub d_prime: f64,
+    /// The root mean square `d` over the weighted cells.
+    pub per_cell: f64,
+}
+
+pub struct Evaluated {
+    pub residual: Residual,
     pub grad: Option<Vec<f64>>,
 }
 
@@ -56,15 +66,46 @@ pub fn phase(line: usize, draw: usize) -> f64 {
     std::f64::consts::TAU * (z >> 11) as f64 / (1u64 << 53) as f64
 }
 
-/// The standard error of `sqrt(mean(squares))` over the draws, by the delta method.
-pub fn draws_error(squares: &[f64]) -> f64 {
-    let k = squares.len() as f64;
-    let mean = squares.iter().sum::<f64>() / k;
-    if k < 2.0 || mean <= 0.0 {
-        return 0.0;
+/// Each element's weight: its set's independent samples per frame.
+pub fn weights(fit: &Fit) -> Vec<f64> {
+    let per_set = sva_samples::measure::internal::weights(fit.ear.grid.step_secs());
+    let set = fit.reference.frames * sva_samples::measure::internal::BARKS;
+    (0..fit.reference.elements.len())
+        .map(|e| per_set[e / set])
+        .collect()
+}
+
+/// The residual of each draw's reading against the reference.
+pub fn residual(fit: &Fit, w: &[f64], draws: &[Vec<f64>]) -> Residual {
+    let k = draws.len() as f64;
+    let (mut weighted, mut plain) = (Vec::new(), 0.0);
+    for elements in draws {
+        let (mut a, mut b) = (0.0, 0.0);
+        for ((x, y), w) in elements.iter().zip(&fit.reference.elements).zip(w) {
+            let d = x - y;
+            a += w * d * d;
+            b += d * d;
+        }
+        weighted.push(BITS_PER_JND2 * a);
+        plain += b;
     }
-    let var = squares.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / (k - 1.0);
-    (var / k).sqrt() / (2.0 * mean.sqrt())
+    let bits = weighted.iter().sum::<f64>() / k;
+    let var = match k > 1.0 {
+        true => {
+            weighted
+                .iter()
+                .map(|x| (x - bits) * (x - bits))
+                .sum::<f64>()
+                / (k - 1.0)
+        }
+        false => 0.0,
+    };
+    Residual {
+        bits,
+        error: (var / k).sqrt(),
+        d_prime: (plain / k).sqrt(),
+        per_cell: (bits / BITS_PER_JND2 / w.iter().sum::<f64>().max(f64::MIN_POSITIVE)).sqrt(),
+    }
 }
 
 /// A line's bin at a phase offset `(cos, sin)`.
@@ -143,35 +184,25 @@ pub fn evaluate(
     let each = sva_engine::each(threads, (0..draws).collect(), |k| {
         let o = offsets(&phased, k);
         let f = fit.ear.forward(&power(&g, &reads, &o));
-        let r: Vec<f64> = f
-            .elements
-            .iter()
-            .zip(&fit.reference.elements)
-            .map(|(a, b)| a - b)
-            .collect();
-        (o, f, r)
+        (o, f)
     });
-    let squares: Vec<f64> = each
-        .iter()
-        .map(|(_, _, r)| r.iter().map(|x| x * x).sum::<f64>())
-        .collect();
-    let distance = (squares.iter().sum::<f64>() / draws as f64).sqrt();
-    let error = draws_error(&squares);
+    let w = weights(fit);
+    let elements: Vec<Vec<f64>> = each.iter().map(|(_, f)| f.elements.clone()).collect();
+    let res = residual(fit, &w, &elements);
     if !grad {
         return Ok(Evaluated {
-            distance,
-            error,
+            residual: res,
             grad: None,
         });
     }
     let dps = sva_engine::each(threads, (0..draws).collect(), |k| {
-        let (_, f, r) = &each[k];
-        let unit: Vec<f64> = r
+        let f = &each[k].1;
+        let unit: Vec<f64> = f
+            .elements
             .iter()
-            .map(|x| match distance > 0.0 {
-                true => x / (draws as f64 * distance),
-                false => 0.0,
-            })
+            .zip(&fit.reference.elements)
+            .zip(&w)
+            .map(|((a, b), w)| 2.0 * BITS_PER_JND2 * w * (a - b) / draws as f64)
             .collect();
         fit.ear.backward(f, &unit)
     });
@@ -228,8 +259,7 @@ pub fn evaluate(
         landed(s, &low.lines[l].slots, local, &mut out);
     }
     Ok(Evaluated {
-        distance,
-        error,
+        residual: res,
         grad: Some(out),
     })
 }

@@ -15,12 +15,14 @@ use std::num::NonZeroUsize;
 use sva_engine::Abandon;
 
 use crate::cli_error::CliError;
-use eval::{Fit, evaluate, scales};
+use eval::{Fit, Residual, evaluate, scales};
 use state::{Slot, State};
 use step::{Adam, Priced, step, zeros};
 
 pub const DEFAULT_STEPS: usize = 600;
-pub const DEFAULT_PATH: [f64; 5] = [0.0004, 0.0012, 0.004, 0.012, 0.04];
+/// Prices in bits per bit: a homotopy from nearly unpriced to 1, where the objective is the
+/// description length itself.
+pub const DEFAULT_PATH: [f64; 5] = [0.01, 0.03, 0.1, 0.3, 1.0];
 /// The exchange rate of a reading's residual into bits: each element a cell coded as a
 /// Gaussian of one JND's spread, `d^2/2` nats.
 pub const BITS_PER_JND2: f64 = 0.5 * std::f64::consts::LOG2_E;
@@ -35,27 +37,24 @@ pub struct Point {
     pub lambda: f64,
     pub numbers: usize,
     pub bits: f64,
-    /// The d' the descent lowers: the reading of the render's own lowered lines.
-    pub predicted: f64,
-    /// The standard errors of `predicted` and `measured` from their draws' spread.
-    pub predicted_error: f64,
-    pub measured_error: Option<f64>,
-    /// The d' read off its renders, as the cost's leaf reads a render.
-    pub measured: Option<f64>,
-    pub cells: usize,
+    /// The residual the descent lowers: the reading of the render's own lowered lines.
+    pub predicted: Residual,
+    /// The residual read off its renders, as the cost's leaf reads a render.
+    pub measured: Option<Residual>,
+    /// The reading's cells, weighted by the independent samples each carries.
+    pub cells: f64,
     pub state: State,
     pub steps: usize,
 }
 
 impl Point {
     pub fn objective(&self) -> f64 {
-        self.predicted + self.lambda * self.bits
+        self.predicted.bits + self.lambda * self.bits
     }
 
-    /// The bits its reading's residual codes in, its render's where it was rendered.
+    /// The bits its reading's residual codes in, its renders' where it was rendered.
     pub fn residual_bits(&self) -> f64 {
-        let d = self.measured.unwrap_or(self.predicted);
-        BITS_PER_JND2 * d * d
+        self.measured.unwrap_or(self.predicted).bits
     }
 
     /// Its description length: the residual's bits and the numbers' bits.
@@ -74,7 +73,7 @@ pub struct Progress<'a> {
     pub phase: &'a str,
     pub lambda: f64,
     pub step: usize,
-    pub distance: f64,
+    pub residual_bits: f64,
     pub numbers: usize,
     pub bits: f64,
 }
@@ -119,16 +118,15 @@ impl Stepping<'_> {
             held,
         };
         step(s, adam, &grad, &priced);
-        Ok(e.distance)
+        Ok(e.residual.bits)
     }
 
     fn objective(&self, s: &State, lambda: f64) -> Result<Objective, CliError> {
         let e = evaluate(self.fit, s, false, self.threads)?;
         let (numbers, bits) = price::numbers(s);
         Ok(Objective {
-            total: e.distance + lambda * bits,
-            distance: e.distance,
-            error: e.error,
+            total: e.residual.bits + lambda * bits,
+            residual: e.residual,
             numbers,
             bits,
         })
@@ -140,8 +138,7 @@ type Split = (f64, State, Adam, Vec<f64>, Vec<f64>);
 
 struct Objective {
     total: f64,
-    distance: f64,
-    error: f64,
+    residual: Residual,
     numbers: usize,
     bits: f64,
 }
@@ -170,14 +167,14 @@ impl Run<'_> {
                 self.cancelled = true;
                 break;
             }
-            let distance = self.stepping().one(s, adam, lambda, held)?;
+            let residual_bits = self.stepping().one(s, adam, lambda, held)?;
             if k % 50 == 0 || k + 1 == count {
                 let (numbers, bits) = price::numbers(s);
                 (self.report)(&Progress {
                     phase,
                     lambda,
                     step: k,
-                    distance,
+                    residual_bits,
                     numbers,
                     bits,
                 });
@@ -439,11 +436,9 @@ pub async fn path(
             lambda: *lambda,
             numbers: o.numbers,
             bits: o.bits,
-            predicted: o.distance,
-            predicted_error: o.error,
+            predicted: o.residual,
             measured: None,
-            measured_error: None,
-            cells: fit.reference.elements.len(),
+            cells: eval::weights(fit).iter().sum(),
             state: s.clone(),
             steps,
         });
@@ -451,32 +446,35 @@ pub async fn path(
     Ok((points, run.cancelled))
 }
 
+fn residual_json(r: &Residual) -> String {
+    use crate::json::num;
+    format!(
+        "{{ \"residual_bits\": {}, \"standard_error\": {}, \"d_prime\": {}, \"per_cell\": {} }}",
+        num(r.bits),
+        num(r.error),
+        num(r.d_prime),
+        num(r.per_cell)
+    )
+}
+
 fn point_json(p: &Point) -> String {
     use crate::json::num;
-    let cell = (p.cells.max(1) as f64).sqrt();
     format!(
         "{{ \"price\": {}, \"numbers\": {}, \"bits\": {}, \"residual_bits\": {}, \"length_bits\": {}, \
-         \"cells\": {}, \"measured\": {}, \"predicted\": {{ \"d_prime\": {}, \"standard_error\": {}, \
-         \"per_cell\": {}, \
-         \"error\": {}, \"objective\": {} }} }}",
+         \"cells\": {}, \"objective\": {}, \"measured\": {}, \"predicted\": {}, \"error_bits\": {} }}",
         num(p.lambda),
         p.numbers,
         num(p.bits),
         num(p.residual_bits()),
         num(p.length()),
-        p.cells,
-        p.measured.map_or("null".to_string(), |m| format!(
-            "{{ \"d_prime\": {}, \"standard_error\": {}, \"per_cell\": {} }}",
-            num(m),
-            num(p.measured_error.unwrap_or(0.0)),
-            num(m / cell)
-        )),
-        num(p.predicted),
-        num(p.predicted_error),
-        num(p.predicted / cell),
-        p.measured
-            .map_or("null".to_string(), |m| num(m - p.predicted)),
+        num(p.cells),
         num(p.objective()),
+        p.measured
+            .as_ref()
+            .map_or("null".to_string(), residual_json),
+        residual_json(&p.predicted),
+        p.measured
+            .map_or("null".to_string(), |m| num(m.bits - p.predicted.bits)),
     )
 }
 
@@ -484,11 +482,11 @@ fn point_json(p: &Point) -> String {
 pub fn progress_json(p: &Progress) -> String {
     use crate::json::{escape, num};
     format!(
-        "{{\"phase\": \"{}\", \"price\": {}, \"step\": {}, \"distance\": {}, \"numbers\": {}, \"bits\": {}}}",
+        "{{\"phase\": \"{}\", \"price\": {}, \"step\": {}, \"residual_bits\": {}, \"numbers\": {}, \"bits\": {}}}",
         escape(p.phase),
         num(p.lambda),
         p.step,
-        num(p.distance),
+        num(p.residual_bits),
         p.numbers,
         num(p.bits)
     )

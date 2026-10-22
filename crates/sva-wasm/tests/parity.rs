@@ -111,7 +111,7 @@ fn filtered_noise_renders_the_pinned_bits_on_four_threads() {
 
 /// A priced fit of a clip rendered here, seeded and solved as `new --from` and `solve
 /// --method prox` do: `<FNV-1a of each point's distance bits> <of the chosen files' bytes>`.
-const PRICED: &str = "bfa5f6afa15bd6c7 2fa3426793b2eac2";
+const PRICED: &str = "def916539bd8a563 bcddb957f773b081";
 
 fn priced(threads: usize) -> String {
     let clip_nodes: sva_ast::Composition = [(
@@ -206,7 +206,7 @@ fn priced(threads: usize) -> String {
         std::task::Poll::Ready(done) => done.expect("the priced solve answers"),
         std::task::Poll::Pending => unreachable!("a fit in memory alone never waits"),
     };
-    let distances = fnv(fitted.points.iter().map(|p| p.predicted.to_bits()));
+    let distances = fnv(fitted.points.iter().map(|p| p.predicted.bits.to_bits()));
     let files = fnv(fitted.files.iter().flat_map(|(p, t)| {
         p.bytes()
             .chain(t.bytes())

@@ -30,7 +30,12 @@ pub const MODEL: &str = "specific loudness N' per Bark every 10 ms after ISO 532
      a first-order complex band-pass of Q = 1 passes 1/sqrt(5) of a steady level, which would \
      read each 1 dB of level as some 2 JND in every band-pass. Cells count as independent \
      though the window, the decay, the upper slopes and the overlapping filters correlate \
-     neighbours, so the count overstates the independent cells";
+     neighbours. A description length weighs each element by the independent samples its \
+     channel carries per frame, 2 B dt over a frame step dt for a channel of bandwidth B \
+     (Shannon 1949, Proc. IRE 37, 10-21), no more than 1: an N' band 1, the frames' own rate, \
+     the lowpass 2 (2.5 Hz) dt, a band-pass 2 fc dt, Q = 1 putting its bandwidth at fc; the 24 \
+     Bark bands count as independent channels, the critical bands being the ear's (Zwicker \
+     and Fastl 2007, 6)";
 
 pub const FRAME_SECS: f64 = 0.01;
 pub const WINDOW_SECS: f64 = 0.02;
@@ -130,6 +135,14 @@ pub fn bin_power(x: &[f64], g: &Grid) -> Vec<f64> {
 /// The Bark of a frequency, Zwicker and Terhardt (1980), JASA 68, 1523-1525.
 pub fn bark(hz: f64) -> f64 {
     13.0 * libm::atan(0.00076 * hz) + 3.5 * libm::atan((hz / 7500.0) * (hz / 7500.0))
+}
+
+/// Each element set's independent samples per frame: N', the lowpass, each band-pass.
+pub fn weights(step_secs: f64) -> Vec<f64> {
+    let per_frame = |hz: f64| (2.0 * hz * step_secs).min(1.0);
+    let mut out = vec![1.0, per_frame(LOWPASS_HZ)];
+    out.extend(channels(step_secs).into_iter().map(|fc| per_frame(fc / Q)));
+    out
 }
 
 /// The band-pass centres the frames' step holds.
