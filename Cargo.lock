@@ -423,6 +423,7 @@ dependencies = [
  "sva-ast",
  "sva-engine",
  "sva-formula",
+ "sva-samples",
 ]
 
 [[package]]

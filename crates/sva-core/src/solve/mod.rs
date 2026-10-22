@@ -2,6 +2,7 @@
 
 mod cost;
 mod load;
+pub mod prox;
 mod residual;
 mod search;
 mod vary;
@@ -134,7 +135,7 @@ pub fn cost_of(source: &dyn Source, written: &str) -> Result<Cost, CliError> {
 }
 
 /// `under` beside the recordings the cost's leaves hold as values, each under its leaf's key.
-struct Recordings<'a> {
+pub(crate) struct Recordings<'a> {
     under: &'a dyn Source,
     held: Vec<(String, Arc<Recording>)>,
 }
@@ -164,7 +165,7 @@ impl Source for Recordings<'_> {
     }
 }
 
-fn recorded<'a>(cost: &Cost, under: &'a dyn Source) -> Recordings<'a> {
+pub(crate) fn recorded<'a>(cost: &Cost, under: &'a dyn Source) -> Recordings<'a> {
     let held = cost
         .leaves
         .iter()
@@ -425,8 +426,12 @@ impl Rendering<'_, '_> {
                     continue;
                 }
                 let representation = leaf.asked.representation(rendered.config.rate, per_bar)?;
-                let answer =
-                    sva_engine::answer_buffer(&leaf.written, &buffer, representation, profile)?;
+                let answer = match representation {
+                    sva_engine::Representation::Numbers => rendered.answered(&leaf.asked)?,
+                    _ => {
+                        sva_engine::answer_buffer(&leaf.written, &buffer, representation, profile)?
+                    }
+                };
                 readings[at] = Some(answer.value);
             }
         }
@@ -436,7 +441,8 @@ impl Rendering<'_, '_> {
             .collect();
         let mut terms = Vec::new();
         for term in &problem.cost.terms {
-            terms.push(term.sign * scalar(&value(&term.node, &readings, self.loads)?));
+            let held = value(&term.node, &readings, self.loads, &problem.vary)?;
+            terms.push(term.sign * scalar(&held));
         }
         Ok((terms.iter().sum(), terms, computed))
     }
@@ -477,8 +483,26 @@ fn side<'r>(node: &Node, readings: &'r [Output], loads: &'r [Held]) -> Option<&'
     }
 }
 
-fn value(node: &Node, readings: &[Output], loads: &[Held]) -> Result<Value, CliError> {
-    let value = |node: &Node| value(node, readings, loads);
+/// What a composition's written numbers cost in bits: each named one its `--vary`'s range
+/// over its step, one no `--vary` names nothing, as it moves at no point of a solve.
+pub fn bits(written: &sva_engine::Written, vary: &[Vary]) -> f64 {
+    written
+        .numbers
+        .iter()
+        .filter_map(|n| {
+            let name = n.name.as_deref()?;
+            vary.iter().find(|v| v.names(&n.path, name)).map(Vary::bits)
+        })
+        .sum()
+}
+
+fn value(
+    node: &Node,
+    readings: &[Output],
+    loads: &[Held],
+    vary: &[Vary],
+) -> Result<Value, CliError> {
+    let value = |node: &Node| value(node, readings, loads, vary);
     Ok(match node {
         Node::Num(n) => Value::Scalar(*n),
         Node::Vector(v) => Value::Vector(v.clone()),
@@ -489,7 +513,10 @@ fn value(node: &Node, readings: &[Output], loads: &[Held]) -> Result<Value, CliE
                 unreachable!("the cost typed every held reading into a subtraction")
             }
         },
-        Node::Leaf(_) => unreachable!("the cost typed every leaf into a subtraction"),
+        Node::Leaf(at) => match &readings[*at] {
+            Output::Numbers(written) => Value::Scalar(bits(written, vary)),
+            _ => unreachable!("the cost typed every other leaf into a subtraction"),
+        },
         Node::Neg(x) => match value(x)? {
             Value::Scalar(s) => Value::Scalar(-s),
             Value::Vector(v) => Value::Vector(v.iter().map(|x| -x).collect()),

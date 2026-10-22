@@ -8,8 +8,8 @@ mod reading;
 mod solve;
 
 use reading::{analyze_args, render_args};
-pub use solve::SolveArgs;
 use solve::solve_args;
+pub use solve::{Method, SolveArgs};
 
 #[derive(Debug, PartialEq)]
 pub struct RenderArgs {
@@ -72,6 +72,10 @@ pub enum Command {
         /// Present where the caller says this is a retry, per the `cli` standard's own
         /// requirement that a create verb be made idempotent.
         idempotency_key: Option<String>,
+        /// A recording the composition starts as a priced fit's starter of.
+        from: Option<PathBuf>,
+        /// The starter's size under `--from`.
+        limits: sva_core::seed::Limits,
     },
 }
 
@@ -160,23 +164,56 @@ fn outline_args(rest: &[String]) -> Result<Command, CliError> {
 }
 
 fn new_args(rest: &[String]) -> Result<Command, CliError> {
-    match rest {
-        [name] if !name.starts_with("--") => Ok(Command::New {
-            name: name.clone(),
-            idempotency_key: None,
-        }),
-        [name, flag, key] if !name.starts_with("--") && flag == "--idempotency-key" => {
-            Ok(Command::New {
-                name: name.clone(),
-                idempotency_key: Some(key.clone()),
-            })
+    let mut it = rest.iter();
+    let name = match it.next() {
+        Some(name) if !name.starts_with("--") => name.clone(),
+        Some(_) | None => return Err(CliError::usage("cli.missing_argument", "missing <name>")),
+    };
+    let (mut idempotency_key, mut from) = (None, None);
+    let mut limits = sva_core::seed::LIMITS;
+    let mut sized = None;
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--idempotency-key" => idempotency_key = Some(value(&mut it, "--idempotency-key")?),
+            "--from" => from = Some(PathBuf::from(value(&mut it, "--from")?)),
+            "--harmonics" | "--lone" => {
+                let n = value(&mut it, flag)?
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| {
+                        CliError::usage(
+                            "cli.bad_value",
+                            format!("`{flag}` takes a whole number above 0"),
+                        )
+                    })?;
+                match flag.as_str() {
+                    "--harmonics" => limits.harmonics = n,
+                    _ => limits.lone = n,
+                }
+                sized = Some(flag.clone());
+            }
+            _ => {
+                return Err(CliError::usage(
+                    "cli.unknown_argument",
+                    "new takes one <name>, an optional `--from <recording>` with `--harmonics <n>` \
+                     and `--lone <n>`, and an optional `--idempotency-key <key>`",
+                ));
+            }
         }
-        [] => Err(CliError::usage("cli.missing_argument", "missing <name>")),
-        _ => Err(CliError::usage(
-            "cli.unknown_argument",
-            "new takes one <name> and an optional `--idempotency-key <key>`",
-        )),
     }
+    if let (Some(flag), None) = (sized, &from) {
+        return Err(CliError::usage(
+            "cli.needs_from",
+            format!("`{flag}` sizes the starter `--from <recording>` writes"),
+        ));
+    }
+    Ok(Command::New {
+        name,
+        idempotency_key,
+        from,
+        limits,
+    })
 }
 
 fn lint_args(rest: &[String]) -> Result<Command, CliError> {
@@ -390,6 +427,8 @@ mod tests {
             Command::New {
                 name: "song1".to_string(),
                 idempotency_key: None,
+                from: None,
+                limits: sva_core::seed::LIMITS,
             }
         );
     }
@@ -845,9 +884,13 @@ mod tests {
             Command::New {
                 name: "song1".to_string(),
                 idempotency_key: Some("k".to_string()),
+                from: None,
+                limits: sva_core::seed::LIMITS,
             }
         );
         refused(&["new"]);
+        refused(&["new", "song1", "--lone", "4"]);
+        refused(&["new", "song1", "--from", "a.wav", "--harmonics", "0"]);
     }
 
     #[test]

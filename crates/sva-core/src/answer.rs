@@ -17,6 +17,7 @@ use sva_engine::harmony::dissonance::{self, Dissonance, Extreme};
 use sva_engine::harmony::inharmonicity::{self, Inharmonicity, Series, Weighted};
 use sva_engine::harmony::tonnetz::{self, Quality, TonalDistance, Triad};
 use sva_engine::harmony::voice_leading::{self, VoiceLeading};
+use sva_engine::heard::{self, Heard};
 use sva_engine::loudness_pattern::{self, LoudnessPattern};
 use sva_engine::modulation::{self, Modulation};
 use sva_engine::partials::{self, Partials};
@@ -329,6 +330,58 @@ fn beating_json(b: &Beating) -> String {
             num(w.from_secs),
             num(w.to_secs),
             maybe(w.phon)
+        ))
+    )
+}
+
+fn numbers_json(w: &sva_engine::Written) -> String {
+    format!(
+        "{{ \"count\": {}, \"numbers\": {} }}",
+        w.numbers.len(),
+        list(&w.numbers, |n| format!(
+            "{{ \"path\": \"{}\", \"name\": {}, \"value\": {} }}",
+            escape(&n.path),
+            n.name
+                .as_ref()
+                .map_or("null".to_string(), |x| format!("\"{}\"", escape(x))),
+            num(n.value)
+        ))
+    )
+}
+
+fn heard_json(h: &Heard) -> String {
+    let frames: Vec<usize> = (0..h.frames).collect();
+    let bands = h.power.len() / h.frames.max(1);
+    format!(
+        "{{ \"model\": \"{}\", \"rate_hz\": {}, \"start_secs\": {}, \"duration_secs\": {}, \
+         \"frame_secs\": {}, \"rms\": {}, \"frames\": {}, \"notes\": {} }}",
+        escape(heard::MODEL),
+        num(h.rate),
+        num(h.start_secs),
+        num(h.duration_secs),
+        num(heard::FRAME_SECS),
+        num(h.rms),
+        list(&frames, |m| {
+            let power: Vec<f64> = (0..bands).map(|b| h.power[b * h.frames + m]).collect();
+            format!(
+                "\n    {{ \"t_secs\": {}, \"power\": {} }}",
+                num(h.start_secs + *m as f64 * heard::FRAME_SECS),
+                numbers(&power)
+            )
+        }),
+        list(&h.notes, |n| format!(
+            "\n    {{ \"at_secs\": {}, \"next_secs\": {}, \"new\": {}, \"rms\": {}, \
+             \"rise_secs\": {}, \"peaks\": {} }}",
+            num(n.at_secs),
+            num(n.next_secs),
+            n.new,
+            num(n.rms),
+            maybe(n.rise_secs),
+            list(&n.peaks, |p| format!(
+                "{{ \"hz\": {}, \"amplitude\": {} }}",
+                num(p.hz),
+                num(p.amplitude)
+            ))
         ))
     )
 }
@@ -974,6 +1027,8 @@ pub fn value_json(output: &Output, limit: Option<usize>, skim: bool) -> String {
         Output::LoudnessPattern(p) => loudness_pattern_json(p),
         Output::Sharpness(s) => sharpness_json(s),
         Output::Beating(b) => beating_json(b),
+        Output::Heard(h) => heard_json(h),
+        Output::Numbers(w) => numbers_json(w),
         Output::Bindings(b) => list(b, binding_json),
         Output::Arguments(a) => list(a, arguments_json),
         Output::Envelope(frames) => list(frames, |f: &EnvelopeFrame| {

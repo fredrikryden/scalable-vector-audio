@@ -11,6 +11,7 @@ mod lint_verdict;
 mod outline;
 mod panics;
 mod pinned;
+mod prox;
 mod render_integration;
 mod scaffold;
 mod score;

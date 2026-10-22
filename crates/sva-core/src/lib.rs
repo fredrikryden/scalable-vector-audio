@@ -6,11 +6,13 @@ mod builtins;
 mod cli_error;
 mod decode;
 pub mod encode;
+pub mod heard;
 pub mod json;
 mod lint_code;
 mod outline;
 mod output;
 mod query;
+pub mod seed;
 mod set;
 pub mod solve;
 mod song;
@@ -75,11 +77,35 @@ pub struct Rendered {
 
 impl Rendered {
     pub fn answer(&self, node: &str, representation: Representation) -> Result<Answer, CliError> {
+        if representation == Representation::Numbers {
+            return Ok(self.numbers(node));
+        }
         let written = |e| CliError::Engine(as_written(e, &self.expression));
         let id = self.render.node(node).map_err(written)?;
         let mut answer = sva_engine::answer(&self.render, id, representation).map_err(written)?;
         self.attribute(&mut answer)?;
         Ok(answer)
+    }
+
+    /// Every number the composition below `node` writes: the node itself where the graph
+    /// holds it, else what the target's expression reads.
+    fn numbers(&self, node: &str) -> Answer {
+        let roots: Vec<String> = match self.graph.defines(node) {
+            true => vec![node.to_string()],
+            false => sva_ast::parse_expr(&self.expression)
+                .map(|e| sva_ast::reads_of("", &e))
+                .unwrap_or_default(),
+        };
+        let mut numbers = Vec::new();
+        for root in roots {
+            numbers.extend(sva_engine::written(&self.graph, &root).numbers);
+        }
+        Answer::whole(
+            Output::Numbers(Box::new(sva_engine::Written { numbers })),
+            sva_engine::Source::Exact,
+            self.config.profile.name,
+            None,
+        )
     }
 
     /// What a bar lasts in this render's tempo; `None` where it has none.

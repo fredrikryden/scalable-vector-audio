@@ -9,7 +9,7 @@ use sva_samples::measure::harmony::{
     voice_leading,
 };
 use sva_samples::measure::{
-    beating, modulation, partials, periodicity, self_similarity, sharpness, sliding,
+    beating, heard, modulation, partials, periodicity, self_similarity, sharpness, sliding,
 };
 use sva_samples::{
     Buffer, Consumes, Extent, Peak, PitchFrame, Profile, Source, measure::bands, measure::crest,
@@ -39,6 +39,16 @@ pub fn answer(
             profile,
             None,
         ));
+    }
+    if representation == Representation::Numbers {
+        return Err(EngineError::refused(Diagnostic {
+            code: "engine.observation_needs_a_graph".to_string(),
+            message: "`numbers` reads the composition's own text, which a render alone does not \
+                      hold"
+                .to_string(),
+            location: Located::at(render.tys.name(node), None),
+            help: "ask for it with the render that parsed the composition".to_string(),
+        }));
     }
     if representation == Representation::Bindings {
         return Ok(Answer::whole(
@@ -1015,6 +1025,7 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
         Representation::Bands => Output::Bands(Box::new(bands::analyze(&planes, sr, start))),
         Representation::Crest => Output::Crest(Box::new(crest::analyze(&planes, sr))),
         Representation::Score => Output::Score(Box::new(score::measure(&planes, sr, start))),
+        Representation::Heard => Output::Heard(Box::new(heard::measure(&planes, sr, start))),
         Representation::LoudnessPattern { frame_secs, spl_db } => {
             Output::LoudnessPattern(Box::new(loudness_pattern::measure(
                 &planes, sr, start, frame_secs, spl_db,

@@ -108,3 +108,123 @@ fn filtered_noise_renders_the_pinned_bits_on_one_thread() {
 fn filtered_noise_renders_the_pinned_bits_on_four_threads() {
     holds(4);
 }
+
+/// A priced fit of a clip rendered here, seeded and solved as `new --from` and `solve
+/// --method prox` do: `<FNV-1a of each point's distance bits> <of the chosen files' bytes>`.
+const PRICED: &str = "bc19e29d58d8940c 5edc00850f3f3937";
+
+fn priced(threads: usize) -> String {
+    let clip_nodes: sva_ast::Composition = [(
+        "clip",
+        "0.1*exp(-6*t)*(sin(2*pi*220*t) + 0.4*sin(2*pi*660*t))\n",
+    )]
+    .into_iter()
+    .collect();
+    let samples = [asked(&call("samples").expect("a call")).expect("a reading")];
+    let job = Job {
+        rate: Some(48_000),
+        asked: &samples,
+        threads: NonZeroUsize::new(threads),
+        ..Job::over(&clip_nodes, "@clip([0, 0.25s])")
+    };
+    let rendered = execute(job, &Tier::default()).expect("the clip renders");
+    let answer = rendered
+        .answer(&rendered.target, Representation::Samples)
+        .expect("samples");
+    let Output::Samples(buffer) = answer.value else {
+        panic!("samples answer samples");
+    };
+    let x: Vec<f64> = buffer.plane(0).to_vec();
+    let channels = vec![x.iter().map(|v| *v as f32).collect::<Vec<f32>>()];
+    let seeded = sva_core::seed::seed(&channels, 48_000.0, "clip.wav", sva_core::seed::LIMITS);
+    let held: sva_ast::Composition = seeded
+        .files
+        .iter()
+        .filter(|(p, _)| !p.starts_with("fits/"))
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    use sva_core::solve::{Op, Target, Tree};
+    let heard = |target| Tree::Repr {
+        call: "heard".to_string(),
+        target,
+    };
+    let planes = channels.clone();
+    let tree = Tree::Bin(
+        Op::Add,
+        Box::new(Tree::Reduce(
+            "sum",
+            vec![Tree::Bin(
+                Op::Sub,
+                Box::new(heard(Target::Text("@master".to_string()))),
+                Box::new(heard(Target::Samples {
+                    rate: 48_000,
+                    planes,
+                })),
+            )],
+        )),
+        Box::new(Tree::Bin(
+            Op::Mul,
+            Box::new(Tree::Num(0.012)),
+            Box::new(Tree::Repr {
+                call: "numbers".to_string(),
+                target: Target::Text("@master".to_string()),
+            }),
+        )),
+    );
+    let problem = sva_core::solve::Problem {
+        source: &held,
+        texts: &sva_core::solve::NoFiles,
+        cost: sva_core::solve::built(tree).expect("the priced cost types"),
+        vary: seeded
+            .varies
+            .iter()
+            .map(|v| sva_core::solve::vary(v).expect("a vary"))
+            .collect(),
+        sets: Vec::new(),
+        rate: Some(48_000),
+        threads: NonZeroUsize::new(threads),
+        stops: sva_core::solve::Stops {
+            max_renders: 1,
+            step_tol: 0.0,
+            cost_tol: 0.0,
+        },
+    };
+    let priced = sva_core::solve::prox::run::Priced {
+        path: Some(vec![0.004, 0.04]),
+        close: 3.0,
+        steps: 12,
+    };
+    let tier = Tier::default();
+    let mut quiet = |_: &sva_core::solve::prox::Progress| {};
+    let fit =
+        sva_core::solve::prox::run::fitted(&problem, &priced, &tier, &mut quiet, &sva_core::Never);
+    let mut fit = std::pin::pin!(fit);
+    let waker = std::task::Waker::noop();
+    let fitted = match fit
+        .as_mut()
+        .poll(&mut std::task::Context::from_waker(waker))
+    {
+        std::task::Poll::Ready(done) => done.expect("the priced solve answers"),
+        std::task::Poll::Pending => unreachable!("a fit in memory alone never waits"),
+    };
+    let distances = fnv(fitted.points.iter().map(|p| p.predicted.to_bits()));
+    let files = fnv(fitted.files.iter().flat_map(|(p, t)| {
+        p.bytes()
+            .chain(t.bytes())
+            .map(u64::from)
+            .collect::<Vec<_>>()
+    }));
+    format!("{distances:016x} {files:016x}")
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_priced_fit_answers_the_pinned_bits_on_one_thread() {
+    assert_eq!(priced(1), PRICED, "on one thread, this target fitted");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_priced_fit_answers_the_pinned_bits_on_four_threads() {
+    assert_eq!(priced(4), PRICED, "on four threads, this target fitted");
+}

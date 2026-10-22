@@ -22,6 +22,7 @@ mod time;
 mod trace;
 mod typing;
 mod vocabulary;
+mod written;
 
 pub use arguments::{Argument, Arguments, Called, Chosen};
 pub use bindings::Binding;
@@ -56,8 +57,8 @@ pub use render::{
 pub use schedule::{Order, Schedule, schedule_from};
 pub use sva_formula::{C64, Codomain, Held, Line, NodeId, SpectralSum, Ty, Var};
 pub use sva_samples::measure::{
-    bands, beating, harmony, loudness_pattern, modulation, partials, periodicity, pitch, score,
-    self_similarity, sharpness, sliding, spectrum,
+    bands, beating, harmony, heard, loudness_pattern, modulation, partials, periodicity, pitch,
+    score, self_similarity, sharpness, sliding, spectrum,
 };
 pub use sva_samples::resample;
 pub use sva_samples::{
@@ -67,10 +68,11 @@ pub use sva_samples::{
     PitchFrame, Profile, Resampled, Rule, Score, SignalKind, Source, Spectrum, StereoFrame,
     StereoImage, fitted_frame, measure_alias, pinned_frame,
 };
-pub use threads::default_threads;
+pub use threads::{default_threads, each};
 pub use trace::{Traced, Up, trace};
 pub use typing::{Typing, Value, When};
 pub use vocabulary::{MAX_WIDTH, named_may_move, recognized_named, shape, shape_name};
+pub use written::{Written, WrittenNumber, written};
 
 use sva_ast::Graph;
 

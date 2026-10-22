@@ -132,7 +132,42 @@ fn amount(text: &str, written: &str) -> Result<(f64, &'static str), CliError> {
     }
 }
 
+/// `name*` names a numbered family: `name` and a number, as `h*` names `h1`, `h2`, ...
+fn named(pattern: &str, name: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => name
+            .strip_prefix(prefix)
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())),
+        None => pattern == name,
+    }
+}
+
 impl Vary {
+    /// `<file>:<name>` scopes a name to one node or score file; a bare name is every one.
+    pub fn scope(&self) -> (Option<&str>, &str) {
+        match self.name.split_once(':') {
+            Some((file, name)) => (Some(file), name),
+            None => (None, &self.name),
+        }
+    }
+
+    /// Whether this names the number `name` written in the file at `path`.
+    pub fn names(&self, path: &str, name: &str) -> bool {
+        let (scope, pattern) = self.scope();
+        let here = scope.is_none_or(|f| f == path || f.strip_suffix(".jsonl") == Some(path));
+        here && named(pattern, name)
+    }
+
+    /// What one number this names costs: its range over its step, log2, on its own scale.
+    pub fn bits(&self) -> f64 {
+        let cells = match (self.step, self.log) {
+            (Some(ratio), true) => libm::log(self.hi / self.lo) / libm::log(ratio),
+            (Some(step), false) => (self.hi - self.lo) / step,
+            (None, _) => 1.0 / crate::solve::FIRST_STEP_OF_SPAN,
+        };
+        libm::log2(cells.max(1.0))
+    }
+
     /// `value` as the variable's file would hold it, rounded where its grid runs out of digits.
     pub fn text(&self, value: f64, precision: Precision) -> String {
         let number = match precision {
@@ -159,6 +194,16 @@ impl Vary {
 
     /// The variable's current value off its file, in this variable's unit.
     pub fn start(&self, source: &dyn Source) -> Result<f64, CliError> {
+        if let (Some(file), name) = self.scope() {
+            return Err(bad(
+                "solve.scoped_variable",
+                format!(
+                    "`--vary {}` names `{name}` written in `{file}`, which only `--method prox` \
+                     fits; this solve moves files under `{VARIABLES}/`",
+                    self.name
+                ),
+            ));
+        }
         let path = variable(&self.name);
         let text = source.get(&path).map_err(CliError::Io)?;
         let Some(text) = text else {

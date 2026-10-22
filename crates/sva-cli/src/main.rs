@@ -76,7 +76,13 @@ fn run() -> ExitCode {
         Ok(Command::New {
             name,
             idempotency_key,
-        }) => scaffold_new(&name, idempotency_key.as_deref()),
+            from,
+            limits,
+        }) => scaffold_new(
+            &name,
+            idempotency_key.as_deref(),
+            from.as_deref().map(|f| (f, limits)),
+        ),
         Err(e) => Err(e),
     };
 
@@ -139,9 +145,13 @@ fn trace_node(target: &str) -> Result<String, CliError> {
     Ok(success_envelope(&trace_data(&traced), &[]))
 }
 
-fn scaffold_new(name: &str, idempotency_key: Option<&str>) -> Result<String, CliError> {
+fn scaffold_new(
+    name: &str,
+    idempotency_key: Option<&str>,
+    from: Option<(&std::path::Path, sva_core::seed::Limits)>,
+) -> Result<String, CliError> {
     Ok(success_envelope(
-        &new_data(&scaffold(&cwd()?, name, idempotency_key)?),
+        &new_data(&scaffold(&cwd()?, name, idempotency_key, from)?),
         &[],
     ))
 }

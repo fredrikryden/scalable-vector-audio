@@ -61,10 +61,18 @@ pub fn trace_data(t: &crate::Traceable) -> String {
 
 pub fn new_data(s: &crate::Scaffolded) -> String {
     format!(
-        "{{ \"root\": \"{}\", \"files\": {}, \"next\": {} }}",
+        "{{ \"root\": \"{}\", \"files\": {}, \"dropped\": {}, \"next\": {} }}",
         escape(&s.root.display().to_string()),
         strings(&s.files),
-        pair_list(&crate::NEXT, "command", "why")
+        strings(&s.dropped),
+        pair_list(
+            &s.next
+                .iter()
+                .map(|(c, w)| (c.as_str(), w.as_str()))
+                .collect::<Vec<_>>(),
+            "command",
+            "why"
+        )
     )
 }
 

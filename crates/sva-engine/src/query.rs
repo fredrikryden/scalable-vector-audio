@@ -6,6 +6,7 @@ use sva_samples::measure::harmony::dissonance::Dissonance;
 use sva_samples::measure::harmony::inharmonicity::Inharmonicity;
 use sva_samples::measure::harmony::tonnetz::TonalDistance;
 use sva_samples::measure::harmony::voice_leading::{Norm, VoiceLeading};
+use sva_samples::measure::heard::Heard;
 use sva_samples::measure::loudness_pattern::LoudnessPattern;
 use sva_samples::measure::modulation::Modulation;
 use sva_samples::measure::partials::Partials;
@@ -393,6 +394,17 @@ static BEATING: Reading = Reading {
     },
 };
 
+static HEARD: Reading = Reading {
+    name: "heard",
+    takes: &[],
+    reads: Reads::Samples,
+    help: "what the judge proxy hears: power per half-Bark band every 10 ms, and each note of \
+           its own `score` reading lasting 80 ms or more with its rms, its strongest peaks under \
+           2.5 kHz and, where it starts from quiet, its 10-90 % rise; two subtract into the \
+           proxy's distance, in JND, the second side the reference; every channel averaged",
+    build: |_| Representation::Heard,
+};
+
 static ALIAS: Reading = Reading {
     name: "alias",
     takes: &[Arg::Oversample],
@@ -545,6 +557,17 @@ static BINDINGS: Reading = Reading {
     build: |_| Representation::Bindings,
 };
 
+static NUMBERS: Reading = Reading {
+    name: "numbers",
+    takes: &[],
+    reads: Reads::Structure,
+    help: "every number the composition below the target writes: each literal of a reached \
+           node's body and default lines, each field of a reached score's lines, with the name \
+           it binds; in a solve's cost it stands alone, its bits each named number's \
+           `--vary` range over its step, log2, a number no `--vary` names costing none",
+    build: |_| Representation::Numbers,
+};
+
 static ARGUMENTS: Reading = Reading {
     name: "arguments",
     takes: &[],
@@ -554,7 +577,7 @@ static ARGUMENTS: Reading = Reading {
 };
 
 /// Every reading a caller may ask for, in the order a listing prints them.
-pub static READINGS: [&Reading; 28] = [
+pub static READINGS: [&Reading; 30] = [
     &LINES,
     &ATOMS,
     &SPECTRUM,
@@ -581,6 +604,8 @@ pub static READINGS: [&Reading; 28] = [
     &LOUDNESS_PATTERN,
     &SHARPNESS,
     &BEATING,
+    &HEARD,
+    &NUMBERS,
     &BINDINGS,
     &ARGUMENTS,
 ];
@@ -672,6 +697,8 @@ pub enum Representation {
         window_secs: f64,
         spl_db: f64,
     },
+    Heard,
+    Numbers,
     Bindings,
     Arguments,
 }
@@ -720,6 +747,8 @@ pub enum Output {
     LoudnessPattern(Box<LoudnessPattern>),
     Sharpness(Box<Sharpness>),
     Beating(Box<Beating>),
+    Heard(Box<Heard>),
+    Numbers(Box<crate::Written>),
     Bindings(Vec<Binding>),
     Arguments(Vec<Arguments>),
 }
@@ -804,6 +833,8 @@ impl Representation {
             Representation::LoudnessPattern { .. } => &LOUDNESS_PATTERN,
             Representation::Sharpness { .. } => &SHARPNESS,
             Representation::Beating { .. } => &BEATING,
+            Representation::Heard => &HEARD,
+            Representation::Numbers => &NUMBERS,
             Representation::Bindings => &BINDINGS,
             Representation::Arguments => &ARGUMENTS,
         }

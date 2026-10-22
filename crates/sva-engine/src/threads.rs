@@ -8,7 +8,7 @@ pub fn default_threads() -> NonZeroUsize {
     std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN)
 }
 
-pub(crate) fn each<T: Send, R: Send>(
+pub fn each<T: Send, R: Send>(
     limit: NonZeroUsize,
     tasks: Vec<T>,
     run: impl Fn(T) -> R + Sync,

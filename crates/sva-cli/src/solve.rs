@@ -13,7 +13,7 @@ use sva_core::solve::{
 use sva_core::{CliError, error_envelope_with, success_envelope};
 use sva_engine::Abandon;
 
-use crate::args::SolveArgs;
+use crate::args::{Method, SolveArgs};
 use crate::heard::Heard;
 use crate::store::{On, opened, persisted, wait};
 
@@ -45,6 +45,9 @@ pub fn solve(args: &SolveArgs) -> Result<(String, u8), CliError> {
         threads: args.threads,
         stops: args.stops,
     };
+    if let Method::Prox(priced) = &args.method {
+        return priced_solve(args, priced, &dir, &problem, tier, stop, warnings);
+    }
     let mut heard_point = |point: &Point| {
         // A reader that closed stderr loses the progress, never the answer.
         let _ = writeln!(std::io::stderr(), "{}", point_json(point));
@@ -124,4 +127,64 @@ fn changed(dir: &std::path::Path, solved: &Solved, vary: &[Vary]) -> Result<Vec<
         });
     }
     Ok(out)
+}
+
+fn priced_solve(
+    args: &SolveArgs,
+    priced: &sva_core::solve::prox::run::Priced,
+    dir: &std::path::Path,
+    problem: &Problem,
+    tier: &sva_engine::Tier<crate::directory::Directory>,
+    stop: Arc<AtomicBool>,
+    mut warnings: Vec<sva_core::Diagnostic>,
+) -> Result<(String, u8), CliError> {
+    use sva_core::solve::prox::run::fitted;
+    use sva_core::solve::prox::{Progress, fitted_data, progress_json};
+    let mut heard = |p: &Progress| {
+        let _ = writeln!(std::io::stderr(), "{}", progress_json(p));
+    };
+    let outcome = wait(fitted(problem, priced, tier, &mut heard, &Flagged(stop)));
+    persisted(tier, &mut warnings);
+    let fitted = outcome?;
+    let paths = |files: &[(String, String)]| {
+        sva_core::json::list(files, |(p, _)| format!("\"{}\"", sva_core::json::escape(p)))
+    };
+    if fitted.cancelled {
+        let data = fitted_data(&fitted, priced, &problem.cost.text, "");
+        let message = "the priced solve was stopped by a signal; `data.path` holds the points it \
+                       finished, and no file was written";
+        let json = error_envelope_with("cancelled", message, &data, &warnings);
+        return Ok((json, CANCELLED));
+    }
+    if !args.write {
+        let data = fitted_data(&fitted, priced, &problem.cost.text, "");
+        return Ok((success_envelope(&data, &warnings), 0));
+    }
+    let listed = paths(&fitted.files);
+    if !fitted.files.is_empty() && !args.confirm {
+        let data = fitted_data(
+            &fitted,
+            priced,
+            &problem.cost.text,
+            &format!(", \"would_write\": {listed}"),
+        );
+        let message = format!(
+            "`--write` would rewrite {} file(s) with the chosen point, and replacing a file needs \
+             `--confirm`; nothing was written",
+            fitted.files.len()
+        );
+        let json = error_envelope_with("conflict", &message, &data, &warnings);
+        return Ok((json, 4));
+    }
+    for (path, text) in &fitted.files {
+        std::fs::write(dir.join(path), text)
+            .map_err(|e| CliError::Io(format!("could not write `{path}`: {e}")))?;
+    }
+    let data = fitted_data(
+        &fitted,
+        priced,
+        &problem.cost.text,
+        &format!(", \"written\": {listed}"),
+    );
+    Ok((success_envelope(&data, &warnings), 0))
 }

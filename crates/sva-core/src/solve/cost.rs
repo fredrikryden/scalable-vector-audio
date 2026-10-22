@@ -6,7 +6,7 @@ use crate::cli_error::CliError;
 use crate::query::{Asked, asked, call};
 
 /// The readings a cost subtracts, each by the rule `residual.rs` states for it.
-pub const SUBTRACTS: [&str; 10] = [
+pub const SUBTRACTS: [&str; 11] = [
     "envelope",
     "loudness",
     "bands",
@@ -17,6 +17,7 @@ pub const SUBTRACTS: [&str; 10] = [
     "loudness_pattern",
     "sharpness",
     "beating",
+    "heard",
 ];
 
 pub const REDUCERS: [&str; 5] = ["norm", "sum", "dot", "max", "abs"];
@@ -42,6 +43,9 @@ pub const OPERATORS: [(&str, Op); 4] = [
 
 /// A leaf that reads a JSON file instead of rendering: the cost's one file read.
 pub const LOAD_JSON: &str = "load_json";
+
+/// Readings whose value is one number, which a cost reads alone rather than subtracted.
+pub const SCALARS: [&str; 1] = ["numbers"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Leaf {
@@ -344,6 +348,7 @@ impl Typing<'_> {
             other => Ok(other),
         };
         Ok(match node {
+            Node::Leaf(at) if SCALARS.contains(&leaves[*at].asked.name.as_str()) => Kind::Scalar,
             Node::Leaf(at) => Kind::Reading(*at),
             Node::Loaded(at) => match self.held.map(|held| &held[*at]) {
                 None => Kind::Unknown,
@@ -443,13 +448,15 @@ fn unpaired(leaf: &Leaf) -> CliError {
 /// A leaf's reading, `call` as `--representation` spells it, with only its own arguments.
 fn own_arguments(call_text: &str, written: &str) -> Result<Asked, CliError> {
     let asked = asked(&call(call_text)?)?;
-    if !SUBTRACTS.contains(&asked.name.as_str()) {
+    if !SUBTRACTS.contains(&asked.name.as_str()) && !SCALARS.contains(&asked.name.as_str()) {
         return Err(refused(
             "solve.unsupported_reading",
             format!(
-                "`{}` is no reading a cost subtracts; it subtracts {}",
+                "`{}` is no reading a cost subtracts or reads alone; it subtracts {} and reads \
+                 {} alone",
                 asked.name,
-                SUBTRACTS.join(", ")
+                SUBTRACTS.join(", "),
+                SCALARS.join(", ")
             ),
         ));
     }
@@ -709,12 +716,14 @@ impl Parser<'_> {
             _ => return Err(self.ended("a reading's name follows `repr.`")),
         };
         self.at += 1;
-        if !SUBTRACTS.contains(&name.as_str()) {
+        if !SUBTRACTS.contains(&name.as_str()) && !SCALARS.contains(&name.as_str()) {
             return Err(refused(
                 "solve.unsupported_reading",
                 format!(
-                    "`repr.{name}` is no reading a cost subtracts; it subtracts {}",
-                    SUBTRACTS.join(", ")
+                    "`repr.{name}` is no reading a cost subtracts or reads alone; it subtracts \
+                     {} and reads {} alone",
+                    SUBTRACTS.join(", "),
+                    SCALARS.join(", ")
                 ),
             ));
         }

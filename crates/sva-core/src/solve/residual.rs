@@ -2,6 +2,10 @@
 
 use sva_engine::Output;
 
+use crate::heard::distance::{Reference, distance, measured};
+use crate::heard::ear::ear;
+use crate::heard::tape::Tape;
+
 /// Every level is floored here before it subtracts: the profile's silence threshold.
 pub const FLOOR_DB: f64 = -120.0;
 /// What an event with no partner on the other side counts, in seconds.
@@ -10,7 +14,7 @@ pub const MISSED_ONSET_SECS: f64 = 1.0;
 pub const MISSED_NOTE_CENTS: f64 = 1200.0;
 
 /// One line per rule, as `--help` prints them.
-pub const RULES: [(&str, &str); 10] = [
+pub const RULES: [(&str, &str); 11] = [
     (
         "envelope",
         "frame by frame, each frame's rms in dB, frame k of one side against frame k of the other",
@@ -53,6 +57,14 @@ pub const RULES: [(&str, &str); 10] = [
         "sharpness",
         "frame by frame, 100 ln(a / b) in percent, zero where either frame is silent or one \
          side lacks it",
+    ),
+    (
+        "heard",
+        "the judge proxy's distance with the second side the reference, its four terms: half \
+         the whole clip's, the soft maximum over the reference's notes of each note's balance, \
+         sharpness, decay and half its beating in JND, at the reference's level, half the \
+         largest pitch error and 0.3 of the mean attack error, the first side's notes paired \
+         to the reference's by nearest onset; `sum` of it is the distance a priced fit lowers",
     ),
     (
         "beating",
@@ -226,6 +238,12 @@ pub fn residual(a: &Output, b: &Output) -> Option<Vec<f64>> {
                 s.windows.iter().map(|w| w.phon).collect()
             };
             held_pairs(&phon(a), &phon(b), |x, y| x - y)
+        }
+        (Output::Heard(a), Output::Heard(b)) => {
+            let reference = Reference::of(b, ear(b.rate));
+            let mut tape = Tape::new();
+            let side = measured(&mut tape, a, &reference);
+            distance(&mut tape, &reference, &side).terms.to_vec()
         }
         (Output::Pitch(a), Output::Pitch(b)) => {
             let mut out = Vec::new();

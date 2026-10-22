@@ -150,6 +150,7 @@ fn analyze_takes_only_the_readings_a_buffer_answers() {
             "dissonance",
             "envelope",
             "formants",
+            "heard",
             "inharmonicity",
             "loudness",
             "loudness_pattern",

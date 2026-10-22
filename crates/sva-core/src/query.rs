@@ -310,6 +310,8 @@ impl Asked {
             | R::Samples
             | R::Crest
             | R::Score
+            | R::Heard
+            | R::Numbers
             | R::Bindings
             | R::Arguments => Vec::new(),
             R::Partials {

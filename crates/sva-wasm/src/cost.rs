@@ -19,6 +19,8 @@ export interface Samples {
  * `{ value }`, a number, a list of numbers or a reading's `data` as `analyze` answers it,
  * checked against the leaf it subtracts from; `add`, `sub`, `mul` and `div` over two or more,
  * left to right; `neg`; the reducers `norm`, `sum`, `max`, `abs`, and `dot: [weights, v]`.
+ * `{ repr: "numbers", target: "@master" }` is the bits a composition writes, which
+ * `method: "prox"` prices.
  */
 export type SolveCost =
     | number
@@ -29,8 +31,9 @@ export type SolveCost =
     | { neg: SolveCost }
     | { norm: SolveCost } | { sum: SolveCost } | { max: SolveCost } | { abs: SolveCost }
     | { dot: [number[], SolveCost] };
-/** One variable a solve moves, as `--vary <name>=<lo>..<hi>[/<step>][,log]`. */
-export interface SolveVary {
+/** One variable a solve moves, as `--vary <name>=<lo>..<hi>[/<step>][,log]`, or that text. */
+export type SolveVary = string | SolveVaryFields;
+export interface SolveVaryFields {
     name: string;
     lo: string | number;
     hi: string | number;
@@ -266,7 +269,10 @@ pub(crate) fn vary_of(values: &js_sys::Array) -> Result<Vec<Vary>, JsValue> {
         .enumerate()
         .map(|(k, value)| {
             let at = format!("vary[{k}]");
-            let fields = entries(&value).ok_or_else(|| bad_vary(&at, "is no object"))?;
+            if let Some(written) = value.as_string() {
+                return vary(&written).map_err(|e| thrown(&e));
+            }
+            let fields = entries(&value).ok_or_else(|| bad_vary(&at, "is no object or text"))?;
             let mut held = (None, None, None, None, false);
             for (key, v) in &fields {
                 let text = || {

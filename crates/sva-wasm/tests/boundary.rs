@@ -2739,3 +2739,84 @@ fn every_reading_a_render_answers_is_listed() {
         assert!(names.iter().any(|n| n == name), "{name} in {names:?}");
     }
 }
+
+/// `seed` hands a page the starter `new --from` writes; `solve` with `method: "prox"` answers
+/// one point a price and, asked to `write`, puts the chosen point's files in the composition.
+#[wasm_bindgen_test]
+fn a_seeded_starter_solves_on_the_priced_path() {
+    let rate = 48_000u32;
+    let clip: Vec<f32> = (0..rate * 3 / 10)
+        .map(|n| {
+            let t = f64::from(n) / f64::from(rate);
+            (0.1 * js_sys::Math::exp(-6.0 * t)
+                * js_sys::Math::sin(std::f64::consts::TAU * 220.0 * t)) as f32
+        })
+        .collect();
+    let channels = js_sys::Array::of1(&js_sys::Float32Array::from(clip.as_slice()));
+    let zero = js_sys::Object::new();
+    js_sys::Reflect::set(&zero, &"lone".into(), &JsValue::from(0))
+        .unwrap_or_else(|_| unreachable!("an object takes a key"));
+    assert!(
+        sva_wasm::seed(rate, channels.clone(), "clip.wav", Some(zero)).is_err(),
+        "a limit of 0 refuses"
+    );
+    let seeded = sva_wasm::seed(rate, channels.clone(), "clip.wav", None)
+        .unwrap_or_else(|e| unreachable!("a clip seeds: {}", as_text(&e)));
+    assert_eq!(
+        items(&seeded, "dropped").length(),
+        0,
+        "one sine leaves nothing out"
+    );
+    let mut comp = Composition::new(Some("a-fit".to_string()));
+    for file in items(&seeded, "files").iter() {
+        let (path, text) = (field(&file, "path"), field(&file, "text"));
+        comp.insert(
+            &path.as_string().unwrap_or_default(),
+            &text.as_string().unwrap_or_default(),
+        );
+    }
+    let cost = js_sys::JSON::parse(&format!(
+        r#"{{ "add": [ {{ "sum": {{ "sub": [ {{ "repr": "heard", "target": "@master" }},
+            {{ "repr": "heard", "target": {{ "samples": {{ "rate": {rate}, "channels": [] }} }} }} ] }} }},
+            {{ "mul": [0.012, {{ "repr": "numbers", "target": "@master" }}] }} ] }}"#
+    ))
+    .unwrap_or_else(|_| unreachable!("the cost is JSON"));
+    let reference = field(
+        &field(
+            &js_sys::Array::from(&field(
+                &field(&js_sys::Array::from(&field(&cost, "add")).get(0), "sum"),
+                "sub",
+            ))
+            .get(1),
+            "target",
+        ),
+        "samples",
+    );
+    js_sys::Reflect::set(&reference, &"channels".into(), &channels)
+        .unwrap_or_else(|_| unreachable!("an object takes a key"));
+    let varies = js_sys::Array::from(&field(&field(&seeded, "varies"), "items"));
+    let asked = js_sys::Object::new();
+    for (key, value) in [
+        ("method", JsValue::from("prox")),
+        ("path", js_sys::Array::of1(&JsValue::from(0.012)).into()),
+        ("steps", JsValue::from(2)),
+        ("write", JsValue::TRUE),
+    ] {
+        js_sys::Reflect::set(&asked, &key.into(), &value)
+            .unwrap_or_else(|_| unreachable!("an object takes a key"));
+    }
+    let answered = now(comp.solve(cost, varies, asked.into())).unwrap_or_else(|e| {
+        unreachable!(
+            "the priced solve answers: {}",
+            as_text(&field(&e, "refusal"))
+        )
+    });
+    let data = field(&answered, "data");
+    assert_eq!(field(&data, "method").as_string().as_deref(), Some("prox"));
+    assert_eq!(items(&data, "path").length(), 1, "one point a price");
+    assert!(field(&data, "chosen").is_object());
+    assert!(
+        items(&data, "written").length() > 0,
+        "the chosen point is written"
+    );
+}

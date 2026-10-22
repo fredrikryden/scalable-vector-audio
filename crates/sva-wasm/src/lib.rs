@@ -8,12 +8,14 @@ mod analyze;
 mod cost;
 mod describe;
 mod opfs;
+mod seed;
 mod stats;
 mod threads;
 
 pub use analyze::analyze;
 pub use describe::{outline, readings};
 pub use opfs::DirectoryHandle;
+pub use seed::seed;
 pub use stats::{subscribe, unsubscribe};
 pub use threads::start_threads;
 
@@ -171,6 +173,11 @@ struct Options {
     step_tol: Option<f64>,
     cost_tol: Option<f64>,
     progress: Option<js_sys::Function>,
+    prox: bool,
+    path: Option<Vec<f64>>,
+    close: Option<f64>,
+    steps: Option<usize>,
+    write: bool,
 }
 
 /// Values per array: stdout's cap, another, or every one (`limit: null`).
@@ -243,6 +250,45 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                     "step_tol" => held.step_tol = Some(tol),
                     _ => held.cost_tol = Some(tol),
                 }
+            }
+            "method" => {
+                held.prox = match value.as_string().as_deref() {
+                    Some("prox") => true,
+                    Some("compass") => false,
+                    _ => {
+                        return Err(refuse(
+                            "`method` is neither \"compass\" nor \"prox\"".into(),
+                            "pass \"prox\" for the priced path, or leave it out",
+                        ));
+                    }
+                }
+            }
+            "path" => {
+                let path: Option<Vec<f64>> = js_sys::Array::is_array(&value)
+                    .then(|| {
+                        js_sys::Array::from(&value)
+                            .iter()
+                            .map(|v| v.as_f64().filter(|x| x.is_finite() && *x > 0.0))
+                            .collect()
+                    })
+                    .flatten();
+                held.path = Some(path.ok_or_else(|| {
+                    refuse(
+                        "`path` is no list of prices above 0".into(),
+                        "pass the prices per number, as [0.003, 0.01, 0.1]",
+                    )
+                })?);
+            }
+            "close" => {
+                let jnd = value.as_f64().filter(|v| v.is_finite() && *v > 0.0);
+                held.close =
+                    Some(jnd.ok_or_else(|| refuse("`close` is no JND above 0".into(), "pass 3"))?);
+            }
+            "steps" => held.steps = Some(whole(&key, &value)?),
+            "write" => {
+                held.write = value.as_bool().ok_or_else(|| {
+                    refuse("`write` is not a boolean".into(), "pass true or false")
+                })?
             }
             "progress" => {
                 held.progress = Some(value.dyn_into::<js_sys::Function>().map_err(|_| {
@@ -529,6 +575,11 @@ impl Composition {
             "threads",
             "signal",
             "progress",
+            "method",
+            "path",
+            "close",
+            "steps",
+            "write",
         ];
         let options = options_of(&options, &keys)?;
         let tree = cost::tree_of(&cost, "cost")?;
@@ -555,10 +606,13 @@ impl Composition {
             threads: Some(threads::limit(options.threads.or(self.threads))),
             stops,
         };
-        let signal = options.signal.map(Signal);
+        let signal = options.signal.clone().map(Signal);
         let abandon = signal
             .as_ref()
             .map_or(&Never as &dyn Abandon, |signal| signal as &dyn Abandon);
+        if options.prox {
+            return self.priced(&problem, &options, abandon).await;
+        }
         let mut heard = |point: &sva_core::solve::Point| {
             if let Some(progress) = &options.progress {
                 let line = sva_core::solve::point_json(point);
@@ -579,6 +633,56 @@ impl Composition {
             return Err(error.into());
         }
         parse(&sva_core::success_envelope(&data, &found))
+    }
+
+    async fn priced(
+        &self,
+        problem: &sva_core::solve::Problem<'_>,
+        options: &Options,
+        abandon: &dyn Abandon,
+    ) -> Result<JsValue, JsValue> {
+        use sva_core::solve::prox::{Progress, fitted_data, progress_json, run};
+        let priced = run::Priced {
+            path: options.path.clone(),
+            close: options
+                .close
+                .unwrap_or(sva_core::solve::prox::DEFAULT_CLOSE),
+            steps: options
+                .steps
+                .unwrap_or(sva_core::solve::prox::DEFAULT_STEPS),
+        };
+        let mut heard = |p: &Progress| {
+            if let Some(progress) = &options.progress {
+                let line = progress_json(p);
+                let _ = progress.call1(&JsValue::NULL, &parse(&line).unwrap_or(line.into()));
+            }
+        };
+        let fitted = run::fitted(problem, &priced, &*self.tier, &mut heard, abandon)
+            .await
+            .map_err(|e| thrown(&e))?;
+        let cost = &problem.cost.text;
+        if fitted.cancelled {
+            let data = fitted_data(&fitted, &priced, cost, "");
+            let message = "the priced solve was aborted; `refusal.data.path` holds the points it \
+                           finished, and nothing was written";
+            let error = JsErr::new(message);
+            error.set_name("AbortError");
+            let envelope = sva_core::error_envelope_with("cancelled", message, &data, &[]);
+            error.set_refusal(parse(&envelope)?);
+            return Err(error.into());
+        }
+        let mut extra = String::new();
+        if options.write {
+            for (path, text) in &fitted.files {
+                self.inner.0.borrow_mut().insert(path, text);
+            }
+            let paths = sva_core::json::list(&fitted.files, |(path, _)| {
+                format!("\"{}\"", sva_core::json::escape(path))
+            });
+            extra = format!(", \"written\": {paths}");
+        }
+        let data = fitted_data(&fitted, &priced, cost, &extra);
+        parse(&sva_core::success_envelope(&data, &[]))
     }
 
     /// `target` and `representations` as `sva-cli render` takes them. `options`: `rate`,

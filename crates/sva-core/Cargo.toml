@@ -12,4 +12,5 @@ libm = { workspace = true }
 sva-ast = { workspace = true }
 sva-engine = { workspace = true }
 sva-formula = { workspace = true }
+sva-samples = { workspace = true }
 serde_json = { workspace = true }

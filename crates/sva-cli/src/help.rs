@@ -29,6 +29,12 @@ pub fn help_text() -> String {
         solve::DEFAULT_STEP_TOL,
         solve::DEFAULT_COST_TOL,
     );
+    let (steps, close) = (solve::prox::DEFAULT_STEPS, solve::prox::DEFAULT_CLOSE);
+    let (harmonics, lone) = (
+        sva_core::seed::LIMITS.harmonics,
+        sva_core::seed::LIMITS.lone,
+    );
+    let lowered = sva_core::heard::power::LOWERED;
     let (passband, stopband) = (resample::PASSBAND, resample::STOPBAND);
     let bound = format!("{} dB", 20.0 * libm::log10(resample::BOUND));
     let formats = crate::recording::READS
@@ -375,10 +381,12 @@ SOLVE:
                 [--max-renders <n>] [--step-tol <x>] [--cost-tol <x>]
                 [--set <name>=<text>]... [--rate <hz>] [--threads <n>]
                 [--cache <path|none>] [--write [--confirm]]
+                [--method prox [--path <p>,<p>...] [--close <jnd>] [--steps <n>]]
 
   Fits variables under `variables/` so the targets a cost reads match a
   reference, and prints the values it found. It edits no file unless `--write
-  --confirm` says so.
+  --confirm` says so. `--method prox` fits a whole composition instead: PRICED
+  FIT below.
 
   The cost is one expression typing to one number. Its leaves are
   `repr.<reading>(<target>, <args>)`: `<reading>` spelled as `--representation`
@@ -583,11 +591,59 @@ OUTLINE:
   (`line`, `lane` or `default`), and the `size`: placed events and the engine's
   instances beside its limit.
 
+PRICED FIT:
+  `--method prox` fits every number of a composition the `--vary`s name, node
+  defaults and score fields alike, and prices the bits it writes, so the fit
+  ends at the smallest model it finds near the reference. The cost is
+    sum(repr.heard(@<model>) - repr.heard(<reference>))
+      + <price>*repr.numbers(@<model>)
+  `heard`'s distance (READINGS, its rule above) plus `<price>` JND on each bit
+  `numbers` (READINGS) counts. The model side is not rendered: it is the
+  composition's expected power per band and frame, read off its closed forms
+  line by line, every number's gradient one reverse sweep; the lowering reads
+  {lowered}, and refuses anything else by name.
+  Each number written costs its `--vary`'s bits, log2((hi-lo)/step), or of
+  ln(hi/lo)/ln(step) where log; one no `--vary` names costs none. Written are:
+  each score line's onset and each field its node has no default for, the line
+  gone where its gain (its one such field whose linear bounds start at 0) is 0;
+  each field that differs from its node's default; and each used node's
+  default, but one at 0 inside linear bounds that hold 0, or one its body no
+  longer reads once those are 0 (a bend time with no bend).
+  Each `--vary` is `[<file>:]<name>=<lo>..<hi>/<step>[,log]`, `<name>*` a
+  numbered family (`h*` is `h1`, `h2`, ...), `<file>:` scoping it to the node
+  or score at that path, and `/<step>` the number's resolution, about a JND of
+  what it moves, which sets its bits, scales its step and its price's floor.
+  The path: an unpriced descent, its lines spread over the nodes of one kind
+  (one body, one set of defaults) and clustered, then for each price of
+  `--path` (default the cost's own) {steps} proximal Adam steps, each priced
+  number's threshold the price times its weight times its own step, the folds
+  of one node's lines into another of its kind and the splits of one node's
+  lines with a new node of its kind each kept only where the cost falls, and a
+  debias holding every zero. `--steps` scales every phase. Each point is
+  then rendered and read as `heard`. The answer's `data`: `path`, one point a
+  price with its `numbers` and their `bits`, `heard` (off its render) and `predicted` (the
+  expected-power distance the descent lowered); `chosen`, the smallest point
+  (fewest bits) whose every heard axis is within `--close` JND (default {close}), else the
+  closest; and `files`, the chosen point's text. `--write --confirm` writes the
+  chosen point in place: defaults in their node files, score lines without their
+  silent ones or the fields their node's default restates. Each step prints a JSON line
+  on stderr. `sva-cli new <name> --from <clip>` writes a starter to fit.
+
 NEW:
-  sva-cli new <name> [--idempotency-key <key>]
+  sva-cli new <name> [--from <recording> [--harmonics <n>] [--lone <n>]]
+      [--idempotency-key <key>]
 
   Writes a starter composition at ./<name>, and refuses if that directory
-  exists. `--idempotency-key <key>` records the key beside the composition, so a
+  exists. `--from <recording>` writes instead the starter a priced fit shrinks
+  (PRICED FIT): one structure per group its readings find, a harmonic series
+  (its stretch `inh` 0, so inharmonic as priced as harmonic) per voice tone of
+  the `score` reading, a lone partial, and a noise band per event sound, its
+  band where `heard` puts that sound's power; every voice, partial and noise
+  they offer as a score line, `fits/clip` and the recording itself, and no
+  annotation. `--harmonics <n>` (default {harmonics}) sets the harmonics a
+  series holds and `--lone <n>` (default {lone}) the lone partials an onset
+  offers; `dropped` names what each left out of the recording. `next` is the
+  `solve` that fits it. `--idempotency-key <key>` records the key beside the composition, so a
   retry under the same key succeeds identically while the tree still holds what
   was written. Any other key, or an edited tree, refuses.
 
@@ -740,6 +796,11 @@ DEFAULTS:
   --step-tol <x>       the fraction of each variable's first step under which a
                        solve's search stops. Default {step_tol}.
   --cost-tol <x>       the cost at or under which a solve stops. Default {cost_tol}.
+  --method <m>         `compass` (default) or `prox`, the priced fit.
+  --path <p>,...       the prices per number a priced fit visits, in turn.
+  --close <jnd>        the largest axis a priced fit's choice may hold. Default
+                       {close}.
+  --steps <n>          a priced fit's steps per price. Default {steps}.
   --write              a solve writes its fitted values to their `variables/`
                        files, with `--confirm`. Default off.
   --confirm            replaces a destination that already holds a file. Without

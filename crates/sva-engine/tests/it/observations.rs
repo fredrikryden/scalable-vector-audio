@@ -627,7 +627,7 @@ fn a_cropped_delta_train_keeps_only_the_instants_its_window_holds() {
 fn one_table_says_what_every_named_reading_consumes() {
     use sva_engine::Representation;
     use sva_samples::Consumes;
-    let always_closed = ["lines", "atoms", "bindings", "arguments"];
+    let always_closed = ["lines", "atoms", "numbers", "bindings", "arguments"];
     let turns_on_the_type = [
         "spectrum",
         "envelope",
@@ -665,6 +665,8 @@ fn one_table_says_what_every_named_reading_consumes() {
         "loudness_pattern",
         "sharpness",
         "beating",
+        "heard",
+        "numbers",
         "bindings",
         "arguments",
     ];
