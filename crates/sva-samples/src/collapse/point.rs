@@ -2,7 +2,7 @@
 
 use sva_formula::closed_form::Unary;
 use sva_formula::spectral_sum::atom::{Singular, SpectralAtom};
-use sva_formula::{C64, Cx, Lane, Num, SpectralSum};
+use sva_formula::{C64, Cx, Kernel, Lane, Num, SpectralSum};
 
 use crate::error::CollapseError;
 use crate::grid::Grid;
@@ -34,7 +34,7 @@ type On = Option<(Grid, i64)>;
 
 /// The six atom factors in closed form. A delta has no ordinary value, and a principal
 /// value has none at its own pole.
-pub(crate) fn eval_atom_on<N: Num>(
+pub(crate) fn eval_atom_on<N: Kernel>(
     a: &SpectralAtom<N>,
     t: N,
     on: On,
@@ -51,10 +51,10 @@ pub(crate) fn eval_atom_on<N: Num>(
     }
     let held = match (a.ind, on) {
         (Some(ind), Some((grid, n))) => match grid.inside(n, ind.l.value(), ind.r.value()) {
-            true => a.smooth_inside(t),
+            true => N::smooth_inside(a, t),
             false => Some(Cx::ZERO),
         },
-        _ => a.smooth_at(t),
+        _ => N::smooth_at(a, t),
     };
     held.ok_or(CollapseError::SingularInCt {
         at: a.pole.map_or(t.v(), |p| p.at.re.v()),
@@ -62,7 +62,11 @@ pub(crate) fn eval_atom_on<N: Num>(
     })
 }
 
-pub(crate) fn eval_lane_on<N: Num>(lane: &Lane<N>, t: N, on: On) -> Result<Cx<N>, CollapseError> {
+pub(crate) fn eval_lane_on<N: Kernel>(
+    lane: &Lane<N>,
+    t: N,
+    on: On,
+) -> Result<Cx<N>, CollapseError> {
     let mut sum = Cx::ZERO;
     for a in &lane.atoms {
         sum = sum + eval_atom_on(a, t, on)?;
@@ -83,7 +87,7 @@ pub(crate) fn eval_among(
     with_modal(lane, sum, t, on)
 }
 
-fn with_modal<N: Num>(
+fn with_modal<N: Kernel>(
     lane: &Lane<N>,
     mut sum: Cx<N>,
     t: N,
@@ -102,7 +106,7 @@ pub(crate) fn eval_spectral_sum(n: &SpectralSum, c: usize, t: f64) -> Result<C64
 }
 
 /// A finite sum's atoms at `at`; a series line is no atom until enumerated.
-pub(crate) fn eval_spectral_sum_on<N: Num>(
+pub(crate) fn eval_spectral_sum_on<N: Kernel>(
     n: &SpectralSum<N>,
     c: usize,
     at: At,

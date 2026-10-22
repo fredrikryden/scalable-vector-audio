@@ -12,7 +12,7 @@ pub mod run;
 mod tail;
 mod truncate;
 
-use sva_formula::{Body, C64, Cx, Kernel, Num, SpectralSum};
+use sva_formula::{Body, C64, Cx, Kernel, SpectralSum};
 
 use crate::error::CollapseError;
 
@@ -26,7 +26,7 @@ pub use truncate::{
     written_with as truncate_written_with,
 };
 
-pub fn eval_spectral_sum_at<N: Num>(
+pub fn eval_spectral_sum_at<N: Kernel>(
     sum: &SpectralSum<N>,
     component: usize,
     at: At,

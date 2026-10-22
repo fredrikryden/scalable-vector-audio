@@ -1,7 +1,7 @@
 // Concern: declares SpectralAtom, its six factors, its derivative and its sort key | Non-concern: multiplying two (product.rs), building one from a Body (build.rs) | IO: (an atom) -> its key
 
 use crate::closed_form::Edge;
-use crate::complex::Cx;
+use crate::complex::{C64, Cx};
 use crate::num::Num;
 use crate::origin::Origin;
 use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
@@ -210,6 +210,15 @@ impl<N: Num> Factors<N> {
 }
 
 impl SpectralAtom {
+    pub fn smooth_at(&self, x: f64) -> Option<C64> {
+        self.smooth_at_over(x)
+    }
+
+    /// `smooth_at` at an `x` its caller already placed inside the window.
+    pub fn smooth_inside(&self, x: f64) -> Option<C64> {
+        self.smooth_inside_over(x)
+    }
+
     /// The same atom over another number, moved by no varied number.
     pub fn lifted<N: Num>(&self) -> SpectralAtom<N> {
         let edge = |e: Edge| Edge::of(e);
@@ -297,7 +306,7 @@ impl<N: Num> SpectralAtom<N> {
             Singular::Delta { at, order } => {
                 assert!(at.v().is_finite());
                 let weight = match order {
-                    0 => atom.smooth_at(at).unwrap_or(Cx::ZERO),
+                    0 => atom.smooth_at_over(at).unwrap_or(Cx::ZERO),
                     _ => {
                         assert!(
                             atom.is_bare(),
@@ -375,15 +384,16 @@ impl<N: Num> SpectralAtom<N> {
         SpectralAtom::new(c, factors, self.sing, self.origin)
     }
 
-    pub fn smooth_at(&self, x: N) -> Option<Cx<N>> {
+    pub fn smooth_at_over(&self, x: N) -> Option<Cx<N>> {
         if self.ind.is_some_and(|i| !i.contains(x.v())) {
             return Some(Cx::ZERO);
         }
-        self.smooth_inside(x)
+        self.smooth_inside_over(x)
     }
 
     /// `smooth_at` at an `x` its caller already placed inside the window.
-    pub fn smooth_inside(&self, x: N) -> Option<Cx<N>> {
+    #[inline(always)]
+    pub fn smooth_inside_over(&self, x: N) -> Option<Cx<N>> {
         let mut v = self.c;
         if !self.poly.is_one() {
             v = v.scale(self.poly.value(x));
@@ -475,7 +485,7 @@ impl<N: Num> SpectralAtom<N> {
             );
             for (edge, sign) in [(i.l, 1.0), (i.r, -1.0)] {
                 let Edge::At(at) = edge else { continue };
-                let Some(w) = open.smooth_at(at) else {
+                let Some(w) = open.smooth_at_over(at) else {
                     continue;
                 };
                 out.push(SpectralAtom::new(

@@ -253,7 +253,7 @@ fn leibniz<N: Num>(
     for j in 0..=order {
         let mut value = Cx::ZERO;
         for atom in &level {
-            let Some(v) = atom.smooth_at(at) else {
+            let Some(v) = atom.smooth_at_over(at) else {
                 return Err(Left::new(
                     delta.origin,
                     AtomSketch::pair(Factor::Delta, Factor::Pole),
