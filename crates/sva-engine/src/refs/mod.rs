@@ -1,9 +1,11 @@
 // Concern: what reading another node yields, per the representation it holds | Non-concern: ordering the reads (schedule.rs), collapsing a closed form (sva-samples) | IO: (NodeId, Var) -> SpectralSum
 
 use std::borrow::Cow;
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use sva_formula::Num;
 use sva_formula::closed_form::children;
 use sva_formula::spectral_sum::atom::Indicator;
 use sva_formula::spectral_sum::build::{multiply_lanes_read, sole_constant};
@@ -227,20 +229,23 @@ fn no_closed_form(typing: &Typing, node: NodeId) -> EngineError {
 
 /// Every ref naming one number, replaced by that number. A constant is the same value on
 /// either axis and under every construct, so it folds where no form would substitute.
-pub(crate) fn fold_constants<'a>(typing: &Typing, f: &'a Body) -> Cow<'a, Body> {
+pub(crate) fn fold_constants<'a, N: Num>(typing: &Typing, f: &'a Body<N>) -> Cow<'a, Body<N>> {
     let fold = &mut Folding::default();
     folded_by(f, &mut |id| number(typing, id, fold))
 }
 
 /// `f` with every ref `number` answers replaced by its number.
-fn folded_by<'a>(f: &'a Body, number: &mut dyn FnMut(NodeId) -> Option<C64>) -> Cow<'a, Body> {
+fn folded_by<'a, N: Num>(
+    f: &'a Body<N>,
+    number: &mut dyn FnMut(NodeId) -> Option<C64>,
+) -> Cow<'a, Body<N>> {
     match names_number(f, number) {
         true => Cow::Owned(folded(f, number)),
         false => Cow::Borrowed(f),
     }
 }
 
-fn names_number(f: &Body, number: &mut dyn FnMut(NodeId) -> Option<C64>) -> bool {
+fn names_number<N: Num>(f: &Body<N>, number: &mut dyn FnMut(NodeId) -> Option<C64>) -> bool {
     match f {
         Body::Node(id) => number(*id).is_some(),
         _ => children(f)
@@ -257,14 +262,14 @@ struct Folding {
     cut: bool,
 }
 
-fn folded(f: &Body, number: &mut dyn FnMut(NodeId) -> Option<C64>) -> Body {
+fn folded<N: Num>(f: &Body<N>, number: &mut dyn FnMut(NodeId) -> Option<C64>) -> Body<N> {
     let Body::Node(id) = f else {
         return sva_formula::closed_form::map_children(f, |p| {
             Part::new(p.origin, folded(&p.body, number))
         });
     };
     match number(*id) {
-        Some(c) => Body::Const(c),
+        Some(c) => Body::Const(sva_formula::Cx::of(c)),
         None => f.clone(),
     }
 }

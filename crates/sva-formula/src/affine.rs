@@ -1,7 +1,8 @@
 // Concern: reads a formula's polynomial to degree two, and a series term at each index | Non-concern: lowering one to atoms (spectral_sum/build.rs) | IO: (&Body) -> Vec<Coeff>; (&Body, k) -> C64
 
 use crate::closed_form::{Body, IndexId, Unary};
-use crate::complex::C64;
+use crate::complex::Cx;
+use crate::num::Num;
 use crate::through::{Opaque, Reads};
 
 /// An affine argument makes the line and delta rows, a quadratic one the Gaussian row.
@@ -16,8 +17,8 @@ pub enum Axis {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Coeff {
-    Exact(C64),
+pub enum Coeff<N: Num = f64> {
+    Exact(Cx<N>),
     Unknown(Axis),
 }
 
@@ -29,8 +30,8 @@ impl Axis {
         }
     }
 
-    fn of(c: C64) -> Axis {
-        match (c.is_real(), c.re == 0.0) {
+    fn of<N: Num>(c: Cx<N>) -> Axis {
+        match (c.is_real(), c.re.is_zero()) {
             (true, _) => Axis::Real,
             (false, true) => Axis::Imaginary,
             _ => Axis::Any,
@@ -50,11 +51,11 @@ impl Axis {
     }
 }
 
-impl Coeff {
-    pub const ZERO: Coeff = Coeff::Exact(C64::ZERO);
-    pub const ONE: Coeff = Coeff::Exact(C64::ONE);
+impl<N: Num> Coeff<N> {
+    pub const ZERO: Coeff<N> = Coeff::Exact(Cx::ZERO);
+    pub const ONE: Coeff<N> = Coeff::Exact(Cx::ONE);
 
-    pub fn exact(self) -> Option<C64> {
+    pub fn exact(self) -> Option<Cx<N>> {
         match self {
             Coeff::Exact(c) => Some(c),
             Coeff::Unknown(_) => None,
@@ -72,7 +73,7 @@ impl Coeff {
         matches!(self, Coeff::Exact(c) if c.is_zero())
     }
 
-    fn add(self, other: Coeff) -> Coeff {
+    fn add(self, other: Coeff<N>) -> Coeff<N> {
         match (self, other) {
             (Coeff::Exact(a), Coeff::Exact(b)) => Coeff::Exact(a + b),
             (a, b) if a.is_zero() => b,
@@ -81,7 +82,7 @@ impl Coeff {
         }
     }
 
-    fn mul(self, other: Coeff) -> Coeff {
+    fn mul(self, other: Coeff<N>) -> Coeff<N> {
         match (self, other) {
             (Coeff::Exact(a), Coeff::Exact(b)) => Coeff::Exact(a * b),
             (a, b) if a.is_zero() || b.is_zero() => Coeff::ZERO,
@@ -89,15 +90,15 @@ impl Coeff {
         }
     }
 
-    fn div(self, other: Coeff) -> Coeff {
+    fn div(self, other: Coeff<N>) -> Coeff<N> {
         match (self, other) {
             (Coeff::Exact(a), Coeff::Exact(b)) => Coeff::Exact(a / b),
             (a, b) => Coeff::Unknown(a.axis().times(b.axis())),
         }
     }
 
-    fn scale(self, k: f64) -> Coeff {
-        self.mul(Coeff::Exact(C64::real(k)))
+    fn scale(self, k: N) -> Coeff<N> {
+        self.mul(Coeff::Exact(Cx::real(k)))
     }
 }
 
@@ -108,31 +109,35 @@ pub enum Reading {
     Index(IndexId),
 }
 
-pub fn polynomial(f: &Body) -> Option<Vec<Coeff>> {
+pub fn polynomial<N: Num>(f: &Body<N>) -> Option<Vec<Coeff<N>>> {
     polynomial_in(f, Reading::Free)
 }
 
-pub fn polynomial_in(f: &Body, reading: Reading) -> Option<Vec<Coeff>> {
+pub fn polynomial_in<N: Num>(f: &Body<N>, reading: Reading) -> Option<Vec<Coeff<N>>> {
     polynomial_read(f, reading, &Opaque)
 }
 
 /// Ascending coefficients, or nothing above degree two. Read in the free variable, an index
 /// is an unknown real; read in an index, the free variable is not a coefficient at all.
-pub fn polynomial_read(f: &Body, reading: Reading, reads: &dyn Reads) -> Option<Vec<Coeff>> {
+pub fn polynomial_read<N: Num>(
+    f: &Body<N>,
+    reading: Reading,
+    reads: &dyn Reads<N>,
+) -> Option<Vec<Coeff<N>>> {
     read(f, reading, reads).map(|p| p.as_slice().to_vec())
 }
 
 /// A series term compiled once to be read at index after index: at each, the constant `read`
 /// spells with the index written in its place, every subterm the index never reaches read
 /// once, here.
-pub struct ConstantAt(Tape);
+pub struct ConstantAt<N: Num = f64>(Tape<N>);
 
-impl ConstantAt {
-    pub fn of(f: &Body, k: IndexId, reads: &dyn Reads) -> ConstantAt {
+impl<N: Num> ConstantAt<N> {
+    pub fn of(f: &Body<N>, k: IndexId, reads: &dyn Reads<N>) -> ConstantAt<N> {
         ConstantAt(Tape::of(f, k, reads))
     }
 
-    pub fn at(&self, value: f64) -> Option<C64> {
+    pub fn at(&self, value: f64) -> Option<Cx<N>> {
         match self.0.exact(value) {
             Exact::Held(c) => Some(c),
             Exact::Failed => None,
@@ -143,40 +148,40 @@ impl ConstantAt {
 
 /// A tape read on constants alone, each op `Coeff`'s arithmetic; `Unknown` where one is no
 /// number, which only the polynomials hold.
-enum Exact {
-    Held(C64),
+enum Exact<N: Num> {
+    Held(Cx<N>),
     Failed,
     Unknown,
 }
 
 /// Postfix: each op pops its operands and pushes what `read` gives of them. `None` where the
 /// term fails to read at every index.
-struct Tape(Option<Vec<Op>>);
+struct Tape<N: Num>(Option<Vec<Op<N>>>);
 
-enum Op {
-    Push(Poly),
+enum Op<N: Num> {
+    Push(Poly<N>),
     Index,
-    Keyed(u64, Tape),
+    Keyed(u64, Tape<N>),
     Apply(Unary),
     Add(usize),
     Mul(usize),
     Div,
     Pow(u32),
-    Shift(f64),
+    Shift(N),
 }
 
-impl Tape {
-    fn of(f: &Body, k: IndexId, reads: &dyn Reads) -> Tape {
+impl<N: Num> Tape<N> {
+    fn of(f: &Body<N>, k: IndexId, reads: &dyn Reads<N>) -> Tape<N> {
         let mut ops = Vec::new();
         Tape(compile(f, k, reads, &mut ops).map(|()| ops))
     }
 
-    fn exact(&self, value: f64) -> Exact {
+    fn exact(&self, value: f64) -> Exact<N> {
         let Some(ops) = &self.0 else {
             return Exact::Failed;
         };
-        let mut stack: Vec<Coeff> = Vec::with_capacity(8);
-        let pop = |stack: &mut Vec<Coeff>| {
+        let mut stack: Vec<Coeff<N>> = Vec::with_capacity(8);
+        let pop = |stack: &mut Vec<Coeff<N>>| {
             stack
                 .pop()
                 .expect("a compiled op pops only what an earlier op pushed")
@@ -187,10 +192,10 @@ impl Tape {
                     [c @ Coeff::Exact(_)] => *c,
                     _ => return Exact::Unknown,
                 },
-                Op::Index => Coeff::Exact(C64::real(value)),
+                Op::Index => Coeff::Exact(Cx::real(N::of(value))),
                 Op::Keyed(seed, of) => match of.exact(value) {
-                    Exact::Held(at) => match crate::hash::draw_nearest(*seed, at.re) {
-                        Some(drawn) => Coeff::Exact(C64::real(drawn)),
+                    Exact::Held(at) => match crate::hash::draw_nearest(*seed, at.re.v()) {
+                        Some(drawn) => Coeff::Exact(Cx::real(N::of(drawn))),
                         None => return Exact::Unknown,
                     },
                     Exact::Failed | Exact::Unknown => return Exact::Unknown,
@@ -233,12 +238,12 @@ impl Tape {
         }
     }
 
-    fn run(&self, value: f64) -> Option<Poly> {
-        let mut stack: Vec<Poly> = Vec::with_capacity(8);
+    fn run(&self, value: f64) -> Option<Poly<N>> {
+        let mut stack: Vec<Poly<N>> = Vec::with_capacity(8);
         for op in self.0.as_ref()? {
             let pushed = match op {
                 Op::Push(p) => *p,
-                Op::Index => Poly::one(Coeff::Exact(C64::real(value))),
+                Op::Index => Poly::one(Coeff::Exact(Cx::real(N::of(value)))),
                 Op::Keyed(seed, of) => keyed(*seed, of.run(value)),
                 Op::Apply(unary) => applied(*unary, &popped(&mut stack))?,
                 Op::Add(n) => {
@@ -270,18 +275,23 @@ impl Tape {
     }
 }
 
-fn popped(stack: &mut Vec<Poly>) -> Poly {
+fn popped<N: Num>(stack: &mut Vec<Poly<N>>) -> Poly<N> {
     stack
         .pop()
         .expect("a compiled op pops only what an earlier op pushed")
 }
 
-fn compile(f: &Body, k: IndexId, reads: &dyn Reads, ops: &mut Vec<Op>) -> Option<()> {
+fn compile<N: Num>(
+    f: &Body<N>,
+    k: IndexId,
+    reads: &dyn Reads<N>,
+    ops: &mut Vec<Op<N>>,
+) -> Option<()> {
     if !crate::series::mentions(f, k) {
         ops.push(Op::Push(read(f, Reading::Free, reads)?));
         return Some(());
     }
-    let mut each = |parts: &[&Body]| {
+    let mut each = |parts: &[&Body<N>]| {
         parts
             .iter()
             .try_for_each(|part| compile(part, k, reads, &mut *ops))
@@ -294,7 +304,7 @@ fn compile(f: &Body, k: IndexId, reads: &dyn Reads, ops: &mut Vec<Op>) -> Option
             Op::Apply(*unary)
         }
         Body::Add(parts) | Body::Mul(parts) => {
-            let bodies: Vec<&Body> = parts.iter().map(|p| &*p.body).collect();
+            let bodies: Vec<&Body<N>> = parts.iter().map(|p| &*p.body).collect();
             each(&bodies)?;
             match f {
                 Body::Add(_) => Op::Add(parts.len()),
@@ -321,8 +331,8 @@ fn compile(f: &Body, k: IndexId, reads: &dyn Reads, ops: &mut Vec<Op>) -> Option
 }
 
 /// An index read in the free variable is an unknown real; read in itself, its own line.
-fn read(f: &Body, reading: Reading, reads: &dyn Reads) -> Option<Poly> {
-    let polynomial = |g: &Body| read(g, reading, reads);
+fn read<N: Num>(f: &Body<N>, reading: Reading, reads: &dyn Reads<N>) -> Option<Poly<N>> {
+    let polynomial = |g: &Body<N>| read(g, reading, reads);
     match f {
         Body::Node(id) => Poly::of(&reads.polynomial(*id, reading)?),
         Body::Const(c) => Some(Poly::one(Coeff::Exact(*c))),
@@ -353,17 +363,17 @@ fn read(f: &Body, reading: Reading, reads: &dyn Reads) -> Option<Poly> {
 }
 
 /// A key the hash cannot draw at is an unknown real.
-fn keyed(seed: u64, of: Option<Poly>) -> Poly {
+fn keyed<N: Num>(seed: u64, of: Option<Poly<N>>) -> Poly<N> {
     match of
         .and_then(constant)
-        .and_then(|at| crate::hash::draw_nearest(seed, at.re))
+        .and_then(|at| crate::hash::draw_nearest(seed, at.re.v()))
     {
-        Some(drawn) => Poly::one(Coeff::Exact(C64::real(drawn))),
+        Some(drawn) => Poly::one(Coeff::Exact(Cx::real(N::of(drawn)))),
         None => Poly::one(Coeff::Unknown(Axis::Real)),
     }
 }
 
-fn applied(op: Unary, arg: &Poly) -> Option<Poly> {
+fn applied<N: Num>(op: Unary, arg: &Poly<N>) -> Option<Poly<N>> {
     match arg.as_slice() {
         [c] => Some(Poly::one(match c.exact() {
             Some(x) => Coeff::Exact(apply_scalar(op, x)),
@@ -373,7 +383,7 @@ fn applied(op: Unary, arg: &Poly) -> Option<Poly> {
     }
 }
 
-fn divided(mut num: Poly, den: &Poly) -> Option<Poly> {
+fn divided<N: Num>(mut num: Poly<N>, den: &Poly<N>) -> Option<Poly<N>> {
     let [d] = *den.as_slice() else {
         return None;
     };
@@ -381,43 +391,43 @@ fn divided(mut num: Poly, den: &Poly) -> Option<Poly> {
     Some(num)
 }
 
-fn power(base: &Poly, n: u32) -> Option<Poly> {
+fn power<N: Num>(base: &Poly<N>, n: u32) -> Option<Poly<N>> {
     (0..n).try_fold(Poly::one(Coeff::ONE), |acc, _| mul(&acc, base))
 }
 
 /// Ascending coefficients held in place: a polynomial read here never passes degree two.
 #[derive(Clone, Copy)]
-struct Poly {
-    c: [Coeff; MAX_DEGREE + 1],
+struct Poly<N: Num> {
+    c: [Coeff<N>; MAX_DEGREE + 1],
     len: usize,
 }
 
-impl Poly {
-    fn zeros(len: usize) -> Poly {
+impl<N: Num> Poly<N> {
+    fn zeros(len: usize) -> Poly<N> {
         Poly {
             c: [Coeff::ZERO; MAX_DEGREE + 1],
             len,
         }
     }
 
-    fn one(c: Coeff) -> Poly {
+    fn one(c: Coeff<N>) -> Poly<N> {
         let mut p = Poly::zeros(1);
         p.c[0] = c;
         p
     }
 
-    fn of(cs: &[Coeff]) -> Option<Poly> {
+    fn of(cs: &[Coeff<N>]) -> Option<Poly<N>> {
         let mut p = Poly::zeros(cs.len());
         p.c.get_mut(..cs.len())?.copy_from_slice(cs);
         Some(p)
     }
 
-    fn as_slice(&self) -> &[Coeff] {
+    fn as_slice(&self) -> &[Coeff<N>] {
         &self.c[..self.len]
     }
 }
 
-fn constant(p: Poly) -> Option<C64> {
+fn constant<N: Num>(p: Poly<N>) -> Option<Cx<N>> {
     match p.as_slice() {
         [b] => b.exact(),
         _ => None,
@@ -426,44 +436,48 @@ fn constant(p: Poly) -> Option<C64> {
 
 /// Every unary this language folds on a scalar, in one place, so `normalize` and `infer`
 /// cannot disagree about what a constant argument gives.
-pub fn apply_scalar(op: Unary, x: C64) -> C64 {
+pub fn apply_scalar<N: Num>(op: Unary, x: Cx<N>) -> Cx<N> {
     match op {
-        Unary::Sin => ((C64::I * x).exp() - (-C64::I * x).exp()) / C64::I.scale(2.0),
-        Unary::Cos => ((C64::I * x).exp() + (-C64::I * x).exp()).scale(0.5),
+        Unary::Sin => ((Cx::I * x).exp() - (-Cx::I * x).exp()) / Cx::I.scale(N::of(2.0)),
+        Unary::Cos => ((Cx::I * x).exp() + (-Cx::I * x).exp()).scale(N::of(0.5)),
         Unary::Exp => x.exp(),
         Unary::Tanh => {
             let (p, m) = (x.exp(), (-x).exp());
             (p - m) / (p + m)
         }
-        Unary::Sat => C64::real(x.re.clamp(-1.0, 1.0)),
-        Unary::Abs => C64::real(x.abs()),
-        Unary::Log => C64::new(libm::log(x.abs()), libm::atan2(x.im, x.re)),
+        Unary::Sat => Cx::real(x.re.clamp(-1.0, 1.0)),
+        Unary::Abs => Cx::real(x.abs()),
+        Unary::Log => Cx::new(x.abs().ln(), x.im.atan2(x.re)),
         Unary::Sqrt => {
             let r = x.abs().sqrt();
-            let half = libm::atan2(x.im, x.re) / 2.0;
-            C64::new(r * libm::cos(half), r * libm::sin(half))
+            let half = x.im.atan2(x.re) / 2.0;
+            Cx::new(r * half.cos(), r * half.sin())
         }
-        Unary::Step => C64::real(step(x.re)),
+        Unary::Step => Cx::real(N::of(step(x.re.v()))),
     }
 }
 
-fn constant_in(f: &Body, reading: Reading) -> Option<C64> {
+fn constant_in<N: Num>(f: &Body<N>, reading: Reading) -> Option<Cx<N>> {
     constant_read(f, reading, &Opaque)
 }
 
-fn constant_read(f: &Body, reading: Reading, reads: &dyn Reads) -> Option<C64> {
+fn constant_read<N: Num>(f: &Body<N>, reading: Reading, reads: &dyn Reads<N>) -> Option<Cx<N>> {
     constant(read(f, reading, reads)?)
 }
 
-pub fn affine(f: &Body) -> Option<(Coeff, Coeff)> {
+pub fn affine<N: Num>(f: &Body<N>) -> Option<(Coeff<N>, Coeff<N>)> {
     affine_in(f, Reading::Free)
 }
 
-pub fn affine_in(f: &Body, reading: Reading) -> Option<(Coeff, Coeff)> {
+pub fn affine_in<N: Num>(f: &Body<N>, reading: Reading) -> Option<(Coeff<N>, Coeff<N>)> {
     affine_read(f, reading, &Opaque)
 }
 
-pub fn affine_read(f: &Body, reading: Reading, reads: &dyn Reads) -> Option<(Coeff, Coeff)> {
+pub fn affine_read<N: Num>(
+    f: &Body<N>,
+    reading: Reading,
+    reads: &dyn Reads<N>,
+) -> Option<(Coeff<N>, Coeff<N>)> {
     match polynomial_read(f, reading, reads)?[..] {
         [b] => Some((Coeff::ZERO, b)),
         [b, a] => Some((a, b)),
@@ -472,41 +486,49 @@ pub fn affine_read(f: &Body, reading: Reading, reads: &dyn Reads) -> Option<(Coe
 }
 
 /// The offset of a time spelled as the variable plus a constant, an index counting as one.
-pub fn slide(at: &Body) -> Option<Coeff> {
+pub fn slide<N: Num>(at: &Body<N>) -> Option<Coeff<N>> {
     slide_read(at, &Opaque)
 }
 
-pub(crate) fn slide_read(at: &Body, reads: &dyn Reads) -> Option<Coeff> {
+/// A slope of exactly one, moved by no varied number: anything else stretches time.
+pub(crate) fn slide_read<N: Num>(at: &Body<N>, reads: &dyn Reads<N>) -> Option<Coeff<N>> {
     match affine_read(at, Reading::Free, reads)? {
-        (Coeff::Exact(slope), offset) if slope.re == 1.0 && slope.im == 0.0 => Some(offset),
+        (Coeff::Exact(slope), offset)
+            if slope.re.v() == 1.0 && slope.re.is_constant() && slope.im.is_zero() =>
+        {
+            Some(offset)
+        }
         _ => None,
     }
 }
 
-pub fn exact_affine(f: &Body) -> Option<(C64, C64)> {
+pub fn exact_affine<N: Num>(f: &Body<N>) -> Option<(Cx<N>, Cx<N>)> {
     exact_affine_read(f, &Opaque)
 }
 
-pub(crate) fn exact_affine_read(f: &Body, reads: &dyn Reads) -> Option<(C64, C64)> {
+pub(crate) fn exact_affine_read<N: Num>(
+    f: &Body<N>,
+    reads: &dyn Reads<N>,
+) -> Option<(Cx<N>, Cx<N>)> {
     let (a, b) = affine_read(f, Reading::Free, reads)?;
     Some((a.exact()?, b.exact()?))
 }
 
-pub fn exact_constant(f: &Body) -> Option<C64> {
+pub fn exact_constant<N: Num>(f: &Body<N>) -> Option<Cx<N>> {
     constant_in(f, Reading::Free)
 }
 
-pub fn exact_constant_read(f: &Body, reads: &dyn Reads) -> Option<C64> {
+pub fn exact_constant_read<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<Cx<N>> {
     constant_read(f, Reading::Free, reads)
 }
 
 /// Whether a hash keyed on this formula names more than one value. The free variable moves
 /// it; so does a node or a parameter, whose own closed form this judgment cannot see.
-pub fn key_moves(f: &Body) -> bool {
+pub fn key_moves<N: Num>(f: &Body<N>) -> bool {
     key_moves_read(f, &Opaque)
 }
 
-pub(crate) fn key_moves_read(f: &Body, reads: &dyn Reads) -> bool {
+pub(crate) fn key_moves_read<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> bool {
     match f {
         Body::Line | Body::Param(_) => true,
         Body::Node(id) => reads.key_moves(*id),
@@ -517,36 +539,39 @@ pub(crate) fn key_moves_read(f: &Body, reads: &dyn Reads) -> bool {
 }
 
 /// `exp(q)` with the square completed: a real width and centre, the rest an exponential.
-pub struct Squared {
-    pub a: f64,
-    pub mu: f64,
-    pub omega: f64,
-    pub amplitude: C64,
+pub struct Squared<N: Num = f64> {
+    pub a: N,
+    pub mu: N,
+    pub omega: N,
+    pub amplitude: Cx<N>,
 }
 
-pub fn completed_square(f: &Body) -> Option<Squared> {
+pub fn completed_square<N: Num>(f: &Body<N>) -> Option<Squared<N>> {
     completed_square_read(f, &Opaque)
 }
 
-pub(crate) fn completed_square_read(f: &Body, reads: &dyn Reads) -> Option<Squared> {
+pub(crate) fn completed_square_read<N: Num>(
+    f: &Body<N>,
+    reads: &dyn Reads<N>,
+) -> Option<Squared<N>> {
     let [a0, a1, a2] = polynomial_read(f, Reading::Free, reads)?[..] else {
         return None;
     };
     let (a0, a1, a2) = (a0.exact()?, a1.exact()?, a2.exact()?);
-    if !a2.is_real() || a2.re >= 0.0 {
+    if !a2.is_real() || a2.re.v() >= 0.0 {
         return None;
     }
     let a = -a2.re;
-    let mu = a1.re / (2.0 * a);
+    let mu = a1.re / (N::of(2.0) * a);
     Some(Squared {
         a,
         mu,
         omega: a1.im,
-        amplitude: (a0 + C64::real(a * mu * mu)).exp(),
+        amplitude: (a0 + Cx::real(a * mu * mu)).exp(),
     })
 }
 
-pub fn is_squared(f: &Body) -> bool {
+pub fn is_squared<N: Num>(f: &Body<N>) -> bool {
     polynomial(f).is_some_and(|p| p.len() == MAX_DEGREE + 1)
 }
 
@@ -562,14 +587,14 @@ fn unary_axis(op: Unary, of: Axis) -> Axis {
 
 /// Where a whole subterm sits in the complex plane, reading an index or a bare variable as
 /// real. `Any` is "could be either", never "is both".
-pub fn axis(f: &Body, env: &dyn crate::env::Env) -> Axis {
+pub fn axis<N: Num>(f: &Body<N>, env: &dyn crate::env::Env) -> Axis {
     axis_read(f, env, &Opaque)
 }
 
 /// The same, a ref `reads` knows the form of sitting where that form sits.
-pub fn axis_read(f: &Body, env: &dyn crate::env::Env, reads: &dyn Reads) -> Axis {
-    let of = |p: &crate::closed_form::Part| axis_read(&p.body, env, reads);
-    let axis = |f: &Body| axis_read(f, env, reads);
+pub fn axis_read<N: Num>(f: &Body<N>, env: &dyn crate::env::Env, reads: &dyn Reads<N>) -> Axis {
+    let of = |p: &crate::closed_form::Part<N>| axis_read(&p.body, env, reads);
+    let axis = |f: &Body<N>| axis_read(f, env, reads);
     match f {
         Body::Const(c) => Axis::of(*c),
         Body::Index(_) | Body::Line | Body::Keyed { .. } | Body::Knots { .. } => Axis::Real,
@@ -601,7 +626,7 @@ pub fn axis_read(f: &Body, env: &dyn crate::env::Env, reads: &dyn Reads) -> Axis
     }
 }
 
-fn add(x: &Poly, y: &Poly) -> Poly {
+fn add<N: Num>(x: &Poly<N>, y: &Poly<N>) -> Poly<N> {
     let mut out = Poly::zeros(x.len.max(y.len));
     for (k, c) in x
         .as_slice()
@@ -614,7 +639,7 @@ fn add(x: &Poly, y: &Poly) -> Poly {
     trim(out)
 }
 
-fn mul(x: &Poly, y: &Poly) -> Option<Poly> {
+fn mul<N: Num>(x: &Poly<N>, y: &Poly<N>) -> Option<Poly<N>> {
     if x.len + y.len > MAX_DEGREE + 2 {
         return None;
     }
@@ -628,20 +653,20 @@ fn mul(x: &Poly, y: &Poly) -> Option<Poly> {
 }
 
 /// `x -> x - by`, by the binomial expansion of each term.
-fn shift(p: &Poly, by: f64) -> Poly {
+fn shift<N: Num>(p: &Poly<N>, by: N) -> Poly<N> {
     let mut out = Poly::zeros(p.len);
     for (n, c) in p.as_slice().iter().enumerate() {
         let mut binomial = 1.0f64;
         for k in (0..=n).rev() {
             let power = i32::try_from(n - k).unwrap_or(0);
-            out.c[k] = out.c[k].add(c.scale(binomial * (-by).powi(power)));
+            out.c[k] = out.c[k].add(c.scale(N::of(binomial) * (-by).powi(power)));
             binomial = binomial * k as f64 / (n - k + 1) as f64;
         }
     }
     trim(out)
 }
 
-fn trim(mut p: Poly) -> Poly {
+fn trim<N: Num>(mut p: Poly<N>) -> Poly<N> {
     while p.len > 1 && p.c[p.len - 1].is_zero() {
         p.len -= 1;
     }

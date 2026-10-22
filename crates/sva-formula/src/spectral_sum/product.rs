@@ -1,14 +1,18 @@
 // Concern: multiplies two atoms into one | Non-concern: summing like atoms (merge.rs) | IO: (SpectralAtom, SpectralAtom) -> Vec<SpectralAtom>
 
 use crate::closed_form::Edge;
-use crate::complex::C64;
+use crate::complex::Cx;
+use crate::num::Num;
 use crate::rational::partial_fractions;
 use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
 use crate::spectral_sum::atom::{Exp, Factors, Gauss, Pole, Poly, Singular, SpectralAtom};
 
 /// Empty where the two indicators do not meet; several where two distinct poles partial-
 /// fraction, or where a delta derivative expands by Leibniz.
-pub fn times(a: &SpectralAtom, b: &SpectralAtom) -> Result<Vec<SpectralAtom>, Left> {
+pub fn times<N: Num>(
+    a: &SpectralAtom<N>,
+    b: &SpectralAtom<N>,
+) -> Result<Vec<SpectralAtom<N>>, Left> {
     match (a.sing, b.sing) {
         (Singular::Regular, Singular::Regular) => match poly_times(a, a.poly, b.poly)? {
             Some(poly) => smooth_times(a, b, poly),
@@ -38,22 +42,26 @@ pub fn times(a: &SpectralAtom, b: &SpectralAtom) -> Result<Vec<SpectralAtom>, Le
 
 /// Two growing halves meet at one reference, the mean their rates weight, so the product
 /// carries no prefactor at all; only a growth that cancels leaves one behind.
-fn combine(x: Exp, y: Exp) -> Option<(Exp, C64)> {
+fn combine<N: Num>(x: Exp<N>, y: Exp<N>) -> Option<(Exp<N>, Cx<N>)> {
     let sigma = x.sigma + y.sigma;
     let omega = x.omega + y.omega;
-    if sigma == 0.0 {
-        let carried = C64::real(-x.sigma * x.mu - y.sigma * y.mu).exp();
+    if sigma.is_zero() {
+        let carried = Cx::real(-x.sigma * x.mu - y.sigma * y.mu).exp();
         return carried
             .is_finite()
-            .then_some((Exp::at(0.0, omega), carried));
+            .then_some((Exp::at(N::ZERO, omega), carried));
     }
     let mu = (x.sigma * x.mu + y.sigma * y.mu) / sigma;
-    Some((Exp { sigma, omega, mu }, C64::ONE))
+    Some((Exp { sigma, omega, mu }, Cx::ONE))
 }
 
 /// Two polynomials read from one instant are one; from two instants, neither is kept. A degree
 /// past `u16` refuses.
-fn poly_times(a: &SpectralAtom, x: Poly, y: Poly) -> Result<Option<Poly>, Left> {
+fn poly_times<N: Num>(
+    a: &SpectralAtom<N>,
+    x: Poly<N>,
+    y: Poly<N>,
+) -> Result<Option<Poly<N>>, Left> {
     Ok(match (x.is_one(), y.is_one()) {
         (true, _) => Some(y),
         (_, true) => Some(x),
@@ -68,7 +76,11 @@ fn poly_times(a: &SpectralAtom, x: Poly, y: Poly) -> Result<Option<Poly>, Left> 
     })
 }
 
-fn smooth_times(a: &SpectralAtom, b: &SpectralAtom, poly: Poly) -> Result<Vec<SpectralAtom>, Left> {
+fn smooth_times<N: Num>(
+    a: &SpectralAtom<N>,
+    b: &SpectralAtom<N>,
+    poly: Poly<N>,
+) -> Result<Vec<SpectralAtom<N>>, Left> {
     let ind = match (a.ind, b.ind) {
         (Some(x), Some(y)) => {
             let met = x.meet(y);
@@ -99,7 +111,7 @@ fn smooth_times(a: &SpectralAtom, b: &SpectralAtom, poly: Poly) -> Result<Vec<Sp
         (Some(x), Some(y)) => {
             let sum = x.a + y.a;
             let gap = x.mu - y.mu;
-            c = c.scale(crate::exp(-x.a * y.a * gap * gap / sum));
+            c = c.scale((-x.a * y.a * gap * gap / sum).exp());
             Some(Gauss {
                 a: sum,
                 mu: (x.a * x.mu + y.a * y.mu) / sum,
@@ -109,10 +121,12 @@ fn smooth_times(a: &SpectralAtom, b: &SpectralAtom, poly: Poly) -> Result<Vec<Sp
     };
 
     let sketch = match (exp, gauss) {
-        (Some(e), _) if !(e.sigma.is_finite() && e.omega.is_finite() && e.mu.is_finite()) => {
+        (Some(e), _)
+            if !(e.sigma.v().is_finite() && e.omega.v().is_finite() && e.mu.v().is_finite()) =>
+        {
             Some(AtomSketch::pair(Factor::Exponential, Factor::Exponential))
         }
-        (_, Some(g)) if !(g.a.is_finite() && g.mu.is_finite()) => {
+        (_, Some(g)) if !(g.a.v().is_finite() && g.mu.v().is_finite()) => {
             Some(AtomSketch::pair(Factor::Gaussian, Factor::Gaussian))
         }
         _ => None,
@@ -168,16 +182,16 @@ fn smooth_times(a: &SpectralAtom, b: &SpectralAtom, poly: Poly) -> Result<Vec<Sp
 
 /// Two distinct poles are one rational, and a rational in A is its residues. The principal
 /// value stays with the pole it was written on: only that one has no ordinary value.
-fn split_poles(
-    c: C64,
-    base: Factors,
-    p: Pole,
-    q: Pole,
-    at: &SpectralAtom,
-) -> Result<Vec<SpectralAtom>, Left> {
+fn split_poles<N: Num>(
+    c: Cx<N>,
+    base: Factors<N>,
+    p: Pole<N>,
+    q: Pole<N>,
+    at: &SpectralAtom<N>,
+) -> Result<Vec<SpectralAtom<N>>, Left> {
     let mut roots = vec![p.at; usize::from(p.order)];
     roots.extend(std::iter::repeat_n(q.at, usize::from(q.order)));
-    let (_, residues) = partial_fractions(&[C64::ONE], &roots).map_err(|reason| {
+    let (_, residues) = partial_fractions(&[Cx::ONE], &roots).map_err(|reason| {
         Left::new(
             at.origin,
             AtomSketch::pair(Factor::Pole, Factor::Pole),
@@ -206,15 +220,14 @@ fn split_poles(
 }
 
 /// `g(x) * delta^(k)(x - a)` is the alternating binomial sum over `g`'s derivatives at `a`.
-fn leibniz(
-    delta: &SpectralAtom,
-    smooth: &SpectralAtom,
-    at: f64,
+fn leibniz<N: Num>(
+    delta: &SpectralAtom<N>,
+    smooth: &SpectralAtom<N>,
+    at: N,
     order: u16,
-) -> Result<Vec<SpectralAtom>, Left> {
+) -> Result<Vec<SpectralAtom<N>>, Left> {
     if let Some(i) = smooth.ind
-        && (i.l == Edge::At(crate::complex::canonical(at))
-            || i.r == Edge::At(crate::complex::canonical(at)))
+        && (i.l == Edge::At(at.canonical()) || i.r == Edge::At(at.canonical()))
     {
         return Err(Left::new(
             delta.origin,
@@ -222,7 +235,7 @@ fn leibniz(
             LeftReason::Nonlinearity,
         ));
     }
-    if smooth.ind.is_some_and(|i| !i.contains(at)) {
+    if smooth.ind.is_some_and(|i| !i.contains(at.v())) {
         return Ok(Vec::new());
     }
     let mut level = vec![SpectralAtom::new(
@@ -238,7 +251,7 @@ fn leibniz(
     let mut out = Vec::new();
     let mut binomial = 1i64;
     for j in 0..=order {
-        let mut value = C64::ZERO;
+        let mut value = Cx::ZERO;
         for atom in &level {
             let Some(v) = atom.smooth_at(at) else {
                 return Err(Left::new(
@@ -251,7 +264,7 @@ fn leibniz(
         }
         let sign = if j % 2 == 0 { 1.0 } else { -1.0 };
         out.push(SpectralAtom::new(
-            delta.c * value.scale(sign * binomial as f64),
+            delta.c * value.scale(N::of(sign * binomial as f64)),
             Factors::NONE,
             Singular::Delta {
                 at,

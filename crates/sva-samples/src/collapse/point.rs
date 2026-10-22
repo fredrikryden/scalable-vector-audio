@@ -2,7 +2,7 @@
 
 use sva_formula::closed_form::Unary;
 use sva_formula::spectral_sum::atom::{Singular, SpectralAtom};
-use sva_formula::{C64, Lane, SpectralSum};
+use sva_formula::{C64, Cx, Lane, Num, SpectralSum};
 
 use crate::error::CollapseError;
 use crate::grid::Grid;
@@ -34,32 +34,36 @@ type On = Option<(Grid, i64)>;
 
 /// The six atom factors in closed form. A delta has no ordinary value, and a principal
 /// value has none at its own pole.
-pub(crate) fn eval_atom_on(a: &SpectralAtom, t: f64, on: On) -> Result<C64, CollapseError> {
+pub(crate) fn eval_atom_on<N: Num>(
+    a: &SpectralAtom<N>,
+    t: N,
+    on: On,
+) -> Result<Cx<N>, CollapseError> {
     debug_assert!(
-        on.is_none_or(|(grid, n)| grid.instant(n) == t),
+        on.is_none_or(|(grid, n)| grid.instant(n) == t.v()),
         "a sample at its instant"
     );
     if let Singular::Delta { at, order } = a.sing {
         return Err(CollapseError::SingularInCt {
-            at,
+            at: at.v(),
             order: i32::from(order),
         });
     }
     let held = match (a.ind, on) {
         (Some(ind), Some((grid, n))) => match grid.inside(n, ind.l.value(), ind.r.value()) {
             true => a.smooth_inside(t),
-            false => Some(C64::ZERO),
+            false => Some(Cx::ZERO),
         },
         _ => a.smooth_at(t),
     };
     held.ok_or(CollapseError::SingularInCt {
-        at: a.pole.map_or(t, |p| p.at.re),
+        at: a.pole.map_or(t.v(), |p| p.at.re.v()),
         order: -1,
     })
 }
 
-pub(crate) fn eval_lane_on(lane: &Lane, t: f64, on: On) -> Result<C64, CollapseError> {
-    let mut sum = C64::ZERO;
+pub(crate) fn eval_lane_on<N: Num>(lane: &Lane<N>, t: N, on: On) -> Result<Cx<N>, CollapseError> {
+    let mut sum = Cx::ZERO;
     for a in &lane.atoms {
         sum = sum + eval_atom_on(a, t, on)?;
     }
@@ -79,10 +83,15 @@ pub(crate) fn eval_among(
     with_modal(lane, sum, t, on)
 }
 
-fn with_modal(lane: &Lane, mut sum: C64, t: f64, on: On) -> Result<C64, CollapseError> {
+fn with_modal<N: Num>(
+    lane: &Lane<N>,
+    mut sum: Cx<N>,
+    t: N,
+    on: On,
+) -> Result<Cx<N>, CollapseError> {
     for bank in &lane.modal {
         for a in sva_formula::modal::atoms(bank, sva_formula::Origin::UNKNOWN) {
-            sum = sum + eval_atom_on(&a, t, on)?;
+            sum = sum + eval_atom_on(&a.lifted::<N>(), t, on)?;
         }
     }
     Ok(sum)
@@ -92,34 +101,39 @@ pub(crate) fn eval_spectral_sum(n: &SpectralSum, c: usize, t: f64) -> Result<C64
     eval_spectral_sum_on(n, c, At::Free(t))
 }
 
-pub(crate) fn eval_spectral_sum_on(
-    n: &SpectralSum,
+/// A finite sum's atoms at `at`; a series line is no atom until enumerated.
+pub(crate) fn eval_spectral_sum_on<N: Num>(
+    n: &SpectralSum<N>,
     c: usize,
     at: At,
-) -> Result<C64, CollapseError> {
-    eval_lane_on(&n.lanes[c.min(n.lanes.len() - 1)], at.t(), at.sample())
+) -> Result<Cx<N>, CollapseError> {
+    eval_lane_on(
+        &n.lanes[c.min(n.lanes.len() - 1)],
+        N::of(at.t()),
+        at.sample(),
+    )
 }
 
 /// FORMAT 15.6's window: one over the plateau, a raised cosine over each shoulder, zero out.
-pub fn crop_gain(t: f64, l: f64, r: f64, rise: f64, fall: f64) -> f64 {
-    if t < l || t >= r {
-        return 0.0;
+pub fn crop_gain<N: Num>(t: N, l: N, r: N, rise: N, fall: N) -> N {
+    if t.v() < l.v() || t.v() >= r.v() {
+        return N::ZERO;
     }
     shoulders(t, l, r, rise, fall)
 }
 
 /// The window's gain at an instant already known to lie inside it.
-pub fn shoulders(t: f64, l: f64, r: f64, rise: f64, fall: f64) -> f64 {
+pub fn shoulders<N: Num>(t: N, l: N, r: N, rise: N, fall: N) -> N {
     let opening = shoulder(t - l, rise);
     let closing = shoulder(r - t, fall);
     opening.min(closing)
 }
 
-fn shoulder(into: f64, span: f64) -> f64 {
-    if span <= 0.0 || into >= span {
-        return 1.0;
+fn shoulder<N: Num>(into: N, span: N) -> N {
+    if span.v() <= 0.0 || into.v() >= span.v() {
+        return N::ONE;
     }
-    0.5 - 0.5 * libm::cos(std::f64::consts::PI * into / span)
+    N::of(0.5) - N::of(0.5) * (N::of(std::f64::consts::PI) * into / span).cos()
 }
 
 /// Which operand of a `join` holds one component of the joined value, and which of its own
@@ -135,22 +149,22 @@ pub fn lane_of(widths: &[usize], component: usize) -> Option<(usize, usize)> {
     None
 }
 
-pub fn unary(op: Unary, x: C64) -> C64 {
+pub fn unary<N: Num>(op: Unary, x: Cx<N>) -> Cx<N> {
     match op {
         Unary::Exp => x.exp(),
         Unary::Sin => {
-            let (sin, cos) = libm::sincos(x.re);
-            C64::new(sin * libm::cosh(x.im), cos * libm::sinh(x.im))
+            let (sin, cos) = x.re.sincos();
+            Cx::new(sin * x.im.cosh(), cos * x.im.sinh())
         }
         Unary::Cos => {
-            let (sin, cos) = libm::sincos(x.re);
-            C64::new(cos * libm::cosh(x.im), -sin * libm::sinh(x.im))
+            let (sin, cos) = x.re.sincos();
+            Cx::new(cos * x.im.cosh(), -sin * x.im.sinh())
         }
-        Unary::Tanh => C64::real(libm::tanh(x.re)),
-        Unary::Sat => C64::real(x.re.clamp(-1.0, 1.0)),
-        Unary::Abs => C64::real(x.abs()),
-        Unary::Log => C64::real(libm::log(x.re)),
-        Unary::Sqrt => C64::real(x.re.sqrt()),
-        Unary::Step => C64::real(sva_formula::affine::step(x.re)),
+        Unary::Tanh => Cx::real(x.re.tanh()),
+        Unary::Sat => Cx::real(x.re.clamp(-1.0, 1.0)),
+        Unary::Abs => Cx::real(x.abs()),
+        Unary::Log => Cx::real(x.re.ln()),
+        Unary::Sqrt => Cx::real(x.re.sqrt()),
+        Unary::Step => Cx::real(N::of(sva_formula::affine::step(x.re.v()))),
     }
 }

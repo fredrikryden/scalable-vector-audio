@@ -3,19 +3,20 @@
 use std::f64::consts::TAU;
 
 use crate::closed_form::{Body, Part, Series, Unary};
-use crate::complex::C64;
+use crate::complex::Cx;
 use crate::fourier_dual::series::{Shape, SymDelta, SymLine, read_with, write};
+use crate::num::Num;
 use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
 use crate::spectral_sum::atom::{Indicator, Singular, SpectralAtom};
 use crate::through::Reads;
 
 /// A finite line sum times a line series is one series per factor, each moved by that
 /// factor's own frequency and cropped by its own window. A closed form in `f` folds instead.
-pub fn times_atoms(
-    s: &Series,
-    by: &[SpectralAtom],
-    reads: &dyn Reads,
-) -> Result<Vec<Series>, Left> {
+pub fn times_atoms<N: Num>(
+    s: &Series<N>,
+    by: &[SpectralAtom<N>],
+    reads: &dyn Reads<N>,
+) -> Result<Vec<Series<N>>, Left> {
     let origin = by.first().map_or(s.term.origin, |a| a.origin);
     let refuse = || {
         Left::new(
@@ -35,17 +36,17 @@ pub fn times_atoms(
 
 /// A bare turning exponential is a gain and a frequency offset; nothing else is one value
 /// across a whole series.
-fn moved(
-    s: &Series,
-    lines: &[SymLine],
-    by: &SpectralAtom,
-    held: Option<Indicator>,
-) -> Result<Series, Left> {
+fn moved<N: Num>(
+    s: &Series<N>,
+    lines: &[SymLine<N>],
+    by: &SpectralAtom<N>,
+    held: Option<Indicator<N>>,
+) -> Result<Series<N>, Left> {
     if !by.poly.is_one()
         || by.gauss.is_some()
         || by.pole.is_some()
         || !matches!(by.sing, Singular::Regular)
-        || by.exp.is_some_and(|e| e.sigma != 0.0)
+        || by.exp.is_some_and(|e| !e.sigma.is_zero())
     {
         return Err(Left::new(
             by.origin,
@@ -53,14 +54,14 @@ fn moved(
             LeftReason::SeriesNonUniform,
         ));
     }
-    let offset = by.exp.map_or(0.0, |e| e.omega / TAU);
-    let moved: Vec<SymLine> = lines
+    let offset = by.exp.map_or(N::ZERO, |e| e.omega / TAU);
+    let moved: Vec<SymLine<N>> = lines
         .iter()
         .map(|l| SymLine {
             amp: product(l.amp.clone(), Body::Const(by.c)),
             freq: Body::Add(vec![
                 Part::bare(l.freq.clone()),
-                Part::bare(Body::Const(C64::real(offset))),
+                Part::bare(Body::Const(Cx::real(offset))),
             ]),
         })
         .collect();
@@ -77,8 +78,8 @@ fn moved(
                     of: Part::new(s.term.origin, term),
                     l: window.l,
                     r: window.r,
-                    rise: 0.0,
-                    fall: 0.0,
+                    rise: N::ZERO,
+                    fall: N::ZERO,
                 },
                 None => term,
             },
@@ -89,7 +90,11 @@ fn moved(
 
 /// A factor multiplied into a delta series folds to the factor read at each line's own
 /// frequency, which is FORMAT 10.1's `H(f)*delta(f - f0)` once per term of the series.
-fn times_lines(s: &Series, by: &[SpectralAtom], reads: &dyn Reads) -> Result<Series, Left> {
+fn times_lines<N: Num>(
+    s: &Series<N>,
+    by: &[SpectralAtom<N>],
+    reads: &dyn Reads<N>,
+) -> Result<Series<N>, Left> {
     let origin = by.first().map_or(s.term.origin, |a| a.origin);
     let refuse = || {
         Left::new(
@@ -115,8 +120,8 @@ fn times_lines(s: &Series, by: &[SpectralAtom], reads: &dyn Reads) -> Result<Ser
     })
 }
 
-fn read_at(by: &[SpectralAtom], at: &Body) -> Option<Body> {
-    let mut sum: Option<Body> = None;
+fn read_at<N: Num>(by: &[SpectralAtom<N>], at: &Body<N>) -> Option<Body<N>> {
+    let mut sum: Option<Body<N>> = None;
     for a in by {
         let term = atom_at(a, at)?;
         sum = Some(match sum {
@@ -128,23 +133,23 @@ fn read_at(by: &[SpectralAtom], at: &Body) -> Option<Body> {
 }
 
 /// A Gaussian, an indicator and a delta name no value at one line.
-fn atom_at(a: &SpectralAtom, at: &Body) -> Option<Body> {
+fn atom_at<N: Num>(a: &SpectralAtom<N>, at: &Body<N>) -> Option<Body<N>> {
     if a.gauss.is_some() || a.ind.is_some() || a.is_delta() {
         return None;
     }
     let mut out = Body::Const(a.c);
     if !a.poly.is_one() {
         let from = match a.poly.at {
-            0.0 => at.clone(),
+            by if by.is_zero() => at.clone(),
             by => Body::Add(vec![
                 Part::bare(at.clone()),
-                Part::bare(Body::Const(C64::real(-by))),
+                Part::bare(Body::Const(Cx::real(-by))),
             ]),
         };
         out = product(out, Body::Pow(Part::bare(from), i32::from(a.poly.degree)));
     }
     if let Some(e) = a.exp {
-        let rate = Body::Const(C64::new(e.sigma, e.omega));
+        let rate = Body::Const(Cx::new(e.sigma, e.omega));
         out = product(
             out,
             Body::Apply(Unary::Exp, Part::bare(product(rate, at.clone()))),
@@ -163,6 +168,6 @@ fn atom_at(a: &SpectralAtom, at: &Body) -> Option<Body> {
     Some(out)
 }
 
-fn product(a: Body, b: Body) -> Body {
+fn product<N: Num>(a: Body<N>, b: Body<N>) -> Body<N> {
     Body::Mul(vec![Part::bare(a), Part::bare(b)])
 }

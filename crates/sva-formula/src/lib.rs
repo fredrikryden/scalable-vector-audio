@@ -16,6 +16,7 @@ pub mod infer;
 pub mod knots;
 pub mod modal;
 pub mod noise;
+pub mod num;
 pub mod origin;
 pub mod rational;
 pub mod refusal;
@@ -32,7 +33,7 @@ pub use closed_form::{
     Body, Bound, ClosedForm, Edge, Excitation, Fold, IndexId, ModalBank, Mode, Part, Rational,
     Series, Unary, Var,
 };
-pub use complex::C64;
+pub use complex::{C64, Cx};
 pub use content_hash::{ContentHasher, HashDomain};
 pub use env::{Env, NodeId, ParamId};
 pub use exp::exp;
@@ -46,6 +47,7 @@ pub use knots::{Knots, Unknotted};
 pub use modal::damping::Damping;
 pub use modal::{Geometry, modes};
 pub use noise::noise;
+pub use num::{Dual, Num, Sparse, Tangents};
 pub use origin::Origin;
 pub use refusal::{AtomSketch, Code, Factor, Left, LeftReason, Refusal};
 pub use run::{Mirror, Run};

@@ -2,19 +2,20 @@
 
 use crate::affine::exact_affine_read;
 use crate::closed_form::{Body, Edge, Fold, Part, map_children};
-use crate::complex::C64;
+use crate::complex::Cx;
+use crate::num::Num;
 use crate::through::Reads;
 
-pub fn split(f: &Body, reads: &dyn Reads) -> Option<Body> {
+pub fn split<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<Body<N>> {
     let (kink, (at, below, above)) = first(f, reads)?;
-    let half = |with: &Body, l: Edge, r: Edge| {
+    let half = |with: &Body<N>, l: Edge<N>, r: Edge<N>| {
         let scope = reads.scope();
         Part::bare(Body::Crop {
             of: Part::bare(replaced(f, (scope, &kink, with), reads)),
             l,
             r,
-            rise: 0.0,
-            fall: 0.0,
+            rise: N::ZERO,
+            fall: N::ZERO,
         })
     };
     Some(Body::Add(vec![
@@ -26,21 +27,21 @@ pub fn split(f: &Body, reads: &dyn Reads) -> Option<Body> {
 /// A constant, or a slope and the instant it is zero at: `k*(t - r)` keeps `r` itself. Each
 /// fold of a written constant rounds once, at most 2^-53 of its result, as `exact_affine`.
 #[derive(Clone, Copy, Debug)]
-pub enum Line {
-    Flat(f64),
-    Sloped { slope: f64, root: f64 },
+pub enum Line<N: Num = f64> {
+    Flat(N),
+    Sloped { slope: N, root: N },
 }
 
-impl Line {
-    fn slope(self) -> f64 {
+impl<N: Num> Line<N> {
+    fn slope(self) -> N {
         match self {
-            Line::Flat(_) => 0.0,
+            Line::Flat(_) => N::ZERO,
             Line::Sloped { slope, .. } => slope,
         }
     }
 
-    fn scaled(self, k: f64, divide: bool) -> Line {
-        let by = |v: f64| if divide { v / k } else { v * k };
+    fn scaled(self, k: N, divide: bool) -> Line<N> {
+        let by = |v: N| if divide { v / k } else { v * k };
         match self {
             Line::Flat(v) => Line::Flat(by(v)),
             Line::Sloped { slope, root } => Line::Sloped {
@@ -50,11 +51,11 @@ impl Line {
         }
     }
 
-    fn plus(self, other: Line) -> Line {
+    fn plus(self, other: Line<N>) -> Line<N> {
         match (self, other) {
             (Line::Flat(a), Line::Flat(b)) => Line::Flat(a + b),
             (Line::Flat(c), Line::Sloped { slope, root })
-            | (Line::Sloped { slope, root }, Line::Flat(c)) => match c == 0.0 {
+            | (Line::Sloped { slope, root }, Line::Flat(c)) => match c.is_zero() {
                 true => Line::Sloped { slope, root },
                 false => Line::Sloped {
                     slope,
@@ -63,7 +64,7 @@ impl Line {
             },
             (Line::Sloped { slope: s, root: r }, Line::Sloped { slope: u, root: q }) => {
                 match (s + u, r == q) {
-                    (0.0, _) => Line::Flat(-(s * r + u * q)),
+                    (sum, _) if sum.is_zero() => Line::Flat(-(s * r + u * q)),
                     (sum, true) => Line::Sloped {
                         slope: sum,
                         root: r,
@@ -78,34 +79,34 @@ impl Line {
     }
 }
 
-pub(crate) fn line(f: &Body, reads: &dyn Reads) -> Option<Line> {
+pub(crate) fn line<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<Line<N>> {
     if let Body::Node(id) = f {
         return reads.line(*id);
     }
-    let line = |g: &Body| line(g, reads);
-    let real = |c: C64| c.is_real().then_some(c.re);
+    let line = |g: &Body<N>| line(g, reads);
+    let real = |c: Cx<N>| c.is_real().then_some(c.re);
     let read = match f {
         Body::Const(c) => Some(Line::Flat(real(*c)?)),
         Body::Line => Some(Line::Sloped {
-            slope: 1.0,
-            root: 0.0,
+            slope: N::ONE,
+            root: N::ZERO,
         }),
         Body::Shift { by, of } => match line(&of.body)? {
             Line::Sloped { slope, root } => Some(Line::Sloped {
                 slope,
-                root: root + by,
+                root: root + *by,
             }),
             flat => Some(flat),
         },
         Body::Add(parts) => parts
             .iter()
-            .try_fold(Line::Flat(0.0), |acc, p| Some(acc.plus(line(&p.body)?))),
+            .try_fold(Line::Flat(N::ZERO), |acc, p| Some(acc.plus(line(&p.body)?))),
         Body::Mul(parts) => {
-            let mut sloped: Option<Line> = None;
-            let mut k = 1.0;
+            let mut sloped: Option<Line<N>> = None;
+            let mut k = N::ONE;
             for p in parts {
                 match line(&p.body)? {
-                    Line::Flat(v) => k *= v,
+                    Line::Flat(v) => k = k * v,
                     held if sloped.is_none() => sloped = Some(held),
                     _ => return None,
                 }
@@ -113,7 +114,7 @@ pub(crate) fn line(f: &Body, reads: &dyn Reads) -> Option<Line> {
             Some(sloped.map_or(Line::Flat(k), |l| l.scaled(k, false)))
         }
         Body::Div(num, den) => match line(&den.body)? {
-            Line::Flat(k) if k != 0.0 => Some(line(&num.body)?.scaled(k, true)),
+            Line::Flat(k) if k.v() != 0.0 => Some(line(&num.body)?.scaled(k, true)),
             _ => None,
         },
         _ => None,
@@ -121,7 +122,7 @@ pub(crate) fn line(f: &Body, reads: &dyn Reads) -> Option<Line> {
     let read = read.or_else(|| {
         let (a, b) = exact_affine_read(f, reads)?;
         match (real(a)?, real(b)?) {
-            (0.0, b) => Some(Line::Flat(b)),
+            (a, b) if a.is_zero() => Some(Line::Flat(b)),
             (a, b) => Some(Line::Sloped {
                 slope: a,
                 root: -b / a,
@@ -129,19 +130,19 @@ pub(crate) fn line(f: &Body, reads: &dyn Reads) -> Option<Line> {
         }
     })?;
     match read {
-        Line::Sloped { slope: 0.0, .. } => Some(Line::Flat(0.0)),
+        Line::Sloped { slope, .. } if slope.is_zero() => Some(Line::Flat(N::ZERO)),
         held => Some(held),
     }
     .filter(|l| match *l {
-        Line::Flat(v) => v.is_finite(),
-        Line::Sloped { slope, root } => slope.is_finite() && root.is_finite(),
+        Line::Flat(v) => v.v().is_finite(),
+        Line::Sloped { slope, root } => slope.v().is_finite() && root.v().is_finite(),
     })
 }
 
 /// Each half is its own line, read from its root. Against a constant, the crossing is the
 /// first double where the line as evaluated passes it, so a `max` never falls under nor a
 /// `min` climbs over it, and a line meeting zero crosses at its root.
-fn crossing(f: &Body, reads: &dyn Reads) -> Option<Crossing> {
+fn crossing<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<Crossing<N>> {
     let Body::Fold(op @ (Fold::Min | Fold::Max), args) = f else {
         return None;
     };
@@ -149,23 +150,29 @@ fn crossing(f: &Body, reads: &dyn Reads) -> Option<Crossing> {
         return None;
     };
     let (l1, l2) = (line(&p.body, reads)?, line(&q.body, reads)?);
-    if l1.slope() == l2.slope() {
+    if l1.slope().v() == l2.slope().v() {
         return None;
     }
     let max = *op == Fold::Max;
     match (l1, l2) {
         (Line::Flat(c), sloped @ Line::Sloped { slope, root })
         | (sloped @ Line::Sloped { slope, root }, Line::Flat(c)) => {
+            let (k, r, level) = (slope.v(), root.v(), c.v());
             let taken = |t: f64| {
-                let v = slope * (t - root);
-                if max { v >= c } else { v <= c }
+                let v = k * (t - r);
+                if max { v >= level } else { v <= level }
             };
-            let flat = Body::Const(C64::real(c));
+            let flat = Body::Const(Cx::real(c));
             let estimate = root + c / slope;
-            match (slope > 0.0) == max {
-                true => Some((first_double(taken, estimate)?, flat, written(sloped))),
+            let at = |found: f64| estimate.rebased(found);
+            match (k > 0.0) == max {
+                true => Some((
+                    at(first_double(taken, estimate.v())?),
+                    flat,
+                    written(sloped),
+                )),
                 false => Some((
-                    first_double(|t| !taken(t), estimate)?,
+                    at(first_double(|t| !taken(t), estimate.v())?),
                     written(sloped),
                     flat,
                 )),
@@ -176,19 +183,21 @@ fn crossing(f: &Body, reads: &dyn Reads) -> Option<Crossing> {
                 true => r,
                 false => (s * r - u * v) / (s - u),
             };
-            let p_below = (s > u) != max;
+            let p_below = (s.v() > u.v()) != max;
             let (below, above) = if p_below { (l1, l2) } else { (l2, l1) };
-            at.is_finite().then(|| (at, written(below), written(above)))
+            at.v()
+                .is_finite()
+                .then(|| (at, written(below), written(above)))
         }
         (Line::Flat(_), Line::Flat(_)) => None,
     }
 }
 
-fn written(l: Line) -> Body {
+fn written<N: Num>(l: Line<N>) -> Body<N> {
     match l {
-        Line::Flat(c) => Body::Const(C64::real(c)),
+        Line::Flat(c) => Body::Const(Cx::real(c)),
         Line::Sloped { slope, root } => Body::Mul(vec![
-            Part::bare(Body::Const(C64::real(slope))),
+            Part::bare(Body::Const(Cx::real(slope))),
             Part::bare(Body::Shift {
                 by: root,
                 of: Part::bare(Body::Line),
@@ -246,7 +255,7 @@ fn first_double(holds: impl Fn(f64) -> bool, near: f64) -> Option<f64> {
 }
 
 /// A shift, warp or series moves the kink; a derivative would add a delta at the seam.
-pub(crate) fn in_time(f: &Body) -> bool {
+pub(crate) fn in_time<N: Num>(f: &Body<N>) -> bool {
     matches!(
         f,
         Body::Add(_)
@@ -261,10 +270,10 @@ pub(crate) fn in_time(f: &Body) -> bool {
     )
 }
 
-pub type Crossing = (f64, Body, Body);
+pub type Crossing<N = f64> = (N, Body<N>, Body<N>);
 
 /// The first min or max of two lines, searched through each ref as through its own form.
-pub(crate) fn first(f: &Body, reads: &dyn Reads) -> Option<(Body, Crossing)> {
+pub(crate) fn first<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<(Body<N>, Crossing<N>)> {
     if let Body::Node(id) = f {
         return reads.kink(*id);
     }
@@ -280,9 +289,9 @@ pub(crate) fn first(f: &Body, reads: &dyn Reads) -> Option<(Body, Crossing)> {
 }
 
 /// Which split it is for, the kink, and the line read in its place.
-type Replacing<'a> = (usize, &'a Body, &'a Body);
+type Replacing<'a, N> = (usize, &'a Body<N>, &'a Body<N>);
 
-fn replaced(f: &Body, at: Replacing, reads: &dyn Reads) -> Body {
+fn replaced<N: Num>(f: &Body<N>, at: Replacing<N>, reads: &dyn Reads<N>) -> Body<N> {
     let (scope, kink, with) = at;
     if f == kink {
         return with.clone();
@@ -298,6 +307,10 @@ fn replaced(f: &Body, at: Replacing, reads: &dyn Reads) -> Body {
     map_children(f, |p| replaced_part(p, at, reads))
 }
 
-pub(crate) fn replaced_part(p: &Part, at: Replacing, reads: &dyn Reads) -> Part {
+pub(crate) fn replaced_part<N: Num>(
+    p: &Part<N>,
+    at: Replacing<N>,
+    reads: &dyn Reads<N>,
+) -> Part<N> {
     Part::new(p.origin, replaced(&p.body, at, reads))
 }

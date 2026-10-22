@@ -1,7 +1,8 @@
 // Concern: declares ClosedForm and its Body, as written before normalization | Non-concern: the canonical atom sum (spectral_sum/) | IO: none
 
-use crate::complex::C64;
+use crate::complex::Cx;
 use crate::env::{NodeId, ParamId};
+use crate::num::Num;
 use crate::origin::Origin;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -21,66 +22,98 @@ impl Var {
 
 /// One `Var` for the whole of it: `t` and `f` never meet inside one.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ClosedForm {
+pub struct ClosedForm<N: Num = f64> {
     pub var: Var,
-    pub body: Body,
+    pub body: Body<N>,
     pub origin: Origin,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Part {
+pub struct Part<N: Num = f64> {
     pub origin: Origin,
-    pub body: Box<Body>,
+    pub body: Box<Body<N>>,
 }
 
-impl Part {
-    pub fn new(origin: Origin, body: Body) -> Part {
+impl<N: Num> Part<N> {
+    pub fn new(origin: Origin, body: Body<N>) -> Part<N> {
         Part {
             origin,
             body: Box::new(body),
         }
     }
 
-    pub fn bare(body: Body) -> Part {
+    pub fn bare(body: Body<N>) -> Part<N> {
         Part::new(Origin::UNKNOWN, body)
     }
 }
 
-/// An infinite bound is a variant, so no sort key or hash ever sees a non-finite `f64`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Edge {
+/// An infinite bound is a variant, so no sort key or hash ever sees a non-finite `f64`; a
+/// finite one is held canonical, `-0.0` as `0.0`.
+#[derive(Clone, Copy, Debug)]
+pub enum Edge<N: Num = f64> {
     NegInf,
-    At(u64),
+    At(N),
     PosInf,
 }
 
-/// Numeric: by bit pattern a negative bound sorts above every positive one.
-impl Ord for Edge {
-    fn cmp(&self, other: &Edge) -> std::cmp::Ordering {
-        self.value().total_cmp(&other.value())
+impl<N: Num> PartialEq for Edge<N> {
+    fn eq(&self, other: &Edge<N>) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
     }
 }
 
-impl PartialOrd for Edge {
-    fn partial_cmp(&self, other: &Edge) -> Option<std::cmp::Ordering> {
+impl<N: Num> Eq for Edge<N> {}
+
+/// Numeric: by bit pattern a negative bound sorts above every positive one. Two edges at
+/// one value moved differently by the varied numbers are two edges.
+impl<N: Num> Ord for Edge<N> {
+    fn cmp(&self, other: &Edge<N>) -> std::cmp::Ordering {
+        let moved = |e: &Edge<N>| match e {
+            Edge::At(x) => Some(x.key()),
+            _ => None,
+        };
+        self.value()
+            .total_cmp(&other.value())
+            .then_with(|| moved(self).cmp(&moved(other)))
+    }
+}
+
+impl<N: Num> PartialOrd for Edge<N> {
+    fn partial_cmp(&self, other: &Edge<N>) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Edge {
-    pub fn at(x: f64) -> Edge {
-        match x {
-            x if x == f64::NEG_INFINITY => Edge::NegInf,
-            x if x == f64::INFINITY => Edge::PosInf,
-            x => Edge::At(crate::complex::canonical(x)),
+impl<N: Num> Edge<N> {
+    pub fn at(x: N) -> Edge<N> {
+        match x.v() {
+            v if v == f64::NEG_INFINITY => Edge::NegInf,
+            v if v == f64::INFINITY => Edge::PosInf,
+            _ => Edge::At(x.canonical()),
         }
     }
 
     pub fn value(self) -> f64 {
         match self {
             Edge::NegInf => f64::NEG_INFINITY,
-            Edge::At(bits) => f64::from_bits(bits),
+            Edge::At(x) => x.v(),
             Edge::PosInf => f64::INFINITY,
+        }
+    }
+
+    /// The edge as a number, an infinite one included.
+    pub fn number(self) -> N {
+        match self {
+            Edge::At(x) => x,
+            infinite => N::of(infinite.value()),
+        }
+    }
+
+    pub fn of(e: Edge) -> Edge<N> {
+        match e {
+            Edge::NegInf => Edge::NegInf,
+            Edge::At(x) => Edge::At(N::of(x)),
+            Edge::PosInf => Edge::PosInf,
         }
     }
 }
@@ -154,11 +187,11 @@ pub enum Bound {
 
 /// A value, not an expansion: truncated once, at collapse.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Series {
+pub struct Series<N: Num = f64> {
     pub index: IndexId,
     pub lo: i64,
     pub hi: Bound,
-    pub term: Part,
+    pub term: Part<N>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -183,74 +216,245 @@ pub struct ModalBank {
 
 /// Residues expand on demand, never stored, so one rational has one spelling.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Rational {
-    pub zeros: Vec<C64>,
-    pub poles: Vec<C64>,
-    pub gain: C64,
+pub struct Rational<N: Num = f64> {
+    pub zeros: Vec<Cx<N>>,
+    pub poles: Vec<Cx<N>>,
+    pub gain: Cx<N>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Body {
-    Const(C64),
+pub enum Body<N: Num = f64> {
+    Const(Cx<N>),
     Line,
     Index(IndexId),
     /// The unit-interval hash `rand` folds to, and the phase a noise line reads.
     Keyed {
         seed: u64,
-        of: Part,
+        of: Part<N>,
     },
     Param(ParamId),
     Node(NodeId),
-    Add(Vec<Part>),
-    Mul(Vec<Part>),
-    Div(Part, Part),
-    Pow(Part, i32),
-    Apply(Unary, Part),
-    Fold(Fold, Vec<Part>),
+    Add(Vec<Part<N>>),
+    Mul(Vec<Part<N>>),
+    Div(Part<N>, Part<N>),
+    Pow(Part<N>, i32),
+    Apply(Unary, Part<N>),
+    Fold(Fold, Vec<Part<N>>),
     Delta {
-        at: Part,
+        at: Part<N>,
         order: u16,
     },
-    Pv(Part),
+    Pv(Part<N>),
     Shift {
-        by: f64,
-        of: Part,
+        by: N,
+        of: Part<N>,
     },
     /// `of` read at the time `at` names, which is a shift only where `at` is `t` plus a
     /// constant.
     Warp {
-        at: Part,
-        of: Part,
+        at: Part<N>,
+        of: Part<N>,
     },
     Deriv {
         order: u16,
-        of: Part,
+        of: Part<N>,
     },
     /// `rise` and `fall` are raised-cosine shoulders inside `[l, r)`; zero is a hard edge.
     Crop {
-        of: Part,
-        l: Edge,
-        r: Edge,
-        rise: f64,
-        fall: f64,
+        of: Part<N>,
+        l: Edge<N>,
+        r: Edge<N>,
+        rise: N,
+        fall: N,
     },
-    Join(Vec<Part>),
-    Channel(Part, u8),
-    Rational(Rational),
-    Series(Box<Series>),
+    Join(Vec<Part<N>>),
+    Channel(Part<N>, u8),
+    Rational(Rational<N>),
+    Series(Box<Series<N>>),
     Modal(ModalBank),
     Run(Box<crate::run::Run>),
-    Banded(Box<crate::banded::Banded>),
+    Banded(Box<crate::banded::Banded<N>>),
     /// The table read at the instant `at` names, a crop's window read at the free variable.
     Knots {
-        at: Part,
-        table: std::sync::Arc<crate::knots::Knots>,
+        at: Part<N>,
+        table: std::sync::Arc<crate::knots::Knots<N>>,
     },
+}
+
+/// The same form over another number, moved by no varied number.
+pub fn lifted<N: Num>(f: &Body) -> Body<N> {
+    let part = |p: &Part| Part::new(p.origin, lifted(&p.body));
+    let parts = |ps: &[Part]| ps.iter().map(part).collect();
+    let series = |s: &Series| Series {
+        index: s.index,
+        lo: s.lo,
+        hi: s.hi,
+        term: part(&s.term),
+    };
+    match f {
+        Body::Const(c) => Body::Const(Cx::of(*c)),
+        Body::Line => Body::Line,
+        Body::Index(k) => Body::Index(*k),
+        Body::Keyed { seed, of } => Body::Keyed {
+            seed: *seed,
+            of: part(of),
+        },
+        Body::Param(id) => Body::Param(*id),
+        Body::Node(id) => Body::Node(*id),
+        Body::Add(ps) => Body::Add(parts(ps)),
+        Body::Mul(ps) => Body::Mul(parts(ps)),
+        Body::Div(a, b) => Body::Div(part(a), part(b)),
+        Body::Pow(of, n) => Body::Pow(part(of), *n),
+        Body::Apply(op, of) => Body::Apply(*op, part(of)),
+        Body::Fold(op, ps) => Body::Fold(*op, parts(ps)),
+        Body::Delta { at, order } => Body::Delta {
+            at: part(at),
+            order: *order,
+        },
+        Body::Pv(at) => Body::Pv(part(at)),
+        Body::Shift { by, of } => Body::Shift {
+            by: N::of(*by),
+            of: part(of),
+        },
+        Body::Warp { at, of } => Body::Warp {
+            at: part(at),
+            of: part(of),
+        },
+        Body::Deriv { order, of } => Body::Deriv {
+            order: *order,
+            of: part(of),
+        },
+        Body::Crop {
+            of,
+            l,
+            r,
+            rise,
+            fall,
+        } => Body::Crop {
+            of: part(of),
+            l: Edge::of(*l),
+            r: Edge::of(*r),
+            rise: N::of(*rise),
+            fall: N::of(*fall),
+        },
+        Body::Join(ps) => Body::Join(parts(ps)),
+        Body::Channel(of, k) => Body::Channel(part(of), *k),
+        Body::Rational(r) => Body::Rational(Rational {
+            zeros: r.zeros.iter().map(|z| Cx::of(*z)).collect(),
+            poles: r.poles.iter().map(|p| Cx::of(*p)).collect(),
+            gain: Cx::of(r.gain),
+        }),
+        Body::Series(s) => Body::Series(Box::new(series(s))),
+        Body::Modal(m) => Body::Modal(m.clone()),
+        Body::Run(run) => Body::Run(run.clone()),
+        Body::Banded(b) => Body::Banded(Box::new(crate::banded::Banded {
+            series: series(&b.series),
+            slope: b.slope.clone(),
+            offset: b.offset.clone(),
+            omega: b.omega,
+            most: b.most,
+            widest: b.widest,
+            reach: b.reach,
+            dropped_db: b.dropped_db,
+        })),
+        Body::Knots { at, table } => Body::Knots {
+            at: part(at),
+            table: std::sync::Arc::new(table.lifted()),
+        },
+    }
+}
+
+/// The same form, every number's tangent dropped.
+pub fn value<N: Num>(f: &Body<N>) -> Body {
+    let part = |p: &Part<N>| Part::new(p.origin, value(&p.body));
+    let parts = |ps: &[Part<N>]| ps.iter().map(part).collect();
+    let series = |s: &Series<N>| Series {
+        index: s.index,
+        lo: s.lo,
+        hi: s.hi,
+        term: part(&s.term),
+    };
+    let edge = |e: Edge<N>| match e {
+        Edge::NegInf => Edge::NegInf,
+        Edge::At(x) => Edge::At(x.v()),
+        Edge::PosInf => Edge::PosInf,
+    };
+    match f {
+        Body::Const(c) => Body::Const(c.value()),
+        Body::Line => Body::Line,
+        Body::Index(k) => Body::Index(*k),
+        Body::Keyed { seed, of } => Body::Keyed {
+            seed: *seed,
+            of: part(of),
+        },
+        Body::Param(id) => Body::Param(*id),
+        Body::Node(id) => Body::Node(*id),
+        Body::Add(ps) => Body::Add(parts(ps)),
+        Body::Mul(ps) => Body::Mul(parts(ps)),
+        Body::Div(a, b) => Body::Div(part(a), part(b)),
+        Body::Pow(of, n) => Body::Pow(part(of), *n),
+        Body::Apply(op, of) => Body::Apply(*op, part(of)),
+        Body::Fold(op, ps) => Body::Fold(*op, parts(ps)),
+        Body::Delta { at, order } => Body::Delta {
+            at: part(at),
+            order: *order,
+        },
+        Body::Pv(at) => Body::Pv(part(at)),
+        Body::Shift { by, of } => Body::Shift {
+            by: by.v(),
+            of: part(of),
+        },
+        Body::Warp { at, of } => Body::Warp {
+            at: part(at),
+            of: part(of),
+        },
+        Body::Deriv { order, of } => Body::Deriv {
+            order: *order,
+            of: part(of),
+        },
+        Body::Crop {
+            of,
+            l,
+            r,
+            rise,
+            fall,
+        } => Body::Crop {
+            of: part(of),
+            l: edge(*l),
+            r: edge(*r),
+            rise: rise.v(),
+            fall: fall.v(),
+        },
+        Body::Join(ps) => Body::Join(parts(ps)),
+        Body::Channel(of, k) => Body::Channel(part(of), *k),
+        Body::Rational(r) => Body::Rational(Rational {
+            zeros: r.zeros.iter().map(|z| z.value()).collect(),
+            poles: r.poles.iter().map(|p| p.value()).collect(),
+            gain: r.gain.value(),
+        }),
+        Body::Series(s) => Body::Series(Box::new(series(s))),
+        Body::Modal(m) => Body::Modal(m.clone()),
+        Body::Run(run) => Body::Run(run.clone()),
+        Body::Banded(b) => Body::Banded(Box::new(crate::banded::Banded {
+            series: series(&b.series),
+            slope: b.slope.clone(),
+            offset: b.offset.clone(),
+            omega: b.omega,
+            most: b.most,
+            widest: b.widest,
+            reach: b.reach,
+            dropped_db: b.dropped_db,
+        })),
+        Body::Knots { at, table } => Body::Knots {
+            at: part(at),
+            table: std::sync::Arc::new(table.value()),
+        },
+    }
 }
 
 /// The subterms of one node: a walker states its recursion once, and every new variant
 /// reaches every walker at once.
-pub fn children(f: &Body) -> Vec<&Part> {
+pub fn children<N: Num>(f: &Body<N>) -> Vec<&Part<N>> {
     match f {
         Body::Const(_)
         | Body::Line
@@ -279,8 +483,8 @@ pub fn children(f: &Body) -> Vec<&Part> {
     }
 }
 
-pub fn map_children(f: &Body, mut g: impl FnMut(&Part) -> Part) -> Body {
-    let one = |p: &Part, g: &mut dyn FnMut(&Part) -> Part| g(p);
+pub fn map_children<N: Num>(f: &Body<N>, mut g: impl FnMut(&Part<N>) -> Part<N>) -> Body<N> {
+    let one = |p: &Part<N>, g: &mut dyn FnMut(&Part<N>) -> Part<N>| g(p);
     match f {
         Body::Const(_)
         | Body::Line
@@ -347,12 +551,12 @@ pub fn map_children(f: &Body, mut g: impl FnMut(&Part) -> Part) -> Body {
 
 /// `1[l,r)(u - by)` reads the free variable too, so a window moves its own bounds; a warp
 /// moves only its time.
-pub fn shift_line(f: &Body, by: f64) -> Body {
-    let walk = |p: &Part| Part::new(p.origin, shift_line(&p.body, by));
+pub fn shift_line<N: Num>(f: &Body<N>, by: N) -> Body<N> {
+    let walk = |p: &Part<N>| Part::new(p.origin, shift_line(&p.body, by));
     match f {
         Body::Line => Body::Add(vec![
             Part::bare(Body::Line),
-            Part::bare(Body::Const(crate::complex::C64::real(-by))),
+            Part::bare(Body::Const(Cx::real(-by))),
         ]),
         Body::Crop {
             of,
@@ -362,8 +566,8 @@ pub fn shift_line(f: &Body, by: f64) -> Body {
             fall,
         } => Body::Crop {
             of: walk(of),
-            l: Edge::at(l.value() + by),
-            r: Edge::at(r.value() + by),
+            l: Edge::at(l.number() + by),
+            r: Edge::at(r.number() + by),
             rise: *rise,
             fall: *fall,
         },
@@ -380,11 +584,15 @@ pub fn shift_line(f: &Body, by: f64) -> Body {
 }
 
 /// An edge holds no formula, so a window is warped whole, and so is a ref.
-pub fn read_at(f: &Body, at: &Body) -> Body {
+pub fn read_at<N: Num>(f: &Body<N>, at: &Body<N>) -> Body<N> {
     read_at_with(f, at, &|_| None)
 }
 
-pub fn read_at_with(f: &Body, at: &Body, node: &dyn Fn(NodeId) -> Option<NodeId>) -> Body {
+pub fn read_at_with<N: Num>(
+    f: &Body<N>,
+    at: &Body<N>,
+    node: &dyn Fn(NodeId) -> Option<NodeId>,
+) -> Body<N> {
     match f {
         Body::Line => at.clone(),
         Body::Node(id) if let Some(moved) = node(*id) => Body::Node(moved),
@@ -403,7 +611,7 @@ pub fn read_at_with(f: &Body, at: &Body, node: &dyn Fn(NodeId) -> Option<NodeId>
 }
 
 /// A leaf substitution cannot walk into: the free variable hides behind a name.
-pub fn shifts_opaquely(f: &Body) -> bool {
+pub fn shifts_opaquely<N: Num>(f: &Body<N>) -> bool {
     matches!(
         f,
         Body::Param(_) | Body::Rational(_) | Body::Modal(_) | Body::Run(_) | Body::Banded(_)

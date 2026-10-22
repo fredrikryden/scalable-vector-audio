@@ -1,20 +1,23 @@
 // Concern: a knot table: the straight lines through its knots, or their running integral | Non-concern: parsing one, evaluating it over a grid (sva-samples) | IO: (times, values) -> Knots; (t) -> f64
 
+use crate::num::Num;
+
 /// Zero before the first knot. The curve is zero again from the last knot on; its integral
-/// holds its total there. Two knots at one time are a jump, read from its right.
+/// holds its total there. Two knots at one time are a jump, read from its right. The bounds
+/// (`rounding`, `span`) are of the values alone.
 #[derive(Clone, Debug)]
-pub struct Knots {
-    times: Vec<f64>,
-    values: Vec<f64>,
+pub struct Knots<N: Num = f64> {
+    times: Vec<N>,
+    values: Vec<N>,
     integral: bool,
-    prefix: Vec<f64>,
+    prefix: Vec<N>,
     after: Vec<(f64, f64)>,
     rounding: f64,
 }
 
-impl PartialEq for Knots {
-    fn eq(&self, other: &Knots) -> bool {
-        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+impl<N: Num> PartialEq for Knots<N> {
+    fn eq(&self, other: &Knots<N>) -> bool {
+        let bits = |v: &[N]| v.iter().map(|x| x.key()).collect::<Vec<_>>();
         self.integral == other.integral
             && bits(&self.times) == bits(&other.times)
             && bits(&self.values) == bits(&other.values)
@@ -30,8 +33,8 @@ pub enum Unknotted {
     NoSpan,
 }
 
-impl Knots {
-    pub fn new(times: Vec<f64>, values: Vec<f64>, integral: bool) -> Result<Knots, Unknotted> {
+impl<N: Num> Knots<N> {
+    pub fn new(times: Vec<N>, values: Vec<N>, integral: bool) -> Result<Knots<N>, Unknotted> {
         if times.len() != values.len() {
             return Err(Unknotted::Odd);
         }
@@ -41,35 +44,35 @@ impl Knots {
         let unheld = times
             .iter()
             .zip(&values)
-            .position(|(t, v)| !t.is_finite() || !v.is_finite());
+            .position(|(t, v)| !t.v().is_finite() || !v.v().is_finite());
         if let Some(k) = unheld {
             return Err(Unknotted::NotFinite(k));
         }
-        if let Some(k) = times.windows(2).position(|w| w[1] < w[0]) {
+        if let Some(k) = times.windows(2).position(|w| w[1].v() < w[0].v()) {
             return Err(Unknotted::Backwards(k + 1));
         }
-        if times[0] == times[times.len() - 1] {
+        if times[0].v() == times[times.len() - 1].v() {
             return Err(Unknotted::NoSpan);
         }
         let n = times.len();
         let mut prefix = Vec::with_capacity(n);
-        let (mut held, mut weight) = (0.0f64, 0.0f64);
-        prefix.push(0.0);
+        let (mut held, mut weight) = (N::ZERO, 0.0f64);
+        prefix.push(N::ZERO);
         for k in 1..n {
             let dt = times[k] - times[k - 1];
-            held += dt * (values[k - 1] + values[k]) * 0.5;
-            weight += dt * (values[k - 1].abs() + values[k].abs()) * 0.5;
+            held = held + dt * (values[k - 1] + values[k]) * 0.5;
+            weight += dt.v() * (values[k - 1].v().abs() + values[k].v().abs()) * 0.5;
             prefix.push(held);
         }
-        let most = values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        let most = values.iter().fold(0.0f64, |m, v| m.max(v.v().abs()));
         let steep = times
             .windows(2)
             .zip(values.windows(2))
-            .filter(|(t, _)| t[1] > t[0])
+            .filter(|(t, _)| t[1].v() > t[0].v())
             .fold(0.0f64, |m, (t, v)| {
-                m.max((v[1] - v[0]).abs() / (t[1] - t[0]))
+                m.max((v[1].v() - v[0].v()).abs() / (t[1].v() - t[0].v()))
             });
-        let late = 4.0 * f64::EPSILON * times[0].abs().max(times[n - 1].abs());
+        let late = 4.0 * f64::EPSILON * times[0].v().abs().max(times[n - 1].v().abs());
         let rounding = match integral {
             true => (n as f64 + 16.0) * f64::EPSILON * weight + 2.0 * most * late,
             false => 16.0 * f64::EPSILON * most + 2.0 * steep * late,
@@ -86,11 +89,11 @@ impl Knots {
         Ok(knots)
     }
 
-    pub fn times(&self) -> &[f64] {
+    pub fn times(&self) -> &[N] {
         &self.times
     }
 
-    pub fn values(&self) -> &[f64] {
+    pub fn values(&self) -> &[N] {
         &self.values
     }
 
@@ -99,24 +102,24 @@ impl Knots {
     }
 
     pub fn first(&self) -> f64 {
-        self.times[0]
+        self.times[0].v()
     }
 
     pub fn last(&self) -> f64 {
-        self.times[self.times.len() - 1]
+        self.times[self.times.len() - 1].v()
     }
 
     pub fn support(&self) -> (f64, f64) {
-        match self.held() == 0.0 {
+        match self.held().v() == 0.0 {
             true => (self.first(), self.last()),
             false => (self.first(), f64::INFINITY),
         }
     }
 
-    pub fn held(&self) -> f64 {
+    pub fn held(&self) -> N {
         match self.integral {
             true => self.prefix[self.prefix.len() - 1],
-            false => 0.0,
+            false => N::ZERO,
         }
     }
 
@@ -127,7 +130,7 @@ impl Knots {
     }
 
     pub fn segment(&self, t: f64) -> usize {
-        let k = self.times.partition_point(|x| *x <= t).saturating_sub(1);
+        let k = self.times.partition_point(|x| x.v() <= t).saturating_sub(1);
         k.min(self.times.len() - 2)
     }
 
@@ -135,9 +138,9 @@ impl Knots {
     pub fn segment_from(&self, t: f64, from: usize) -> usize {
         let n = self.times.len();
         let mut k = from.min(n - 2);
-        if self.times[k] <= t {
+        if self.times[k].v() <= t {
             for _ in 0..4 {
-                if k + 1 < n - 1 && self.times[k + 1] <= t {
+                if k + 1 < n - 1 && self.times[k + 1].v() <= t {
                     k += 1;
                 } else {
                     return k;
@@ -147,50 +150,77 @@ impl Knots {
         self.segment(t)
     }
 
-    pub fn inside(&self, t: f64, k: usize) -> f64 {
+    pub fn inside(&self, t: N, k: usize) -> N {
         let (t0, t1) = (self.times[k], self.times[k + 1]);
         let (v0, v1) = (self.values[k], self.values[k + 1]);
         let into = t - t0;
         match self.integral {
             false => v0 + (v1 - v0) * into / (t1 - t0),
-            true => self.prefix[k] + into * (v0 + 0.5 * into * (v1 - v0) / (t1 - t0)),
+            true => self.prefix[k] + into * (v0 + N::of(0.5) * into * (v1 - v0) / (t1 - t0)),
         }
     }
 
-    pub fn at(&self, t: f64) -> f64 {
+    pub fn at(&self, t: N) -> N {
         self.read(t, false, &mut 0)
     }
 
     /// Its value at an exact time `u` names, `below` where that time is under `u` itself: a
     /// time on a knot reads the segment ending there. `hint` holds the segment last read.
-    pub fn read(&self, u: f64, below: bool, hint: &mut usize) -> f64 {
+    pub fn read(&self, u: N, below: bool, hint: &mut usize) -> N {
         let (first, last) = (self.first(), self.last());
-        if u < first || (u == first && below) {
-            return 0.0;
+        let at = u.v();
+        if at < first || (at == first && below) {
+            return N::ZERO;
         }
-        if u > last || (u == last && !below) {
+        if at > last || (at == last && !below) {
             return self.held();
         }
-        let mut k = self.segment_from(u, *hint);
-        if below && self.times[k] == u {
-            k = self.times.partition_point(|x| *x < u) - 1;
+        let mut k = self.segment_from(at, *hint);
+        if below && self.times[k].v() == at {
+            k = self.times.partition_point(|x| x.v() < at) - 1;
         }
         *hint = k;
         self.inside(u, k)
     }
 
+    /// The same table over another number, moved by no varied number.
+    pub fn lifted<M: Num>(&self) -> Knots<M> {
+        let of = |xs: &[N]| xs.iter().map(|x| M::of(x.v())).collect();
+        Knots {
+            times: of(&self.times),
+            values: of(&self.values),
+            integral: self.integral,
+            prefix: of(&self.prefix),
+            after: self.after.clone(),
+            rounding: self.rounding,
+        }
+    }
+
+    /// The same table, its tangents dropped.
+    pub fn value(&self) -> Knots {
+        Knots {
+            times: self.times.iter().map(|x| x.v()).collect(),
+            values: self.values.iter().map(|x| x.v()).collect(),
+            integral: self.integral,
+            prefix: self.prefix.iter().map(|x| x.v()).collect(),
+            after: self.after.clone(),
+            rounding: self.rounding,
+        }
+    }
+
     pub fn span(&self, a: f64, b: f64) -> (f64, f64) {
-        let mut held = (self.at(a), self.at(a));
+        let at = |t: f64| self.at(N::of(t)).v();
+        let mut held = (at(a), at(a));
         let mut take = |v: f64| held = (held.0.min(v), held.1.max(v));
         if b.is_finite() {
-            take(self.at(b));
+            take(at(b));
         } else {
-            take(self.held());
+            take(self.held().v());
         }
         if b >= self.last() && !self.integral {
             take(0.0);
         }
-        let from = self.times.partition_point(|x| *x < a);
+        let from = self.times.partition_point(|x| x.v() < a);
         if let Some(turn) = from.checked_sub(1).and_then(|k| self.turn(k))
             && a <= turn.0
             && turn.0 <= b
@@ -205,7 +235,7 @@ impl Knots {
             return held;
         }
         for k in from..self.times.len() {
-            if self.times[k] > b {
+            if self.times[k].v() > b {
                 break;
             }
             take(self.knot(k));
@@ -218,8 +248,8 @@ impl Knots {
 
     fn knot(&self, k: usize) -> f64 {
         match self.integral {
-            true => self.prefix[k],
-            false => self.values[k],
+            true => self.prefix[k].v(),
+            false => self.values[k].v(),
         }
     }
 
@@ -228,19 +258,19 @@ impl Knots {
         if !self.integral || k + 1 >= self.times.len() {
             return None;
         }
-        let (v0, v1) = (self.values[k], self.values[k + 1]);
+        let (v0, v1) = (self.values[k].v(), self.values[k + 1].v());
         if v0 == v1 || v0.signum() == v1.signum() || v0 == 0.0 {
             return None;
         }
-        let (t0, t1) = (self.times[k], self.times[k + 1]);
+        let (t0, t1) = (self.times[k].v(), self.times[k + 1].v());
         let at = t0 + (t1 - t0) * v0 / (v0 - v1);
-        Some((at, self.inside(at.clamp(t0, t1), k)))
+        Some((at, self.inside(N::of(at.clamp(t0, t1)), k).v()))
     }
 
     fn suffix(&self) -> Vec<(f64, f64)> {
         let n = self.times.len();
         let mut out = vec![(0.0, 0.0); n];
-        let mut held = (self.held(), self.held());
+        let mut held = (self.held().v(), self.held().v());
         let take = |held: &mut (f64, f64), v: f64| *held = (held.0.min(v), held.1.max(v));
         for k in (0..n).rev() {
             take(&mut held, self.knot(k));

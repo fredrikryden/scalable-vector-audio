@@ -1,15 +1,16 @@
 // Concern: designs RBJ biquad coefficients and their magnitude response | Non-concern: the shapes and their H(s) (sva-formula), dispatch (filters.rs) | IO: (Shape, cutoff, q, gain, sr) -> Coeffs
 
 use sva_formula::filter::Shape;
+use sva_formula::{Cx, Num};
 
 /// Normalized to `a0 = 1`: `y = b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Coeffs {
-    pub b0: f64,
-    pub b1: f64,
-    pub b2: f64,
-    pub a1: f64,
-    pub a2: f64,
+pub struct Coeffs<N: Num = f64> {
+    pub b0: N,
+    pub b1: N,
+    pub b2: N,
+    pub a1: N,
+    pub a2: N,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -104,70 +105,72 @@ pub fn clamp_q(shape: Shape, cutoff: f64, q: f64, gain: f64, sr: f64) -> (f64, b
 }
 
 /// The RBJ Audio EQ Cookbook's designs, normalized by `a0`; `gain` is a ratio.
-pub fn design(shape: Shape, cutoff: f64, q: f64, gain: f64, sr: f64) -> Coeffs {
+pub fn design<N: Num>(shape: Shape, cutoff: N, q: N, gain: N, sr: f64) -> Coeffs<N> {
+    let turn = 2.0 * std::f64::consts::PI;
     if shape == Shape::OnePole {
-        let rc = 1.0 / (2.0 * std::f64::consts::PI * cutoff);
+        let rc = N::ONE / (cutoff * turn);
         let dt = 1.0 / sr;
-        let alpha = dt / (rc + dt);
+        let alpha = N::of(dt) / (rc + dt);
         return Coeffs {
             b0: alpha,
-            b1: 0.0,
-            b2: 0.0,
+            b1: N::ZERO,
+            b2: N::ZERO,
             a1: alpha - 1.0,
-            a2: 0.0,
+            a2: N::ZERO,
         };
     }
 
-    let w0 = 2.0 * std::f64::consts::PI * cutoff / sr;
-    let cs = libm::cos(w0);
-    let sn = libm::sin(w0);
-    let alpha = sn / (2.0 * q);
+    let w0 = cutoff * turn / sr;
+    let cs = w0.cos();
+    let sn = w0.sin();
+    let alpha = sn / (q * 2.0);
     let a = gain.sqrt();
     let sqrt_a = a.sqrt();
+    let one = N::ONE;
 
     let (b0, b1, b2, a0, a1, a2) = match shape {
         Shape::OnePole => unreachable!("handled above"),
         Shape::Lowpass => (
-            (1.0 - cs) / 2.0,
-            1.0 - cs,
-            (1.0 - cs) / 2.0,
-            1.0 + alpha,
-            -2.0 * cs,
-            1.0 - alpha,
+            (one - cs) / 2.0,
+            one - cs,
+            (one - cs) / 2.0,
+            one + alpha,
+            cs * -2.0,
+            one - alpha,
         ),
         Shape::Highpass => (
-            (1.0 + cs) / 2.0,
-            -(1.0 + cs),
-            (1.0 + cs) / 2.0,
-            1.0 + alpha,
-            -2.0 * cs,
-            1.0 - alpha,
+            (one + cs) / 2.0,
+            -(one + cs),
+            (one + cs) / 2.0,
+            one + alpha,
+            cs * -2.0,
+            one - alpha,
         ),
-        Shape::Bandpass => (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cs, 1.0 - alpha),
-        Shape::Notch => (1.0, -2.0 * cs, 1.0, 1.0 + alpha, -2.0 * cs, 1.0 - alpha),
+        Shape::Bandpass => (alpha, N::ZERO, -alpha, one + alpha, cs * -2.0, one - alpha),
+        Shape::Notch => (one, cs * -2.0, one, one + alpha, cs * -2.0, one - alpha),
         Shape::Peaking => (
-            1.0 + alpha * a,
-            -2.0 * cs,
-            1.0 - alpha * a,
-            1.0 + alpha / a,
-            -2.0 * cs,
-            1.0 - alpha / a,
+            one + alpha * a,
+            cs * -2.0,
+            one - alpha * a,
+            one + alpha / a,
+            cs * -2.0,
+            one - alpha / a,
         ),
         Shape::Lowshelf => (
-            a * ((a + 1.0) - (a - 1.0) * cs + 2.0 * sqrt_a * alpha),
-            2.0 * a * ((a - 1.0) - (a + 1.0) * cs),
-            a * ((a + 1.0) - (a - 1.0) * cs - 2.0 * sqrt_a * alpha),
-            (a + 1.0) + (a - 1.0) * cs + 2.0 * sqrt_a * alpha,
-            -2.0 * ((a - 1.0) + (a + 1.0) * cs),
-            (a + 1.0) + (a - 1.0) * cs - 2.0 * sqrt_a * alpha,
+            a * ((a + 1.0) - (a - 1.0) * cs + sqrt_a * 2.0 * alpha),
+            a * 2.0 * ((a - 1.0) - (a + 1.0) * cs),
+            a * ((a + 1.0) - (a - 1.0) * cs - sqrt_a * 2.0 * alpha),
+            (a + 1.0) + (a - 1.0) * cs + sqrt_a * 2.0 * alpha,
+            ((a - 1.0) + (a + 1.0) * cs) * -2.0,
+            (a + 1.0) + (a - 1.0) * cs - sqrt_a * 2.0 * alpha,
         ),
         Shape::Highshelf => (
-            a * ((a + 1.0) + (a - 1.0) * cs + 2.0 * sqrt_a * alpha),
-            -2.0 * a * ((a - 1.0) + (a + 1.0) * cs),
-            a * ((a + 1.0) + (a - 1.0) * cs - 2.0 * sqrt_a * alpha),
-            (a + 1.0) - (a - 1.0) * cs + 2.0 * sqrt_a * alpha,
-            2.0 * ((a - 1.0) - (a + 1.0) * cs),
-            (a + 1.0) - (a - 1.0) * cs - 2.0 * sqrt_a * alpha,
+            a * ((a + 1.0) + (a - 1.0) * cs + sqrt_a * 2.0 * alpha),
+            a * -2.0 * ((a - 1.0) + (a + 1.0) * cs),
+            a * ((a + 1.0) + (a - 1.0) * cs - sqrt_a * 2.0 * alpha),
+            (a + 1.0) - (a - 1.0) * cs + sqrt_a * 2.0 * alpha,
+            ((a - 1.0) - (a + 1.0) * cs) * 2.0,
+            (a + 1.0) - (a - 1.0) * cs - sqrt_a * 2.0 * alpha,
         ),
     };
 
@@ -178,6 +181,15 @@ pub fn design(shape: Shape, cutoff: f64, q: f64, gain: f64, sr: f64) -> Coeffs {
         a1: a1 / a0,
         a2: a2 / a0,
     }
+}
+
+/// `H(e^{i w})` at `hz`: what the recurrence multiplies a held line of that frequency by.
+pub fn at<N: Num>(c: &Coeffs<N>, hz: f64, sr: f64) -> Cx<N> {
+    let w = 2.0 * std::f64::consts::PI * hz / sr;
+    let back = |k: f64| Cx::of(sva_formula::C64::new(libm::cos(k * w), -libm::sin(k * w)));
+    let num = Cx::real(c.b0) + Cx::real(c.b1) * back(1.0) + Cx::real(c.b2) * back(2.0);
+    let den = Cx::ONE + Cx::real(c.a1) * back(1.0) + Cx::real(c.a2) * back(2.0);
+    num / den
 }
 
 pub fn magnitude_db(c: &Coeffs, hz: f64, sr: f64) -> f64 {

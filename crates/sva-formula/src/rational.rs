@@ -1,7 +1,8 @@
 // Concern: expands a rational's partial fractions into pole atoms by residues | Non-concern: choosing a rational's zeros and poles | IO: (Rational) -> Vec<SpectralAtom> or Left
 
 use crate::closed_form::Rational;
-use crate::complex::C64;
+use crate::complex::Cx;
+use crate::num::Num;
 use crate::origin::Origin;
 use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
 use crate::spectral_sum::atom::{Factors, Pole, Singular, SpectralAtom};
@@ -10,16 +11,19 @@ use crate::spectral_sum::atom::{Factors, Pole, Singular, SpectralAtom};
 pub const MAX_POLE_ORDER: u16 = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Residue {
-    pub at: C64,
+pub struct Residue<N: Num = f64> {
+    pub at: Cx<N>,
     pub order: u16,
-    pub weight: C64,
+    pub weight: Cx<N>,
 }
 
 /// Ascending coefficients: `c[k]` multiplies `x^k`.
-type Poly = Vec<C64>;
+type Poly<N> = Vec<Cx<N>>;
 
-pub fn expand(r: &Rational, origin: Origin) -> Result<Vec<SpectralAtom>, Left> {
+/// The quotient polynomial beside each pole's residues.
+type Fractions<N> = (Poly<N>, Vec<Residue<N>>);
+
+pub fn expand<N: Num>(r: &Rational<N>, origin: Origin) -> Result<Vec<SpectralAtom<N>>, Left> {
     let mut num = from_roots(&r.zeros);
     for c in &mut num {
         *c = *c * r.gain;
@@ -27,7 +31,7 @@ pub fn expand(r: &Rational, origin: Origin) -> Result<Vec<SpectralAtom>, Left> {
     let (quotient, residues) = partial_fractions(&num, &r.poles)
         .map_err(|reason| Left::new(origin, AtomSketch::of(Factor::Pole), reason))?;
 
-    let mut out: Vec<SpectralAtom> = quotient
+    let mut out: Vec<SpectralAtom<N>> = quotient
         .into_iter()
         .enumerate()
         .filter(|(_, c)| !c.is_zero())
@@ -65,7 +69,10 @@ pub fn expand(r: &Rational, origin: Origin) -> Result<Vec<SpectralAtom>, Left> {
 }
 
 /// A repeated pole's residues are the truncated Taylor series of the rest over it.
-pub fn partial_fractions(num: &[C64], poles: &[C64]) -> Result<(Poly, Vec<Residue>), LeftReason> {
+pub fn partial_fractions<N: Num>(
+    num: &[Cx<N>],
+    poles: &[Cx<N>],
+) -> Result<Fractions<N>, LeftReason> {
     let total = u16::try_from(poles.len()).unwrap_or(u16::MAX);
     if total > MAX_POLE_ORDER {
         return Err(LeftReason::PoleOrder(total));
@@ -73,7 +80,7 @@ pub fn partial_fractions(num: &[C64], poles: &[C64]) -> Result<(Poly, Vec<Residu
     let den = from_roots(poles);
     let (quotient, remainder) = divide(num, &den);
 
-    let mut grouped: Vec<(C64, u16)> = Vec::new();
+    let mut grouped: Vec<(Cx<N>, u16)> = Vec::new();
     for p in poles {
         match grouped.iter_mut().find(|(q, _)| q == p) {
             Some((_, m)) => *m += 1,
@@ -83,7 +90,7 @@ pub fn partial_fractions(num: &[C64], poles: &[C64]) -> Result<(Poly, Vec<Residu
 
     let mut out = Vec::new();
     for (p, m) in &grouped {
-        let others: Vec<C64> = grouped
+        let others: Vec<Cx<N>> = grouped
             .iter()
             .filter(|(q, _)| q != p)
             .flat_map(|(q, n)| std::iter::repeat_n(*q, usize::from(*n)))
@@ -102,10 +109,10 @@ pub fn partial_fractions(num: &[C64], poles: &[C64]) -> Result<(Poly, Vec<Residu
     Ok((quotient, out))
 }
 
-fn from_roots(roots: &[C64]) -> Poly {
-    let mut out = vec![C64::ONE];
+fn from_roots<N: Num>(roots: &[Cx<N>]) -> Poly<N> {
+    let mut out = vec![Cx::ONE];
     for r in roots {
-        let mut next = vec![C64::ZERO; out.len() + 1];
+        let mut next = vec![Cx::ZERO; out.len() + 1];
         for (k, c) in out.iter().enumerate() {
             next[k + 1] = next[k + 1] + *c;
             next[k] = next[k] - *c * *r;
@@ -115,11 +122,11 @@ fn from_roots(roots: &[C64]) -> Poly {
     out
 }
 
-fn degree(p: &[C64]) -> Option<usize> {
+fn degree<N: Num>(p: &[Cx<N>]) -> Option<usize> {
     p.iter().rposition(|c| !c.is_zero())
 }
 
-fn divide(num: &[C64], den: &[C64]) -> (Poly, Poly) {
+fn divide<N: Num>(num: &[Cx<N>], den: &[Cx<N>]) -> (Poly<N>, Poly<N>) {
     let (Some(dn), Some(dd)) = (degree(num), degree(den)) else {
         return (Vec::new(), num.to_vec());
     };
@@ -127,7 +134,7 @@ fn divide(num: &[C64], den: &[C64]) -> (Poly, Poly) {
         return (Vec::new(), num.to_vec());
     }
     let mut rem = num.to_vec();
-    let mut quotient = vec![C64::ZERO; dn - dd + 1];
+    let mut quotient = vec![Cx::ZERO; dn - dd + 1];
     for shift in (0..=dn - dd).rev() {
         let factor = rem[shift + dd] / den[dd];
         quotient[shift] = factor;
@@ -140,16 +147,16 @@ fn divide(num: &[C64], den: &[C64]) -> (Poly, Poly) {
 }
 
 /// The first `count` Taylor coefficients about `at`, by repeated synthetic division.
-fn taylor_at(p: &[C64], at: C64, count: usize) -> Poly {
+fn taylor_at<N: Num>(p: &[Cx<N>], at: Cx<N>, count: usize) -> Poly<N> {
     let mut work = if p.is_empty() {
-        vec![C64::ZERO]
+        vec![Cx::ZERO]
     } else {
         p.to_vec()
     };
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         let last = work.len() - 1;
-        let mut quotient = vec![C64::ZERO; last];
+        let mut quotient = vec![Cx::ZERO; last];
         let mut carry = work[last];
         for k in (0..last).rev() {
             quotient[k] = carry;
@@ -157,7 +164,7 @@ fn taylor_at(p: &[C64], at: C64, count: usize) -> Poly {
         }
         out.push(carry);
         work = if quotient.is_empty() {
-            vec![C64::ZERO]
+            vec![Cx::ZERO]
         } else {
             quotient
         };
@@ -166,9 +173,9 @@ fn taylor_at(p: &[C64], at: C64, count: usize) -> Poly {
 }
 
 /// Truncated power series; `b[0]` is nonzero because the other factors miss this pole.
-fn series_div(a: &[C64], b: &[C64]) -> Poly {
+fn series_div<N: Num>(a: &[Cx<N>], b: &[Cx<N>]) -> Poly<N> {
     let n = a.len();
-    let mut out = vec![C64::ZERO; n];
+    let mut out = vec![Cx::ZERO; n];
     for k in 0..n {
         let mut acc = a[k];
         for j in 1..=k {

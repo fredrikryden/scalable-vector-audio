@@ -4,24 +4,25 @@ use std::f64::consts::{PI, TAU};
 
 use sva_ast::{Arg, ByteSpan, Expr};
 use sva_formula::affine::exact_constant;
-use sva_formula::{Body, Bound, C64, IndexId, Part, Series, Unary, Var};
+use sva_formula::{Body, Bound, Cx as Complex, IndexId, Part, Series, Unary, Var};
 
 use crate::error::EngineError;
 use crate::instantiate::{Cx, Node};
+use crate::lower::dual::Number;
 use crate::lower::{Index, Lowering, Piece};
 use sva_ast::SERIES;
 
-impl Lowering<'_> {
+impl<N: Number> Lowering<'_, N> {
     /// `saw`, `square` and `triangle` carry no harmonic budget: each is the series FORMAT 6.4
     /// states, truncated once at collapse.
     pub(super) fn wave(
         &mut self,
         name: &str,
         positional: &[&Expr],
-        named: &[(&str, f64)],
+        named: &[(&str, N)],
         cx: Cx,
         var: Var,
-    ) -> Result<Option<Piece>, EngineError> {
+    ) -> Result<Option<Piece<N>>, EngineError> {
         let odd = match name {
             "saw" => false,
             "square" | "triangle" => true,
@@ -41,10 +42,10 @@ impl Lowering<'_> {
             None => named
                 .iter()
                 .find(|(k, _)| *k == "phase")
-                .map(|(_, v)| Body::Const(C64::real(*v))),
+                .map(|(_, v)| Body::Const(Complex::real(*v))),
         };
         let pitch = exact_constant(&hz)
-            .filter(|c| c.im == 0.0 && c.re != 0.0 && c.re.is_finite() && var == Var::T);
+            .filter(|c| c.im.is_zero() && c.re.v() != 0.0 && c.re.v().is_finite() && var == Var::T);
         let (turned, delay) = match (phase, pitch) {
             (Some(phase), Some(pitch)) => (None, Some(self.delay(phase, pitch.re))),
             (phase, _) => (phase, None),
@@ -52,7 +53,7 @@ impl Lowering<'_> {
         let index = self.index();
         let ordinal = self.ordinal(index, odd, name);
         let term = self.partial(name, &hz, turned.as_ref(), &ordinal, index);
-        let scale = self.part(Body::Const(C64::real(amplitude(name))), None);
+        let scale = self.part(Body::Const(Complex::real(N::of(amplitude(name)))), None);
         let series = self.part(
             Body::Series(Box::new(Series {
                 index,
@@ -74,23 +75,23 @@ impl Lowering<'_> {
 
     /// At a constant pitch the wave is its plain series read at `t + phase/(2*pi*hz)`, a line
     /// series the band truncates whatever the phase does.
-    fn delay(&mut self, phase: Body, hz: f64) -> Part {
+    fn delay(&mut self, phase: Body<N>, hz: N) -> Part<N> {
         let line = self.part(Body::Line, None);
         let phase = self.part(phase, None);
-        let per_turn = self.part(Body::Const(C64::real(TAU * hz)), None);
+        let per_turn = self.part(Body::Const(Complex::real(hz * TAU)), None);
         let late = self.part(Body::Div(phase, per_turn), None);
         self.part(Body::Add(vec![line, late]), None)
     }
 
     /// `k` for every harmonic, `2k-1` where only the odd ones are present.
-    fn ordinal(&mut self, index: IndexId, odd: bool, _name: &str) -> Body {
+    fn ordinal(&mut self, index: IndexId, odd: bool, _name: &str) -> Body<N> {
         if !odd {
             return Body::Index(index);
         }
-        let two = self.part(Body::Const(C64::real(2.0)), None);
+        let two = self.part(Body::Const(Complex::real(N::of(2.0))), None);
         let k = self.part(Body::Index(index), None);
         let doubled = self.part(Body::Mul(vec![two, k]), None);
-        let minus = self.part(Body::Const(C64::real(-1.0)), None);
+        let minus = self.part(Body::Const(Complex::real(N::of(-1.0))), None);
         Body::Add(vec![doubled, minus])
     }
 
@@ -101,12 +102,12 @@ impl Lowering<'_> {
     fn partial(
         &mut self,
         name: &str,
-        hz: &Body,
-        phase: Option<&Body>,
-        ordinal: &Body,
+        hz: &Body<N>,
+        phase: Option<&Body<N>>,
+        ordinal: &Body<N>,
         index: IndexId,
-    ) -> Part {
-        let turn = self.part(Body::Const(C64::real(TAU)), None);
+    ) -> Part<N> {
+        let turn = self.part(Body::Const(Complex::real(N::of(TAU))), None);
         let n = self.part(ordinal.clone(), None);
         let hz = self.part(hz.clone(), None);
         let line = self.part(Body::Line, None);
@@ -118,9 +119,9 @@ impl Lowering<'_> {
             sum.push(self.part(Body::Mul(vec![n, phase]), None));
         }
         if name == "triangle" {
-            let half = self.part(Body::Const(C64::real(PI)), None);
+            let half = self.part(Body::Const(Complex::real(N::of(PI))), None);
             let k = self.part(Body::Index(index), None);
-            let one = self.part(Body::Const(C64::real(-1.0)), None);
+            let one = self.part(Body::Const(Complex::real(N::of(-1.0))), None);
             let shifted = self.part(Body::Add(vec![k, one]), None);
             sum.push(self.part(Body::Mul(vec![half, shifted]), None));
         }
@@ -130,7 +131,7 @@ impl Lowering<'_> {
         Part::new(wave.origin, Body::Div(wave, denominator))
     }
 
-    fn part_of(&self, f: Body) -> Part {
+    fn part_of(&self, f: Body<N>) -> Part<N> {
         Part::bare(f)
     }
 
@@ -140,7 +141,7 @@ impl Lowering<'_> {
         span: ByteSpan,
         cx: Cx,
         var: Var,
-    ) -> Result<Piece, EngineError> {
+    ) -> Result<Piece<N>, EngineError> {
         let [
             Arg::Pos(Expr::Var(name)),
             Arg::Pos(lo),
@@ -150,13 +151,13 @@ impl Lowering<'_> {
         else {
             return Err(EngineError::BadArity(SERIES.to_string()));
         };
-        let Some(lo) = self.named_value(lo, cx) else {
+        let Some(lo) = self.named_value(lo, cx).map(N::v) else {
             return Err(EngineError::BadArity(SERIES.to_string()));
         };
         let hi = match self.inst.node(hi, cx) {
             Node::Name("inf") => Bound::Infinite,
             _ => match self.named_value(hi, cx) {
-                Some(n) => Bound::Finite(n as i64),
+                Some(n) => Bound::Finite(n.v() as i64),
                 None => return Err(EngineError::BadArity(SERIES.to_string())),
             },
         };
@@ -200,7 +201,7 @@ impl Lowering<'_> {
         body: &Expr,
         (cx, var): (Cx, Var),
         (span, failed): (ByteSpan, Option<EngineError>),
-    ) -> Result<Piece, EngineError> {
+    ) -> Result<Piece<N>, EngineError> {
         if hi.saturating_sub(lo) >= MAX_WRITTEN_TERMS {
             return Err(failed.unwrap_or_else(|| {
                 self.refused_at(
@@ -224,10 +225,15 @@ impl Lowering<'_> {
                     let parts = vec![self.part(a, None), self.part(b, None)];
                     Piece::ClosedForm(Body::Add(parts))
                 }
-                (Some(a), b) => self.operation("+", vec![a, b], Some(span), var)?,
+                (Some(a), b) => {
+                    let pieces = vec![N::value(a), N::value(b)];
+                    self.rendered("a term of samples", |low| {
+                        low.operation("+", pieces, Some(span), var)
+                    })?
+                }
             });
         }
-        Ok(whole.unwrap_or(Piece::ClosedForm(Body::Const(C64::ZERO))))
+        Ok(whole.unwrap_or(Piece::ClosedForm(Body::Const(Complex::ZERO))))
     }
 }
 

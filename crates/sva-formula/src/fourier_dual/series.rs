@@ -3,37 +3,42 @@
 use std::f64::consts::TAU;
 
 use crate::closed_form::{Body, Part, Series, Unary};
-use crate::complex::C64;
+use crate::complex::{C64, Cx};
+use crate::num::Num;
 use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
 use crate::series::mentions_line_read;
 use crate::through::{Opaque, Reads, Seen, looked};
 
 /// `amp * exp(2*pi*i*freq*u)`, with both written as index expressions rather than numbers.
-pub struct SymLine {
-    pub amp: Body,
-    pub freq: Body,
+pub struct SymLine<N: Num = f64> {
+    pub amp: Body<N>,
+    pub freq: Body<N>,
 }
 
 /// `weight * delta(u - at)`.
-pub struct SymDelta {
-    pub weight: Body,
-    pub at: Body,
+pub struct SymDelta<N: Num = f64> {
+    pub weight: Body<N>,
+    pub at: Body<N>,
 }
 
-pub enum Shape {
-    Lines(Vec<SymLine>),
-    Deltas(Vec<SymDelta>),
+pub enum Shape<N: Num = f64> {
+    Lines(Vec<SymLine<N>>),
+    Deltas(Vec<SymDelta<N>>),
 }
 
-pub(crate) fn dual(s: &Series, reads: &dyn Reads) -> Result<Series, Left> {
+pub(crate) fn dual<N: Num>(s: &Series<N>, reads: &dyn Reads<N>) -> Result<Series<N>, Left> {
     transform(s, dual_shape, reads)
 }
 
-pub(crate) fn reflect(s: &Series, reads: &dyn Reads) -> Result<Series, Left> {
+pub(crate) fn reflect<N: Num>(s: &Series<N>, reads: &dyn Reads<N>) -> Result<Series<N>, Left> {
     transform(s, reflect_shape, reads)
 }
 
-fn transform(s: &Series, op: impl Fn(Shape) -> Shape, reads: &dyn Reads) -> Result<Series, Left> {
+fn transform<N: Num>(
+    s: &Series<N>,
+    op: impl Fn(Shape<N>) -> Shape<N>,
+    reads: &dyn Reads<N>,
+) -> Result<Series<N>, Left> {
     let Some(shape) = read_with(&s.term.body, reads) else {
         return Err(Left::new(
             s.term.origin,
@@ -47,7 +52,7 @@ fn transform(s: &Series, op: impl Fn(Shape) -> Shape, reads: &dyn Reads) -> Resu
     })
 }
 
-fn dual_shape(shape: Shape) -> Shape {
+fn dual_shape<N: Num>(shape: Shape<N>) -> Shape<N> {
     match shape {
         Shape::Lines(lines) => Shape::Deltas(
             lines
@@ -70,7 +75,7 @@ fn dual_shape(shape: Shape) -> Shape {
     }
 }
 
-fn reflect_shape(shape: Shape) -> Shape {
+fn reflect_shape<N: Num>(shape: Shape<N>) -> Shape<N> {
     match shape {
         Shape::Lines(lines) => Shape::Lines(
             lines
@@ -93,8 +98,8 @@ fn reflect_shape(shape: Shape) -> Shape {
     }
 }
 
-pub(crate) fn write(shape: &Shape) -> Body {
-    let parts: Vec<Part> = match shape {
+pub(crate) fn write<N: Num>(shape: &Shape<N>) -> Body<N> {
+    let parts: Vec<Part<N>> = match shape {
         Shape::Lines(lines) => lines
             .iter()
             .map(|l| {
@@ -103,7 +108,7 @@ pub(crate) fn write(shape: &Shape) -> Body {
                     Part::bare(Body::Apply(
                         Unary::Exp,
                         Part::bare(Body::Mul(vec![
-                            Part::bare(Body::Const(C64::new(0.0, TAU))),
+                            Part::bare(Body::Const(Cx::of(C64::new(0.0, TAU)))),
                             Part::bare(l.freq.clone()),
                             Part::bare(Body::Line),
                         ])),
@@ -130,18 +135,18 @@ pub(crate) fn write(shape: &Shape) -> Body {
     Body::Add(parts)
 }
 
-pub fn read(term: &Body) -> Option<Shape> {
+pub fn read<N: Num>(term: &Body<N>) -> Option<Shape<N>> {
     read_with(term, &Opaque)
 }
 
 /// The same, each ref the term holds read as the form `reads` names, one level at a time.
-pub fn read_with(term: &Body, reads: &dyn Reads) -> Option<Shape> {
+pub fn read_with<N: Num>(term: &Body<N>, reads: &dyn Reads<N>) -> Option<Shape<N>> {
     read_deltas(term, reads)
         .map(Shape::Deltas)
         .or_else(|| read_lines(term, reads).map(Shape::Lines))
 }
 
-fn read_deltas(term: &Body, reads: &dyn Reads) -> Option<Vec<SymDelta>> {
+fn read_deltas<N: Num>(term: &Body<N>, reads: &dyn Reads<N>) -> Option<Vec<SymDelta<N>>> {
     match &*looked(term, reads) {
         Body::Add(parts) => {
             let mut out = Vec::new();
@@ -154,14 +159,14 @@ fn read_deltas(term: &Body, reads: &dyn Reads) -> Option<Vec<SymDelta>> {
     }
 }
 
-fn read_delta(term: &Body, reads: &dyn Reads) -> Option<SymDelta> {
+fn read_delta<N: Num>(term: &Body<N>, reads: &dyn Reads<N>) -> Option<SymDelta<N>> {
     let (weight, singular) = match term {
         Body::Mul(parts) => match parts.as_slice() {
             [weight, singular] => ((*weight.body).clone(), looked(&singular.body, reads)),
             _ => return None,
         },
         // A strike written without a coefficient still weighs one.
-        Body::Delta { .. } => (Body::Const(C64::ONE), Seen::Here(term)),
+        Body::Delta { .. } => (Body::Const(Cx::ONE), Seen::Here(term)),
         _ => return None,
     };
     let Body::Delta { at, order: 0 } = &*singular else {
@@ -179,12 +184,16 @@ fn read_delta(term: &Body, reads: &dyn Reads) -> Option<SymDelta> {
     })
 }
 
-fn read_lines(term: &Body, reads: &dyn Reads) -> Option<Vec<SymLine>> {
-    read_wave(term, Body::Const(C64::ONE), reads)
+fn read_lines<N: Num>(term: &Body<N>, reads: &dyn Reads<N>) -> Option<Vec<SymLine<N>>> {
+    read_wave(term, Body::Const(Cx::ONE), reads)
 }
 
 /// Peels the index-only factors off a term until one wave in the free variable is left.
-fn read_wave(term: &Body, coeff: Body, reads: &dyn Reads) -> Option<Vec<SymLine>> {
+fn read_wave<N: Num>(
+    term: &Body<N>,
+    coeff: Body<N>,
+    reads: &dyn Reads<N>,
+) -> Option<Vec<SymLine<N>>> {
     match &*looked(term, reads) {
         // Written associativity must not decide whether a series reads.
         Body::Add(parts) => {
@@ -223,12 +232,22 @@ fn read_wave(term: &Body, coeff: Body, reads: &dyn Reads) -> Option<Vec<SymLine>
             Some(match op {
                 Unary::Exp => vec![SymLine {
                     amp: product(coeff, exponential(phase)),
-                    freq: divide(slope, C64::new(0.0, TAU)),
+                    freq: divide(slope, Cx::of(C64::new(0.0, TAU))),
                 }],
-                Unary::Cos => quadrature(coeff, slope, phase, C64::real(0.5), C64::real(0.5)),
-                Unary::Sin => {
-                    quadrature(coeff, slope, phase, C64::new(0.0, -0.5), C64::new(0.0, 0.5))
-                }
+                Unary::Cos => quadrature(
+                    coeff,
+                    slope,
+                    phase,
+                    Cx::of(C64::real(0.5)),
+                    Cx::of(C64::real(0.5)),
+                ),
+                Unary::Sin => quadrature(
+                    coeff,
+                    slope,
+                    phase,
+                    Cx::of(C64::new(0.0, -0.5)),
+                    Cx::of(C64::new(0.0, 0.5)),
+                ),
                 _ => return None,
             })
         }
@@ -236,13 +255,19 @@ fn read_wave(term: &Body, coeff: Body, reads: &dyn Reads) -> Option<Vec<SymLine>
     }
 }
 
-fn quadrature(coeff: Body, slope: Body, phase: Body, up: C64, down: C64) -> Vec<SymLine> {
+fn quadrature<N: Num>(
+    coeff: Body<N>,
+    slope: Body<N>,
+    phase: Body<N>,
+    up: Cx<N>,
+    down: Cx<N>,
+) -> Vec<SymLine<N>> {
     let turn = Body::Mul(vec![
-        Part::bare(Body::Const(C64::I)),
+        Part::bare(Body::Const(Cx::I)),
         Part::bare(phase.clone()),
     ]);
-    let back = Body::Mul(vec![Part::bare(Body::Const(-C64::I)), Part::bare(phase)]);
-    let freq = divide(slope, C64::real(TAU));
+    let back = Body::Mul(vec![Part::bare(Body::Const(-Cx::I)), Part::bare(phase)]);
+    let freq = divide(slope, Cx::of(C64::real(TAU)));
     vec![
         SymLine {
             amp: product(product(coeff.clone(), Body::Const(up)), exponential(turn)),
@@ -256,11 +281,11 @@ fn quadrature(coeff: Body, slope: Body, phase: Body, up: C64, down: C64) -> Vec<
 }
 
 /// `slope * u + phase`, both index-only, or nothing.
-fn split_argument(arg: &Body, reads: &dyn Reads) -> Option<(Body, Body)> {
+fn split_argument<N: Num>(arg: &Body<N>, reads: &dyn Reads<N>) -> Option<(Body<N>, Body<N>)> {
     match &*looked(arg, reads) {
         Body::Add(parts) => {
             let mut slope = None;
-            let mut phase = Body::Const(C64::ZERO);
+            let mut phase = Body::Const(Cx::ZERO);
             for p in parts {
                 if mentions_line_read(&p.body, reads) {
                     if slope.is_some() {
@@ -282,7 +307,7 @@ fn split_argument(arg: &Body, reads: &dyn Reads) -> Option<(Body, Body)> {
             Some((slope?, phase))
         }
         Body::Mul(parts) => {
-            let mut coeff = Body::Const(C64::ONE);
+            let mut coeff = Body::Const(Cx::ONE);
             let mut core = None;
             for p in parts {
                 if mentions_line_read(&p.body, reads) {
@@ -297,16 +322,16 @@ fn split_argument(arg: &Body, reads: &dyn Reads) -> Option<(Body, Body)> {
             let (slope, phase) = split_argument(core?, reads)?;
             Some((product(coeff.clone(), slope), product(coeff, phase)))
         }
-        other => Some((strip_line(other, reads)?, Body::Const(C64::ZERO))),
+        other => Some((strip_line(other, reads)?, Body::Const(Cx::ZERO))),
     }
 }
 
 /// A shifted argument reaches here as `coeff*(t + offset)`, so the coefficient is peeled
 /// before the sum inside it is read.
 /// The coefficient of the free variable in a product that names it exactly once.
-fn strip_line(f: &Body, reads: &dyn Reads) -> Option<Body> {
+fn strip_line<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<Body<N>> {
     match &*looked(f, reads) {
-        Body::Line => Some(Body::Const(C64::ONE)),
+        Body::Line => Some(Body::Const(Cx::ONE)),
         Body::Mul(parts) => {
             let mut rest = Vec::new();
             let mut seen = false;
@@ -323,39 +348,39 @@ fn strip_line(f: &Body, reads: &dyn Reads) -> Option<Body> {
     }
 }
 
-fn collapse(mut parts: Vec<Part>) -> Body {
+fn collapse<N: Num>(mut parts: Vec<Part<N>>) -> Body<N> {
     match parts.len() {
-        0 => Body::Const(C64::ONE),
+        0 => Body::Const(Cx::ONE),
         1 => (*parts.remove(0).body).clone(),
         _ => Body::Mul(parts),
     }
 }
 
-fn product(a: Body, b: Body) -> Body {
+fn product<N: Num>(a: Body<N>, b: Body<N>) -> Body<N> {
     match (&a, &b) {
-        (Body::Const(x), _) if *x == C64::ONE => b,
-        (_, Body::Const(x)) if *x == C64::ONE => a,
+        (Body::Const(x), _) if *x == Cx::ONE => b,
+        (_, Body::Const(x)) if *x == Cx::ONE => a,
         _ => Body::Mul(vec![Part::bare(a), Part::bare(b)]),
     }
 }
 
-fn sum(a: Body, b: Body) -> Body {
+fn sum<N: Num>(a: Body<N>, b: Body<N>) -> Body<N> {
     match &a {
         Body::Const(x) if x.is_zero() => b,
         _ => Body::Add(vec![Part::bare(a), Part::bare(b)]),
     }
 }
 
-fn exponential(argument: Body) -> Body {
+fn exponential<N: Num>(argument: Body<N>) -> Body<N> {
     match &argument {
-        Body::Const(c) if c.is_zero() => Body::Const(C64::ONE),
+        Body::Const(c) if c.is_zero() => Body::Const(Cx::ONE),
         _ => Body::Apply(Unary::Exp, Part::bare(argument)),
     }
 }
 
 /// Folding the factor away where it is already written keeps `dual` of `dual` structurally
 /// equal to `reflect` rather than merely equal in value.
-fn divide(f: Body, by: C64) -> Body {
+fn divide<N: Num>(f: Body<N>, by: Cx<N>) -> Body<N> {
     if let Body::Mul(parts) = &f
         && let Some(at) = parts
             .iter()
@@ -369,18 +394,18 @@ fn divide(f: Body, by: C64) -> Body {
 }
 
 /// An involution, so a frequency negated twice is the formula it started as.
-fn negate(f: Body) -> Body {
+fn negate<N: Num>(f: Body<N>) -> Body<N> {
     if let Body::Mul(parts) = &f
         && let Some(at) = parts
             .iter()
-            .position(|p| matches!(&*p.body, Body::Const(c) if *c == C64::real(-1.0)))
+            .position(|p| matches!(&*p.body, Body::Const(c) if *c == Cx::of(C64::real(-1.0))))
     {
         let mut rest = parts.clone();
         rest.remove(at);
         return collapse(rest);
     }
     Body::Mul(vec![
-        Part::bare(Body::Const(C64::real(-1.0))),
+        Part::bare(Body::Const(Cx::of(C64::real(-1.0)))),
         Part::bare(f),
     ])
 }

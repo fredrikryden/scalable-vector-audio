@@ -2,101 +2,127 @@
 
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
+use crate::num::Num;
+
 #[derive(Clone, Copy, Debug)]
-pub struct C64 {
-    pub re: f64,
-    pub im: f64,
+pub struct Cx<N> {
+    pub re: N,
+    pub im: N,
 }
 
+pub type C64 = Cx<f64>;
+
 /// Bitwise after canonicalizing `-0.0`, so equality is transitive.
-impl PartialEq for C64 {
-    fn eq(&self, other: &C64) -> bool {
+impl<N: Num> PartialEq for Cx<N> {
+    fn eq(&self, other: &Cx<N>) -> bool {
         self.bits() == other.bits()
     }
 }
-impl Eq for C64 {}
+impl<N: Num> Eq for Cx<N> {}
 
-impl C64 {
-    pub const ZERO: C64 = C64 { re: 0.0, im: 0.0 };
-    pub const ONE: C64 = C64 { re: 1.0, im: 0.0 };
-    pub const I: C64 = C64 { re: 0.0, im: 1.0 };
+impl<N: Num> Cx<N> {
+    pub const ZERO: Cx<N> = Cx {
+        re: N::ZERO,
+        im: N::ZERO,
+    };
+    pub const ONE: Cx<N> = Cx {
+        re: N::ONE,
+        im: N::ZERO,
+    };
+    pub const I: Cx<N> = Cx {
+        re: N::ZERO,
+        im: N::ONE,
+    };
 
-    pub fn new(re: f64, im: f64) -> C64 {
-        C64 { re, im }
+    pub fn new(re: N, im: N) -> Cx<N> {
+        Cx { re, im }
     }
 
-    pub fn real(re: f64) -> C64 {
-        C64 { re, im: 0.0 }
+    pub fn real(re: N) -> Cx<N> {
+        Cx { re, im: N::ZERO }
     }
 
-    pub fn bits(self) -> (u64, u64) {
-        (canonical(self.re), canonical(self.im))
+    pub fn of(c: C64) -> Cx<N> {
+        Cx::new(N::of(c.re), N::of(c.im))
+    }
+
+    pub fn value(self) -> C64 {
+        C64::new(self.re.v(), self.im.v())
+    }
+
+    pub fn bits(self) -> (N::Key, N::Key) {
+        (self.re.key(), self.im.key())
     }
 
     pub fn is_finite(self) -> bool {
-        self.re.is_finite() && self.im.is_finite()
+        self.re.v().is_finite() && self.im.v().is_finite()
     }
 
+    /// A varied zero is no zero to fold.
     pub fn is_zero(self) -> bool {
-        self.bits() == C64::ZERO.bits()
+        self.re.is_zero() && self.im.is_zero()
     }
 
     pub fn is_real(self) -> bool {
-        canonical(self.im) == canonical(0.0)
+        self.im.is_zero()
     }
 
-    pub fn conj(self) -> C64 {
-        C64::new(self.re, -self.im)
+    pub fn is_constant(self) -> bool {
+        self.re.is_constant() && self.im.is_constant()
     }
 
-    pub fn norm_sqr(self) -> f64 {
+    pub fn conj(self) -> Cx<N> {
+        Cx::new(self.re, -self.im)
+    }
+
+    pub fn norm_sqr(self) -> N {
         self.re * self.re + self.im * self.im
     }
 
-    pub fn abs(self) -> f64 {
-        libm::hypot(self.re, self.im)
+    pub fn abs(self) -> N {
+        self.re.hypot(self.im)
     }
 
     /// A component alone on its axis inverts by one division, correctly rounded; only a
     /// value off both axes takes the conjugate over the squared norm.
-    pub fn inv(self) -> C64 {
+    pub fn inv(self) -> Cx<N> {
         let d = self.norm_sqr();
-        match (self.re == 0.0, self.im == 0.0) {
-            (false, true) => C64::new(1.0 / self.re, -self.im / d),
-            (true, false) => C64::new(self.re / d, -1.0 / self.im),
-            _ => C64::new(self.re / d, -self.im / d),
+        match (self.re.is_zero(), self.im.is_zero()) {
+            (false, true) => Cx::new(N::ONE / self.re, -self.im / d),
+            (true, false) => Cx::new(self.re / d, -N::ONE / self.im),
+            _ => Cx::new(self.re / d, -self.im / d),
         }
     }
 
-    pub fn exp(self) -> C64 {
-        let r = crate::exp(self.re);
-        let (sin, cos) = libm::sincos(self.im);
-        C64::new(r * cos, r * sin)
+    pub fn exp(self) -> Cx<N> {
+        let r = self.re.exp();
+        let (sin, cos) = self.im.sincos();
+        Cx::new(r * cos, r * sin)
     }
 
     /// `e^z - 1` without the cancellation `exp() - ONE` meets near zero.
-    pub fn exp_m1(self) -> C64 {
-        let half = libm::sin(self.im * 0.5);
-        C64::new(
-            libm::expm1(self.re) * libm::cos(self.im) - 2.0 * half * half,
-            crate::exp(self.re) * libm::sin(self.im),
+    pub fn exp_m1(self) -> Cx<N> {
+        let half = (self.im * 0.5).sin();
+        Cx::new(
+            self.re.expm1() * self.im.cos() - N::of(2.0) * half * half,
+            self.re.exp() * self.im.sin(),
         )
     }
 
-    pub fn powi(self, n: u32) -> C64 {
-        let mut out = C64::ONE;
+    pub fn powi(self, n: u32) -> Cx<N> {
+        let mut out = Cx::ONE;
         for _ in 0..n {
             out = out * self;
         }
         out
     }
 
-    pub fn scale(self, k: f64) -> C64 {
-        C64::new(self.re * k, self.im * k)
+    pub fn scale(self, k: N) -> Cx<N> {
+        Cx::new(self.re * k, self.im * k)
     }
 
-    pub fn over(self, k: f64) -> C64 {
-        C64::new(self.re / k, self.im / k)
+    pub fn over(self, k: N) -> Cx<N> {
+        Cx::new(self.re / k, self.im / k)
     }
 }
 
@@ -108,46 +134,47 @@ pub fn canonical(x: f64) -> u64 {
     }
 }
 
-impl Add for C64 {
-    type Output = C64;
-    fn add(self, o: C64) -> C64 {
-        C64::new(self.re + o.re, self.im + o.im)
+impl<N: Num> Add for Cx<N> {
+    type Output = Cx<N>;
+    fn add(self, o: Cx<N>) -> Cx<N> {
+        Cx::new(self.re + o.re, self.im + o.im)
     }
 }
-impl Sub for C64 {
-    type Output = C64;
-    fn sub(self, o: C64) -> C64 {
-        C64::new(self.re - o.re, self.im - o.im)
+impl<N: Num> Sub for Cx<N> {
+    type Output = Cx<N>;
+    fn sub(self, o: Cx<N>) -> Cx<N> {
+        Cx::new(self.re - o.re, self.im - o.im)
     }
 }
-impl Mul for C64 {
-    type Output = C64;
-    fn mul(self, o: C64) -> C64 {
-        C64::new(
+impl<N: Num> Mul for Cx<N> {
+    type Output = Cx<N>;
+    fn mul(self, o: Cx<N>) -> Cx<N> {
+        Cx::new(
             self.re * o.re - self.im * o.im,
             self.re * o.im + self.im * o.re,
         )
     }
 }
-impl Div for C64 {
-    type Output = C64;
-    fn div(self, o: C64) -> C64 {
-        if o.im == 0.0 && o.re != 0.0 {
-            return C64::new(self.re / o.re, self.im / o.re);
+/// A varied zero off an axis is no axis.
+impl<N: Num> Div for Cx<N> {
+    type Output = Cx<N>;
+    fn div(self, o: Cx<N>) -> Cx<N> {
+        if o.im.is_zero() && o.re.v() != 0.0 {
+            return Cx::new(self.re / o.re, self.im / o.re);
         }
-        if o.re == 0.0 && o.im != 0.0 {
-            return C64::new(self.im / o.im, -self.re / o.im);
+        if o.re.is_zero() && o.im.v() != 0.0 {
+            return Cx::new(self.im / o.im, -self.re / o.im);
         }
         let d = o.norm_sqr();
-        C64::new(
+        Cx::new(
             (self.re * o.re + self.im * o.im) / d,
             (self.im * o.re - self.re * o.im) / d,
         )
     }
 }
-impl Neg for C64 {
-    type Output = C64;
-    fn neg(self) -> C64 {
-        C64::new(-self.re, -self.im)
+impl<N: Num> Neg for Cx<N> {
+    type Output = Cx<N>;
+    fn neg(self) -> Cx<N> {
+        Cx::new(-self.re, -self.im)
     }
 }

@@ -5,6 +5,8 @@ use std::sync::Arc;
 use sva_ast::{Arg, ByteSpan, Expr, Literal, PWL_INTEGRAL};
 use sva_formula::{Body, Knots, Unknotted, Var};
 
+use crate::lower::dual::Number;
+
 use crate::error::EngineError;
 use crate::instantiate::Cx;
 use crate::lower::{Lowering, Piece};
@@ -12,7 +14,7 @@ use crate::lower::{Lowering, Piece};
 const HELP: &str = "write the time a table is read at, then each knot as a time and a value, \
                     times never falling: pwl(t, 0s, 0, 10ms, 1, 0.5s, 0)";
 
-impl Lowering<'_> {
+impl<N: Number> Lowering<'_, N> {
     pub(super) fn knots(
         &mut self,
         name: &str,
@@ -20,7 +22,7 @@ impl Lowering<'_> {
         span: ByteSpan,
         cx: Cx,
         var: Var,
-    ) -> Result<Piece, EngineError> {
+    ) -> Result<Piece<N>, EngineError> {
         let refuse =
             |low: &Self, what: String| low.refused_at("engine.bad_knots", what, HELP, Some(span));
         let mut written = args.iter().filter_map(|a| match a {
@@ -36,8 +38,8 @@ impl Lowering<'_> {
         let mut numbers = Vec::with_capacity(args.len());
         for (k, x) in written.enumerate() {
             let number = match x {
-                Expr::Lit(Literal::Num(v)) => Some(*v),
-                other => crate::loops::amount(self.inst, other, cx),
+                Expr::Lit(Literal::Num(v)) => Some(N::of(*v)),
+                other => crate::loops::amount_seeded(self.inst, other, cx, self.seeds),
             };
             numbers.push(number.ok_or_else(|| {
                 refuse(

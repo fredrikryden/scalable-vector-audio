@@ -386,6 +386,10 @@ impl Instances {
         Some((thunk.expr, self.cx(thunk.scope)))
     }
 
+    pub(crate) fn scope_of(&self, path: &str) -> Option<ScopeId> {
+        self.nodes.get(path).map(|held| held.body.scope)
+    }
+
     pub fn bindings<'a>(&'a self, path: &str) -> Option<Vec<(&'a str, &'a Expr, Cx<'a>)>> {
         let scope = self.nodes.get(path)?.body.scope;
         Some(

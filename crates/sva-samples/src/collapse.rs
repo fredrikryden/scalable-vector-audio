@@ -5,6 +5,7 @@ mod addends;
 mod atoms;
 mod blocks;
 mod column;
+mod instant;
 mod lines;
 mod period;
 mod point;
@@ -12,12 +13,13 @@ pub mod run;
 mod tail;
 mod truncate;
 
-use sva_formula::{Body, C64, SpectralSum};
+use sva_formula::{Body, C64, Cx, Num, SpectralSum};
 
 use crate::error::CollapseError;
 
 pub use blocks::Rows;
 pub(crate) use column::Program;
+pub use instant::form_at;
 pub use lines::summed_bounds;
 pub use point::{At, crop_gain, lane_of, shoulders, unary};
 pub use truncate::{
@@ -26,11 +28,11 @@ pub use truncate::{
     written_with as truncate_written_with,
 };
 
-pub fn eval_spectral_sum_at(
-    sum: &SpectralSum,
+pub fn eval_spectral_sum_at<N: Num>(
+    sum: &SpectralSum<N>,
     component: usize,
     at: At,
-) -> Result<C64, CollapseError> {
+) -> Result<Cx<N>, CollapseError> {
     point::eval_spectral_sum_on(sum, component, at)
 }
 

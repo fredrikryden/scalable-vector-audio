@@ -2,7 +2,8 @@
 
 use sva_ast::{Arg, ByteSpan, Expr, Literal};
 use sva_formula::{
-    Body, C64, Codomain, Edge, Fold, Held, NodeId, Origin, Part, Ty, Unary, Var, hash,
+    Body, C64, Codomain, Cx as Complex, Edge, Fold, Held, NodeId, Num, Origin, Part, Ty, Unary,
+    Var, hash,
 };
 use sva_samples::physics::Varies;
 
@@ -10,13 +11,17 @@ use crate::arguments::{Argument, Called, Chosen};
 use crate::cast::Cast;
 use crate::error::EngineError;
 use crate::instantiate::Cx;
+use crate::lower::dual::Number;
 use crate::lower::{Lowering, Piece};
 use crate::refs::{PerNode, written_form};
 use crate::time::Lattice;
 use crate::typing::{Value, When};
 use sva_ast::SERIES;
 
-impl Lowering<'_> {
+/// A crop's two edges.
+type Window<N> = (Edge<N>, Edge<N>);
+
+impl<N: Number> Lowering<'_, N> {
     pub(super) fn call(
         &mut self,
         name: &str,
@@ -24,7 +29,7 @@ impl Lowering<'_> {
         span: ByteSpan,
         cx: Cx,
         var: Var,
-    ) -> Result<Piece, EngineError> {
+    ) -> Result<Piece<N>, EngineError> {
         if name == SERIES {
             return self.sum(args, span, cx, var);
         }
@@ -51,56 +56,41 @@ impl Lowering<'_> {
         }
         let mut chosen = Vec::new();
         let named = self.named_values(name, args, span, cx, &mut chosen)?;
-        let view: Vec<(&str, f64)> = named.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let view: Vec<(&str, N)> = named.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let values: Vec<(String, f64)> = named.iter().map(|(k, v)| (k.clone(), v.v())).collect();
         let solved = sva_ast::FINITE_DIFFERENCE.contains(&name);
         if solved || sva_ast::MODAL.contains(&name) {
-            let Some(numbers) = positional_values(self, args, cx, &mut chosen) else {
-                return Err(EngineError::BadArity(name.to_string()));
-            };
-            if !solved {
-                self.note_call(name, span, positional_named(name, &numbers, &named), chosen);
-                return self.modal(name, &numbers, &view);
-            }
-            return self.solver(name, (&numbers, &view, args), span, chosen, (cx, var));
+            return self.rendered(&format!("`{name}(...)`"), |low| {
+                low.physical(name, args, span, (values, chosen), (cx, var))
+            });
         }
         if name == "noise" {
-            let Some(numbers) = positional_values(self, args, cx, &mut chosen) else {
-                return Err(EngineError::BadArity(name.to_string()));
-            };
-            let [seed, ..] = numbers.as_slice() else {
-                return Err(EngineError::BadArity(name.to_string()));
-            };
-            if let Some(Arg::Named(_, color)) = args
-                .iter()
-                .find(|a| matches!(a, Arg::Named(k, _) if k == "color"))
-            {
-                self.ratio_argument(name, "color", color, cx, span)?;
-            }
-            self.note_call(name, span, positional_named(name, &numbers, &named), chosen);
-            return Ok(Piece::ClosedForm(Body::Series(Box::new(
-                sva_formula::noise(
-                    *seed as u64,
-                    named_or(&view, "period", 1.0),
-                    named_or(&view, "color", 1.0),
-                ),
-            ))));
+            return self.rendered("`noise(...)`", |low| {
+                low.noise(args, span, (values, chosen), cx)
+            });
         }
-        self.note_call(name, span, written_named(&named), chosen);
+        if let Some(low) = N::render(self) {
+            low.note_call(name, span, written_named(&values), chosen);
+        }
         if let Some(cast) = Cast::from_name(name) {
-            let cast = match cast {
-                Cast::Stft { .. } => Cast::Stft {
-                    window: self.step_count(args, "window", span, cx)?,
-                    hop: self.step_count(args, "hop", span, cx)?,
-                },
-                other => other,
-            };
-            return self.cast(cast, args, span, cx, var);
+            return self.rendered(&format!("the cast `{name}(...)`"), |low| {
+                let cast = match cast {
+                    Cast::Stft { .. } => Cast::Stft {
+                        window: low.step_count(args, "window", span, cx)?,
+                        hop: low.step_count(args, "hop", span, cx)?,
+                    },
+                    other => other,
+                };
+                low.cast(cast, args, span, cx, var)
+            });
         }
         if let Some(shape) = crate::vocabulary::shape(name) {
-            return self.filter(shape, args, span, cx, var);
+            return self.rendered(&format!("the filter `{name}(...)`"), |low| {
+                low.filter(shape, args, span, cx, var)
+            });
         }
         if name == "rand" {
-            return self.drawn(args, span, cx, var);
+            return self.rendered("`rand(...)`", |low| low.drawn(args, span, cx, var));
         }
         let positional: Vec<&Expr> = args
             .iter()
@@ -118,7 +108,7 @@ impl Lowering<'_> {
                 ("crop", 1 | 2, Expr::Lit(Literal::Samples(n)))
                     if let Some(edge) = self.counted(*n) =>
                 {
-                    Piece::ClosedForm(Body::Const(C64::real(edge)))
+                    Piece::ClosedForm(Body::Const(Complex::real(N::of(edge))))
                 }
                 _ => self.walk(x, cx, var)?,
             });
@@ -127,13 +117,17 @@ impl Lowering<'_> {
             return Ok(held);
         }
         if pieces.iter().any(|p| matches!(p, Piece::Value(_))) {
-            return match (name, view.iter().find(|(k, _)| *k == "drive")) {
-                ("sat", Some((_, drive))) => self.driven(pieces, *drive, span, var),
-                ("crop", _) => self.sampled_crop(pieces, &view, span, var),
-                _ => self.operation(name, pieces, Some(span), var),
-            };
+            let pieces: Vec<Piece> = pieces.into_iter().map(N::value).collect();
+            return self.rendered("an operation on samples", |low| {
+                let view: Vec<(&str, f64)> = values.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+                match (name, view.iter().find(|(k, _)| *k == "drive")) {
+                    ("sat", Some((_, drive))) => low.driven(pieces, *drive, span, var),
+                    ("crop", _) => low.sampled_crop(pieces, &view, span, var),
+                    _ => low.operation(name, pieces, Some(span), var),
+                }
+            });
         }
-        let bodies: Vec<Body> = pieces
+        let bodies: Vec<Body<N>> = pieces
             .into_iter()
             .map(|p| match p {
                 Piece::ClosedForm(f) => f,
@@ -155,13 +149,13 @@ impl Lowering<'_> {
     fn image(
         &mut self,
         name: &str,
-        bodies: Vec<Body>,
+        bodies: Vec<Body<N>>,
         written: &[&Expr],
-        named: &[(&str, f64)],
+        named: &[(&str, N)],
         span: ByteSpan,
         var: Var,
-    ) -> Result<Piece, EngineError> {
-        let read = |key: &str, fallback: f64| named_or(named, key, fallback);
+    ) -> Result<Piece<N>, EngineError> {
+        let read = |key: &str, fallback: f64| named_or(named, key, N::of(fallback));
         let arity = |want: usize| -> Result<(), EngineError> {
             match bodies.len() == want {
                 true => Ok(()),
@@ -183,10 +177,10 @@ impl Lowering<'_> {
                 let (rise, fall) = shoulders_of(named);
                 let Some((l, r)) = self.cropped(&bodies[1], &bodies[2], (rise, fall), var, span)?
                 else {
-                    return Ok(Piece::ClosedForm(Body::Const(C64::ZERO)));
+                    return Ok(Piece::ClosedForm(Body::Const(Complex::ZERO)));
                 };
                 let fall = match r {
-                    Edge::PosInf => 0.0,
+                    Edge::PosInf => N::ZERO,
                     _ => fall,
                 };
                 let of = self.part(first(bodies), Some(span));
@@ -203,7 +197,7 @@ impl Lowering<'_> {
                 let at = self.part(first(bodies), Some(span));
                 Ok(Piece::ClosedForm(Body::Delta {
                     at,
-                    order: read("k", 0.0) as u16,
+                    order: read("k", 0.0).v() as u16,
                 }))
             }
             "pv" => {
@@ -221,45 +215,10 @@ impl Lowering<'_> {
                     return Err(EngineError::BadArity(name.to_string()));
                 };
                 let of = self.part(first(bodies), Some(span));
-                Ok(Piece::ClosedForm(Body::Channel(of, index as u8)))
+                Ok(Piece::ClosedForm(Body::Channel(of, index.v() as u8)))
             }
             other => Err(EngineError::UnknownBuiltin(other.to_string())),
         }
-    }
-
-    /// The product `arithmetic` writes, so the drive reaches the renderer and the identity.
-    fn driven(
-        &mut self,
-        mut pieces: Vec<Piece>,
-        drive: f64,
-        span: ByteSpan,
-        var: Var,
-    ) -> Result<Piece, EngineError> {
-        pieces.push(Piece::ClosedForm(Body::Const(C64::real(drive))));
-        let product = self.operation("*", pieces, Some(span), var)?;
-        self.operation("sat", vec![product], Some(span), var)
-    }
-
-    /// A closed form's window: its shoulders, refused alike, ride along as two numbers.
-    fn sampled_crop(
-        &mut self,
-        mut pieces: Vec<Piece>,
-        named: &[(&str, f64)],
-        span: ByteSpan,
-        var: Var,
-    ) -> Result<Piece, EngineError> {
-        let (rise, fall) = shoulders_of(named);
-        if let [_, Piece::ClosedForm(l), Piece::ClosedForm(r)] = pieces.as_slice()
-            && self.cropped(l, r, (rise, fall), var, span)?.is_none()
-        {
-            return Ok(Piece::ClosedForm(Body::Const(C64::ZERO)));
-        }
-        if rise > 0.0 || fall > 0.0 {
-            for shoulder in [rise, fall] {
-                pieces.push(Piece::ClosedForm(Body::Const(C64::real(shoulder))));
-            }
-        }
-        self.operation("crop", pieces, Some(span), var)
     }
 
     fn non_integer_power(&self, written: &[&Expr], span: ByteSpan) -> EngineError {
@@ -283,12 +242,12 @@ impl Lowering<'_> {
     /// bound that moves with the free variable has no number to be.
     fn window(
         &mut self,
-        l: &Body,
-        r: &Body,
+        l: &Body<N>,
+        r: &Body<N>,
         var: Var,
         name: &str,
         span: ByteSpan,
-    ) -> Result<(Edge, Edge), EngineError> {
+    ) -> Result<Window<N>, EngineError> {
         Ok((
             self.edge(l, var, name, "start", span)?,
             self.edge(r, var, name, "end", span)?,
@@ -299,17 +258,17 @@ impl Lowering<'_> {
     /// where the window opens at or after it closes, which is zero whatever it crops.
     fn cropped(
         &mut self,
-        l: &Body,
-        r: &Body,
-        (rise, fall): (f64, f64),
+        l: &Body<N>,
+        r: &Body<N>,
+        (rise, fall): (N, N),
         var: Var,
         span: ByteSpan,
-    ) -> Result<Option<(Edge, Edge)>, EngineError> {
+    ) -> Result<Option<Window<N>>, EngineError> {
         let (l, r) = self.window(l, r, var, "crop", span)?;
         if l >= r {
             return Ok(None);
         }
-        self.shoulders(rise, fall, r.value() - l.value(), span)?;
+        self.shoulders(rise.v(), fall.v(), r.value() - l.value(), span)?;
         Ok(Some((l, r)))
     }
 
@@ -342,15 +301,15 @@ impl Lowering<'_> {
 
     fn edge(
         &self,
-        body: &Body,
+        body: &Body<N>,
         var: Var,
         name: &str,
         which: &str,
         span: ByteSpan,
-    ) -> Result<Edge, EngineError> {
+    ) -> Result<Edge<N>, EngineError> {
         let folded = crate::refs::fold_constants(self.typing, body);
         let infinite = match *folded {
-            Body::Const(c) if c.im == 0.0 && c.re.is_infinite() => Some(c.re),
+            Body::Const(c) if c.im.is_zero() && c.re.v().is_infinite() => Some(c.re),
             _ => None,
         };
         match infinite.or_else(|| super::constant_value(&folded, var)) {
@@ -364,7 +323,7 @@ impl Lowering<'_> {
         }
     }
 
-    fn parts(&mut self, bodies: Vec<Body>, span: ByteSpan) -> Vec<Part> {
+    fn parts(&mut self, bodies: Vec<Body<N>>, span: ByteSpan) -> Vec<Part<N>> {
         bodies
             .into_iter()
             .map(|b| self.part(b, Some(span)))
@@ -422,14 +381,15 @@ impl Lowering<'_> {
         span: ByteSpan,
         cx: Cx,
         chosen: &mut Vec<Chosen>,
-    ) -> Result<Vec<(String, f64)>, EngineError> {
+    ) -> Result<Vec<(String, N)>, EngineError> {
         let mut out = Vec::new();
         for arg in args {
             let Arg::Named(key, value) = arg else {
                 continue;
             };
-            let folded = crate::loops::amount_choosing(self.inst, value, cx, chosen);
-            self.finite_argument(name, key, value, folded)?;
+            let folded: Option<N> =
+                crate::loops::amount_choosing(self.inst, value, cx, chosen, self.seeds);
+            self.finite_argument(name, key, value, folded.map(N::v))?;
             match folded.and_then(crate::loops::plain) {
                 Some(v) => out.push((key.clone(), v)),
                 None if crate::vocabulary::named_may_move(name, key) => {}
@@ -449,8 +409,104 @@ impl Lowering<'_> {
         Ok(out)
     }
 
+    /// A number a call reads as an argument. A grid count is not one: `1sp` names no
+    /// cutoff, so the same fold that reads a delay answers `None` for it here.
+    pub(super) fn named_value(&self, e: &Expr, cx: Cx) -> Option<N> {
+        crate::loops::plain(crate::loops::amount_seeded(self.inst, e, cx, self.seeds)?)
+    }
+}
+
+impl Lowering<'_> {
+    /// A finite-difference solver or a modal bank, each of plain numbers.
+    fn physical(
+        &mut self,
+        name: &str,
+        args: &[Arg],
+        span: ByteSpan,
+        (named, mut chosen): (Vec<(String, f64)>, Vec<Chosen>),
+        (cx, var): (Cx, Var),
+    ) -> Result<Piece, EngineError> {
+        let view: Vec<(&str, f64)> = named.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let Some(numbers) = positional_values(self, args, cx, &mut chosen) else {
+            return Err(EngineError::BadArity(name.to_string()));
+        };
+        if !sva_ast::FINITE_DIFFERENCE.contains(&name) {
+            self.note_call(name, span, positional_named(name, &numbers, &named), chosen);
+            return self.modal(name, &numbers, &view);
+        }
+        self.solver(name, (&numbers, &view, args), span, chosen, (cx, var))
+    }
+
+    fn noise(
+        &mut self,
+        args: &[Arg],
+        span: ByteSpan,
+        (named, mut chosen): (Vec<(String, f64)>, Vec<Chosen>),
+        cx: Cx,
+    ) -> Result<Piece, EngineError> {
+        let name = "noise";
+        let view: Vec<(&str, f64)> = named.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let Some(numbers) = positional_values(self, args, cx, &mut chosen) else {
+            return Err(EngineError::BadArity(name.to_string()));
+        };
+        let [seed, ..] = numbers.as_slice() else {
+            return Err(EngineError::BadArity(name.to_string()));
+        };
+        if let Some(Arg::Named(_, color)) = args
+            .iter()
+            .find(|a| matches!(a, Arg::Named(k, _) if k == "color"))
+        {
+            self.ratio_argument(name, "color", color, cx, span)?;
+        }
+        self.note_call(name, span, positional_named(name, &numbers, &named), chosen);
+        Ok(Piece::ClosedForm(Body::Series(Box::new(
+            sva_formula::noise(
+                *seed as u64,
+                named_or(&view, "period", 1.0),
+                named_or(&view, "color", 1.0),
+            ),
+        ))))
+    }
+
+    /// The product `arithmetic` writes, so the drive reaches the renderer and the identity.
+    fn driven(
+        &mut self,
+        mut pieces: Vec<Piece>,
+        drive: f64,
+        span: ByteSpan,
+        var: Var,
+    ) -> Result<Piece, EngineError> {
+        pieces.push(Piece::ClosedForm(Body::Const(C64::real(drive))));
+        let product = self.operation("*", pieces, Some(span), var)?;
+        self.operation("sat", vec![product], Some(span), var)
+    }
+
+    /// A closed form's window: its shoulders, refused alike, ride along as two numbers.
+    fn sampled_crop(
+        &mut self,
+        mut pieces: Vec<Piece>,
+        named: &[(&str, f64)],
+        span: ByteSpan,
+        var: Var,
+    ) -> Result<Piece, EngineError> {
+        let (rise, fall) = shoulders_of(named);
+        if let [_, Piece::ClosedForm(l), Piece::ClosedForm(r)] = pieces.as_slice()
+            && self.cropped(l, r, (rise, fall), var, span)?.is_none()
+        {
+            return Ok(Piece::ClosedForm(Body::Const(C64::ZERO)));
+        }
+        if rise > 0.0 || fall > 0.0 {
+            for shoulder in [rise, fall] {
+                pieces.push(Piece::ClosedForm(Body::Const(C64::real(shoulder))));
+            }
+        }
+        self.operation("crop", pieces, Some(span), var)
+    }
+
     fn chosen_value(&self, e: &Expr, cx: Cx, chosen: &mut Vec<Chosen>) -> Option<f64> {
-        crate::loops::plain(crate::loops::amount_choosing(self.inst, e, cx, chosen)?)
+        crate::loops::plain(crate::loops::amount_choosing(
+            self.inst, e, cx, chosen, None,
+        )?)
     }
 
     /// The numbers a call was lowered with, where it was written, and what each constant
@@ -562,12 +618,6 @@ impl Lowering<'_> {
              k*step(t - t0)",
             Some(span),
         )
-    }
-
-    /// A number a call reads as an argument. A grid count is not one: `1sp` names no
-    /// cutoff, so the same fold that reads a delay answers `None` for it here.
-    pub(super) fn named_value(&self, e: &Expr, cx: Cx) -> Option<f64> {
-        crate::loops::plain(crate::loops::amount(self.inst, e, cx)?)
     }
 
     /// A duration a cast counts in steps of the rate in use, which has to be a whole number of
@@ -686,19 +736,19 @@ pub(super) fn numeric(name: &str) -> bool {
 
 /// The closed form a numeric call names, built once for the lowering and for the constant fold, so
 /// an argument folded before a call and the same argument lowered agree by construction.
-pub(super) fn arithmetic(
+pub(super) fn arithmetic<N: Number>(
     name: &str,
-    bodies: Vec<Body>,
-    named: &[(&str, f64)],
+    bodies: Vec<Body<N>>,
+    named: &[(&str, N)],
     var: Var,
     origin: Origin,
-) -> Option<Body> {
-    let bodies = match <[Body; 1]>::try_from(bodies) {
+) -> Option<Body<N>> {
+    let bodies = match <[Body<N>; 1]>::try_from(bodies) {
         Ok([x]) => return unary(name, x, named, origin),
         Err(bodies) => bodies,
     };
-    let [a, b] = <[Body; 2]>::try_from(bodies).ok()?;
-    let fold = |op: Fold, a: Body, b: Body| {
+    let [a, b] = <[Body<N>; 2]>::try_from(bodies).ok()?;
+    let fold = |op: Fold, a: Body<N>, b: Body<N>| {
         Body::Fold(op, vec![Part::new(origin, a), Part::new(origin, b)])
     };
     match name {
@@ -709,10 +759,10 @@ pub(super) fn arithmetic(
     }
 }
 
-fn unary(name: &str, x: Body, named: &[(&str, f64)], origin: Origin) -> Option<Body> {
-    let part = |f: Body| Part::new(origin, f);
+fn unary<N: Num>(name: &str, x: Body<N>, named: &[(&str, N)], origin: Origin) -> Option<Body<N>> {
+    let part = |f: Body<N>| Part::new(origin, f);
     if name == "sat" {
-        let drive = Body::Const(C64::real(named_or(named, "drive", 1.0)));
+        let drive = Body::Const(Complex::real(named_or(named, "drive", N::ONE)));
         let driven = Body::Mul(vec![part(x), part(drive)]);
         return Some(Body::Apply(Unary::Sat, part(driven)));
     }
@@ -720,18 +770,18 @@ fn unary(name: &str, x: Body, named: &[(&str, f64)], origin: Origin) -> Option<B
         && let Some(at) = rising_zero(&x)
     {
         return Some(Body::Crop {
-            of: part(Body::Const(C64::ONE)),
+            of: part(Body::Const(Complex::ONE)),
             l: Edge::at(at),
             r: Edge::PosInf,
-            rise: 0.0,
-            fall: 0.0,
+            rise: N::ZERO,
+            fall: N::ZERO,
         });
     }
     Unary::from_name(name).map(|op| Body::Apply(op, part(x)))
 }
 
 /// The one operand a call of one argument reads, moved out of the operands it was lowered in.
-fn first(bodies: Vec<Body>) -> Body {
+fn first<N: Num>(bodies: Vec<Body<N>>) -> Body<N> {
     bodies
         .into_iter()
         .next()
@@ -739,14 +789,16 @@ fn first(bodies: Vec<Body>) -> Body {
 }
 
 /// `min(x, inf)` is `x` and `min(x, -inf)` is `-inf`, `max` alike, whatever `x` holds.
-fn beside_infinity(name: &str, pieces: &mut Vec<Piece>) -> Option<Piece> {
+fn beside_infinity<N: Num>(name: &str, pieces: &mut Vec<Piece<N>>) -> Option<Piece<N>> {
     let absorbs = match name {
         "min" => f64::NEG_INFINITY,
         "max" => f64::INFINITY,
         _ => return None,
     };
-    let infinite = |p: &Piece| match p {
-        Piece::ClosedForm(Body::Const(c)) if c.im == 0.0 && c.re.is_infinite() => Some(c.re),
+    let infinite = |p: &Piece<N>| match p {
+        Piece::ClosedForm(Body::Const(c)) if c.im.is_zero() && c.re.v().is_infinite() => {
+            Some(c.re.v())
+        }
         _ => None,
     };
     let at = pieces.iter().position(|p| infinite(p).is_some())?;
@@ -761,42 +813,46 @@ fn beside_infinity(name: &str, pieces: &mut Vec<Piece>) -> Option<Piece> {
 }
 
 /// Where `a*t + b` with `a > 0` crosses zero, so `step` of it is the crop opening there.
-fn rising_zero(x: &Body) -> Option<f64> {
+fn rising_zero<N: Num>(x: &Body<N>) -> Option<N> {
     let (a, b) = sva_formula::affine::exact_affine(x)?;
     let (a, b) = (a.is_real().then_some(a.re)?, b.is_real().then_some(b.re)?);
     let at = -b / a;
-    (a > 0.0 && !at.is_nan()).then_some(at)
+    (a.v() > 0.0 && !at.v().is_nan()).then_some(at)
 }
 
 /// An integer exponent is a polynomial factor and stays one. A real exponent is
 /// `exp(x*ln(b))`, which only a positive base has: a constant one folds here, a signal one
 /// becomes that exponential, and anything else has no value to approximate.
-fn power(base: Body, exponent: Body, var: Var, origin: Origin) -> Option<Body> {
-    let part = |f: Body| Part::new(origin, f);
+fn power<N: Number>(base: Body<N>, exponent: Body<N>, var: Var, origin: Origin) -> Option<Body<N>> {
+    let part = |f: Body<N>| Part::new(origin, f);
     let n = super::constant_value(&exponent, var);
     if let Some(n) = n.filter(|n| whole(*n)) {
-        return Some(Body::Pow(part(base), n as i32));
+        return Some(Body::Pow(part(base), n.v() as i32));
     }
-    let b = super::constant_value(&base, var).filter(|b| *b > 0.0)?;
+    let b = super::constant_value(&base, var).filter(|b| b.v() > 0.0)?;
     if let Some(n) = n {
-        return Some(Body::Const(C64::real(libm::pow(b, n))));
+        return Some(Body::Const(Complex::real(b.pow(n))));
     }
-    let rate = Body::Const(C64::real(libm::log(b)));
+    let rate = Body::Const(Complex::real(b.ln()));
     let scaled = Body::Mul(vec![part(exponent), part(rate)]);
     Some(Body::Apply(Unary::Exp, part(scaled)))
 }
 
 /// Whether a real exponent names a polynomial power an atom's u16 order holds.
-fn whole(n: f64) -> bool {
-    n.fract() == 0.0 && n.abs() <= f64::from(u16::MAX)
+/// A varied exponent is no whole one: its tangent moves the power off the integer.
+fn whole<N: Num>(n: N) -> bool {
+    n.is_constant() && n.v().fract() == 0.0 && n.v().abs() <= f64::from(u16::MAX)
 }
 
-fn shoulders_of(named: &[(&str, f64)]) -> (f64, f64) {
-    (named_or(named, "rise", 0.0), named_or(named, "fall", 0.0))
+fn shoulders_of<N: Num>(named: &[(&str, N)]) -> (N, N) {
+    (
+        named_or(named, "rise", N::ZERO),
+        named_or(named, "fall", N::ZERO),
+    )
 }
 
 /// A named argument's number, or what the builtin takes when the call left it out.
-pub(super) fn named_or(named: &[(&str, f64)], key: &str, fallback: f64) -> f64 {
+pub(super) fn named_or<N: Num>(named: &[(&str, N)], key: &str, fallback: N) -> N {
     named
         .iter()
         .find(|(k, _)| *k == key)

@@ -1,12 +1,14 @@
 // Concern: which terms of a series an instant sums, its carriers under a ceiling | Non-concern: choosing one (truncate.rs), evaluating a term | IO: (slope, offset at t) -> indices
 
 use crate::closed_form::{Bound, Series};
+use crate::num::Num;
 use crate::spectral_sum::SpectralSum;
 
 /// Term `k` turns at `k*slope(t) + offset(t)` rad/s; an instant sums those under `omega`.
+/// Which terms sound is the values' judgment alone.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Banded {
-    pub series: Series,
+pub struct Banded<N: Num = f64> {
+    pub series: Series<N>,
     pub slope: SpectralSum,
     pub offset: SpectralSum,
     pub omega: f64,
@@ -16,7 +18,7 @@ pub struct Banded {
     pub dropped_db: f64,
 }
 
-impl Banded {
+impl<N: Num> Banded<N> {
     pub fn within(&self, slope: f64, offset: f64) -> Option<(i64, i64)> {
         let sounds = |k: i64| (k as f64 * slope + offset).abs() < self.omega;
         let lo = self.series.lo;

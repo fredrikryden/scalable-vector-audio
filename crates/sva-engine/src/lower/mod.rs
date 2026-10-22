@@ -3,6 +3,7 @@
 mod calls;
 mod casts;
 mod constant;
+pub mod dual;
 pub(crate) mod knots;
 pub(crate) mod physics;
 mod solvers;
@@ -10,10 +11,11 @@ mod walk;
 mod waves;
 
 use std::borrow::Cow;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use sva_ast::{Address, Arg, ByteSpan, Expr, Literal};
-use sva_formula::{Body, ClosedForm, Held, IndexId, NodeId, Part, Ty, Var};
+use sva_formula::{Body, ClosedForm, Held, IndexId, NodeId, Num, Part, Ty, Var};
 
 use crate::cast::{Cast, Mismatch};
 use crate::error::{Diagnostic, EngineError, Located};
@@ -29,9 +31,11 @@ pub(crate) use constant::{
 };
 pub(crate) use solvers::{field, value_of};
 
+use dual::{Number, Seeds};
+
 /// One written subterm, either still inside a closed form or already a node of its own.
-pub enum Piece {
-    ClosedForm(Body),
+pub enum Piece<N: Num = f64> {
+    ClosedForm(Body<N>),
     Value(NodeId),
 }
 
@@ -52,7 +56,7 @@ enum Index {
     Term(i64),
 }
 
-pub struct Lowering<'a> {
+pub struct Lowering<'a, N: Num = f64> {
     inst: &'a Instances,
     typing: &'a mut Typing,
     /// The node's path, the name every node it makes shares.
@@ -61,6 +65,8 @@ pub struct Lowering<'a> {
     mode: SelfMode,
     own: Vec<(crate::time::Q, NodeId)>,
     grid: Grid,
+    seeds: Option<&'a Seeds>,
+    number: PhantomData<N>,
 }
 
 /// Dependencies are already typed, so every ref this reads answers with a decided `Ty`.
@@ -150,6 +156,8 @@ fn lowered_on(
         mode,
         own: Vec::new(),
         grid,
+        seeds: None,
+        number: PhantomData,
     };
     let piece = low.walk(expr, cx, var)?;
     let piece = match closed {
@@ -256,12 +264,12 @@ fn scan_axis(inst: &Instances, typing: &Typing, e: &Expr, cx: Cx, seen: &mut (bo
     }
 }
 
-impl Lowering<'_> {
+impl<N: Number> Lowering<'_, N> {
     fn here(&self, span: Option<ByteSpan>) -> Located {
         Located::at(&*self.node, span)
     }
 
-    fn part(&mut self, f: Body, span: Option<ByteSpan>) -> Part {
+    fn part(&mut self, f: Body<N>, span: Option<ByteSpan>) -> Part<N> {
         let origin = self.typing.mark(&self.node, span);
         Part::new(origin, f)
     }
@@ -288,7 +296,9 @@ impl Lowering<'_> {
     fn refuse(&self, call: &str, m: &Mismatch, span: Option<ByteSpan>) -> EngineError {
         EngineError::refused(overload::format_refusal(call, m, self.here(span), &[]))
     }
+}
 
+impl Lowering<'_> {
     /// A subterm becomes a node of its own wherever a cast or a sampled operand ends the closed form.
     fn seal(&mut self, piece: Piece, var: Var, path: Option<&str>) -> Result<NodeId, EngineError> {
         match match piece {

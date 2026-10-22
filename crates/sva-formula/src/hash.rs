@@ -122,9 +122,9 @@ impl<'a> Sink<'a> {
     fn edge(&mut self, e: Edge) {
         match e {
             Edge::NegInf => self.byte(0),
-            Edge::At(bits) => {
+            Edge::At(x) => {
                 self.byte(1);
-                self.u64(bits);
+                self.u64(crate::complex::canonical(x));
             }
             Edge::PosInf => self.byte(2),
         }

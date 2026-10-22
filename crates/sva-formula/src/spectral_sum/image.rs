@@ -2,7 +2,8 @@
 
 use crate::affine::{apply_scalar, completed_square_read, exact_affine_read};
 use crate::closed_form::{Body, Edge, Fold, Part, Series, Unary, Var};
-use crate::complex::C64;
+use crate::complex::Cx;
+use crate::num::Num;
 use crate::origin::Origin;
 use crate::refusal::{AtomSketch, Factor, Left, LeftReason};
 use crate::spectral_sum::atom::{
@@ -18,7 +19,7 @@ pub fn left(origin: Origin, first: Factor, reason: LeftReason) -> Left {
 
 /// A constant that is not finite is no atom: a division, a remainder or a logarithm at zero
 /// names no number, and A holds none.
-pub fn constant(var: Var, c: C64, origin: Origin) -> Result<SpectralSum, Left> {
+pub fn constant<N: Num>(var: Var, c: Cx<N>, origin: Origin) -> Result<SpectralSum<N>, Left> {
     match c.is_finite() {
         true => Ok(one(var, SpectralAtom::constant(c, origin))),
         false => Err(left(origin, Factor::Amplitude, LeftReason::NoValue)),
@@ -27,26 +28,26 @@ pub fn constant(var: Var, c: C64, origin: Origin) -> Result<SpectralSum, Left> {
 
 /// A rate, a width or an instant an atom is built on is a finite double or the atom is none:
 /// `t/0` and a slope past the largest double name no line to build one on.
-pub fn held(origin: Origin, first: Factor, values: &[f64]) -> Result<(), Left> {
-    match values.iter().all(|v| v.is_finite()) {
+pub fn held<N: Num>(origin: Origin, first: Factor, values: &[N]) -> Result<(), Left> {
+    match values.iter().all(|v| v.v().is_finite()) {
         true => Ok(()),
         false => Err(left(origin, first, LeftReason::NotFinite)),
     }
 }
 
-pub fn one(var: Var, atom: SpectralAtom) -> SpectralSum {
+pub fn one<N: Num>(var: Var, atom: SpectralAtom<N>) -> SpectralSum<N> {
     let mut lane = Lane::of(vec![atom]);
     simplify(&mut lane);
     SpectralSum::of(var, vec![lane])
 }
 
-pub fn apply(
+pub fn apply<N: Num>(
     op: Unary,
-    arg: &Part,
+    arg: &Part<N>,
     origin: Origin,
     var: Var,
-    reads: &dyn Reads,
-) -> Result<SpectralSum, Left> {
+    reads: &dyn Reads<N>,
+) -> Result<SpectralSum<N>, Left> {
     let affine = exact_affine_read(&arg.body, reads);
     if let Some((a, b)) = affine
         && a.is_zero()
@@ -66,7 +67,7 @@ pub fn apply(
             SpectralAtom::new(
                 q.amplitude,
                 Factors {
-                    exp: Some(Exp::at(0.0, q.omega)),
+                    exp: Some(Exp::at(N::ZERO, q.omega)),
                     gauss: Some(Gauss { a: q.a, mu: q.mu }),
                     ..Factors::NONE
                 },
@@ -89,12 +90,20 @@ pub fn apply(
     let atoms = match op {
         Unary::Exp => vec![exp_atom(a, b, origin)?],
         Unary::Cos => vec![
-            line_atom((C64::I * b).exp().scale(0.5), C64::I * a, origin),
-            line_atom((-C64::I * b).exp().scale(0.5), -C64::I * a, origin),
+            line_atom((Cx::I * b).exp().scale(N::of(0.5)), Cx::I * a, origin),
+            line_atom((-Cx::I * b).exp().scale(N::of(0.5)), -Cx::I * a, origin),
         ],
         _ => vec![
-            line_atom((C64::I * b).exp() * -C64::I.scale(0.5), C64::I * a, origin),
-            line_atom((-C64::I * b).exp() * C64::I.scale(0.5), -C64::I * a, origin),
+            line_atom(
+                (Cx::I * b).exp() * -Cx::I.scale(N::of(0.5)),
+                Cx::I * a,
+                origin,
+            ),
+            line_atom(
+                (-Cx::I * b).exp() * Cx::I.scale(N::of(0.5)),
+                -Cx::I * a,
+                origin,
+            ),
         ],
     };
     let mut lane = Lane::of(atoms);
@@ -104,9 +113,9 @@ pub fn apply(
 
 /// `e^{a t + b}`, anchored where it is one where `e^b` passes a double: `e^{sigma (t - mu)}`,
 /// `mu = -re(b)/sigma`, `mu`'s rounding carried exactly in the weight's own exponent.
-fn exp_atom(a: C64, b: C64, origin: Origin) -> Result<SpectralAtom, Left> {
+fn exp_atom<N: Num>(a: Cx<N>, b: Cx<N>, origin: Origin) -> Result<SpectralAtom<N>, Left> {
     let weight = b.exp();
-    if weight.is_finite() && !weight.is_zero() || a.re == 0.0 {
+    if weight.is_finite() && !weight.is_zero() || a.re.is_zero() {
         return match weight.is_finite() {
             true => Ok(line_atom(weight, a, origin)),
             false => Err(left(origin, Factor::Exponential, LeftReason::Overflow)),
@@ -122,7 +131,7 @@ fn exp_atom(a: C64, b: C64, origin: Origin) -> Result<SpectralAtom, Left> {
         }),
         ..Factors::NONE
     };
-    let residue = C64::new(a.re.mul_add(mu, b.re), b.im).exp();
+    let residue = Cx::new(a.re.mul_add(mu, b.re), b.im).exp();
     Ok(SpectralAtom::new(
         residue,
         factors,
@@ -131,7 +140,7 @@ fn exp_atom(a: C64, b: C64, origin: Origin) -> Result<SpectralAtom, Left> {
     ))
 }
 
-fn line_atom(c: C64, alpha: C64, origin: Origin) -> SpectralAtom {
+fn line_atom<N: Num>(c: Cx<N>, alpha: Cx<N>, origin: Origin) -> SpectralAtom<N> {
     SpectralAtom::new(
         c,
         Factors {
@@ -144,33 +153,38 @@ fn line_atom(c: C64, alpha: C64, origin: Origin) -> SpectralAtom {
 }
 
 /// `values` is each argument's one number, `None` where one holds none.
-pub fn fold(
+pub fn fold<N: Num>(
     op: Fold,
-    values: Option<Vec<C64>>,
+    values: Option<Vec<Cx<N>>>,
     origin: Origin,
     var: Var,
-) -> Result<SpectralSum, Left> {
+) -> Result<SpectralSum<N>, Left> {
     let Some(values) = values else {
         return Err(left(origin, Factor::Value, LeftReason::Nonlinearity));
     };
     let folded = match (op, values.as_slice()) {
-        (Fold::Max, [a, b]) => C64::real(a.re.max(b.re)),
-        (Fold::Min, [a, b]) => C64::real(a.re.min(b.re)),
-        (Fold::Mod, [a, b]) => C64::real(a.re.rem_euclid(b.re)),
+        (Fold::Max, [a, b]) => Cx::real(a.re.max(b.re)),
+        (Fold::Min, [a, b]) => Cx::real(a.re.min(b.re)),
+        (Fold::Mod, [a, b]) => Cx::real(a.re.rem_euclid(b.re)),
         _ => return Err(left(origin, Factor::Value, LeftReason::Nonlinearity)),
     };
     constant(var, folded, origin)
 }
 
 /// `delta^(k)(a*x + b)` places one delta at the argument's zero, scaled by `a^k * |a|`.
-pub fn delta(at: &Part, order: u16, var: Var, reads: &dyn Reads) -> Result<SpectralSum, Left> {
+pub fn delta<N: Num>(
+    at: &Part<N>,
+    order: u16,
+    var: Var,
+    reads: &dyn Reads<N>,
+) -> Result<SpectralSum<N>, Left> {
     let (a, b) = real_affine(at, reads)?;
     held(at.origin, Factor::Delta, &[-b / a])?;
     let scale = a.powi(i32::from(order)) * a.abs();
     Ok(one(
         var,
         SpectralAtom::new(
-            C64::real(1.0 / scale),
+            Cx::real(N::ONE / scale),
             Factors::NONE,
             Singular::Delta { at: -b / a, order },
             at.origin,
@@ -178,16 +192,20 @@ pub fn delta(at: &Part, order: u16, var: Var, reads: &dyn Reads) -> Result<Spect
     ))
 }
 
-pub fn principal_value(at: &Part, var: Var, reads: &dyn Reads) -> Result<SpectralSum, Left> {
+pub fn principal_value<N: Num>(
+    at: &Part<N>,
+    var: Var,
+    reads: &dyn Reads<N>,
+) -> Result<SpectralSum<N>, Left> {
     let (a, b) = real_affine(at, reads)?;
     held(at.origin, Factor::PrincipalValue, &[-b / a])?;
     Ok(one(
         var,
         SpectralAtom::new(
-            C64::real(1.0 / a),
+            Cx::real(N::ONE / a),
             Factors {
                 pole: Some(Pole {
-                    at: C64::real(-b / a),
+                    at: Cx::real(-b / a),
                     order: 1,
                     pv: true,
                 }),
@@ -199,9 +217,9 @@ pub fn principal_value(at: &Part, var: Var, reads: &dyn Reads) -> Result<Spectra
     ))
 }
 
-fn real_affine(at: &Part, reads: &dyn Reads) -> Result<(f64, f64), Left> {
+fn real_affine<N: Num>(at: &Part<N>, reads: &dyn Reads<N>) -> Result<(N, N), Left> {
     match exact_affine_read(&at.body, reads) {
-        Some((a, b)) if a.is_real() && b.is_real() && a.re != 0.0 => Ok((a.re, b.re)),
+        Some((a, b)) if a.is_real() && b.is_real() && a.re.v() != 0.0 => Ok((a.re, b.re)),
         _ => Err(left(
             at.origin,
             Factor::Delta,
@@ -210,14 +228,14 @@ fn real_affine(at: &Part, reads: &dyn Reads) -> Result<(f64, f64), Left> {
     }
 }
 /// The `a*x + b` an atom sum spells, when it spells one.
-pub fn affine_atoms(n: &SpectralSum) -> Option<(C64, C64)> {
+pub fn affine_atoms<N: Num>(n: &SpectralSum<N>) -> Option<(Cx<N>, Cx<N>)> {
     let [lane] = n.lanes.as_slice() else {
         return None;
     };
     if !lane.is_finite_sum() {
         return None;
     }
-    let (mut a, mut b) = (C64::ZERO, C64::ZERO);
+    let (mut a, mut b) = (Cx::ZERO, Cx::ZERO);
     for atom in lane.atoms.iter().flat_map(SpectralAtom::flattened) {
         if atom.is_delta() || atom.exp.is_some() || atom.gauss.is_some() {
             return None;
@@ -234,7 +252,7 @@ pub fn affine_atoms(n: &SpectralSum) -> Option<(C64, C64)> {
     (!a.is_zero()).then_some((a, b))
 }
 
-pub fn shift(n: SpectralSum, by: f64) -> Result<SpectralSum, Left> {
+pub fn shift<N: Num>(n: SpectralSum<N>, by: N) -> Result<SpectralSum<N>, Left> {
     let mut lanes = Vec::with_capacity(n.lanes.len());
     for lane in n.lanes {
         let lane = lane.expanded();
@@ -250,7 +268,7 @@ pub fn shift(n: SpectralSum, by: f64) -> Result<SpectralSum, Left> {
 
 /// A shift of a series is the shift of each of its terms: the free variable moves under the
 /// sum the same way it moves under a finite one, so the pair and its term count both stand.
-fn shift_series(s: &Series, by: f64) -> Result<Series, Left> {
+fn shift_series<N: Num>(s: &Series<N>, by: N) -> Result<Series<N>, Left> {
     if crate::closed_form::shifts_opaquely(&s.term.body) {
         return Err(left(
             s.term.origin,
@@ -268,7 +286,7 @@ fn shift_series(s: &Series, by: f64) -> Result<Series, Left> {
 }
 
 /// `x -> x - by` in every factor, each keeping the instant it is read from.
-fn shift_atom(atom: &SpectralAtom, by: f64) -> SpectralAtom {
+fn shift_atom<N: Num>(atom: &SpectralAtom<N>, by: N) -> SpectralAtom<N> {
     if let Singular::Delta { at, order } = atom.sing {
         return SpectralAtom::new(
             atom.c,
@@ -286,22 +304,22 @@ fn shift_atom(atom: &SpectralAtom, by: f64) -> SpectralAtom {
         exp: f.exp.map(|e| Exp { mu: e.mu + by, ..e }),
         gauss: f.gauss.map(|g| Gauss { mu: g.mu + by, ..g }),
         ind: f.ind.map(|i| Indicator {
-            l: Edge::at(i.l.value() + by),
-            r: Edge::at(i.r.value() + by),
+            l: Edge::at(i.l.number() + by),
+            r: Edge::at(i.r.number() + by),
         }),
         pole: f.pole.map(|p| Pole {
-            at: p.at + C64::real(by),
+            at: p.at + Cx::real(by),
             ..p
         }),
     };
     let mut c = atom.c;
     if let Some(e) = f.exp {
-        c = c * C64::new(0.0, -e.omega * by).exp();
+        c = c * Cx::new(N::ZERO, -e.omega * by).exp();
     }
     SpectralAtom::new(c, moved, Singular::Regular, atom.origin)
 }
 
-pub fn derive(n: SpectralSum) -> Result<SpectralSum, Left> {
+pub fn derive<N: Num>(n: SpectralSum<N>) -> Result<SpectralSum<N>, Left> {
     let mut lanes = Vec::with_capacity(n.lanes.len());
     for lane in n.lanes {
         let lane = lane.expanded();
@@ -325,7 +343,7 @@ pub fn derive(n: SpectralSum) -> Result<SpectralSum, Left> {
 
 /// An indicator is a pointwise factor, so it distributes over a sum however long: a cropped
 /// series is the series of cropped terms, and the window is the same in every term.
-pub fn crop(n: SpectralSum, window: Indicator) -> Result<SpectralSum, Left> {
+pub fn crop<N: Num>(n: SpectralSum<N>, window: Indicator<N>) -> Result<SpectralSum<N>, Left> {
     let mut lanes = Vec::with_capacity(n.lanes.len());
     for lane in n.lanes {
         let lane = lane.expanded();
@@ -337,7 +355,7 @@ pub fn crop(n: SpectralSum, window: Indicator) -> Result<SpectralSum, Left> {
                 continue;
             }
             if let Singular::Delta { at, .. } = atom.sing {
-                if met.contains(at) {
+                if met.contains(at.v()) {
                     atoms.push(*atom);
                 }
                 continue;
@@ -362,23 +380,26 @@ pub fn crop(n: SpectralSum, window: Indicator) -> Result<SpectralSum, Left> {
 
 /// A hard-cropped term with its window lifted off: an indicator is a pointwise factor, so
 /// what is under it reads as the closed form it was before the crop. A shoulder is not one.
-pub fn crop_peeled(f: &Body) -> (Body, Option<Indicator>) {
+pub fn crop_peeled<N: Num>(f: &Body<N>) -> (Body<N>, Option<Indicator<N>>) {
     let Body::Crop {
         of,
         l,
         r,
-        rise: 0.0,
-        fall: 0.0,
+        rise,
+        fall,
     } = f
     else {
         return (f.clone(), None);
     };
+    if !(rise.is_zero() && fall.is_zero()) {
+        return (f.clone(), None);
+    }
     let (body, held) = crop_peeled(&of.body);
     let window = Indicator { l: *l, r: *r };
     (body, Some(held.map_or(window, |h| h.meet(window))))
 }
 
-fn windowed(s: &Series, window: Indicator) -> Series {
+fn windowed<N: Num>(s: &Series<N>, window: Indicator<N>) -> Series<N> {
     Series {
         term: Part::new(
             s.term.origin,
@@ -386,8 +407,8 @@ fn windowed(s: &Series, window: Indicator) -> Series {
                 of: s.term.clone(),
                 l: window.l,
                 r: window.r,
-                rise: 0.0,
-                fall: 0.0,
+                rise: N::ZERO,
+                fall: N::ZERO,
             },
         ),
         ..s.clone()
@@ -395,17 +416,17 @@ fn windowed(s: &Series, window: Indicator) -> Series {
 }
 
 /// The plateau plus two raised-cosine shoulders, seven atoms, each under its own indicator.
-pub fn crop_window(
-    l: Edge,
-    r: Edge,
-    rise: f64,
-    fall: f64,
+pub fn crop_window<N: Num>(
+    l: Edge<N>,
+    r: Edge<N>,
+    rise: N,
+    fall: N,
     origin: Origin,
     var: Var,
-) -> SpectralSum {
-    let (a, b) = (l.value(), r.value());
+) -> SpectralSum<N> {
+    let (a, b) = (l.number(), r.number());
     let mut atoms = vec![SpectralAtom::new(
-        C64::ONE,
+        Cx::ONE,
         Factors {
             ind: Some(Indicator {
                 l: Edge::at(a + rise),
@@ -423,29 +444,36 @@ pub fn crop_window(
 
 /// A shoulder of no length is a hard edge, which the plateau's own indicator already is: a
 /// raised cosine over zero seconds has no half-period to turn over.
-fn shoulder(from: f64, to: f64, span: f64, quarter: f64, origin: Origin) -> Vec<SpectralAtom> {
-    if span <= 0.0 || !span.is_finite() {
+fn shoulder<N: Num>(from: N, to: N, span: N, quarter: f64, origin: Origin) -> Vec<SpectralAtom<N>> {
+    if span.v() <= 0.0 || !span.v().is_finite() {
         return Vec::new();
     }
-    raised_cosine(from, to, std::f64::consts::PI / span, 0.5, quarter, origin)
+    raised_cosine(
+        from,
+        to,
+        N::of(std::f64::consts::PI) / span,
+        N::of(0.5),
+        quarter,
+        origin,
+    )
 }
 
 /// `dc + 2*side*cos(w*(t - from))` over `[from, to)` and nothing outside it, as the three
 /// atoms it is: the level, and one line either side of it phased to the window's own start.
-pub(crate) fn raised_cosine(
-    from: f64,
-    to: f64,
-    w: f64,
-    dc: f64,
+pub(crate) fn raised_cosine<N: Num>(
+    from: N,
+    to: N,
+    w: N,
+    dc: N,
     side: f64,
     origin: Origin,
-) -> Vec<SpectralAtom> {
+) -> Vec<SpectralAtom<N>> {
     let window = Indicator {
         l: Edge::at(from),
         r: Edge::at(to),
     };
     let mut out = vec![SpectralAtom::new(
-        C64::real(dc),
+        Cx::real(dc),
         Factors {
             ind: Some(window),
             ..Factors::NONE
@@ -455,9 +483,11 @@ pub(crate) fn raised_cosine(
     )];
     for sign in [1.0, -1.0] {
         out.push(SpectralAtom::new(
-            C64::new(0.0, -sign * w * from).exp().scale(side),
+            Cx::new(N::ZERO, N::of(-sign) * w * from)
+                .exp()
+                .scale(N::of(side)),
             Factors {
-                exp: Some(Exp::at(0.0, sign * w)),
+                exp: Some(Exp::at(N::ZERO, w * sign)),
                 ind: Some(window),
                 ..Factors::NONE
             },

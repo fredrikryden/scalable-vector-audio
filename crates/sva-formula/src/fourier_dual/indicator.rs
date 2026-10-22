@@ -15,18 +15,14 @@ pub(crate) fn row(a: &SpectralAtom) -> Result<Vec<SpectralAtom>, Left> {
 
     match (window.l, window.r) {
         (Edge::At(l), Edge::At(r)) => Ok([
-            edge_terms(a, alpha, pole, f64::from_bits(l), C64::ONE)?,
-            edge_terms(a, alpha, pole, f64::from_bits(r), -C64::ONE)?,
+            edge_terms(a, alpha, pole, l, C64::ONE)?,
+            edge_terms(a, alpha, pole, r, -C64::ONE)?,
         ]
         .concat()),
-        (Edge::At(l), Edge::PosInf) if alpha.re < 0.0 => {
-            edge_terms(a, alpha, pole, f64::from_bits(l), C64::ONE)
-        }
-        (Edge::NegInf, Edge::At(r)) if alpha.re > 0.0 => {
-            edge_terms(a, alpha, pole, f64::from_bits(r), -C64::ONE)
-        }
-        (Edge::At(l), Edge::PosInf) => heaviside(a, pole, f64::from_bits(l), C64::ONE),
-        (Edge::NegInf, Edge::At(r)) => heaviside(a, pole, f64::from_bits(r), -C64::ONE),
+        (Edge::At(l), Edge::PosInf) if alpha.re < 0.0 => edge_terms(a, alpha, pole, l, C64::ONE),
+        (Edge::NegInf, Edge::At(r)) if alpha.re > 0.0 => edge_terms(a, alpha, pole, r, -C64::ONE),
+        (Edge::At(l), Edge::PosInf) => heaviside(a, pole, l, C64::ONE),
+        (Edge::NegInf, Edge::At(r)) => heaviside(a, pole, r, -C64::ONE),
         _ => Err(Left::new(
             a.origin,
             AtomSketch::of(Factor::Indicator),

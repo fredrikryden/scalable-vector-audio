@@ -35,6 +35,7 @@ pub use cache::{
 };
 pub use cast::Cast;
 pub use error::{BindingFault, Diagnostic, EngineError, Located, REGISTRY};
+pub use lower::dual::{Varied, tangents};
 pub use meaning::{Meaning, meaning};
 pub use query::{
     Answer, Arg, Ask, Atom, DEFAULT_BEATING_WINDOW_SECS, DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS,

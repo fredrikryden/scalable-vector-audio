@@ -10,25 +10,37 @@ pub mod spread;
 pub mod sup;
 
 use crate::closed_form::{Body, ModalBank, Part, Series, Var, map_children};
+use crate::num::Num;
 use crate::origin::Origin;
 use atom::SpectralAtom;
 
-/// The infinite two sit beside the atoms because they carry their own truncation.
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct Lane {
-    pub atoms: Vec<SpectralAtom>,
-    pub series: Vec<Series>,
+/// The infinite two sit beside the atoms because they carry their own truncation. A modal
+/// bank is built of plain numbers, moved by no varied one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lane<N: Num = f64> {
+    pub atoms: Vec<SpectralAtom<N>>,
+    pub series: Vec<Series<N>>,
     pub modal: Vec<ModalBank>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct SpectralSum {
-    pub var: Var,
-    pub lanes: Vec<Lane>,
+impl<N: Num> Default for Lane<N> {
+    fn default() -> Lane<N> {
+        Lane {
+            atoms: Vec::new(),
+            series: Vec::new(),
+            modal: Vec::new(),
+        }
+    }
 }
 
-impl Lane {
-    pub fn of(atoms: Vec<SpectralAtom>) -> Lane {
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpectralSum<N: Num = f64> {
+    pub var: Var,
+    pub lanes: Vec<Lane<N>>,
+}
+
+impl<N: Num> Lane<N> {
+    pub fn of(atoms: Vec<SpectralAtom<N>>) -> Lane<N> {
         Lane {
             atoms,
             ..Lane::default()
@@ -44,21 +56,22 @@ impl Lane {
         self.series.is_empty() && self.modal.is_empty()
     }
 
-    pub fn expanded(mut self) -> Lane {
+    pub fn expanded(mut self) -> Lane<N> {
         for bank in std::mem::take(&mut self.modal) {
+            let atoms = crate::modal::atoms(&bank, crate::origin::Origin::UNKNOWN);
             self.atoms
-                .extend(crate::modal::atoms(&bank, crate::origin::Origin::UNKNOWN));
+                .extend(atoms.iter().map(SpectralAtom::lifted::<N>));
         }
         self
     }
 }
 
-impl SpectralSum {
-    pub fn of(var: Var, lanes: Vec<Lane>) -> SpectralSum {
+impl<N: Num> SpectralSum<N> {
+    pub fn of(var: Var, lanes: Vec<Lane<N>>) -> SpectralSum<N> {
         SpectralSum { var, lanes }
     }
 
-    pub fn mono(var: Var, atoms: Vec<SpectralAtom>) -> SpectralSum {
+    pub fn mono(var: Var, atoms: Vec<SpectralAtom<N>>) -> SpectralSum<N> {
         SpectralSum {
             var,
             lanes: vec![Lane::of(atoms)],
@@ -69,12 +82,12 @@ impl SpectralSum {
         self.lanes.len()
     }
 
-    pub fn atoms(&self) -> impl Iterator<Item = &SpectralAtom> {
+    pub fn atoms(&self) -> impl Iterator<Item = &SpectralAtom<N>> {
         self.lanes.iter().flat_map(|l| l.atoms.iter())
     }
 
     /// The same value, every atom and term naming `origin` as where it was written.
-    pub fn located(mut self, origin: Origin) -> SpectralSum {
+    pub fn located(mut self, origin: Origin) -> SpectralSum<N> {
         for lane in &mut self.lanes {
             for atom in &mut lane.atoms {
                 atom.origin = origin;
@@ -87,6 +100,6 @@ impl SpectralSum {
     }
 }
 
-fn at(f: &Body, origin: Origin) -> Body {
+fn at<N: Num>(f: &Body<N>, origin: Origin) -> Body<N> {
     map_children(f, |p| Part::new(origin, at(&p.body, origin)))
 }

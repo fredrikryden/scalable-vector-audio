@@ -6,9 +6,10 @@ use crate::affine::{Axis, ConstantAt, Reading, affine_in, affine_read, axis_read
 use crate::closed_form::{
     Body, Bound, IndexId, Part, Series, Unary, children, map_children, read_at,
 };
-use crate::complex::C64;
+use crate::complex::Cx;
 use crate::env::Env;
 use crate::fourier_dual::series::{Shape, read_with};
+use crate::num::Num;
 use crate::spectral_sum::atom::{Exp, Factors, Singular, SpectralAtom};
 use crate::through::{Opaque, Reads};
 
@@ -106,11 +107,11 @@ impl IndexGrowth {
 }
 
 /// What separates a series term's coefficient from its wave.
-pub fn mentions_line(f: &Body) -> bool {
+pub fn mentions_line<N: Num>(f: &Body<N>) -> bool {
     mentions_line_read(f, &Opaque)
 }
 
-pub fn mentions_line_read(f: &Body, reads: &dyn Reads) -> bool {
+pub fn mentions_line_read<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> bool {
     match f {
         Body::Line => true,
         Body::Node(id) => reads.mentions_line(*id),
@@ -121,7 +122,7 @@ pub fn mentions_line_read(f: &Body, reads: &dyn Reads) -> bool {
 }
 
 /// A bound on `|c(k+1)| / |c(k)|` holding at every index.
-pub fn ratio(f: &Body, k: IndexId) -> Option<f64> {
+pub fn ratio<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
     if !mentions(f, k) {
         return Some(1.0);
     }
@@ -137,7 +138,7 @@ pub fn ratio(f: &Body, k: IndexId) -> Option<f64> {
         Body::Apply(Unary::Abs, arg) => ratio(&arg.body, k),
         Body::Apply(Unary::Exp, arg) => {
             let (slope, _) = affine_in(&arg.body, Reading::Index(k))?;
-            Some(crate::exp(slope.exact()?.re))
+            Some(crate::exp(slope.exact()?.re.v()))
         }
         Body::Pow(base, n) if *n >= 0 => Some(ratio(&base.body, k)?.powi(*n)),
         _ => None,
@@ -145,7 +146,7 @@ pub fn ratio(f: &Body, k: IndexId) -> Option<f64> {
 }
 
 /// Whether `|f(j)| <= |f(i)|` for every `j >= i >= 1`.
-pub fn falls(f: &Body, k: IndexId) -> bool {
+pub fn falls<N: Num>(f: &Body<N>, k: IndexId) -> bool {
     power(f, k).is_some_and(|p| p >= 0.0)
 }
 
@@ -156,7 +157,7 @@ enum Decay {
     Power(f64),
 }
 
-fn decay(f: &Body, k: IndexId) -> Option<Decay> {
+fn decay<N: Num>(f: &Body<N>, k: IndexId) -> Option<Decay> {
     if let Some(r) = ratio(f, k).filter(|r| *r < 1.0) {
         return Some(Decay::Geometric(r));
     }
@@ -174,7 +175,7 @@ impl Decay {
 }
 
 /// A `p` with `|f(j)| <= |f(i)|*(i/j)^p` for every `j >= i >= 1`.
-fn power(f: &Body, k: IndexId) -> Option<f64> {
+fn power<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
     if let Some(e) = exponent(f, k) {
         return Some(-e);
     }
@@ -197,7 +198,7 @@ fn power(f: &Body, k: IndexId) -> Option<f64> {
 
 /// An `e` with `|f(j)| >= |f(i)|*(j/i)^e` for every `j >= i >= 1`: `a*k + b`, `a > 0`,
 /// `b <= 0 < a + b`, rises at least as `k` does.
-fn rises(f: &Body, k: IndexId) -> Option<f64> {
+fn rises<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
     if let Some(e) = exponent(f, k) {
         return Some(e);
     }
@@ -206,14 +207,15 @@ fn rises(f: &Body, k: IndexId) -> Option<f64> {
         _ => {
             let (slope, offset) = affine_in(f, Reading::Index(k))?;
             let (a, b) = (slope.exact()?, offset.exact()?);
-            let real = a.im == 0.0 && b.im == 0.0;
-            (real && a.re > 0.0 && b.re <= 0.0 && a.re + b.re > 0.0).then_some(1.0)
+            let real = a.im.is_zero() && b.im.is_zero();
+            let (a, b) = (a.re.v(), b.re.v());
+            (real && a > 0.0 && b <= 0.0 && a + b > 0.0).then_some(1.0)
         }
     }
 }
 
 /// The `e` with `|f(j)| = |f(i)|*(j/i)^e` exactly for every `i, j >= 1`.
-fn exponent(f: &Body, k: IndexId) -> Option<f64> {
+fn exponent<N: Num>(f: &Body<N>, k: IndexId) -> Option<f64> {
     if !mentions(f, k) {
         return Some(0.0);
     }
@@ -229,24 +231,24 @@ fn exponent(f: &Body, k: IndexId) -> Option<f64> {
     }
 }
 
-pub fn mentions(f: &Body, k: IndexId) -> bool {
+pub fn mentions<N: Num>(f: &Body<N>, k: IndexId) -> bool {
     reaches(f, &|x| matches!(x, Body::Index(i) if *i == k))
 }
 
-fn reaches(f: &Body, leaf: &dyn Fn(&Body) -> bool) -> bool {
+fn reaches<N: Num>(f: &Body<N>, leaf: &dyn Fn(&Body<N>) -> bool) -> bool {
     leaf(f) || children(f).iter().any(|p| reaches(&p.body, leaf))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Line {
-    pub hz: f64,
-    pub amp: C64,
+pub struct Line<N: Num = f64> {
+    pub hz: N,
+    pub amp: Cx<N>,
     /// Where the term's own frequency places it, which `hz` rounds.
     pub rung: Option<Rung>,
 }
 
-impl Line {
-    pub fn bare(hz: f64, amp: C64) -> Line {
+impl<N: Num> Line<N> {
+    pub fn bare(hz: N, amp: Cx<N>) -> Line<N> {
         Line {
             hz,
             amp,
@@ -266,9 +268,9 @@ pub struct Rung {
 /// `tail_db` is what was dropped against the loudest taken line: the loudest dropped line, or
 /// where the walk stopped short, the bound on the summed magnitude of every term it left.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Lines {
-    pub taken: Vec<Line>,
-    pub dropped: Vec<Line>,
+pub struct Lines<N: Num = f64> {
+    pub taken: Vec<Line<N>>,
+    pub dropped: Vec<Line<N>>,
     pub tail_db: f64,
 }
 
@@ -284,11 +286,11 @@ pub fn lines_read(s: &Series, band: (f64, f64, f64), reads: &dyn Reads) -> Optio
     walk(s, band, reads)
 }
 
-fn walk(
-    s: &Series,
+fn walk<N: Num>(
+    s: &Series<N>,
     (ceiling, floor_db, precision): (f64, f64, f64),
-    reads: &dyn Reads,
-) -> Option<Lines> {
+    reads: &dyn Reads<N>,
+) -> Option<Lines<N>> {
     let shape = read_with(&s.term.body, reads)?;
     let voices = places(&shape);
     let band = voices
@@ -314,14 +316,14 @@ fn walk(
         .map(|(_, weight)| decay(weight, s.index))
         .collect();
     let truncates = band.is_none() && s.hi == Bound::Infinite;
-    let terms: Vec<(ConstantAt, ConstantAt)> = voices
+    let terms: Vec<(ConstantAt<N>, ConstantAt<N>)> = voices
         .iter()
         .map(|(place, weight)| {
-            let at = |f: &Body| ConstantAt::of(f, s.index, reads);
+            let at = |f: &Body<N>| ConstantAt::of(f, s.index, reads);
             (at(place), at(weight))
         })
         .collect();
-    let unread = |f: &ConstantAt| f.at(s.lo as f64).is_none();
+    let unread = |f: &ConstantAt<N>| f.at(s.lo as f64).is_none();
     if truncates
         && terms
             .iter()
@@ -359,12 +361,12 @@ fn walk(
         let whole = here.len() == voices.len();
         let tail = match (ratio, &decays) {
             (Some(r), _) => {
-                whole.then(|| here.iter().map(|l| l.amp.abs()).sum::<f64>() / (1.0 - r))
+                whole.then(|| here.iter().map(|l| l.amp.abs().v()).sum::<f64>() / (1.0 - r))
             }
             (None, Some(decays)) if whole => here
                 .iter()
                 .zip(decays)
-                .try_fold(0.0, |held, (l, d)| Some(held + d.tail(l.amp.abs(), k)?)),
+                .try_fold(0.0, |held, (l, d)| Some(held + d.tail(l.amp.abs().v(), k)?)),
             (None, _) => None,
         };
         let gone = tail.filter(|tail| match ratio {
@@ -377,8 +379,8 @@ fn walk(
             break;
         }
         for line in here {
-            if line.hz.abs() < ceiling {
-                peak = peak.max(line.amp.abs());
+            if line.hz.v().abs() < ceiling {
+                peak = peak.max(line.amp.abs().v());
                 taken.push(line);
             } else {
                 dropped.push(line);
@@ -388,7 +390,7 @@ fn walk(
     if truncates && left.is_none() {
         return None;
     }
-    let loudest = |set: &[Line]| set.iter().map(|l| l.amp.abs()).fold(0.0f64, f64::max);
+    let loudest = |set: &[Line<N>]| set.iter().map(|l| l.amp.abs().v()).fold(0.0f64, f64::max);
     let gone = loudest(&dropped).max(left.unwrap_or(0.0));
     Some(Lines {
         tail_db: if gone > 0.0 && peak > 0.0 {
@@ -401,17 +403,18 @@ fn walk(
     })
 }
 
-fn ladder(place: &Body, k: IndexId, reads: &dyn Reads) -> Option<(f64, f64)> {
+fn ladder<N: Num>(place: &Body<N>, k: IndexId, reads: &dyn Reads<N>) -> Option<(f64, f64)> {
     let (slope, offset) = affine_read(place, Reading::Index(k), reads)?;
     let (slope, offset) = (slope.exact()?, offset.exact()?);
-    let real = slope.im == 0.0 && offset.im == 0.0;
-    (real && slope.re.is_finite() && offset.re.is_finite()).then_some((offset.re, slope.re))
+    let real = slope.im.is_zero() && offset.im.is_zero();
+    let (slope, offset) = (slope.re.v(), offset.re.v());
+    (real && slope.is_finite() && offset.is_finite()).then_some((offset, slope))
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Enumerated {
-    pub atoms: Vec<SpectralAtom>,
-    pub dropped: Vec<Line>,
+pub struct Enumerated<N: Num = f64> {
+    pub atoms: Vec<SpectralAtom<N>>,
+    pub dropped: Vec<Line<N>>,
 }
 
 /// A crop of a series is the series of cropped terms: the window lifts off, goes back on
@@ -421,6 +424,15 @@ pub fn line_atoms(s: &Series, ceiling: f64, floor_db: f64, precision: f64) -> Op
 }
 
 pub fn line_atoms_read(s: &Series, band: (f64, f64, f64), reads: &dyn Reads) -> Option<Enumerated> {
+    line_atoms_over(s, band, reads)
+}
+
+/// The same over any number: a dual's lines carry their tangents.
+pub fn line_atoms_over<N: Num>(
+    s: &Series<N>,
+    band: (f64, f64, f64),
+    reads: &dyn Reads<N>,
+) -> Option<Enumerated<N>> {
     let (body, window) =
         crate::spectral_sum::image::crop_peeled(&crate::through::looked(&s.term.body, reads));
     let bare = Series {
@@ -431,12 +443,12 @@ pub fn line_atoms_read(s: &Series, band: (f64, f64, f64), reads: &dyn Reads) -> 
         Shape::Deltas(_) => true,
         Shape::Lines(_) => false,
     };
-    let found = lines_read(&bare, band, reads)?;
+    let found = walk(&bare, band, reads)?;
     let atoms = found
         .taken
         .into_iter()
         .filter_map(|l| match singular {
-            true => window.is_none_or(|w| w.contains(l.hz)).then(|| {
+            true => window.is_none_or(|w| w.contains(l.hz.v())).then(|| {
                 SpectralAtom::new(
                     l.amp,
                     Factors::NONE,
@@ -447,7 +459,7 @@ pub fn line_atoms_read(s: &Series, band: (f64, f64, f64), reads: &dyn Reads) -> 
             false => Some(SpectralAtom::new(
                 l.amp,
                 Factors {
-                    exp: Some(Exp::at(0.0, TAU * l.hz)),
+                    exp: Some(Exp::at(N::ZERO, l.hz * TAU)),
                     ind: window,
                     ..Factors::NONE
                 },
@@ -462,7 +474,7 @@ pub fn line_atoms_read(s: &Series, band: (f64, f64, f64), reads: &dyn Reads) -> 
     })
 }
 
-fn places(shape: &Shape) -> Vec<(Body, Body)> {
+fn places<N: Num>(shape: &Shape<N>) -> Vec<(Body<N>, Body<N>)> {
     match shape {
         Shape::Lines(lines) => lines
             .iter()
@@ -477,9 +489,14 @@ fn places(shape: &Shape) -> Vec<(Body, Body)> {
 
 /// The last index the walk reaches, solving `|slope*k + offset| <= ceiling`
 /// at both signs: an offset opposing the slope carries the line back in before it leaves.
-fn leaves_band(place: &Body, k: IndexId, ceiling: f64, reads: &dyn Reads) -> Option<i64> {
+fn leaves_band<N: Num>(
+    place: &Body<N>,
+    k: IndexId,
+    ceiling: f64,
+    reads: &dyn Reads<N>,
+) -> Option<i64> {
     let (slope, offset) = affine_read(place, Reading::Index(k), reads)?;
-    let (slope, offset) = (slope.exact()?.re, offset.exact()?.re);
+    let (slope, offset) = (slope.exact()?.re.v(), offset.exact()?.re.v());
     if slope == 0.0 {
         return None;
     }
@@ -490,9 +507,9 @@ fn leaves_band(place: &Body, k: IndexId, ceiling: f64, reads: &dyn Reads) -> Opt
 
 const MAX_TERMS: i64 = 1 << 20;
 
-pub fn substitute(f: &Body, k: IndexId, value: f64) -> Body {
+pub fn substitute<N: Num>(f: &Body<N>, k: IndexId, value: f64) -> Body<N> {
     match f {
-        Body::Index(i) if *i == k => Body::Const(C64::real(value)),
+        Body::Index(i) if *i == k => Body::Const(Cx::real(N::of(value))),
         other => map_children(other, |p| {
             Part::new(p.origin, substitute(&p.body, k, value))
         }),
@@ -502,13 +519,13 @@ pub fn substitute(f: &Body, k: IndexId, value: f64) -> Body {
 const MAX_WRITTEN_TERMS: i64 = 1 << 13;
 
 /// `f`, each finite series summed term by term; `None` where one is infinite or too long.
-pub fn written_out(f: &Body) -> Option<Body> {
+pub fn written_out<N: Num>(f: &Body<N>) -> Option<Body<N>> {
     let mut left = MAX_WRITTEN_TERMS;
     within(f, &mut left)
 }
 
 /// `left` counts the terms every series written out so far may still add, nesting included.
-fn within(f: &Body, left: &mut i64) -> Option<Body> {
+fn within<N: Num>(f: &Body<N>, left: &mut i64) -> Option<Body<N>> {
     if let Body::Series(s) = f {
         let Bound::Finite(hi) = s.hi else {
             return None;
@@ -526,7 +543,7 @@ fn within(f: &Body, left: &mut i64) -> Option<Body> {
             })
             .collect::<Option<Vec<_>>>()?;
         return Some(match terms.len() {
-            0 => Body::Const(C64::ZERO),
+            0 => Body::Const(Cx::ZERO),
             _ => Body::Add(terms),
         });
     }

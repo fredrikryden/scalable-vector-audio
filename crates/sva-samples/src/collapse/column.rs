@@ -951,18 +951,18 @@ impl RootView<'_> {
 }
 
 /// The knot a sum `t + c` rounding to `u` may exactly equal: one within a few steps of `u`.
-fn near(table: &Knots, u: f64, c: f64) -> Option<f64> {
+pub(super) fn near<N: sva_formula::Num>(table: &Knots<N>, u: f64, c: f64) -> Option<f64> {
     let times = table.times();
-    let k = times.partition_point(|x| *x < u);
+    let k = times.partition_point(|x| x.v() < u);
     let reach = 4.0 * f64::EPSILON * u.abs().max(c.abs());
     [k.checked_sub(1), Some(k)]
         .into_iter()
         .flatten()
-        .filter_map(|j| times.get(j).copied())
+        .filter_map(|j| times.get(j).map(|x| x.v()))
         .find(|x| (x - u).abs() <= reach)
 }
 
-fn power(x: C64, n: i32) -> C64 {
+pub(super) fn power<N: sva_formula::Num>(x: sva_formula::Cx<N>, n: i32) -> sva_formula::Cx<N> {
     match n {
         0.. => x.powi(n as u32),
         _ => x.powi(n.unsigned_abs()).inv(),
@@ -972,7 +972,7 @@ fn power(x: C64, n: i32) -> C64 {
 /// The component count a written subterm answers for. Only `join` widens, and only `ch` and
 /// a node narrow back.
 /// `refs[k]` the width of the form `Body::Node(k)` names; one past it is one wide.
-pub(crate) fn width_of(f: &Body, refs: &[usize]) -> usize {
+pub(crate) fn width_of<N: sva_formula::Num>(f: &Body<N>, refs: &[usize]) -> usize {
     match f {
         Body::Join(parts) => parts.iter().map(|p| width_of(&p.body, refs)).sum(),
         Body::Channel(..) => 1,

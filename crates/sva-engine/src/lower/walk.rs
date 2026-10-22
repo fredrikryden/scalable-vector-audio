@@ -3,20 +3,27 @@
 use std::collections::HashMap;
 
 use sva_ast::{Address, Arg, BinOp, ByteSpan, Expr, Literal};
-use sva_formula::{Body, C64, Held, IndexId, NodeId, Ty, Var};
+use sva_formula::{Body, C64, Cx as Complex, Held, IndexId, NodeId, Ty, Var};
 
 use crate::cast::Cast;
 use crate::error::{EngineError, Located};
 use crate::instantiate::{Cx, Node, Thunk};
 use crate::loops::{self, Tap};
+use crate::lower::dual::Number;
 use crate::lower::{Index, Lowering, Piece, SelfMode, constant, on};
 use crate::overload;
 use crate::time::{Affine, Lattice, Q};
 use crate::typing::{Step, Value, When};
 
-impl Lowering<'_> {
-    pub(super) fn walk(&mut self, e: &Expr, cx: Cx, var: Var) -> Result<Piece, EngineError> {
+impl<N: Number> Lowering<'_, N> {
+    pub(super) fn walk(&mut self, e: &Expr, cx: Cx, var: Var) -> Result<Piece<N>, EngineError> {
         let inst = self.inst;
+        if let Expr::Var(name) = e
+            && let Some(tangent) = self.seed(cx.scope, name)
+            && let Some(r) = inst.follow(e, cx, |e2, cx2| self.walk(e2, cx2, var))
+        {
+            return self.varied(r?, tangent, var);
+        }
         if let Some(r) = inst.follow(e, cx, |e2, cx2| self.walk(e2, cx2, var)) {
             return r;
         }
@@ -29,19 +36,175 @@ impl Lowering<'_> {
                 arg,
                 address: Address::Time,
                 span,
-            } => self.read(path, arg, span, cx, var),
+            } => self.rendered("a read of another node", |low| {
+                low.read(path, arg, span, cx, var)
+            }),
             Node::Read {
                 path,
                 arg,
                 address: Address::Index,
                 span,
-            } => self.indexed(path, arg, span, cx, var),
-            Node::Own { arg, address, span } => self.own((arg, address), span, cx, var),
-            Node::Signal { of, arg, span, .. } => self.signal(of, arg, span, cx, var),
+            } => self.rendered("an index read", |low| low.indexed(path, arg, span, cx, var)),
+            Node::Own { arg, address, span } => {
+                self.rendered("`self`", |low| low.own((arg, address), span, cx, var))
+            }
+            Node::Signal { of, arg, span, .. } => self
+                .rendered("a parameter read by index", |low| {
+                    low.signal(of, arg, span, cx, var)
+                }),
             Node::Call { name, args, span } => self.call(name, args, span, cx, var),
         }
     }
 
+    /// Fresh across the graph: two nodes' series compose into one closed form, and an index one of
+    /// them reused would be captured by the other's expansion.
+    pub(super) fn index(&mut self) -> IndexId {
+        self.typing.next_index()
+    }
+
+    fn literal(&mut self, l: &Literal, var: Var) -> Result<Piece<N>, EngineError> {
+        let grid = self.grid;
+        let number = |x: f64| Piece::ClosedForm(Body::Const(Complex::real(N::of(x))));
+        match l {
+            Literal::Num(n) => Ok(number(*n)),
+            Literal::Bars(_) if var == Var::F => Err(self.refused(
+                "type.bars_in_frequency",
+                "a bar is a duration and has no position in f".to_string(),
+                "write the duration in seconds, or move it into the closed form in t",
+            )),
+            Literal::Bars(_) => Err(EngineError::UnresolvedBars(self.here(None))),
+            Literal::Samples(n) if grid.is_rate() => {
+                let count = self.part(Body::Const(Complex::real(N::of(*n))), None);
+                let rate = self.part(Body::Const(Complex::real(N::of(grid.rate.into()))), None);
+                Ok(Piece::ClosedForm(Body::Div(count, rate)))
+            }
+            Literal::Samples(n) => {
+                let exact = Q::decimal(*n).and_then(|n| grid.steps(n));
+                let secs = exact.map_or_else(|| grid.steps_f64(*n), Q::to_f64);
+                Ok(number(secs))
+            }
+            Literal::Path(path) => Err(self.refused(
+                "grammar.unresolved_path",
+                format!("`\"{path}\"` was never resolved to a recording"),
+                "read a path only as `sample(\"<path>\")` in a composition a front end loads",
+            )),
+            Literal::Recorded(recording) => Err(self.refused(
+                "grammar.recording_outside_sample",
+                format!(
+                    "`\"{}\"` is a recording, read only as `sample`'s argument",
+                    recording.path
+                ),
+                "write `sample(\"<path>\")`",
+            )),
+            Literal::Str(s) => match sva_ast::note_hz(s) {
+                Some(hz) => Ok(number(hz)),
+                None => Err(self.refused(
+                    "grammar.unknown_name",
+                    format!("`{s}` is text, and only a note name reads as a frequency"),
+                    "write a note name like `A4`, or the hertz itself",
+                )),
+            },
+        }
+    }
+
+    fn name(&mut self, name: &str, var: Var) -> Result<Piece<N>, EngineError> {
+        if let Some((_, index)) = self.indices.iter().rev().find(|(k, _)| k == name) {
+            return Ok(Piece::ClosedForm(match *index {
+                Index::Series(index) => Body::Index(index),
+                Index::Term(k) => Body::Const(Complex::real(N::of(k as f64))),
+            }));
+        }
+        let constant = match name {
+            "t" if var == Var::T => return Ok(Piece::ClosedForm(Body::Line)),
+            "f" if var == Var::F => return Ok(Piece::ClosedForm(Body::Line)),
+            "t" | "f" => {
+                return Err(self.refused(
+                    "type.domain_mismatch",
+                    format!("`{name}` is not the variable this closed form is written in."),
+                    "write fourier on the t side, or ifourier on the f side",
+                ));
+            }
+            "pi" => C64::real(std::f64::consts::PI),
+            "i" => C64::new(0.0, 1.0),
+            "inf" => C64::real(f64::INFINITY),
+            other => match sva_ast::note_hz(other) {
+                Some(hz) => C64::real(hz),
+                None => return Err(EngineError::UnknownBuiltin(other.to_string())),
+            },
+        };
+        Ok(Piece::ClosedForm(Body::Const(Complex::of(constant))))
+    }
+
+    fn binary(
+        &mut self,
+        op: BinOp,
+        l: &Expr,
+        r: &Expr,
+        cx: Cx,
+        var: Var,
+    ) -> Result<Piece<N>, EngineError> {
+        let left = self.walk(l, cx, var)?;
+        let right = self.walk(r, cx, var)?;
+        let (left, right) = match (left, right) {
+            (Piece::ClosedForm(a), Piece::ClosedForm(b)) => {
+                let a = self.part(a, None);
+                let b = self.part(b, None);
+                let body = match op {
+                    BinOp::Add => Body::Add(vec![a, b]),
+                    BinOp::Sub => {
+                        let minus = self.part(Body::Const(Complex::real(N::of(-1.0))), None);
+                        let negated = self.part(Body::Mul(vec![minus, b]), None);
+                        Body::Add(vec![a, negated])
+                    }
+                    BinOp::Mul => Body::Mul(vec![a, b]),
+                    BinOp::Div => Body::Div(a, b),
+                    BinOp::Mod => Body::Fold(sva_formula::Fold::Mod, vec![a, b]),
+                };
+                return self.folded(body, var);
+            }
+            pieces => pieces,
+        };
+        let name = match op {
+            BinOp::Add => "+",
+            BinOp::Sub => "-",
+            BinOp::Mul => "*",
+            BinOp::Div => "/",
+            BinOp::Mod => "%",
+        };
+        let pieces = vec![N::value(left), N::value(right)];
+        self.rendered("an operation on samples", |low| {
+            low.operation(name, pieces, None, var)
+        })
+    }
+
+    /// A body of numbers holding `inf` is the one number it folds to, and `inf - inf` or
+    /// `0*inf` refuse; so is a sum of `inf` and terms finite at every instant, as `t - inf` is
+    /// `-inf`. Anything else stays the body it was built as.
+    pub(super) fn folded(&self, body: Body<N>, var: Var) -> Result<Piece<N>, EngineError> {
+        if let Some(v) = constant::plain(&body) {
+            return Ok(Piece::ClosedForm(Body::Const(Complex::real(v))));
+        }
+        let reach = (var == Var::T).then(|| i64::MAX as f64 / self.grid.sr());
+        let swamped = || reach.and_then(|reach| constant::swamped(&body, reach));
+        match constant::unbounded(&body).or_else(swamped) {
+            Some(v) if v.v().is_nan() => Err(self
+                .infinite("arithmetic on inf folds to no number here, as inf - inf or 0*inf does")),
+            Some(v) => Ok(Piece::ClosedForm(Body::Const(Complex::real(v)))),
+            None => Ok(Piece::ClosedForm(body)),
+        }
+    }
+
+    pub(super) fn infinite(&self, what: &str) -> EngineError {
+        self.refused(
+            "engine.infinite_value",
+            what.to_string(),
+            "write inf only where it names a number: a crop's edge, a parameter a crop \
+             reads, or a constant it folds away in",
+        )
+    }
+}
+
+impl Lowering<'_> {
     /// The series expands around a body whose own refs each read as the form they name. A
     /// zero coefficient is no loop at all, and a series around it would take the log of zero.
     pub(super) fn expand(
@@ -97,12 +260,6 @@ impl Lowering<'_> {
             Body::Add(_) => named.clone(),
             _ => f,
         }
-    }
-
-    /// Fresh across the graph: two nodes' series compose into one closed form, and an index one of
-    /// them reused would be captured by the other's expansion.
-    pub(super) fn index(&mut self) -> IndexId {
-        self.typing.next_index()
     }
 
     /// The zero a series expands around, or a discrete loop's past by index. Which sample a
@@ -180,143 +337,6 @@ impl Lowering<'_> {
     pub(super) fn time(&mut self, arg: &Expr, cx: Cx) -> Result<NodeId, EngineError> {
         let piece = self.walk(arg, cx, Var::T)?;
         self.seal(piece, Var::T, None)
-    }
-
-    fn literal(&mut self, l: &Literal, var: Var) -> Result<Piece, EngineError> {
-        let grid = self.grid;
-        match l {
-            Literal::Num(n) => Ok(Piece::ClosedForm(Body::Const(C64::real(*n)))),
-            Literal::Bars(_) if var == Var::F => Err(self.refused(
-                "type.bars_in_frequency",
-                "a bar is a duration and has no position in f".to_string(),
-                "write the duration in seconds, or move it into the closed form in t",
-            )),
-            Literal::Bars(_) => Err(EngineError::UnresolvedBars(self.here(None))),
-            Literal::Samples(n) if grid.is_rate() => {
-                let count = self.part(Body::Const(C64::real(*n)), None);
-                let rate = self.part(Body::Const(C64::real(grid.rate.into())), None);
-                Ok(Piece::ClosedForm(Body::Div(count, rate)))
-            }
-            Literal::Samples(n) => {
-                let exact = Q::decimal(*n).and_then(|n| grid.steps(n));
-                let secs = exact.map_or_else(|| grid.steps_f64(*n), Q::to_f64);
-                Ok(Piece::ClosedForm(Body::Const(C64::real(secs))))
-            }
-            Literal::Path(path) => Err(self.refused(
-                "grammar.unresolved_path",
-                format!("`\"{path}\"` was never resolved to a recording"),
-                "read a path only as `sample(\"<path>\")` in a composition a front end loads",
-            )),
-            Literal::Recorded(recording) => Err(self.refused(
-                "grammar.recording_outside_sample",
-                format!(
-                    "`\"{}\"` is a recording, read only as `sample`'s argument",
-                    recording.path
-                ),
-                "write `sample(\"<path>\")`",
-            )),
-            Literal::Str(s) => match sva_ast::note_hz(s) {
-                Some(hz) => Ok(Piece::ClosedForm(Body::Const(C64::real(hz)))),
-                None => Err(self.refused(
-                    "grammar.unknown_name",
-                    format!("`{s}` is text, and only a note name reads as a frequency"),
-                    "write a note name like `A4`, or the hertz itself",
-                )),
-            },
-        }
-    }
-
-    fn name(&mut self, name: &str, var: Var) -> Result<Piece, EngineError> {
-        if let Some((_, index)) = self.indices.iter().rev().find(|(k, _)| k == name) {
-            return Ok(Piece::ClosedForm(match *index {
-                Index::Series(index) => Body::Index(index),
-                Index::Term(k) => Body::Const(C64::real(k as f64)),
-            }));
-        }
-        let constant = match name {
-            "t" if var == Var::T => return Ok(Piece::ClosedForm(Body::Line)),
-            "f" if var == Var::F => return Ok(Piece::ClosedForm(Body::Line)),
-            "t" | "f" => {
-                return Err(self.refused(
-                    "type.domain_mismatch",
-                    format!("`{name}` is not the variable this closed form is written in."),
-                    "write fourier on the t side, or ifourier on the f side",
-                ));
-            }
-            "pi" => C64::real(std::f64::consts::PI),
-            "i" => C64::new(0.0, 1.0),
-            "inf" => C64::real(f64::INFINITY),
-            other => match sva_ast::note_hz(other) {
-                Some(hz) => C64::real(hz),
-                None => return Err(EngineError::UnknownBuiltin(other.to_string())),
-            },
-        };
-        Ok(Piece::ClosedForm(Body::Const(constant)))
-    }
-
-    fn binary(
-        &mut self,
-        op: BinOp,
-        l: &Expr,
-        r: &Expr,
-        cx: Cx,
-        var: Var,
-    ) -> Result<Piece, EngineError> {
-        let left = self.walk(l, cx, var)?;
-        let right = self.walk(r, cx, var)?;
-        let (left, right) = match (left, right) {
-            (Piece::ClosedForm(a), Piece::ClosedForm(b)) => {
-                let a = self.part(a, None);
-                let b = self.part(b, None);
-                let body = match op {
-                    BinOp::Add => Body::Add(vec![a, b]),
-                    BinOp::Sub => {
-                        let minus = self.part(Body::Const(C64::real(-1.0)), None);
-                        let negated = self.part(Body::Mul(vec![minus, b]), None);
-                        Body::Add(vec![a, negated])
-                    }
-                    BinOp::Mul => Body::Mul(vec![a, b]),
-                    BinOp::Div => Body::Div(a, b),
-                    BinOp::Mod => Body::Fold(sva_formula::Fold::Mod, vec![a, b]),
-                };
-                return self.folded(body, var);
-            }
-            pieces => pieces,
-        };
-        let name = match op {
-            BinOp::Add => "+",
-            BinOp::Sub => "-",
-            BinOp::Mul => "*",
-            BinOp::Div => "/",
-            BinOp::Mod => "%",
-        };
-        self.operation(name, vec![left, right], None, var)
-    }
-
-    /// A body of numbers holding `inf` is the one number it folds to, and `inf - inf` or
-    /// `0*inf` refuse; so is a sum of `inf` and terms finite at every instant, as `t - inf` is
-    /// `-inf`. Anything else stays the body it was built as.
-    pub(super) fn folded(&self, body: Body, var: Var) -> Result<Piece, EngineError> {
-        if let Some(v) = constant::plain(&body) {
-            return Ok(Piece::ClosedForm(Body::Const(C64::real(v))));
-        }
-        let reach = (var == Var::T).then(|| i64::MAX as f64 / self.grid.sr());
-        let swamped = || reach.and_then(|reach| constant::swamped(&body, reach));
-        match constant::unbounded(&body).or_else(swamped) {
-            Some(v) if v.is_nan() => Err(self
-                .infinite("arithmetic on inf folds to no number here, as inf - inf or 0*inf does")),
-            Some(v) => Ok(Piece::ClosedForm(Body::Const(C64::real(v)))),
-            None => Ok(Piece::ClosedForm(body)),
-        }
-    }
-
-    pub(super) fn infinite(&self, what: &str) -> EngineError {
-        self.refused(
-            "engine.infinite_value",
-            what.to_string(),
-            "write inf only where it names a number: a crop's edge, a parameter a crop \
-             reads, or a constant it folds away in",
-        )
     }
 
     /// A call whose operands did not all stay inside one closed form is a sampled operation: the
