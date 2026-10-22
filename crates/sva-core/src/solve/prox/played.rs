@@ -8,7 +8,7 @@ use sva_engine::Varied;
 use sva_formula::Tangents;
 
 use super::draws::{DRAWS, seed};
-use super::lines::{self, Filter, Line};
+use super::lines::{self, Filter, Line, Realisation};
 use super::model::constant;
 use super::state::{Slot, State};
 use crate::cli_error::CliError;
@@ -262,7 +262,7 @@ fn text(s: &State, source: &dyn Fn(&str) -> Option<String>) -> Result<Text, CliE
     Ok(Text { files, noise })
 }
 
-type Rendered = BTreeMap<(String, u64), Arc<Vec<f64>>>;
+type Rendered = BTreeMap<(String, u64), Arc<Realisation>>;
 
 /// Each noise rendered once at the clip's samples, by its text, seed and onset. No number a fit
 /// varies moves an onset or a noise's text, so it holds one render per noisy line and seed.
@@ -275,7 +275,7 @@ fn rendered(
     seed: Option<u64>,
     at: f64,
     g: &Grid,
-) -> Result<Arc<Vec<f64>>, CliError> {
+) -> Result<Arc<Realisation>, CliError> {
     let text = match seed {
         Some(n) => format!("seed = {n}\n{}", sva_ast::render_expr(source)),
         None => sva_ast::render_expr(source),
@@ -307,7 +307,7 @@ fn rendered(
         .plane(0)
         .to_vec();
     x.resize(g.len, 0.0);
-    let x = Arc::new(x);
+    let x = Arc::new(Realisation::of(x, g));
     renders
         .0
         .lock()

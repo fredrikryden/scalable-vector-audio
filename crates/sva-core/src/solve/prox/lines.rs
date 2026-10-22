@@ -5,7 +5,8 @@
 //! no bound is proven a priori: a priced solve renders each point and reports its reading off
 //! the render less this one as `predicted.error`, and chooses by the render's.
 
-use std::sync::Arc;
+use std::borrow::Cow;
+use std::sync::{Arc, OnceLock};
 
 use sva_formula::closed_form::{Edge, Unary};
 use sva_formula::{Body, C64, Cx, Dual, Num, Tangents};
@@ -176,8 +177,24 @@ pub struct Line {
     pub frames: Vec<(usize, usize)>,
     pub tangents: Tangents,
     /// Its noise's realisations, one a draw where its seed is drawn; none where it holds none.
-    pub noise: Vec<Arc<Vec<f64>>>,
+    pub noise: Vec<Arc<Realisation>>,
     pub noise_filters: Vec<Filter>,
+}
+
+/// One noise at the clip's samples, and each frame's windowed spectrum where the frame reads
+/// only samples inside the clip: the same bits however its line is cropped around it.
+pub struct Realisation {
+    samples: Vec<f64>,
+    spectra: Vec<OnceLock<Vec<C64>>>,
+}
+
+impl Realisation {
+    pub fn of(samples: Vec<f64>, g: &Grid) -> Realisation {
+        Realisation {
+            samples,
+            spectra: (0..g.frames).map(|_| OnceLock::new()).collect(),
+        }
+    }
 }
 
 /// The support `[lo, hi)` in samples.
@@ -665,7 +682,7 @@ impl Line {
         g: &Grid,
         tr: &Transform,
         shaped: &[C64],
-        noise: &[f64],
+        noise: &Realisation,
         (m, i0): (usize, usize),
         (lo, hi): (f64, f64),
         gamma: &dyn Fn(usize, usize) -> C64,
@@ -685,7 +702,7 @@ impl Line {
             * self.shoulder(self.instants[i0 + 1]);
         let gains: Vec<C64> = shaped.iter().map(|h| h.scale(e)).collect();
         let xb = samples_back(g, tr, m, &|mm, j| gains[j].conj() * gamma(mm, j));
-        let read = |k: usize| noise.get(s0 as usize + k).copied().unwrap_or(0.0);
+        let read = |k: usize| noise.samples.get(s0 as usize + k).copied().unwrap_or(0.0);
         let mut out = (0.0, 0.0);
         if lo > s0 && lo < end {
             let k = (lo - s0).ceil() as usize;
@@ -745,19 +762,35 @@ fn samples_back(
     (0..g.window).map(|k| tr.w[k] * re[g.left + k]).collect()
 }
 
-fn noise_frame(noise: &[f64], g: &Grid, tr: &Transform, m: usize, lo: f64, hi: f64) -> Vec<C64> {
+fn noise_frame<'a>(
+    noise: &'a Realisation,
+    g: &Grid,
+    tr: &Transform,
+    m: usize,
+    lo: f64,
+    hi: f64,
+) -> Cow<'a, [C64]> {
     let s0 = g.first(m);
-    let mut re = vec![0.0; g.n];
-    let mut im = vec![0.0; g.n];
-    for (k, wk) in tr.w.iter().enumerate() {
-        let s = g.mirrored(s0 + k as i64);
-        let sf = s as f64;
-        if sf >= lo && sf < hi && (s as usize) < noise.len() {
-            re[g.left + k] = wk * noise[s as usize];
+    let end = s0 + g.window as i64;
+    let cropped = |lo: f64, hi: f64| {
+        let (mut re, mut im) = (vec![0.0; g.n], vec![0.0; g.n]);
+        for (k, wk) in tr.w.iter().enumerate() {
+            let s = g.mirrored(s0 + k as i64);
+            let sf = s as f64;
+            if sf >= lo && sf < hi && (s as usize) < noise.samples.len() {
+                re[g.left + k] = wk * noise.samples[s as usize];
+            }
         }
+        sva_samples::fft::fft_with(&mut re, &mut im, &tr.twiddles);
+        (0..g.bins())
+            .map(|j| C64::new(re[j], im[j]))
+            .collect::<Vec<C64>>()
+    };
+    let inside = s0 >= 0 && end as usize <= noise.samples.len();
+    match inside && s0 as f64 >= lo && ((end - 1) as f64) < hi {
+        true => Cow::Borrowed(noise.spectra[m].get_or_init(|| cropped(f64::MIN, f64::MAX))),
+        false => Cow::Owned(cropped(lo, hi)),
     }
-    sva_samples::fft::fft_with(&mut re, &mut im, &tr.twiddles);
-    (0..g.bins()).map(|j| C64::new(re[j], im[j])).collect()
 }
 
 /// Whether `b` reads the free variable anywhere.
