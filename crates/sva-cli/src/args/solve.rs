@@ -82,11 +82,6 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
                 priced.path = Some(path);
                 prox_flag = Some("--path");
             }
-            "--close" => {
-                let raw = value(&mut it, "--close")?;
-                priced.close = number(&raw, "--close", |v| v > 0.0, "a JND above 0")?;
-                prox_flag = Some("--close");
-            }
             "--steps" => {
                 priced.steps = count(&value(&mut it, "--steps")?, "--steps", "steps")?.get();
                 prox_flag = Some("--steps");

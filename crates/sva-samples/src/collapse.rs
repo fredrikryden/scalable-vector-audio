@@ -62,4 +62,23 @@ impl<N: Kernel> Evaluator<N> {
         }
         columns.root(0, (0, 1)).get(0).map_err(Clone::clone)
     }
+
+    /// Several forms, each identical subterm once.
+    pub fn over_each(bodies: &[&Body<N>], component: usize) -> Evaluator<N> {
+        Evaluator(Program::of(bodies, &[], component))
+    }
+
+    /// `[form][instant]`, no instant a sample's.
+    pub fn read_each(&self, at: &[f64]) -> Vec<Vec<Result<Cx<N>, CollapseError>>> {
+        let mut columns = self.0.columns(at.len());
+        columns.t.copy_from_slice(at);
+        (0..self.0.root_count())
+            .map(|k| {
+                let view = columns.root(k, (0, at.len()));
+                (0..at.len())
+                    .map(|i| view.get(i).map_err(Clone::clone))
+                    .collect()
+            })
+            .collect()
+    }
 }

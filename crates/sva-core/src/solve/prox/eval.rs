@@ -1,19 +1,28 @@
-// Concern: one state's distance and every coordinate's gradient: each score line on its own tape, the axes on one more | Non-concern: what a step does with them (step.rs) | IO: (Fit, State) -> Evaluated
+// Concern: one state's distance and gradient: every line's transform in the reading's bins, the axes on a tape, adjoints back | Non-concern: what a step does (step.rs) | IO: (Fit, State) -> Evaluated
 
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use sva_formula::C64;
+use sva_samples::measure::heard::BANDS;
+
+use super::played::{self, Lowered, ROOT_SEED, Renders};
 use super::state::{Slot, State};
 use crate::cli_error::CliError;
 use crate::heard::distance::{self, Axes, Reference, Side};
 use crate::heard::ear::Ear;
-use crate::heard::power::{self, Played};
-use crate::heard::tape::{Arr, Sparse, Tape, V};
+use crate::heard::lines::{Carrier, Grid, Read};
+use crate::heard::tape::{Arr, Tape};
 
 pub struct Fit {
     pub reference: Reference,
     pub ear: Arc<Ear>,
     pub threads: NonZeroUsize,
+    pub grid: Grid,
+    /// The text of every file the composition's model reads, by path.
+    pub texts: BTreeMap<String, String>,
+    pub renders: Renders,
 }
 
 pub struct Evaluated {
@@ -22,48 +31,103 @@ pub struct Evaluated {
     pub grad: Option<Vec<f64>>,
 }
 
-struct Lined {
-    tape: Tape,
-    leaves: Vec<(V, Slot)>,
-    played: Played,
-    /// Each line's mean power per note segment, `[lines, notes]`.
-    means: Option<V>,
+impl Fit {
+    fn lowered(&self, s: &State, threads: NonZeroUsize) -> Result<Lowered, CliError> {
+        let ms_len = self.ms_len();
+        let spans: Vec<(usize, usize)> = (0..self.reference.peaks.len())
+            .filter(|n| self.reference.rises[*n].is_some())
+            .map(|n| {
+                let (a, b) = self.reference.rise_span(n);
+                (a.min(ms_len), (b + 2).min(ms_len))
+            })
+            .collect();
+        let text = |p: &str| self.texts.get(p).cloned();
+        played::lowered(s, &text, &self.grid, &self.renders, &spans, threads)
+    }
+
+    fn ms_len(&self) -> usize {
+        self.reference.frames * self.ear.hop_ms + 2 * self.ear.hop_ms
+    }
+
+    fn band_of(&self) -> Vec<usize> {
+        sva_samples::measure::heard::bins(self.grid.n, self.grid.sr).0
+    }
 }
 
-fn line(fit: &Fit, s: &State, i: usize) -> Result<Option<Lined>, CliError> {
-    let mut tape = Tape::new();
-    let mut leaves = Vec::new();
-    let root = s.scope(&mut tape, &s.root_slots(), &mut leaves);
-    let own = s.scope(&mut tape, &s.slots(i), &mut leaves);
-    let frames = fit.reference.frames;
-    let Some(played) = power::played(&mut tape, &s.model, &fit.ear, i, &root, &own, frames)? else {
-        return Ok(None);
-    };
-    let notes = fit.reference.peaks.len();
-    let means = match (played.line_power, notes) {
-        (Some(lp), n) if n > 0 => {
-            let (k, f) = (tape.val(lp).r, tape.val(lp).c);
-            let mut entries = Vec::new();
-            for row in 0..k {
-                entries.extend(fit.reference.note_means(row, played.grid.m_lo, f));
-            }
-            Some(tape.linear(
-                Arc::new(Sparse {
-                    r: k,
-                    c: n,
-                    entries,
-                }),
-                lp,
-            ))
+/// Each frame's bins: its lines' windowed samples in one transform, their noise beside.
+fn total(g: &Grid, reads: &[Read]) -> Vec<Vec<C64>> {
+    let mut buf = vec![vec![0.0; g.window]; g.frames];
+    let mut noise = vec![vec![C64::new(0.0, 0.0); g.bins()]; g.frames];
+    for r in reads {
+        for (m, x) in &r.samples {
+            buf[*m].iter_mut().zip(x).for_each(|(b, v)| *b += v);
         }
-        _ => None,
-    };
-    Ok(Some(Lined {
-        tape,
-        leaves,
-        played,
-        means,
-    }))
+        for (m, bins) in &r.noise {
+            noise[*m]
+                .iter_mut()
+                .zip(bins)
+                .for_each(|(b, v)| *b = *b + *v);
+        }
+    }
+    buf.iter()
+        .zip(noise)
+        .map(|(x, n)| {
+            let (mut re, mut im) = (vec![0.0; g.n], vec![0.0; g.n]);
+            re[g.left..g.left + g.window].copy_from_slice(x);
+            sva_samples::fft::fft(&mut re, &mut im);
+            (0..g.bins())
+                .map(|j| C64::new(re[j], im[j]) + n[j])
+                .collect()
+        })
+        .collect()
+}
+
+/// Each frame's `dL/dx_k` from its bins' `gamma`: `w_k Re(sum_j gamma_j e^{2 pi i j (left + k)/n})`.
+fn samples_back(g: &Grid, gamma: &dyn Fn(usize, usize) -> C64) -> Vec<Vec<f64>> {
+    let w = sva_samples::measure::heard::hann_periodic(g.window);
+    (0..g.frames)
+        .map(|m| {
+            let (mut re, mut im) = (vec![0.0; g.n], vec![0.0; g.n]);
+            for j in 0..g.bins() {
+                let y = gamma(m, j);
+                re[j] = y.re;
+                im[j] = -y.im;
+            }
+            sva_samples::fft::fft(&mut re, &mut im);
+            (0..g.window).map(|k| w[k] * re[g.left + k]).collect()
+        })
+        .collect()
+}
+
+fn band_power(g: &Grid, band: &[usize], x: &[Vec<C64>]) -> Vec<f64> {
+    let scale = g.scale();
+    let mut p = vec![0.0; BANDS * g.frames];
+    for (m, bins) in x.iter().enumerate() {
+        for (j, v) in bins.iter().enumerate() {
+            p[band[j] * g.frames + m] += v.norm_sqr() * scale;
+        }
+    }
+    p
+}
+
+/// Each coordinate's share of a local gradient, through its played value's slope.
+fn landed(s: &State, slots: &[Slot], local: &[(u32, f64)], out: &mut [f64]) {
+    let root = s.root_slots();
+    for (k, d) in local {
+        let slot = match *k >= ROOT_SEED {
+            true => root[(*k - ROOT_SEED) as usize].1,
+            false => slots[*k as usize],
+        };
+        let g = d * played::slope(s, slot);
+        match slot {
+            Slot::Fused { centre, dev } => {
+                out[centre] += g;
+                out[dev] += g;
+            }
+            Slot::Own(o) => out[o] += g,
+            Slot::Fixed(_) => {}
+        }
+    }
 }
 
 pub fn evaluate(
@@ -72,46 +136,51 @@ pub fn evaluate(
     grad: bool,
     threads: NonZeroUsize,
 ) -> Result<Evaluated, CliError> {
-    let lines: Vec<usize> = (0..s.model.lines.len()).collect();
-    let lined = sva_engine::each(threads, lines, |i| line(fit, s, i));
-    let lined: Vec<Lined> = lined
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+    let g = fit.grid;
     let r = &fit.reference;
-    let m = r.frames;
-    let ms_len = m * fit.ear.hop_ms + 2 * fit.ear.hop_ms;
+    let low = fit.lowered(s, threads)?;
+    let tasks: Vec<usize> = (0..low.lines.len()).collect();
+    let reads = sva_engine::each(threads, tasks, |i| low.lines[i].line.bins(&g, &low.master));
+    let x = total(&g, &reads);
+    let band = fit.band_of();
     let notes = r.peaks.len();
-    let mut power = vec![0.0; 48 * m];
-    let mut ms = vec![0.0; ms_len];
     let mut hz = Vec::new();
     let mut means = Vec::new();
-    let mut rows = Vec::with_capacity(lined.len());
-    for l in &lined {
-        let p = l.tape.val(l.played.power);
-        let g = l.played.grid;
-        for b in 0..48 {
-            for f in 0..g.frames {
-                power[b * m + g.m_lo + f] += p.v[b * p.c + f];
+    let mut rows: Vec<Vec<Option<usize>>> = Vec::new();
+    for (l, read) in reads.iter().enumerate() {
+        let mut own = Vec::new();
+        for (k, (f, per)) in read.tones.iter().enumerate() {
+            let tone = matches!(low.lines[l].line.terms[k].carrier, Carrier::Tone { .. });
+            if !tone || per.is_empty() || notes == 0 {
+                own.push(None);
+                continue;
             }
-        }
-        let pm = l.tape.val(l.played.power_ms);
-        for j in 0..g.ms {
-            let at = g.g0 + j as i64;
-            if at >= 0 && (at as usize) < ms_len {
-                ms[at as usize] += pm.v[j];
+            own.push(Some(hz.len()));
+            hz.push(*f);
+            let mut row = vec![0.0; notes];
+            for (n, seg) in r.notes().enumerate() {
+                let w = 1.0 / (seg.m1 - seg.m0) as f64;
+                row[n] = per
+                    .iter()
+                    .filter(|(m, _)| *m >= seg.m0 && *m < seg.m1)
+                    .map(|(_, p)| p * w)
+                    .sum();
             }
+            means.extend(row);
         }
-        rows.push(hz.len());
-        if let Some(mv) = l.means {
-            hz.extend_from_slice(&l.played.line_hz);
-            means.extend_from_slice(&l.tape.val(mv).v);
+        rows.push(own);
+    }
+    let ms_len = fit.ms_len();
+    let mut ms = vec![0.0; ms_len];
+    for l in &low.lines {
+        for (j, p) in l.line.ms_power() {
+            if j < ms_len {
+                ms[j] += p;
+            }
         }
     }
     let mut tape = Tape::new();
-    let pw = tape.leaf(Arr::new(48, m, power), grad);
+    let pw = tape.leaf(Arr::new(BANDS, g.frames, band_power(&g, &band, &x)), grad);
     let lp = (!hz.is_empty()).then(|| tape.leaf(Arr::new(hz.len(), notes, means), grad));
     let pms = tape.leaf(Arr::row(ms), grad);
     let rises = (0..notes)
@@ -136,52 +205,40 @@ pub fn evaluate(
         });
     }
     let one = Arr::scalar(1.0);
-    let g = tape.backward(&[(d.total, &one)]);
+    let back = tape.backward(&[(d.total, &one)]);
     let zeros = |a: &Arr| Arr::zeros(a.r, a.c);
-    let gp = g.of(pw).cloned().unwrap_or_else(|| zeros(tape.val(pw)));
-    let gm = g.of(pms).cloned().unwrap_or_else(|| zeros(tape.val(pms)));
-    let gl = lp.map(|lp| g.of(lp).cloned().unwrap_or_else(|| zeros(tape.val(lp))));
-    let tasks: Vec<(Lined, usize)> = lined.into_iter().zip(rows).collect();
-    let parts = sva_engine::each(threads, tasks, |(l, row)| {
-        let gr = l.played.grid;
-        let mut seed_p = Arr::zeros(48, gr.frames);
-        for b in 0..48 {
-            for f in 0..gr.frames {
-                seed_p.v[b * gr.frames + f] = gp.v[b * m + gr.m_lo + f];
-            }
-        }
-        let mut seed_m = Arr::zeros(1, gr.ms);
-        for j in 0..gr.ms {
-            let at = gr.g0 + j as i64;
-            if at >= 0 && (at as usize) < gm.c {
-                seed_m.v[j] = gm.v[at as usize];
-            }
-        }
-        let mut seeds = vec![(l.played.power, &seed_p), (l.played.power_ms, &seed_m)];
-        let seed_l;
-        if let (Some(mv), Some(gl)) = (l.means, gl.as_ref()) {
-            let k = l.tape.val(mv).r;
-            seed_l = Arr::new(k, notes, gl.v[row * notes..(row + k) * notes].to_vec());
-            seeds.push((mv, &seed_l));
-        }
-        let grads = l.tape.backward(&seeds);
-        l.leaves
-            .iter()
-            .map(|(leaf, slot)| (*slot, grads.scalar(*leaf)))
-            .collect::<Vec<_>>()
+    let gp = back.of(pw).cloned().unwrap_or_else(|| zeros(tape.val(pw)));
+    let gm = back
+        .of(pms)
+        .cloned()
+        .unwrap_or_else(|| zeros(tape.val(pms)));
+    let gl = lp.map(|lp| back.of(lp).cloned().unwrap_or_else(|| zeros(tape.val(lp))));
+    let scale = g.scale();
+    let segs: Vec<(usize, usize)> = r.notes().map(|s| (s.m0, s.m1)).collect();
+    let gamma = |m: usize, j: usize| x[m][j].scale(2.0 * scale * gp.v[band[j] * g.frames + m]);
+    let xbar = samples_back(&g, &gamma);
+    let tasks: Vec<usize> = (0..low.lines.len()).collect();
+    let parts = sva_engine::each(threads, tasks, |l| {
+        let own = |k: usize, m: usize| -> f64 {
+            let (Some(gl), Some(row)) = (gl.as_ref(), rows[l][k]) else {
+                return 0.0;
+            };
+            segs.iter()
+                .enumerate()
+                .filter(|(_, (m0, m1))| m >= *m0 && m < *m1)
+                .map(|(n, (m0, m1))| gl.v[row * notes + n] / (m1 - m0) as f64)
+                .sum()
+        };
+        let ms_adj = |j: usize| gm.v.get(j).copied().unwrap_or(0.0);
+        let mut local = Vec::new();
+        low.lines[l]
+            .line
+            .back(&g, &low.master, &xbar, &gamma, &own, &ms_adj, &mut local);
+        local
     });
     let mut out = vec![0.0; s.x.len()];
-    for part in parts {
-        for (slot, g) in part {
-            match slot {
-                Slot::Fused { centre, dev } => {
-                    out[centre] += g;
-                    out[dev] += g;
-                }
-                Slot::Own(o) => out[o] += g,
-                Slot::Fixed(_) => {}
-            }
-        }
+    for (l, local) in parts.iter().enumerate() {
+        landed(s, &low.lines[l].slots, local, &mut out);
     }
     Ok(Evaluated {
         distance: value,
@@ -192,25 +249,25 @@ pub fn evaluate(
 
 /// Each line's least-squares power against the reference, at its gain 1: a gain's own scale.
 pub fn scales(fit: &Fit, s: &State) -> Result<Vec<f64>, CliError> {
+    let mut unit = s.clone();
+    for root in s.root.iter().flatten() {
+        unit.x[*root] = 1.0;
+    }
+    let g = fit.grid;
+    let low = fit.lowered(&unit, fit.threads)?;
+    let band = fit.band_of();
     let mut out = vec![0.0; s.x.len()];
-    let r = &fit.reference;
     for (i, root) in s.root.iter().enumerate() {
         let Some(root) = root else {
             continue;
         };
-        let mut unit = s.clone();
-        unit.x[*root] = 1.0;
-        let Some(l) = line(fit, &unit, i)? else {
-            continue;
-        };
-        let p = l.tape.val(l.played.power);
-        let g = l.played.grid;
+        let read = low.lines[i].line.bins(&g, &low.master);
+        let p = band_power(&g, &band, &total(&g, std::slice::from_ref(&read)));
         let (mut num, mut den) = (0.0, 0.0);
-        for b in 0..48 {
-            for f in 0..g.frames {
-                let e1 = p.v[b * p.c + f];
-                let reference = r.power(b, g.m_lo + f);
-                num += reference * e1;
+        for b in 0..BANDS {
+            for m in 0..g.frames {
+                let e1 = p[b * g.frames + m];
+                num += fit.reference.power(b, m) * e1;
                 den += e1 * e1;
             }
         }

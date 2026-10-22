@@ -2,13 +2,9 @@
 
 use std::collections::BTreeMap;
 
+use super::model::Model;
 use crate::cli_error::CliError;
-use crate::heard::power::Model;
-use crate::heard::tape::{Arr, Tape, V};
 use crate::solve::Vary;
-
-/// A silent gain still plays at this power, -300 dB, so its gradient reaches it.
-const SILENT_POWER: f64 = 1e-30;
 
 #[derive(Clone, Debug)]
 pub struct Var {
@@ -388,42 +384,6 @@ impl State {
                 )
             }
         }
-    }
-
-    /// A scope on `tape`: each name a leaf where it varies, gradients reaching `leaves`.
-    pub fn scope(
-        &self,
-        tape: &mut Tape,
-        slots: &[(String, Slot)],
-        leaves: &mut Vec<(V, Slot)>,
-    ) -> BTreeMap<String, V> {
-        let mut scope = BTreeMap::new();
-        for (name, slot) in slots {
-            let v = match slot {
-                Slot::Fixed(v) => tape.num(*v),
-                Slot::Own(o) if self.is_root(*slot) => {
-                    let (lo, hi) = self.bounds(*o);
-                    let leaf = tape.leaf(Arr::scalar(self.x[*o]), true);
-                    leaves.push((leaf, *slot));
-                    let held = tape.clamp(leaf, lo, hi);
-                    let lifted = tape.offset(held, SILENT_POWER);
-                    tape.sqrt(lifted)
-                }
-                _ => {
-                    let var = self.var_of_slot(*slot).expect("a varied slot");
-                    let c = self.coord_of(*slot).expect("a coordinate");
-                    let leaf = tape.leaf(Arr::scalar(c), true);
-                    leaves.push((leaf, *slot));
-                    let held = tape.clamp(leaf, var.lo, var.hi);
-                    match var.log {
-                        true => tape.exp(held),
-                        false => held,
-                    }
-                }
-            };
-            scope.insert(name.clone(), v);
-        }
-        scope
     }
 
     /// A new node of `node`'s kind at its centres, and each new coordinate beside the one it

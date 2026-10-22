@@ -175,7 +175,6 @@ struct Options {
     progress: Option<js_sys::Function>,
     prox: bool,
     path: Option<Vec<f64>>,
-    close: Option<f64>,
     steps: Option<usize>,
     write: bool,
 }
@@ -278,11 +277,6 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                         "pass the prices per number, as [0.003, 0.01, 0.1]",
                     )
                 })?);
-            }
-            "close" => {
-                let jnd = value.as_f64().filter(|v| v.is_finite() && *v > 0.0);
-                held.close =
-                    Some(jnd.ok_or_else(|| refuse("`close` is no JND above 0".into(), "pass 3"))?);
             }
             "steps" => held.steps = Some(whole(&key, &value)?),
             "write" => {
@@ -577,7 +571,6 @@ impl Composition {
             "progress",
             "method",
             "path",
-            "close",
             "steps",
             "write",
         ];
@@ -644,9 +637,6 @@ impl Composition {
         use sva_core::solve::prox::{Progress, fitted_data, progress_json, run};
         let priced = run::Priced {
             path: options.path.clone(),
-            close: options
-                .close
-                .unwrap_or(sva_core::solve::prox::DEFAULT_CLOSE),
             steps: options
                 .steps
                 .unwrap_or(sva_core::solve::prox::DEFAULT_STEPS),

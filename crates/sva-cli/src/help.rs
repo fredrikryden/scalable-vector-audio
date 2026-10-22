@@ -29,12 +29,11 @@ pub fn help_text() -> String {
         solve::DEFAULT_STEP_TOL,
         solve::DEFAULT_COST_TOL,
     );
-    let (steps, close) = (solve::prox::DEFAULT_STEPS, solve::prox::DEFAULT_CLOSE);
+    let (steps, rate) = (solve::prox::DEFAULT_STEPS, solve::prox::BITS_PER_JND2);
     let (harmonics, lone) = (
         sva_core::seed::LIMITS.harmonics,
         sva_core::seed::LIMITS.lone,
     );
-    let lowered = sva_core::heard::power::LOWERED;
     let (passband, stopband) = (resample::PASSBAND, resample::STOPBAND);
     let bound = format!("{} dB", 20.0 * libm::log10(resample::BOUND));
     let formats = crate::recording::READS
@@ -381,7 +380,7 @@ SOLVE:
                 [--max-renders <n>] [--step-tol <x>] [--cost-tol <x>]
                 [--set <name>=<text>]... [--rate <hz>] [--threads <n>]
                 [--cache <path|none>] [--write [--confirm]]
-                [--method prox [--path <p>,<p>...] [--close <jnd>] [--steps <n>]]
+                [--method prox [--path <p>,<p>...] [--steps <n>]]
 
   Fits variables under `variables/` so the targets a cost reads match a
   reference, and prints the values it found. It edits no file unless `--write
@@ -598,10 +597,14 @@ PRICED FIT:
     sum(repr.heard(@<model>) - repr.heard(<reference>))
       + <price>*repr.numbers(@<model>)
   `heard`'s distance (READINGS, its rule above) plus `<price>` JND on each bit
-  `numbers` (READINGS) counts. The model side is not rendered: it is the
-  composition's expected power per band and frame, read off its closed forms
-  line by line, every number's gradient one reverse sweep; the lowering reads
-  {lowered}, and refuses anything else by name.
+  `numbers` (READINGS) counts. The model side is the render's own: each score
+  line lowered as a render lowers it, every number beside its tangent, split
+  into its partials (an amplitude times the cosine of a phase) and read at
+  each frame's middle, its short-time transform in closed form there (the
+  window cut at the line's crop and mirrored at the clip's ends, the master's
+  biquads as H(f)); a node's filtered noise is its rendered realisation under
+  H(f). Each partial is exact where its amplitude and frequency hold over the
+  20 ms window; a form with no partial in it refuses by name.
   Each number written costs its `--vary`'s bits, log2((hi-lo)/step), or of
   ln(hi/lo)/ln(step) where log; one no `--vary` names costs none. Written are:
   each score line's onset and each field its node has no default for, the line
@@ -622,9 +625,10 @@ PRICED FIT:
   debias holding every zero. `--steps` scales every phase. Each point is
   then rendered and read as `heard`. The answer's `data`: `path`, one point a
   price with its `numbers` and their `bits`, `heard` (off its render) and `predicted` (the
-  expected-power distance the descent lowered); `chosen`, the smallest point
-  (fewest bits) whose every heard axis is within `--close` JND (default {close}), else the
-  closest; and `files`, the chosen point's text. `--write --confirm` writes the
+  distance the descent lowered, its `error` the heard distance less it), its `residual_bits` (each heard axis of each
+  segment a cell coded as a Gaussian of one JND, {rate:.4} bits per JND squared)
+  and `length_bits`, the two summed; `chosen`, the point of least length; and
+  `files`, the chosen point's text. `--write --confirm` writes the
   chosen point in place: defaults in their node files, score lines without their
   silent ones or the fields their node's default restates. Each step prints a JSON line
   on stderr. `sva-cli new <name> --from <clip>` writes a starter to fit.
@@ -798,8 +802,6 @@ DEFAULTS:
   --cost-tol <x>       the cost at or under which a solve stops. Default {cost_tol}.
   --method <m>         `compass` (default) or `prox`, the priced fit.
   --path <p>,...       the prices per number a priced fit visits, in turn.
-  --close <jnd>        the largest axis a priced fit's choice may hold. Default
-                       {close}.
   --steps <n>          a priced fit's steps per price. Default {steps}.
   --write              a solve writes its fitted values to their `variables/`
                        files, with `--confirm`. Default off.

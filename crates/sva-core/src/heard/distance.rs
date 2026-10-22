@@ -73,7 +73,8 @@ pub struct Axes {
 }
 
 impl Axes {
-    pub fn largest(&self) -> f64 {
+    /// Each axis it holds, in JND.
+    pub fn cells(&self) -> impl Iterator<Item = f64> {
         [
             Some(self.balance),
             Some(self.sharpness),
@@ -84,7 +85,10 @@ impl Axes {
         ]
         .into_iter()
         .flatten()
-        .fold(0.0, f64::max)
+    }
+
+    pub fn largest(&self) -> f64 {
+        self.cells().fold(0.0, f64::max)
     }
 }
 

@@ -111,7 +111,7 @@ fn filtered_noise_renders_the_pinned_bits_on_four_threads() {
 
 /// A priced fit of a clip rendered here, seeded and solved as `new --from` and `solve
 /// --method prox` do: `<FNV-1a of each point's distance bits> <of the chosen files' bytes>`.
-const PRICED: &str = "bc19e29d58d8940c 5edc00850f3f3937";
+const PRICED: &str = "c4e1f8d9f72a3a62 61c1e066f4c2c818";
 
 fn priced(threads: usize) -> String {
     let clip_nodes: sva_ast::Composition = [(
@@ -191,7 +191,6 @@ fn priced(threads: usize) -> String {
     };
     let priced = sva_core::solve::prox::run::Priced {
         path: Some(vec![0.004, 0.04]),
-        close: 3.0,
         steps: 12,
     };
     let tier = Tier::default();

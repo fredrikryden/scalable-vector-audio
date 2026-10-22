@@ -211,7 +211,7 @@ fn seeded(from: &Path, limits: sva_core::seed::Limits) -> Result<Tree, CliError>
             .join(","),
         varies.join(" ")
     );
-    let why = "shrinks the starter to the smallest model its path holds within 3 JND of the clip, \
+    let why = "shrinks the starter to the point of least description length its path holds, \
                the price per number along `--path`, and writes it in place";
     Ok(Tree {
         files,

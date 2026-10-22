@@ -1,6 +1,8 @@
 // Concern: the priced path: an unpriced start, each price's proximal descent, the merges the cost keeps, a debias | Non-concern: one step, one evaluation | IO: (Fit, State, prices) -> Points
 
 pub mod eval;
+pub mod model;
+pub mod played;
 pub mod price;
 pub mod run;
 pub mod state;
@@ -19,7 +21,9 @@ use step::{Adam, Priced, step, zeros};
 
 pub const DEFAULT_STEPS: usize = 600;
 pub const DEFAULT_PATH: [f64; 5] = [0.0004, 0.0012, 0.004, 0.012, 0.04];
-pub const DEFAULT_CLOSE: f64 = 3.0;
+/// The exchange rate of a reading's residual into bits: each axis of each segment a cell coded
+/// as a Gaussian of one JND's spread, `e^2/2` nats.
+pub const BITS_PER_JND2: f64 = 0.5 * std::f64::consts::LOG2_E;
 const START_STEPS: f64 = 500.0 / 600.0;
 const SETTLE_STEPS: f64 = 200.0 / 600.0;
 const TRIAL_STEPS: f64 = 80.0 / 600.0;
@@ -31,7 +35,7 @@ pub struct Point {
     pub lambda: f64,
     pub numbers: usize,
     pub bits: f64,
-    /// The distance of the composition's expected power, which the descent lowers.
+    /// The distance the descent lowers: the reading of the render's own lowered lines.
     pub predicted: f64,
     pub predicted_axes: Vec<Axes>,
     /// The distance read off its render, as the cost's leaf reads a render.
@@ -55,25 +59,32 @@ impl Point {
         self.predicted + self.lambda * self.bits
     }
 
-    /// The largest axis its render is heard at, or its expected power where none is.
-    pub fn largest(&self) -> f64 {
-        largest(
-            self.heard
-                .as_ref()
-                .map_or(&self.predicted_axes, |h| &h.axes),
-        )
+    fn axes(&self) -> &[Axes] {
+        self.heard
+            .as_ref()
+            .map_or(&self.predicted_axes, |h| &h.axes)
+    }
+
+    /// The bits its reading's residual codes in, its render's where it was rendered.
+    pub fn residual_bits(&self) -> f64 {
+        BITS_PER_JND2
+            * self
+                .axes()
+                .iter()
+                .flat_map(Axes::cells)
+                .map(|e| e * e)
+                .sum::<f64>()
+    }
+
+    /// Its description length: the residual's bits and the numbers' bits.
+    pub fn length(&self) -> f64 {
+        self.residual_bits() + self.bits
     }
 }
 
-/// The point the path keeps: its smallest model heard within `close` JND on every axis,
-/// else its closest.
-pub fn chosen(points: &[Point], close: f64) -> Option<usize> {
-    let within = (0..points.len())
-        .filter(|i| points[*i].largest() <= close)
-        .min_by(|a, b| points[*a].bits.total_cmp(&points[*b].bits));
-    within.or_else(|| {
-        (0..points.len()).min_by(|a, b| points[*a].largest().total_cmp(&points[*b].largest()))
-    })
+/// The point the path keeps: its least description length.
+pub fn chosen(points: &[Point]) -> Option<usize> {
+    (0..points.len()).min_by(|a, b| points[*a].length().total_cmp(&points[*b].length()))
 }
 
 /// One line of progress: the phase, the lambda, the step and what the state costs there.
@@ -483,12 +494,18 @@ fn point_json(p: &Point) -> String {
         )
     });
     format!(
-        "{{ \"price\": {}, \"numbers\": {}, \"bits\": {}, \"heard\": {heard}, \"predicted\": {{ \"distance\": {}, \
+        "{{ \"price\": {}, \"numbers\": {}, \"bits\": {}, \"residual_bits\": {}, \"length_bits\": {}, \
+         \"heard\": {heard}, \"predicted\": {{ \"distance\": {}, \"error\": {}, \
          \"objective\": {}, \"largest_jnd\": {}, \"axes\": {} }} }}",
         num(p.lambda),
         p.numbers,
         num(p.bits),
+        num(p.residual_bits()),
+        num(p.length()),
         num(p.predicted),
+        p.heard
+            .as_ref()
+            .map_or("null".to_string(), |h| num(h.distance - p.predicted)),
         num(p.objective()),
         num(largest(&p.predicted_axes)),
         list(&p.predicted_axes, axes_json)
@@ -517,12 +534,12 @@ pub fn fitted_data(f: &run::Fitted, priced: &run::Priced, cost: &str, extra: &st
         .map_or("null".to_string(), |c| point_json(&f.points[c]));
     format!(
         "{{\"method\": \"prox\", \"cost_expression\": \"{}\", \"model\": \"{}\", \"reference\": \
-         \"{}\", \"close_jnd\": {}, \"steps\": {}, \"stopped_by\": \"{}\", \"chosen\": {chosen}, \
+         \"{}\", \"bits_per_jnd2\": {}, \"steps\": {}, \"stopped_by\": \"{}\", \"chosen\": {chosen}, \
          \"files\": {}{extra}, \"path\": {}}}",
         escape(cost),
         escape(&f.model),
         escape(&f.reference),
-        num(priced.close),
+        num(BITS_PER_JND2),
         priced.steps,
         if f.cancelled {
             "cancelled"

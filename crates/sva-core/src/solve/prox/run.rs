@@ -4,12 +4,14 @@ use sva_ast::Source;
 use sva_engine::{Abandon, Backend, Output, Session, Tier};
 
 use super::eval::Fit;
+use super::model::Model;
+use super::played::Renders;
 use super::state::{State, Var};
-use super::{DEFAULT_CLOSE, DEFAULT_STEPS, Measured, Point, Progress, chosen, path, write};
+use super::{DEFAULT_STEPS, Measured, Point, Progress, chosen, path, write};
 use crate::cli_error::CliError;
 use crate::heard::distance::{Reference, distance, measured};
 use crate::heard::ear::ear;
-use crate::heard::power::Model;
+use crate::heard::lines::Grid;
 use crate::heard::tape::Tape;
 use crate::query::{asked, call};
 use crate::solve::cost::{Node, Op};
@@ -21,7 +23,6 @@ use crate::{Job, execute_over, overlaid};
 pub struct Priced {
     /// The prices per number the path visits; `None` takes the cost's own.
     pub path: Option<Vec<f64>>,
-    pub close: f64,
     pub steps: usize,
 }
 
@@ -29,7 +30,6 @@ impl Default for Priced {
     fn default() -> Priced {
         Priced {
             path: None,
-            close: DEFAULT_CLOSE,
             steps: DEFAULT_STEPS,
         }
     }
@@ -186,10 +186,25 @@ pub async fn fitted<B: Backend>(
     let model = Model::of(&graph, &root)?;
     let state = State::of(&model, &vars)?;
     let threads = problem.threads.unwrap_or_else(sva_engine::default_threads);
+    let reference = Reference::of(&clip, ear(clip.rate));
+    let mut texts = std::collections::BTreeMap::new();
+    let paths = model
+        .nodes
+        .keys()
+        .cloned()
+        .chain(model.score.iter().map(|s| format!("{s}.jsonl")));
+    for p in paths {
+        if let Some(t) = source.get(&p).ok().flatten() {
+            texts.insert(p, t.into_owned());
+        }
+    }
     let fit = Fit {
-        reference: Reference::of(&clip, ear(clip.rate)),
+        grid: Grid::of(clip.rate, reference.frames, frames),
+        reference,
         ear: ear(clip.rate),
         threads,
+        texts,
+        renders: Renders::default(),
     };
     let lambdas = priced.path.clone().unwrap_or_else(|| vec![lambda]);
     let steps = priced.steps;
@@ -208,7 +223,7 @@ pub async fn fitted<B: Backend>(
             axes: d.axes,
         });
     }
-    let chosen = chosen(&points, priced.close);
+    let chosen = chosen(&points);
     let files = match chosen {
         Some(c) => write::files(&points[c].state, &text)?,
         None => Vec::new(),

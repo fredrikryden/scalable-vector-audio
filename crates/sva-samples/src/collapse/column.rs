@@ -141,6 +141,10 @@ impl<N: Kernel> Program<N> {
         }
     }
 
+    pub(crate) fn root_count(&self) -> usize {
+        self.roots.len()
+    }
+
     /// The program's values at `lanes` instants; `Columns::root` evaluates on demand.
     pub(crate) fn columns(&self, lanes: usize) -> Columns<'_, N> {
         Columns {
