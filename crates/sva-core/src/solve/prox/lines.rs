@@ -15,8 +15,19 @@ use sva_samples::measure::internal::Grid;
 /// A frame reads its line a quarter window either side of its middle.
 pub const SPREAD_SECS: f64 = 0.005;
 
-fn hann(n: usize) -> Vec<f64> {
-    sva_samples::measure::internal::hann(n)
+/// A frame's window and the transform's twiddles, built once a line.
+struct Transform {
+    w: Vec<f64>,
+    twiddles: Vec<(f64, f64)>,
+}
+
+impl Transform {
+    fn of(g: &Grid) -> Transform {
+        Transform {
+            w: sva_samples::measure::internal::hann(g.window),
+            twiddles: sva_samples::fft::twiddles(g.n),
+        }
+    }
 }
 
 /// A sum of products of leaves.
@@ -372,11 +383,25 @@ impl Line {
         }
     }
 
+    /// Its noise filters' and the master's gain at each bin.
+    fn noise_gains(&self, g: &Grid, master: &[Filter]) -> Vec<C64> {
+        (0..g.bins())
+            .map(|j| {
+                let hz = j as f64 * g.sr / g.n as f64;
+                gain(&self.noise_filters, hz, g.sr) * gain(master, hz, g.sr)
+            })
+            .collect()
+    }
+
     /// Each frame it sounds in, and its bins there.
     pub fn bins(&self, g: &Grid, master: &[Filter]) -> Vec<Bins> {
-        let w = hann(g.window);
-        let twiddles = sva_samples::fft::twiddles(g.n);
+        let tr = Transform::of(g);
+        let w = &tr.w;
         let (lo, hi) = span(self, g);
+        let shaped = match self.noise.is_empty() {
+            true => Vec::new(),
+            false => self.noise_gains(g, master),
+        };
         let mut out = Vec::with_capacity(self.frames.len());
         for (m, i0) in &self.frames {
             let tstar = self.instants[i0 + 1];
@@ -392,7 +417,7 @@ impl Line {
                     im[g.left + i] += a * s;
                 });
             }
-            sva_samples::fft::fft_with(&mut re, &mut im, &twiddles);
+            sva_samples::fft::fft_with(&mut re, &mut im, &tr.twiddles);
             let z = |j: usize| C64::new(re[j % g.n], im[j % g.n]);
             let half = C64::new(0.5, 0.0);
             let cos: Vec<C64> = (0..g.bins())
@@ -404,7 +429,7 @@ impl Line {
             let mut noise = Vec::with_capacity(self.noise.len());
             for n in &self.noise {
                 let mut bins = vec![C64::new(0.0, 0.0); g.bins()];
-                let spec = noise_frame(n, g, *m, lo, hi);
+                let spec = noise_frame(n, g, &tr, *m, lo, hi);
                 for term in self
                     .terms
                     .iter()
@@ -412,9 +437,7 @@ impl Line {
                 {
                     let e = self.amp(term, i0 + 1) * self.shoulder(tstar);
                     for (j, x) in spec.iter().enumerate() {
-                        let hz = j as f64 * g.sr / g.n as f64;
-                        let h = gain(&self.noise_filters, hz, g.sr) * gain(master, hz, g.sr);
-                        bins[j] = bins[j] + (*x * h).scale(e);
+                        bins[j] = bins[j] + (*x * shaped[j]).scale(e);
                     }
                 }
                 noise.push(bins);
@@ -433,7 +456,7 @@ impl Line {
     /// tones' cosine and quadrature parts and of its noise.
     pub fn back(&self, g: &Grid, master: &[Filter], adj: &Adjoint, out: &mut Vec<(u32, f64)>) {
         let gamma = adj.noise;
-        let w = hann(g.window);
+        let tr = Transform::of(g);
         let mut leaf_adj: Vec<Vec<f64>> = self.leaves.iter().map(|v| vec![0.0; v.len()]).collect();
         let add_leaf = |l: usize, i: usize, x: f64, adj: &mut Vec<Vec<f64>>| {
             let slot = match adj[l].len() {
@@ -448,8 +471,8 @@ impl Line {
         let (lo, hi) = span(self, g);
         for (m, i0) in &self.frames {
             let tstar = self.instants[i0 + 1];
-            let xc = samples_back(g, &w, *m, adj.cos);
-            let xs = samples_back(g, &w, *m, adj.quad);
+            let xc = samples_back(g, &tr, *m, adj.cos);
+            let xs = samples_back(g, &tr, *m, adj.quad);
             for term in &self.terms {
                 let Some(t) = self.tone(term, *i0, master, g.sr) else {
                     continue;
@@ -529,12 +552,27 @@ impl Line {
                 }
             }
         }
+        let chains: Vec<_> = match self.noise.is_empty() {
+            true => Vec::new(),
+            false => (0..g.bins())
+                .map(|j| {
+                    let hz = j as f64 * g.sr / g.n as f64;
+                    let (h, _, dcut) = chain(&self.noise_filters, hz, g.sr);
+                    let (hm, _, dmcut) = chain(master, hz, g.sr);
+                    (h, dcut, hm, dmcut)
+                })
+                .collect(),
+        };
+        let shaped = match self.noise.is_empty() {
+            true => Vec::new(),
+            false => self.noise_gains(g, master),
+        };
         for (r, n) in self.noise.iter().enumerate() {
             let gamma = &|m: usize, j: usize| gamma(r, m, j);
             for (m, i0) in &self.frames {
                 let tstar = self.instants[i0 + 1];
                 let sh = self.shoulder(tstar);
-                let spec = noise_frame(n, g, *m, lo, hi);
+                let spec = noise_frame(n, g, &tr, *m, lo, hi);
                 let sh_dt = {
                     let [(_, dl), (_, dr), ..] = self.shoulder_slopes(tstar);
                     -(dl + dr)
@@ -549,16 +587,15 @@ impl Line {
                     let e_dt = (self.amp(term, i0 + 2) - self.amp(term, *i0)) / (2.0 * SPREAD_SECS);
                     let mut d_e = 0.0;
                     for (j, x) in spec.iter().enumerate() {
-                        let hz = j as f64 * g.sr / g.n as f64;
-                        let (h, _, dcut) = chain(&self.noise_filters, hz, g.sr);
-                        let (hm, _, dmcut) = chain(master, hz, g.sr);
+                        let (h, dcut, hm, dmcut) = &chains[j];
+                        let (h, hm) = (*h, *hm);
                         let cg = gamma(*m, j).conj();
                         d_e += (cg * *x * h * hm).re;
                         for (s, d) in dcut {
-                            cut_adj.push((s, (cg * *x * d * hm).re * e * sh));
+                            cut_adj.push((*s, (cg * *x * *d * hm).re * e * sh));
                         }
                         for (s, d) in dmcut {
-                            cut_adj.push((s, (cg * *x * h * d).re * e * sh));
+                            cut_adj.push((*s, (cg * *x * h * *d).re * e * sh));
                         }
                     }
                     term.amp
@@ -571,7 +608,7 @@ impl Line {
                 let (dl, dr) = centre_slopes(g, *m, lo, hi);
                 l_adj += d_t * dl;
                 r_adj += d_t * dr;
-                let (l, r) = self.noise_edges(g, &w, master, n, (*m, *i0), (lo, hi), gamma);
+                let (l, r) = self.noise_edges(g, &tr, &shaped, n, (*m, *i0), (lo, hi), gamma);
                 l_adj += l;
                 r_adj += r;
             }
@@ -607,8 +644,8 @@ impl Line {
     fn noise_edges(
         &self,
         g: &Grid,
-        w: &[f64],
-        master: &[Filter],
+        tr: &Transform,
+        shaped: &[C64],
         noise: &[f64],
         (m, i0): (usize, usize),
         (lo, hi): (f64, f64),
@@ -627,13 +664,8 @@ impl Line {
             .map(|t| self.amp(t, i0 + 1))
             .sum::<f64>()
             * self.shoulder(self.instants[i0 + 1]);
-        let gains: Vec<C64> = (0..g.bins())
-            .map(|j| {
-                let hz = j as f64 * g.sr / g.n as f64;
-                (gain(&self.noise_filters, hz, g.sr) * gain(master, hz, g.sr)).scale(e)
-            })
-            .collect();
-        let xb = samples_back(g, w, m, &|mm, j| gains[j].conj() * gamma(mm, j));
+        let gains: Vec<C64> = shaped.iter().map(|h| h.scale(e)).collect();
+        let xb = samples_back(g, tr, m, &|mm, j| gains[j].conj() * gamma(mm, j));
         let read = |k: usize| noise.get(s0 as usize + k).copied().unwrap_or(0.0);
         let mut out = (0.0, 0.0);
         if lo > s0 && lo < end {
@@ -678,30 +710,34 @@ impl Line {
 
 /// Frame `m`'s `dL/dx_k` from its bins' `gamma`: `w_k Re(sum_j gamma_j e^{2 pi i j (left +
 /// k)/n})`.
-fn samples_back(g: &Grid, w: &[f64], m: usize, gamma: &dyn Fn(usize, usize) -> C64) -> Vec<f64> {
+fn samples_back(
+    g: &Grid,
+    tr: &Transform,
+    m: usize,
+    gamma: &dyn Fn(usize, usize) -> C64,
+) -> Vec<f64> {
     let (mut re, mut im) = (vec![0.0; g.n], vec![0.0; g.n]);
     for j in 0..g.bins() {
         let y = gamma(m, j);
         re[j] = y.re;
         im[j] = -y.im;
     }
-    sva_samples::fft::fft(&mut re, &mut im);
-    (0..g.window).map(|k| w[k] * re[g.left + k]).collect()
+    sva_samples::fft::fft_with(&mut re, &mut im, &tr.twiddles);
+    (0..g.window).map(|k| tr.w[k] * re[g.left + k]).collect()
 }
 
-fn noise_frame(noise: &[f64], g: &Grid, m: usize, lo: f64, hi: f64) -> Vec<C64> {
-    let w = hann(g.window);
+fn noise_frame(noise: &[f64], g: &Grid, tr: &Transform, m: usize, lo: f64, hi: f64) -> Vec<C64> {
     let s0 = g.first(m);
     let mut re = vec![0.0; g.n];
     let mut im = vec![0.0; g.n];
-    for (k, wk) in w.iter().enumerate() {
+    for (k, wk) in tr.w.iter().enumerate() {
         let s = g.mirrored(s0 + k as i64);
         let sf = s as f64;
         if sf >= lo && sf < hi && (s as usize) < noise.len() {
             re[g.left + k] = wk * noise[s as usize];
         }
     }
-    sva_samples::fft::fft(&mut re, &mut im);
+    sva_samples::fft::fft_with(&mut re, &mut im, &tr.twiddles);
     (0..g.bins()).map(|j| C64::new(re[j], im[j])).collect()
 }
 

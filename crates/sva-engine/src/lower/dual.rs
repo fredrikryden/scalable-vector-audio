@@ -4,11 +4,10 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use sva_ast::Graph;
 use sva_formula::{Body, ClosedForm, Cx, Dual, Kernel, Origin, Sparse, Var};
 
 use crate::error::{Diagnostic, EngineError, Located};
-use crate::instantiate::ScopeId;
+use crate::instantiate::{Instances, ScopeId};
 use crate::lower::{Lowering, Piece, SelfMode};
 
 /// A render's `f64` builds every node a value needs; a dual lowers one closed form and
@@ -77,19 +76,16 @@ pub struct Varied<'a> {
     pub tangent: &'a [(u32, f64)],
 }
 
-/// The render's own lowering of `instance`, each number beside its tangent. Inside
-/// [`sva_formula::Tangents::active`].
+/// The render's own lowering of `instance` among `inst`, each number beside its tangent.
+/// Inside [`sva_formula::Tangents::active`].
 pub fn tangents(
-    graph: &Graph,
-    root: &str,
-    rate: u32,
+    inst: &Instances,
     instance: &str,
     varied: &[Varied],
 ) -> Result<ClosedForm<Dual>, EngineError> {
-    let inst = crate::instantiate::instantiate(graph, root, rate)?;
     let path = inst.instance_of(instance)?;
-    let order = crate::schedule::schedule_from(&inst, std::slice::from_ref(&path))?;
-    let mut typing = crate::typing::infer_all(&inst, &order)?;
+    let order = crate::schedule::schedule_from(inst, std::slice::from_ref(&path))?;
+    let mut typing = crate::typing::infer_all(inst, &order)?;
     let mut seeds = Seeds::default();
     for v in varied {
         let held = inst.instance_of(v.instance)?;
@@ -113,10 +109,10 @@ pub fn tangents(
     if inst.reads_self(&path) {
         return Err(refuse("a node reading itself"));
     }
-    let var = super::axis_of(&inst, &typing, expr, cx, &path)?;
+    let var = super::axis_of(inst, &typing, expr, cx, &path)?;
     let node: Arc<str> = Arc::from(path.as_str());
     let mut low = Lowering {
-        inst: &inst,
+        inst,
         typing: &mut typing,
         node,
         indices: Vec::new(),

@@ -476,8 +476,7 @@ pub fn lowered(
             None => Vec::new(),
         };
         let (read, tangents) = Tangents::default().active(|| -> Result<_, CliError> {
-            let form = sva_engine::tangents(&graph, &root, rate, path, &varied)
-                .map_err(CliError::Engine)?;
+            let form = sva_engine::tangents(&inst, path, &varied).map_err(CliError::Engine)?;
             let split = lines::split(&form.body, noise.is_some()).map_err(|why| {
                 refused(format!(
                     "score line {} (`{node}`): {why}",

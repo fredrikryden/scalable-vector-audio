@@ -136,14 +136,18 @@ fn offsets(phased: &[bool], k: usize) -> Vec<(f64, f64)> {
         .collect()
 }
 
-fn landed(s: &State, slots: &[Slot], local: &[(u32, f64)], out: &mut [f64]) {
-    let root = s.root_slots();
+/// A slot, and how far its played value moves a unit of its coordinate.
+fn sloped(s: &State, slots: impl Iterator<Item = Slot>) -> Vec<(Slot, f64)> {
+    slots.map(|slot| (slot, played::slope(s, slot))).collect()
+}
+
+fn landed(root: &[(Slot, f64)], own: &[(Slot, f64)], local: &[(u32, f64)], out: &mut [f64]) {
     for (k, d) in local {
-        let slot = match *k >= ROOT_SEED {
-            true => root[(*k - ROOT_SEED) as usize].1,
-            false => slots[*k as usize],
+        let (slot, slope) = match *k >= ROOT_SEED {
+            true => root[(*k - ROOT_SEED) as usize],
+            false => own[*k as usize],
         };
-        let g = d * played::slope(s, slot);
+        let g = d * slope;
         match slot {
             Slot::Fused { centre, dev } => {
                 out[centre] += g;
@@ -195,23 +199,20 @@ pub fn evaluate(
         fit.ear.backward(f, &unit)
     });
     let (bins, scale) = (g.bins(), g.scale());
-    let mut sums = vec![C64::new(0.0, 0.0); g.frames * bins];
-    let totals: Vec<Vec<C64>> = (0..draws)
-        .map(|k| {
-            sums.iter_mut().for_each(|x| *x = C64::new(0.0, 0.0));
-            for (read, o) in reads.iter().zip(&each[k].0) {
-                for b in read {
-                    for j in 0..bins {
-                        sums[b.m * bins + j] = sums[b.m * bins + j] + at(b, j, *o, k);
-                    }
+    let totals: Vec<Vec<C64>> = sva_engine::each(threads, (0..draws).collect(), |k| {
+        let mut sums = vec![C64::new(0.0, 0.0); g.frames * bins];
+        for (read, o) in reads.iter().zip(&each[k].0) {
+            for b in read {
+                for j in 0..bins {
+                    sums[b.m * bins + j] = sums[b.m * bins + j] + at(b, j, *o, k);
                 }
             }
-            sums.iter()
-                .zip(&dps[k])
-                .map(|(x, d)| x.scale(2.0 * scale * d))
-                .collect()
-        })
-        .collect();
+        }
+        sums.iter()
+            .zip(&dps[k])
+            .map(|(x, d)| x.scale(2.0 * scale * d))
+            .collect()
+    });
     let tasks: Vec<usize> = (0..low.lines.len()).collect();
     let parts = sva_engine::each(threads, tasks, |l| {
         let mut frame = vec![usize::MAX; g.frames];
@@ -245,9 +246,11 @@ pub fn evaluate(
         low.lines[l].line.back(&g, &low.master, &adj, &mut local);
         local
     });
+    let root = sloped(s, s.root_slots().into_iter().map(|(_, slot)| slot));
     let mut out = vec![0.0; s.x.len()];
     for (l, local) in parts.iter().enumerate() {
-        landed(s, &low.lines[l].slots, local, &mut out);
+        let own = sloped(s, low.lines[l].slots.iter().copied());
+        landed(&root, &own, local, &mut out);
     }
     Ok(Evaluated {
         residual: res,
