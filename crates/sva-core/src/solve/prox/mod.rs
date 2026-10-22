@@ -1,6 +1,7 @@
 // Concern: the priced path: an unpriced start, each price's proximal descent, the merges the cost keeps, a debias | Non-concern: one step, one evaluation | IO: (Fit, State, prices) -> Points
 
 pub mod eval;
+pub mod lines;
 pub mod model;
 pub mod played;
 pub mod price;
@@ -14,15 +15,14 @@ use std::num::NonZeroUsize;
 use sva_engine::Abandon;
 
 use crate::cli_error::CliError;
-use crate::heard::distance::Axes;
 use eval::{Fit, evaluate, scales};
 use state::{Slot, State};
 use step::{Adam, Priced, step, zeros};
 
 pub const DEFAULT_STEPS: usize = 600;
 pub const DEFAULT_PATH: [f64; 5] = [0.0004, 0.0012, 0.004, 0.012, 0.04];
-/// The exchange rate of a reading's residual into bits: each axis of each segment a cell coded
-/// as a Gaussian of one JND's spread, `e^2/2` nats.
+/// The exchange rate of a reading's residual into bits: each element a cell coded as a
+/// Gaussian of one JND's spread, `d^2/2` nats.
 pub const BITS_PER_JND2: f64 = 0.5 * std::f64::consts::LOG2_E;
 const START_STEPS: f64 = 500.0 / 600.0;
 const SETTLE_STEPS: f64 = 200.0 / 600.0;
@@ -35,23 +35,12 @@ pub struct Point {
     pub lambda: f64,
     pub numbers: usize,
     pub bits: f64,
-    /// The distance the descent lowers: the reading of the render's own lowered lines.
+    /// The d' the descent lowers: the reading of the render's own lowered lines.
     pub predicted: f64,
-    pub predicted_axes: Vec<Axes>,
-    /// The distance read off its render, as the cost's leaf reads a render.
-    pub heard: Option<Measured>,
+    /// The d' read off its render, as the cost's leaf reads a render.
+    pub measured: Option<f64>,
     pub state: State,
     pub steps: usize,
-}
-
-#[derive(Clone)]
-pub struct Measured {
-    pub distance: f64,
-    pub axes: Vec<Axes>,
-}
-
-fn largest(axes: &[Axes]) -> f64 {
-    axes.iter().map(Axes::largest).fold(0.0, f64::max)
 }
 
 impl Point {
@@ -59,21 +48,10 @@ impl Point {
         self.predicted + self.lambda * self.bits
     }
 
-    fn axes(&self) -> &[Axes] {
-        self.heard
-            .as_ref()
-            .map_or(&self.predicted_axes, |h| &h.axes)
-    }
-
     /// The bits its reading's residual codes in, its render's where it was rendered.
     pub fn residual_bits(&self) -> f64 {
-        BITS_PER_JND2
-            * self
-                .axes()
-                .iter()
-                .flat_map(Axes::cells)
-                .map(|e| e * e)
-                .sum::<f64>()
+        let d = self.measured.unwrap_or(self.predicted);
+        BITS_PER_JND2 * d * d
     }
 
     /// Its description length: the residual's bits and the numbers' bits.
@@ -103,7 +81,7 @@ struct Run<'a> {
     scales: Vec<f64>,
     steps: usize,
     abandon: &'a dyn Abandon,
-    heard: &'a mut dyn FnMut(&Progress),
+    report: &'a mut dyn FnMut(&Progress),
     cancelled: bool,
 }
 
@@ -148,7 +126,6 @@ impl Stepping<'_> {
             distance: e.distance,
             numbers,
             bits,
-            axes: e.axes,
         })
     }
 }
@@ -161,7 +138,6 @@ struct Objective {
     distance: f64,
     numbers: usize,
     bits: f64,
-    axes: Vec<Axes>,
 }
 
 impl Run<'_> {
@@ -191,7 +167,7 @@ impl Run<'_> {
             let distance = self.stepping().one(s, adam, lambda, held)?;
             if k % 50 == 0 || k + 1 == count {
                 let (numbers, bits) = price::numbers(s);
-                (self.heard)(&Progress {
+                (self.report)(&Progress {
                     phase,
                     lambda,
                     step: k,
@@ -418,7 +394,7 @@ pub async fn path(
     lambdas: &[f64],
     steps: usize,
     abandon: &dyn Abandon,
-    heard: &mut dyn FnMut(&Progress),
+    report: &mut dyn FnMut(&Progress),
 ) -> Result<(Vec<Point>, bool), CliError> {
     let mut adam = Adam::of(&s);
     let gains = scales(fit, &s)?;
@@ -428,7 +404,7 @@ pub async fn path(
         scales: gains,
         steps,
         abandon,
-        heard,
+        report,
         cancelled: false,
     };
     let start = scaled(steps, START_STEPS);
@@ -458,8 +434,7 @@ pub async fn path(
             numbers: o.numbers,
             bits: o.bits,
             predicted: o.distance,
-            predicted_axes: o.axes,
-            heard: None,
+            measured: None,
             state: s.clone(),
             steps,
         });
@@ -467,48 +442,24 @@ pub async fn path(
     Ok((points, run.cancelled))
 }
 
-fn axes_json(a: &Axes) -> String {
-    use crate::json::num;
-    let maybe = |v: Option<f64>| v.map_or("null".to_string(), num);
-    format!(
-        "{{ \"at_secs\": {}, \"balance\": {}, \"sharpness\": {}, \"decay\": {}, \"beating\": {}, \
-         \"pitch\": {}, \"attack\": {} }}",
-        num(a.at_secs),
-        num(a.balance),
-        num(a.sharpness),
-        maybe(a.decay),
-        maybe(a.beating),
-        maybe(a.pitch),
-        maybe(a.attack)
-    )
-}
-
 fn point_json(p: &Point) -> String {
-    use crate::json::{list, num};
-    let heard = p.heard.as_ref().map_or("null".to_string(), |h| {
-        format!(
-            "{{ \"distance\": {}, \"largest_jnd\": {}, \"axes\": {} }}",
-            num(h.distance),
-            num(largest(&h.axes)),
-            list(&h.axes, axes_json)
-        )
-    });
+    use crate::json::num;
     format!(
         "{{ \"price\": {}, \"numbers\": {}, \"bits\": {}, \"residual_bits\": {}, \"length_bits\": {}, \
-         \"heard\": {heard}, \"predicted\": {{ \"distance\": {}, \"error\": {}, \
-         \"objective\": {}, \"largest_jnd\": {}, \"axes\": {} }} }}",
+         \"measured\": {}, \"predicted\": {{ \"d_prime\": {}, \"error\": {}, \"objective\": {} }} }}",
         num(p.lambda),
         p.numbers,
         num(p.bits),
         num(p.residual_bits()),
         num(p.length()),
+        p.measured.map_or("null".to_string(), |m| format!(
+            "{{ \"d_prime\": {} }}",
+            num(m)
+        )),
         num(p.predicted),
-        p.heard
-            .as_ref()
-            .map_or("null".to_string(), |h| num(h.distance - p.predicted)),
+        p.measured
+            .map_or("null".to_string(), |m| num(m - p.predicted)),
         num(p.objective()),
-        num(largest(&p.predicted_axes)),
-        list(&p.predicted_axes, axes_json)
     )
 }
 

@@ -6,7 +6,7 @@ use sva_samples::measure::harmony::dissonance::Dissonance;
 use sva_samples::measure::harmony::inharmonicity::Inharmonicity;
 use sva_samples::measure::harmony::tonnetz::TonalDistance;
 use sva_samples::measure::harmony::voice_leading::{Norm, VoiceLeading};
-use sva_samples::measure::heard::Heard;
+use sva_samples::measure::internal::Internal;
 use sva_samples::measure::loudness_pattern::LoudnessPattern;
 use sva_samples::measure::modulation::Modulation;
 use sva_samples::measure::partials::Partials;
@@ -394,15 +394,18 @@ static BEATING: Reading = Reading {
     },
 };
 
-static HEARD: Reading = Reading {
-    name: "heard",
-    takes: &[],
+static INTERNAL: Reading = Reading {
+    name: "internal",
+    takes: &[Arg::Spl],
     reads: Reads::Samples,
-    help: "what the judge proxy hears: power per half-Bark band every 10 ms, and each note of \
-           its own `score` reading lasting 80 ms or more with its rms, its strongest peaks under \
-           2.5 kHz and, where it starts from quiet, its 10-90 % rise; two subtract into the \
-           proxy's distance, in JND, the second side the reference; every channel averaged",
-    build: |_| Representation::Heard,
+    help: "the ear's internal representation at 1 Bark by 10 ms: specific loudness by ISO \
+           532-1's time-varying stages and each band's level through a modulation filterbank, \
+           every element over its JND, so two subtract into an ideal observer's d' by `norm`, \
+           the model's phases between lines taken as unknown; a full-scale sine at `spl` dB \
+           SPL; every channel averaged",
+    build: |g| Representation::Internal {
+        spl_db: g.spl_db.unwrap_or(DEFAULT_SPL_DB),
+    },
 };
 
 static ALIAS: Reading = Reading {
@@ -604,7 +607,7 @@ pub static READINGS: [&Reading; 30] = [
     &LOUDNESS_PATTERN,
     &SHARPNESS,
     &BEATING,
-    &HEARD,
+    &INTERNAL,
     &NUMBERS,
     &BINDINGS,
     &ARGUMENTS,
@@ -697,7 +700,9 @@ pub enum Representation {
         window_secs: f64,
         spl_db: f64,
     },
-    Heard,
+    Internal {
+        spl_db: f64,
+    },
     Numbers,
     Bindings,
     Arguments,
@@ -747,7 +752,7 @@ pub enum Output {
     LoudnessPattern(Box<LoudnessPattern>),
     Sharpness(Box<Sharpness>),
     Beating(Box<Beating>),
-    Heard(Box<Heard>),
+    Internal(Box<Internal>),
     Numbers(Box<crate::Written>),
     Bindings(Vec<Binding>),
     Arguments(Vec<Arguments>),
@@ -833,7 +838,7 @@ impl Representation {
             Representation::LoudnessPattern { .. } => &LOUDNESS_PATTERN,
             Representation::Sharpness { .. } => &SHARPNESS,
             Representation::Beating { .. } => &BEATING,
-            Representation::Heard => &HEARD,
+            Representation::Internal { .. } => &INTERNAL,
             Representation::Numbers => &NUMBERS,
             Representation::Bindings => &BINDINGS,
             Representation::Arguments => &ARGUMENTS,

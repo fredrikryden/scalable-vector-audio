@@ -1,4 +1,4 @@
-// Concern: a state's composition as played: exact text, each line lowered by the render with tangents, its noise rendered | Non-concern: the transform (heard/lines.rs) | IO: (State) -> lowered lines
+// Concern: a state's composition as played: exact text, each line lowered by the render with tangents, its noise rendered | Non-concern: the transform (lines.rs) | IO: (State) -> lowered lines
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -7,10 +7,11 @@ use sva_ast::{Arg, Expr, Literal};
 use sva_engine::Varied;
 use sva_formula::Tangents;
 
+use super::lines::{self, Filter, Line};
 use super::model::constant;
 use super::state::{Slot, State};
 use crate::cli_error::CliError;
-use crate::heard::lines::{self, Filter, Grid, Line};
+use sva_samples::measure::internal::Grid;
 
 /// A silent gain still plays at this power, -300 dB, so its gradient reaches it.
 pub const SILENT_POWER: f64 = 1e-30;
@@ -378,7 +379,6 @@ pub fn lowered(
     source: &dyn Fn(&str) -> Option<String>,
     g: &Grid,
     renders: &Renders,
-    ms: &[(usize, usize)],
     threads: std::num::NonZeroUsize,
 ) -> Result<Lowered, CliError> {
     let text = text(s, source)?;
@@ -469,25 +469,15 @@ pub fn lowered(
                     instants.extend([t - lines::SPREAD_SECS, t, t + lines::SPREAD_SECS]);
                 }
             }
-            let mut own_ms = Vec::new();
-            for (lo, hi) in ms {
-                for j in *lo..*hi {
-                    let t = (j as f64 + 0.5) / 1000.0 - onset;
-                    if t >= split.l.v && t < split.r.v {
-                        own_ms.push((j, instants.len()));
-                        instants.push(t);
-                    }
-                }
-            }
             let leaves = lines::read_leaves(&split.leaves, &instants).map_err(|why| {
                 refused(format!(
                     "score line {} (`{node}`): {why}",
                     s.model.lines[i].number
                 ))
             })?;
-            Ok((split, instants, frames, own_ms, leaves))
+            Ok((split, instants, frames, leaves))
         });
-        let (split, instants, frames, own_ms, leaves) = read?;
+        let (split, instants, frames, leaves) = read?;
         Ok::<_, CliError>(Lined {
             line: Line {
                 at: *onset,
@@ -499,7 +489,6 @@ pub fn lowered(
                 leaves,
                 instants,
                 frames,
-                ms: own_ms,
                 tangents,
                 noise: noise_samples,
                 noise_filters,

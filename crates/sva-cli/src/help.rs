@@ -594,17 +594,20 @@ PRICED FIT:
   `--method prox` fits every number of a composition the `--vary`s name, node
   defaults and score fields alike, and prices the bits it writes, so the fit
   ends at the smallest model it finds near the reference. The cost is
-    sum(repr.heard(@<model>) - repr.heard(<reference>))
+    norm(repr.internal(@<model>) - repr.internal(<reference>))
       + <price>*repr.numbers(@<model>)
-  `heard`'s distance (READINGS, its rule above) plus `<price>` JND on each bit
+  `internal`'s d' (READINGS, its rule above) plus `<price>` d' on each bit
   `numbers` (READINGS) counts. The model side is the render's own: each score
   line lowered as a render lowers it, every number beside its tangent, split
   into its partials (an amplitude times the cosine of a phase) and read at
   each frame's middle, its short-time transform in closed form there (the
   window cut at the line's crop and mirrored at the clip's ends, the master's
   biquads as H(f)); a node's filtered noise is its rendered realisation under
-  H(f). Each partial is exact where its amplitude and frequency hold over the
-  20 ms window; a form with no partial in it refuses by name.
+  H(f). The phases between lines are no part of the model, so its power per
+  bin is their expectation: each line's bins coherent, the lines' powers
+  summed; then the reading's own stages. Each partial is exact where its
+  amplitude and frequency hold over the 20 ms window; a form with no partial
+  in it refuses by name.
   Each number written costs its `--vary`'s bits, log2((hi-lo)/step), or of
   ln(hi/lo)/ln(step) where log; one no `--vary` names costs none. Written are:
   each score line's onset and each field its node has no default for, the line
@@ -623,11 +626,12 @@ PRICED FIT:
   of one node's lines into another of its kind and the splits of one node's
   lines with a new node of its kind each kept only where the cost falls, and a
   debias holding every zero. `--steps` scales every phase. Each point is
-  then rendered and read as `heard`. The answer's `data`: `path`, one point a
-  price with its `numbers` and their `bits`, `heard` (off its render) and `predicted` (the
-  distance the descent lowered, its `error` the heard distance less it), its `residual_bits` (each heard axis of each
-  segment a cell coded as a Gaussian of one JND, {rate:.4} bits per JND squared)
-  and `length_bits`, the two summed; `chosen`, the point of least length; and
+  then rendered and read as `internal`. The answer's `data`: `path`, one point
+  a price with its `numbers` and their `bits`, `measured` (its render's d')
+  and `predicted` (the d' the descent lowered, its `error` the measured less
+  it), its `residual_bits` (each element of the reading a cell coded as a
+  Gaussian of one JND, {rate:.4} bits per d' squared) and `length_bits`, the
+  two summed; `chosen`, the point of least length; and
   `files`, the chosen point's text. `--write --confirm` writes the
   chosen point in place: defaults in their node files, score lines without their
   silent ones or the fields their node's default restates. Each step prints a JSON line
@@ -642,7 +646,7 @@ NEW:
   (PRICED FIT): one structure per group its readings find, a harmonic series
   (its stretch `inh` 0, so inharmonic as priced as harmonic) per voice tone of
   the `score` reading, a lone partial, and a noise band per event sound, its
-  band where `heard` puts that sound's power; every voice, partial and noise
+  band where `internal` puts that sound's loudness; every voice, partial and noise
   they offer as a score line, `fits/clip` and the recording itself, and no
   annotation. `--harmonics <n>` (default {harmonics}) sets the harmonics a
   series holds and `--lone <n>` (default {lone}) the lone partials an onset

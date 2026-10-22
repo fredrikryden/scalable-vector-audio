@@ -6,7 +6,6 @@ mod builtins;
 mod cli_error;
 mod decode;
 pub mod encode;
-pub mod heard;
 pub mod json;
 mod lint_code;
 mod outline;

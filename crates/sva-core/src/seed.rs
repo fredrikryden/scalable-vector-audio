@@ -1,7 +1,7 @@
 // Concern: the starter a priced fit shrinks: one structure per group the clip's readings find, a line per voice, partial and noise | Non-concern: fitting it | IO: (samples, rate) -> files, varies, cost
 
 use sva_samples::measure::partials::{self, Asked, Curve, Kind as TrackKind};
-use sva_samples::measure::{heard, score};
+use sva_samples::measure::{internal, score};
 
 /// How large a starter is written: harmonics per voice, lone partials per onset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,12 +154,12 @@ fn noisy(seed: u64, (att, dec, sus, rel, lo, hi): (f64, f64, f64, f64, f64, f64)
     )
 }
 
-/// The frequency at a Bark value: `heard::bark` inverted by bisection.
+/// The frequency at a Bark value: `internal::bark` inverted by bisection.
 fn hz_at(z: f64) -> f64 {
     let (mut lo, mut hi) = (0.0, 24_000.0);
     for _ in 0..60 {
         let mid = 0.5 * (lo + hi);
-        match heard::bark(mid) < z {
+        match internal::bark(mid) < z {
             true => lo = mid,
             false => hi = mid,
         }
@@ -167,33 +167,33 @@ fn hz_at(z: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
-/// The band holding a span's power between its 10th and 90th percentile, by `heard`'s bands.
-fn band(ear: &heard::Heard, at: f64, len: f64) -> (f64, f64) {
+/// The Bark bands holding a span's loudness between its 10th and 90th percentile.
+fn band(ear: &internal::Internal, at: f64, len: f64) -> (f64, f64) {
     let frames = ear.frames;
-    let first = ((at / heard::FRAME_SECS) as usize).min(frames);
-    let last = (((at + len) / heard::FRAME_SECS) as usize).clamp(first + 1, frames.max(1));
-    let power: Vec<f64> = (0..heard::BANDS)
+    let first = ((at / internal::FRAME_SECS) as usize).min(frames);
+    let last = (((at + len) / internal::FRAME_SECS) as usize).clamp(first + 1, frames.max(1));
+    let power: Vec<f64> = (0..internal::BARKS)
         .map(|b| {
             (first..last.min(frames))
-                .map(|m| ear.power[b * frames + m])
+                .map(|m| ear.specific[m * internal::BARKS + b])
                 .sum()
         })
         .collect();
     let total: f64 = power.iter().sum();
     let edge = |share: f64| {
         let mut held = 0.0;
-        (0..heard::BANDS)
+        (0..internal::BARKS)
             .find(|b| {
                 held += power[*b];
                 held >= share * total
             })
-            .unwrap_or(heard::BANDS - 1)
+            .unwrap_or(internal::BARKS - 1)
     };
     if total <= 0.0 {
         return (NOISE_LOW_HZ, NOISE_HIGH_HZ);
     }
-    let lo = hz_at(edge(0.1) as f64 / 2.0).clamp(NOISE_LOW_HZ, NOISE_HIGH_HZ);
-    let hi = hz_at((edge(0.9) + 1) as f64 / 2.0).clamp(lo * 1.5, NOISE_HIGH_HZ);
+    let lo = hz_at(edge(0.1) as f64).clamp(NOISE_LOW_HZ, NOISE_HIGH_HZ);
+    let hi = hz_at((edge(0.9) + 1) as f64).clamp(lo * 1.5, NOISE_HIGH_HZ);
     (lo, hi.max(lo))
 }
 
@@ -350,7 +350,7 @@ pub fn seed(channels: &[Vec<f32>], rate: f64, clip: &str, limits: Limits) -> See
     if lone_lines > 0 {
         files.push(("instruments/partial".to_string(), lone()));
     }
-    let ear = heard::measure(&planes, rate, 0.0);
+    let ear = internal::measure(&planes, rate, 0.0, sva_engine::DEFAULT_SPL_DB);
     let mut spans: Vec<(&str, f64, f64)> = read
         .events
         .iter()
@@ -408,7 +408,7 @@ pub fn seed(channels: &[Vec<f32>], rate: f64, clip: &str, limits: Limits) -> See
             .to_string(),
     ));
     let cost = format!(
-        "sum(repr.heard(@master) - repr.heard(sample(\"{}\"))) + 0.001*repr.numbers(@master)",
+        "norm(repr.internal(@master) - repr.internal(sample(\"{}\"))) + 0.001*repr.numbers(@master)",
         clip.replace('"', "")
     );
     files.push((COST.to_string(), format!("{cost}\n")));

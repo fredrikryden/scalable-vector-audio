@@ -1,4 +1,4 @@
-// Concern: a score line's short-time transform on the reading's frames off its lowering, its tangents back | Non-concern: lowering it, the distance | IO: (form, frames) -> samples; adjoint -> gradient
+// Concern: a score line's short-time transform on the reading's frames off its lowering, its tangents back | Non-concern: lowering it, reading the bins | IO: (form, frames) -> bins; adjoint -> gradient
 
 //! Each tone's amplitude and phase are read at a frame's middle and a quarter window either
 //! side and taken quadratic between: exact where both are quadratic over its 20 ms. Elsewhere
@@ -10,62 +10,13 @@ use std::sync::Arc;
 use sva_formula::closed_form::{Edge, Unary};
 use sva_formula::{Body, C64, Cx, Dual, Num, Tangents};
 use sva_samples::Evaluator;
+use sva_samples::measure::internal::Grid;
 
 /// A frame reads its line a quarter window either side of its middle.
 pub const SPREAD_SECS: f64 = 0.005;
 
-/// The reading's frames: `measure::heard::pattern`'s, the clip's `len` samples mirrored.
-#[derive(Clone, Copy, Debug)]
-pub struct Grid {
-    pub sr: f64,
-    pub n: usize,
-    pub window: usize,
-    pub hop: usize,
-    pub left: usize,
-    pub frames: usize,
-    pub len: usize,
-}
-
-impl Grid {
-    pub fn of(sr: f64, frames: usize, len: usize) -> Grid {
-        let (n, window, hop) = sva_samples::measure::heard::sizes(sr);
-        Grid {
-            sr,
-            n,
-            window,
-            hop,
-            left: (n - window) / 2,
-            frames,
-            len,
-        }
-    }
-
-    pub fn bins(&self) -> usize {
-        self.n / 2 + 1
-    }
-
-    fn first(&self, m: usize) -> i64 {
-        (m * self.hop) as i64 - (self.n / 2) as i64 + self.left as i64
-    }
-
-    pub fn scale(&self) -> f64 {
-        let w2: f64 = hann(self.window).iter().map(|x| x * x).sum();
-        2.0 / (self.n as f64 * w2)
-    }
-
-    fn mirrored(&self, s: i64) -> i64 {
-        let len = self.len as i64;
-        if len <= 1 {
-            return 0;
-        }
-        let period = 2 * (len - 1);
-        let k = s.rem_euclid(period);
-        if k >= len { period - k } else { k }
-    }
-}
-
 fn hann(n: usize) -> Vec<f64> {
-    sva_samples::measure::heard::hann_periodic(n)
+    sva_samples::measure::internal::hann(n)
 }
 
 /// A sum of products of leaves.
@@ -212,8 +163,6 @@ pub struct Line {
     pub instants: Vec<f64>,
     /// Each frame the line sounds in, and its first instant.
     pub frames: Vec<(usize, usize)>,
-    /// Each ms a rise reads, and its instant.
-    pub ms: Vec<(usize, usize)>,
     pub tangents: Tangents,
     pub noise: Option<Arc<Vec<f64>>>,
     pub noise_filters: Vec<Filter>,
@@ -257,6 +206,21 @@ pub fn centre(at: f64, l: f64, r: f64, g: &Grid, m: usize) -> Option<f64> {
     (b > a).then(|| 0.5 * (a + b) / g.sr - at)
 }
 
+/// `centre`'s slopes in `l` and `r` where frame `m` reads no mirrored sample: half of each
+/// edge inside its window.
+fn centre_slopes(g: &Grid, m: usize, lo: f64, hi: f64) -> (f64, f64) {
+    let s0 = g.first(m) as f64;
+    let s1 = s0 + g.window as f64;
+    if s0 < 0.0 || s1 > g.len as f64 {
+        return (0.0, 0.0);
+    }
+    let inside = |x: f64| x > s0 && x < s1;
+    (
+        if inside(lo) { 0.5 } else { 0.0 },
+        if inside(hi) { 0.5 } else { 0.0 },
+    )
+}
+
 /// Lagrange's weights on a frame's three instants at `u`, its offset in quarter windows.
 fn lagrange(u: f64) -> [f64; 3] {
     [0.5 * u * (u - 1.0), 1.0 - u * u, 0.5 * u * (u + 1.0)]
@@ -264,15 +228,6 @@ fn lagrange(u: f64) -> [f64; 3] {
 
 fn through(v: &[f64; 3], l: &[f64; 3]) -> f64 {
     v[0] * l[0] + v[1] * l[1] + v[2] * l[2]
-}
-
-pub struct Read {
-    /// Per frame the line sounds in, its tones' windowed samples `w_k x_k`.
-    pub samples: Vec<(usize, Vec<f64>)>,
-    /// Per frame, its noise's bins.
-    pub noise: Vec<(usize, Vec<C64>)>,
-    /// Per term, its frequency at its last frame and its own power per frame.
-    pub tones: Vec<(f64, Vec<(usize, f64)>)>,
 }
 
 /// A tone in one frame at its three instants: `a = amp * sh`, the phase as a cosine's, its
@@ -399,94 +354,56 @@ impl Line {
         }
     }
 
-    pub fn bins(&self, g: &Grid, master: &[Filter]) -> Read {
+    /// Each frame it sounds in, and its bins there: its tones' windowed samples transformed,
+    /// its noise beside, coherent.
+    pub fn bins(&self, g: &Grid, master: &[Filter]) -> Vec<(usize, Vec<C64>)> {
         let w = hann(g.window);
-        let w2: f64 = w.iter().map(|x| x * x).sum();
-        let mut samples = Vec::with_capacity(self.frames.len());
-        let mut tones: Vec<(f64, Vec<(usize, f64)>)> =
-            self.terms.iter().map(|_| (f64::NAN, Vec::new())).collect();
+        let twiddles = sva_samples::fft::twiddles(g.n);
+        let (lo, hi) = span(self, g);
+        let mut out = Vec::with_capacity(self.frames.len());
         for (m, i0) in &self.frames {
             let tstar = self.instants[i0 + 1];
-            let mut x = vec![0.0; g.window];
-            for (k, term) in self.terms.iter().enumerate() {
+            let (mut re, mut im) = (vec![0.0; g.n], vec![0.0; g.n]);
+            for term in &self.terms {
                 let Some(t) = self.tone(term, *i0, master, g.sr) else {
                     continue;
                 };
                 let abs = t.h.abs();
-                let mut own = 0.0;
                 self.each_sample(g, *m, tstar, &t, |i, u, c, _| {
-                    let a = abs * through(&t.a, &lagrange(u));
-                    x[i] += w[i] * a * c;
-                    own += w[i] * w[i] * a * a;
+                    re[g.left + i] += w[i] * abs * through(&t.a, &lagrange(u)) * c;
                 });
-                tones[k].0 = t.hz;
-                tones[k].1.push((*m, 0.5 * own / w2));
             }
-            samples.push((*m, x));
-        }
-        let mut noise = Vec::new();
-        if let Some(n) = &self.noise {
-            let (lo, hi) = span(self, g);
-            for (m, i0) in &self.frames {
-                let mut bins = vec![C64::new(0.0, 0.0); g.bins()];
+            sva_samples::fft::fft_with(&mut re, &mut im, &twiddles);
+            let mut bins: Vec<C64> = (0..g.bins()).map(|j| C64::new(re[j], im[j])).collect();
+            if let Some(n) = &self.noise {
+                let spec = noise_frame(n, g, *m, lo, hi);
                 for term in self
                     .terms
                     .iter()
                     .filter(|t| matches!(t.carrier, Carrier::Noise))
                 {
-                    let tstar = self.instants[i0 + 1];
                     let e = self.amp(term, i0 + 1) * self.shoulder(tstar);
-                    for (j, x) in noise_frame(n, g, *m, lo, hi).iter().enumerate() {
+                    for (j, x) in spec.iter().enumerate() {
                         let hz = j as f64 * g.sr / g.n as f64;
                         let h = gain(&self.noise_filters, hz, g.sr) * gain(master, hz, g.sr);
                         bins[j] = bins[j] + (*x * h).scale(e);
                     }
                 }
-                noise.push((*m, bins));
             }
+            out.push((*m, bins));
         }
-        Read {
-            samples,
-            noise,
-            tones,
-        }
+        out
     }
 
-    pub fn ms_power(&self) -> Vec<(usize, f64)> {
-        self.ms
-            .iter()
-            .map(|(j, i)| {
-                let sh = self.shoulder(self.instants[*i]);
-                let p: f64 = self
-                    .terms
-                    .iter()
-                    .filter(|t| matches!(t.carrier, Carrier::Tone { .. }))
-                    .map(|term| {
-                        let a = self.amp(term, *i) * sh;
-                        0.5 * a * a
-                    })
-                    .sum();
-                (*j, p)
-            })
-            .collect()
-    }
-
-    /// The gradient in local indices from each frame's sample adjoint `dL/dx_k` (the window
-    /// read in), each bin's `dL/dRe X + i dL/dIm X` for the noise, and each term's own power's
-    /// and each ms power's adjoint.
-    #[allow(clippy::too_many_arguments)]
+    /// The gradient in local indices from each of its bins' `dL/dRe X + i dL/dIm X`.
     pub fn back(
         &self,
         g: &Grid,
         master: &[Filter],
-        xbar: &[Vec<f64>],
         gamma: &dyn Fn(usize, usize) -> C64,
-        own: &dyn Fn(usize, usize) -> f64,
-        ms_adj: &dyn Fn(usize) -> f64,
         out: &mut Vec<(u32, f64)>,
     ) {
         let w = hann(g.window);
-        let w2: f64 = w.iter().map(|x| x * x).sum();
         let mut leaf_adj: Vec<Vec<f64>> = self.leaves.iter().map(|v| vec![0.0; v.len()]).collect();
         let add_leaf = |l: usize, i: usize, x: f64, adj: &mut Vec<Vec<f64>>| {
             let slot = match adj[l].len() {
@@ -501,15 +418,11 @@ impl Line {
         let (lo, hi) = span(self, g);
         for (m, i0) in &self.frames {
             let tstar = self.instants[i0 + 1];
-            let xb = Some(xbar[*m].as_slice()).filter(|x| !x.is_empty());
-            for (k, term) in self.terms.iter().enumerate() {
+            let x = samples_back(g, &w, *m, gamma);
+            for term in &self.terms {
                 let Some(t) = self.tone(term, *i0, master, g.sr) else {
                     continue;
                 };
-                let oa = own(k, *m);
-                if xb.is_none() && oa == 0.0 {
-                    continue;
-                }
                 let abs = t.h.abs();
                 let (mut ga, mut gphi) = ([0.0; 3], [0.0; 3]);
                 let (mut g_abs, mut g_arg) = (0.0, 0.0);
@@ -517,13 +430,12 @@ impl Line {
                 self.each_sample(g, *m, tstar, &t, |i, u, c, s| {
                     let lw = lagrange(u);
                     let a = through(&t.a, &lw);
-                    let xk = xb.map_or(0.0, |x| x[i]);
-                    let o = oa * w[i] * w[i] / w2;
+                    let xk = x[i];
                     for j in 0..3 {
-                        ga[j] += (xk * abs * c + o * abs * abs * a) * lw[j];
+                        ga[j] += xk * abs * c * lw[j];
                         gphi[j] -= xk * abs * a * s * lw[j];
                     }
-                    g_abs += xk * a * c + o * abs * a * a;
+                    g_abs += xk * a * c;
                     g_arg -= xk * abs * a * s;
                     if ends.0.is_none() {
                         ends.0 = Some(i);
@@ -532,7 +444,7 @@ impl Line {
                 });
                 let s0 = g.first(*m) as f64;
                 let unmirrored = s0 >= 0.0 && s0 + g.window as f64 <= g.len as f64;
-                if let (Some(x), true) = (xb, unmirrored) {
+                if unmirrored {
                     let value = |i: usize| {
                         let u = (((s0 + i as f64) / g.sr) - self.at - tstar) / SPREAD_SECS;
                         let ph = t.phase(u);
@@ -591,12 +503,18 @@ impl Line {
                 let tstar = self.instants[i0 + 1];
                 let sh = self.shoulder(tstar);
                 let spec = noise_frame(n, g, *m, lo, hi);
+                let sh_dt = {
+                    let [(_, dl), (_, dr), ..] = self.shoulder_slopes(tstar);
+                    -(dl + dr)
+                };
+                let mut d_t = 0.0;
                 for term in self
                     .terms
                     .iter()
                     .filter(|t| matches!(t.carrier, Carrier::Noise))
                 {
                     let e = self.amp(term, i0 + 1);
+                    let e_dt = (self.amp(term, i0 + 2) - self.amp(term, *i0)) / (2.0 * SPREAD_SECS);
                     let mut d_e = 0.0;
                     for (j, x) in spec.iter().enumerate() {
                         let hz = j as f64 * g.sr / g.n as f64;
@@ -616,30 +534,15 @@ impl Line {
                             add_leaf(l, i0 + 1, x, &mut leaf_adj)
                         });
                     sh_adj.push((tstar, d_e * e));
+                    d_t += d_e * (e_dt * sh + e * sh_dt);
                 }
+                let (dl, dr) = centre_slopes(g, *m, lo, hi);
+                l_adj += d_t * dl;
+                r_adj += d_t * dr;
+                let (l, r) = self.noise_edges(g, &w, master, n, (*m, *i0), (lo, hi), gamma);
+                l_adj += l;
+                r_adj += r;
             }
-        }
-        for (j, i) in &self.ms {
-            let adj = ms_adj(*j);
-            if adj == 0.0 {
-                continue;
-            }
-            let t = self.instants[*i];
-            let sh = self.shoulder(t);
-            let mut d_sh = 0.0;
-            for term in self
-                .terms
-                .iter()
-                .filter(|t| matches!(t.carrier, Carrier::Tone { .. }))
-            {
-                let a = self.amp(term, *i);
-                term.amp
-                    .back(&|l| self.leaf(l, *i), adj * a * sh * sh, &mut |l, x| {
-                        add_leaf(l, *i, x, &mut leaf_adj)
-                    });
-                d_sh += adj * a * a * sh;
-            }
-            sh_adj.push((t, d_sh));
         }
         let mut push = |d: Dual, x: f64| {
             if x != 0.0 {
@@ -666,6 +569,56 @@ impl Line {
         out.extend(cut_adj);
     }
 
+    /// The noise's share of `dL/dl` and `dL/dr` in a frame its crop cuts: the sample at each
+    /// edge read in or out.
+    #[allow(clippy::too_many_arguments)]
+    fn noise_edges(
+        &self,
+        g: &Grid,
+        w: &[f64],
+        master: &[Filter],
+        noise: &[f64],
+        (m, i0): (usize, usize),
+        (lo, hi): (f64, f64),
+        gamma: &dyn Fn(usize, usize) -> C64,
+    ) -> (f64, f64) {
+        let s0 = g.first(m) as f64;
+        let end = s0 + g.window as f64;
+        let cuts = (lo > s0 && lo < end) || (hi > s0 && hi < end);
+        if s0 < 0.0 || end > g.len as f64 || !cuts {
+            return (0.0, 0.0);
+        }
+        let e: f64 = self
+            .terms
+            .iter()
+            .filter(|t| matches!(t.carrier, Carrier::Noise))
+            .map(|t| self.amp(t, i0 + 1))
+            .sum::<f64>()
+            * self.shoulder(self.instants[i0 + 1]);
+        let gains: Vec<C64> = (0..g.bins())
+            .map(|j| {
+                let hz = j as f64 * g.sr / g.n as f64;
+                (gain(&self.noise_filters, hz, g.sr) * gain(master, hz, g.sr)).scale(e)
+            })
+            .collect();
+        let xb = samples_back(g, w, m, &|mm, j| gains[j].conj() * gamma(mm, j));
+        let read = |k: usize| noise.get(s0 as usize + k).copied().unwrap_or(0.0);
+        let mut out = (0.0, 0.0);
+        if lo > s0 && lo < end {
+            let k = (lo - s0).ceil() as usize;
+            if k < g.window {
+                out.0 = -g.sr * xb[k] * read(k);
+            }
+        }
+        if hi > s0 && hi < end {
+            let k = (hi - s0).ceil() as usize;
+            if k < g.window {
+                out.1 = g.sr * xb[k] * read(k);
+            }
+        }
+        out
+    }
+
     /// The shoulders' slopes in `l`, `r`, `rise` and `fall` at `t`, where `t` is inside.
     fn shoulder_slopes(&self, t: f64) -> [(Dual, f64); 4] {
         let (l, r, rise, fall) = (self.l.v, self.r.v, self.rise.v, self.fall.v);
@@ -689,6 +642,19 @@ impl Line {
             (self.fall, dfall),
         ]
     }
+}
+
+/// Frame `m`'s `dL/dx_k` from its bins' `gamma`: `w_k Re(sum_j gamma_j e^{2 pi i j (left +
+/// k)/n})`.
+fn samples_back(g: &Grid, w: &[f64], m: usize, gamma: &dyn Fn(usize, usize) -> C64) -> Vec<f64> {
+    let (mut re, mut im) = (vec![0.0; g.n], vec![0.0; g.n]);
+    for j in 0..g.bins() {
+        let y = gamma(m, j);
+        re[j] = y.re;
+        im[j] = -y.im;
+    }
+    sva_samples::fft::fft(&mut re, &mut im);
+    (0..g.window).map(|k| w[k] * re[g.left + k]).collect()
 }
 
 fn noise_frame(noise: &[f64], g: &Grid, m: usize, lo: f64, hi: f64) -> Vec<C64> {

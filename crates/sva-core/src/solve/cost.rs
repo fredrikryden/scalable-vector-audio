@@ -17,7 +17,7 @@ pub const SUBTRACTS: [&str; 11] = [
     "loudness_pattern",
     "sharpness",
     "beating",
-    "heard",
+    "internal",
 ];
 
 pub const REDUCERS: [&str; 5] = ["norm", "sum", "dot", "max", "abs"];

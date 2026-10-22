@@ -1,25 +1,22 @@
-// Concern: one state's distance and gradient: every line's transform in the reading's bins, the axes on a tape, adjoints back | Non-concern: what a step does (step.rs) | IO: (Fit, State) -> Evaluated
+// Concern: one state's d' and gradient: each line's bins, their power summed across lines, the reading's stages and adjoint | Non-concern: what a step does (step.rs) | IO: (Fit, State) -> Evaluated
 
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use sva_formula::C64;
-use sva_samples::measure::heard::BANDS;
+use sva_samples::measure::internal::{Ear, Grid, Internal};
 
 use super::played::{self, Lowered, ROOT_SEED, Renders};
 use super::state::{Slot, State};
 use crate::cli_error::CliError;
-use crate::heard::distance::{self, Axes, Reference, Side};
-use crate::heard::ear::Ear;
-use crate::heard::lines::{Carrier, Grid, Read};
-use crate::heard::tape::{Arr, Tape};
 
 pub struct Fit {
-    pub reference: Reference,
+    pub reference: Internal,
+    /// The reference's third-octave mean squares per frame, `[m * THIRDS + b]`.
+    pub thirds: Vec<f64>,
     pub ear: Arc<Ear>,
     pub threads: NonZeroUsize,
-    pub grid: Grid,
     /// The text of every file the composition's model reads, by path.
     pub texts: BTreeMap<String, String>,
     pub renders: Renders,
@@ -27,90 +24,37 @@ pub struct Fit {
 
 pub struct Evaluated {
     pub distance: f64,
-    pub axes: Vec<Axes>,
     pub grad: Option<Vec<f64>>,
 }
 
+type Bins = Vec<(usize, Vec<C64>)>;
+
 impl Fit {
+    pub fn grid(&self) -> Grid {
+        self.ear.grid
+    }
+
     fn lowered(&self, s: &State, threads: NonZeroUsize) -> Result<Lowered, CliError> {
-        let ms_len = self.ms_len();
-        let spans: Vec<(usize, usize)> = (0..self.reference.peaks.len())
-            .filter(|n| self.reference.rises[*n].is_some())
-            .map(|n| {
-                let (a, b) = self.reference.rise_span(n);
-                (a.min(ms_len), (b + 2).min(ms_len))
-            })
-            .collect();
         let text = |p: &str| self.texts.get(p).cloned();
-        played::lowered(s, &text, &self.grid, &self.renders, &spans, threads)
-    }
-
-    fn ms_len(&self) -> usize {
-        self.reference.frames * self.ear.hop_ms + 2 * self.ear.hop_ms
-    }
-
-    fn band_of(&self) -> Vec<usize> {
-        sva_samples::measure::heard::bins(self.grid.n, self.grid.sr).0
+        played::lowered(s, &text, &self.ear.grid, &self.renders, threads)
     }
 }
 
-/// Each frame's bins: its lines' windowed samples in one transform, their noise beside.
-fn total(g: &Grid, reads: &[Read]) -> Vec<Vec<C64>> {
-    let mut buf = vec![vec![0.0; g.window]; g.frames];
-    let mut noise = vec![vec![C64::new(0.0, 0.0); g.bins()]; g.frames];
-    for r in reads {
-        for (m, x) in &r.samples {
-            buf[*m].iter_mut().zip(x).for_each(|(b, v)| *b += v);
-        }
-        for (m, bins) in &r.noise {
-            noise[*m]
-                .iter_mut()
-                .zip(bins)
-                .for_each(|(b, v)| *b = *b + *v);
-        }
-    }
-    buf.iter()
-        .zip(noise)
-        .map(|(x, n)| {
-            let (mut re, mut im) = (vec![0.0; g.n], vec![0.0; g.n]);
-            re[g.left..g.left + g.window].copy_from_slice(x);
-            sva_samples::fft::fft(&mut re, &mut im);
-            (0..g.bins())
-                .map(|j| C64::new(re[j], im[j]) + n[j])
-                .collect()
-        })
-        .collect()
-}
-
-/// Each frame's `dL/dx_k` from its bins' `gamma`: `w_k Re(sum_j gamma_j e^{2 pi i j (left + k)/n})`.
-fn samples_back(g: &Grid, gamma: &dyn Fn(usize, usize) -> C64) -> Vec<Vec<f64>> {
-    let w = sva_samples::measure::heard::hann_periodic(g.window);
-    (0..g.frames)
-        .map(|m| {
-            let (mut re, mut im) = (vec![0.0; g.n], vec![0.0; g.n]);
-            for j in 0..g.bins() {
-                let y = gamma(m, j);
-                re[j] = y.re;
-                im[j] = -y.im;
+/// Power per bin summed over lines: the phases between lines are unknown, so their cross terms
+/// average out; within a line its terms add coherently.
+fn power(g: &Grid, reads: &[Bins]) -> Vec<f64> {
+    let (bins, scale) = (g.bins(), g.scale());
+    let mut p = vec![0.0; g.frames * bins];
+    for read in reads {
+        for (m, x) in read {
+            for (j, v) in x.iter().enumerate() {
+                p[m * bins + j] += v.norm_sqr() * scale;
             }
-            sva_samples::fft::fft(&mut re, &mut im);
-            (0..g.window).map(|k| w[k] * re[g.left + k]).collect()
-        })
-        .collect()
-}
-
-fn band_power(g: &Grid, band: &[usize], x: &[Vec<C64>]) -> Vec<f64> {
-    let scale = g.scale();
-    let mut p = vec![0.0; BANDS * g.frames];
-    for (m, bins) in x.iter().enumerate() {
-        for (j, v) in bins.iter().enumerate() {
-            p[band[j] * g.frames + m] += v.norm_sqr() * scale;
         }
     }
     p
 }
 
-/// Each coordinate's share of a local gradient, through its played value's slope.
 fn landed(s: &State, slots: &[Slot], local: &[(u32, f64)], out: &mut [f64]) {
     let root = s.root_slots();
     for (k, d) in local {
@@ -136,104 +80,41 @@ pub fn evaluate(
     grad: bool,
     threads: NonZeroUsize,
 ) -> Result<Evaluated, CliError> {
-    let g = fit.grid;
-    let r = &fit.reference;
+    let g = fit.grid();
     let low = fit.lowered(s, threads)?;
     let tasks: Vec<usize> = (0..low.lines.len()).collect();
     let reads = sva_engine::each(threads, tasks, |i| low.lines[i].line.bins(&g, &low.master));
-    let x = total(&g, &reads);
-    let band = fit.band_of();
-    let notes = r.peaks.len();
-    let mut hz = Vec::new();
-    let mut means = Vec::new();
-    let mut rows: Vec<Vec<Option<usize>>> = Vec::new();
-    for (l, read) in reads.iter().enumerate() {
-        let mut own = Vec::new();
-        for (k, (f, per)) in read.tones.iter().enumerate() {
-            let tone = matches!(low.lines[l].line.terms[k].carrier, Carrier::Tone { .. });
-            if !tone || per.is_empty() || notes == 0 {
-                own.push(None);
-                continue;
-            }
-            own.push(Some(hz.len()));
-            hz.push(*f);
-            let mut row = vec![0.0; notes];
-            for (n, seg) in r.notes().enumerate() {
-                let w = 1.0 / (seg.m1 - seg.m0) as f64;
-                row[n] = per
-                    .iter()
-                    .filter(|(m, _)| *m >= seg.m0 && *m < seg.m1)
-                    .map(|(_, p)| p * w)
-                    .sum();
-            }
-            means.extend(row);
-        }
-        rows.push(own);
-    }
-    let ms_len = fit.ms_len();
-    let mut ms = vec![0.0; ms_len];
-    for l in &low.lines {
-        for (j, p) in l.line.ms_power() {
-            if j < ms_len {
-                ms[j] += p;
-            }
-        }
-    }
-    let mut tape = Tape::new();
-    let pw = tape.leaf(Arr::new(BANDS, g.frames, band_power(&g, &band, &x)), grad);
-    let lp = (!hz.is_empty()).then(|| tape.leaf(Arr::new(hz.len(), notes, means), grad));
-    let pms = tape.leaf(Arr::row(ms), grad);
-    let rises = (0..notes)
-        .map(|n| {
-            let (a, b) = r.rise_span(n);
-            distance::rise(&mut tape, pms, a, b)
-        })
+    let f = fit.ear.forward(&power(&g, &reads));
+    let residual: Vec<f64> = f
+        .elements
+        .iter()
+        .zip(&fit.reference.elements)
+        .map(|(a, b)| a - b)
         .collect();
-    let side = Side {
-        power: pw,
-        line_hz: hz,
-        line_power: lp,
-        rises,
-    };
-    let d = distance::distance(&mut tape, r, &side);
-    let value = tape.scalar_of(d.total);
+    let distance = residual.iter().map(|r| r * r).sum::<f64>().sqrt();
     if !grad {
         return Ok(Evaluated {
-            distance: value,
-            axes: d.axes,
+            distance,
             grad: None,
         });
     }
-    let one = Arr::scalar(1.0);
-    let back = tape.backward(&[(d.total, &one)]);
-    let zeros = |a: &Arr| Arr::zeros(a.r, a.c);
-    let gp = back.of(pw).cloned().unwrap_or_else(|| zeros(tape.val(pw)));
-    let gm = back
-        .of(pms)
-        .cloned()
-        .unwrap_or_else(|| zeros(tape.val(pms)));
-    let gl = lp.map(|lp| back.of(lp).cloned().unwrap_or_else(|| zeros(tape.val(lp))));
-    let scale = g.scale();
-    let segs: Vec<(usize, usize)> = r.notes().map(|s| (s.m0, s.m1)).collect();
-    let gamma = |m: usize, j: usize| x[m][j].scale(2.0 * scale * gp.v[band[j] * g.frames + m]);
-    let xbar = samples_back(&g, &gamma);
+    let unit: Vec<f64> = residual
+        .iter()
+        .map(|r| if distance > 0.0 { r / distance } else { 0.0 })
+        .collect();
+    let dp = fit.ear.backward(&f, &unit);
+    let (bins, scale) = (g.bins(), g.scale());
     let tasks: Vec<usize> = (0..low.lines.len()).collect();
     let parts = sva_engine::each(threads, tasks, |l| {
-        let own = |k: usize, m: usize| -> f64 {
-            let (Some(gl), Some(row)) = (gl.as_ref(), rows[l][k]) else {
-                return 0.0;
-            };
-            segs.iter()
-                .enumerate()
-                .filter(|(_, (m0, m1))| m >= *m0 && m < *m1)
-                .map(|(n, (m0, m1))| gl.v[row * notes + n] / (m1 - m0) as f64)
-                .sum()
+        let mut at = vec![usize::MAX; g.frames];
+        for (k, (m, _)) in reads[l].iter().enumerate() {
+            at[*m] = k;
+        }
+        let gamma = |m: usize, j: usize| -> C64 {
+            reads[l][at[m]].1[j].scale(2.0 * scale * dp[m * bins + j])
         };
-        let ms_adj = |j: usize| gm.v.get(j).copied().unwrap_or(0.0);
         let mut local = Vec::new();
-        low.lines[l]
-            .line
-            .back(&g, &low.master, &xbar, &gamma, &own, &ms_adj, &mut local);
+        low.lines[l].line.back(&g, &low.master, &gamma, &mut local);
         local
     });
     let mut out = vec![0.0; s.x.len()];
@@ -241,35 +122,30 @@ pub fn evaluate(
         landed(s, &low.lines[l].slots, local, &mut out);
     }
     Ok(Evaluated {
-        distance: value,
-        axes: d.axes,
+        distance,
         grad: Some(out),
     })
 }
 
-/// Each line's least-squares power against the reference, at its gain 1: a gain's own scale.
+/// Each line's least-squares gain on the reference's third-octave mean squares at its gain 1.
 pub fn scales(fit: &Fit, s: &State) -> Result<Vec<f64>, CliError> {
     let mut unit = s.clone();
     for root in s.root.iter().flatten() {
         unit.x[*root] = 1.0;
     }
-    let g = fit.grid;
+    let g = fit.grid();
     let low = fit.lowered(&unit, fit.threads)?;
-    let band = fit.band_of();
     let mut out = vec![0.0; s.x.len()];
     for (i, root) in s.root.iter().enumerate() {
         let Some(root) = root else {
             continue;
         };
         let read = low.lines[i].line.bins(&g, &low.master);
-        let p = band_power(&g, &band, &total(&g, std::slice::from_ref(&read)));
+        let own = fit.ear.thirds(&power(&g, std::slice::from_ref(&read)));
         let (mut num, mut den) = (0.0, 0.0);
-        for b in 0..BANDS {
-            for m in 0..g.frames {
-                let e1 = p[b * g.frames + m];
-                num += fit.reference.power(b, m) * e1;
-                den += e1 * e1;
-            }
+        for (e1, r) in own.iter().zip(&fit.thirds) {
+            num += r * e1;
+            den += e1 * e1;
         }
         out[*root] = match den > 0.0 {
             true => (num / den).max(1e-18),

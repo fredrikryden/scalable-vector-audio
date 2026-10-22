@@ -9,7 +9,7 @@ use sva_samples::measure::harmony::{
     voice_leading,
 };
 use sva_samples::measure::{
-    beating, heard, modulation, partials, periodicity, self_similarity, sharpness, sliding,
+    beating, internal, modulation, partials, periodicity, self_similarity, sharpness, sliding,
 };
 use sva_samples::{
     Buffer, Consumes, Extent, Peak, PitchFrame, Profile, Source, measure::bands, measure::crest,
@@ -1025,7 +1025,9 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
         Representation::Bands => Output::Bands(Box::new(bands::analyze(&planes, sr, start))),
         Representation::Crest => Output::Crest(Box::new(crest::analyze(&planes, sr))),
         Representation::Score => Output::Score(Box::new(score::measure(&planes, sr, start))),
-        Representation::Heard => Output::Heard(Box::new(heard::measure(&planes, sr, start))),
+        Representation::Internal { spl_db } => {
+            Output::Internal(Box::new(internal::measure(&planes, sr, start, spl_db)))
+        }
         Representation::LoudnessPattern { frame_secs, spl_db } => {
             Output::LoudnessPattern(Box::new(loudness_pattern::measure(
                 &planes, sr, start, frame_secs, spl_db,

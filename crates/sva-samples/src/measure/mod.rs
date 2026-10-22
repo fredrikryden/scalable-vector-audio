@@ -7,7 +7,7 @@ pub mod crest;
 pub mod envelope;
 pub mod formants;
 pub mod harmony;
-pub mod heard;
+pub mod internal;
 pub mod ledger;
 pub mod loudness;
 pub mod loudness_pattern;

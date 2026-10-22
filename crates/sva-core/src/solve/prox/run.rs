@@ -1,18 +1,16 @@
-// Concern: one priced solve: the cost read as a heard distance plus a price on bits, the reference heard once, the path, its choice's files | Non-concern: argv, writing | IO: (Problem, Tier) -> Fitted
+// Concern: one priced solve: the cost read as a d' plus a price on bits, the reference read once, the path, its choice's files | Non-concern: argv, writing | IO: (Problem, Tier) -> Fitted
 
 use sva_ast::Source;
 use sva_engine::{Abandon, Backend, Output, Session, Tier};
+
+use sva_samples::measure::internal::{self, Ear, Grid, Internal};
 
 use super::eval::Fit;
 use super::model::Model;
 use super::played::Renders;
 use super::state::{State, Var};
-use super::{DEFAULT_STEPS, Measured, Point, Progress, chosen, path, write};
+use super::{DEFAULT_STEPS, Point, Progress, chosen, path, write};
 use crate::cli_error::CliError;
-use crate::heard::distance::{Reference, distance, measured};
-use crate::heard::ear::ear;
-use crate::heard::lines::Grid;
-use crate::heard::tape::Tape;
 use crate::query::{asked, call};
 use crate::solve::cost::{Node, Op};
 use crate::solve::{Problem, recorded};
@@ -44,32 +42,35 @@ pub struct Fitted {
     pub cancelled: bool,
 }
 
-const SHAPE: &str = "under `--method prox` a cost is `sum(repr.heard(@<model>) - \
-     repr.heard(<reference>)) + <price>*repr.numbers(@<model>)`: the proxy's distance of the \
-     model from the reference, plus a price in JND on each bit of the numbers the model writes";
+const SHAPE: &str = "under `--method prox` a cost is `norm(repr.internal(@<model>) - \
+     repr.internal(<reference>)) + <price>*repr.numbers(@<model>)`: the d' of the model from \
+     the reference, plus a price in d' on each bit of the numbers the model writes";
 
 fn shaped(what: String) -> CliError {
     CliError::usage("solve.prox_cost", format!("{what}; {SHAPE}"))
 }
 
-/// The heard pair's leaves and the price on the model's written numbers, off the cost's terms.
+/// The internal pair's leaves and the price on the model's written numbers, off the cost's terms.
 fn read(problem: &Problem) -> Result<(usize, usize, String, f64), CliError> {
     let cost = &problem.cost;
     let mut pair = None;
     let mut price = None;
     for term in &cost.terms {
         let node = match &term.node {
-            Node::Reduce("sum", args) if args.len() == 1 => &args[0],
+            Node::Reduce("norm", args) if args.len() == 1 => &args[0],
             other => other,
         };
         match node {
             Node::Bin(Op::Sub, a, b) => match (&**a, &**b) {
-                (Node::Leaf(x), Node::Leaf(y)) if cost.leaves[*x].asked.name == "heard" => {
+                (Node::Leaf(x), Node::Leaf(y))
+                    if cost.leaves[*x].asked.name == "internal"
+                        && matches!(term.node, Node::Reduce("norm", _)) =>
+                {
                     pair = Some((*x, *y));
                 }
                 _ => {
                     return Err(shaped(format!(
-                        "`{}` subtracts no two heard readings",
+                        "`{}` is no norm of two internal readings",
                         term.text
                     )));
                 }
@@ -88,7 +89,7 @@ fn read(problem: &Problem) -> Result<(usize, usize, String, f64), CliError> {
             _ => return Err(shaped(format!("`{}` is neither part", term.text))),
         }
     }
-    let (a, b) = pair.ok_or_else(|| shaped("the cost holds no heard distance".to_string()))?;
+    let (a, b) = pair.ok_or_else(|| shaped("the cost holds no internal d'".to_string()))?;
     let (sized, lambda) =
         price.ok_or_else(|| shaped("the cost prices no `repr.numbers`".to_string()))?;
     if cost.leaves[a].target != sized {
@@ -104,7 +105,7 @@ fn read(problem: &Problem) -> Result<(usize, usize, String, f64), CliError> {
     Ok((a, b, root.to_string(), lambda))
 }
 
-struct Hearing<'a, B: Backend> {
+struct Reading<'a, B: Backend> {
     problem: &'a Problem<'a>,
     tier: &'a Tier<B>,
     abandon: &'a dyn Abandon,
@@ -112,13 +113,13 @@ struct Hearing<'a, B: Backend> {
     leaf: &'a crate::solve::Leaf,
 }
 
-impl<B: Backend> Hearing<'_, B> {
-    /// `target` rendered over `source` and read as `heard`, and its length in samples.
-    async fn heard(
+impl<B: Backend> Reading<'_, B> {
+    /// `target` rendered over `source` and read as `internal`, and its channels averaged.
+    async fn read(
         &self,
         source: &dyn Source,
         target: &str,
-    ) -> Result<(sva_samples::measure::heard::Heard, usize), CliError> {
+    ) -> Result<(Internal, Vec<f64>), CliError> {
         let samples = asked(&call("samples")?)?;
         let job = Job {
             rate: Some(FIT_RATE),
@@ -137,13 +138,14 @@ impl<B: Backend> Hearing<'_, B> {
             .asked
             .representation(rendered.config.rate, per_bar)?;
         let profile = rendered.config.profile.name;
-        let frames = buffer.plane(0).len();
+        let planes: Vec<&[f64]> = (0..buffer.width()).map(|c| buffer.plane(c)).collect();
+        let mono = internal::mono(&planes);
         let answer =
             sva_engine::answer_buffer(&self.leaf.written, &buffer, representation, profile)?;
-        let Output::Heard(heard) = answer.value else {
-            unreachable!("`heard` answers what it heard");
+        let Output::Internal(read) = answer.value else {
+            unreachable!("`internal` answers its reading");
         };
-        Ok((*heard, frames))
+        Ok((*read, mono))
     }
 }
 
@@ -154,7 +156,7 @@ pub async fn fitted<B: Backend>(
     problem: &Problem<'_>,
     priced: &Priced,
     tier: &Tier<B>,
-    heard: &mut dyn FnMut(&Progress),
+    report: &mut dyn FnMut(&Progress),
     abandon: &dyn Abandon,
 ) -> Result<Fitted, CliError> {
     let (model_leaf, reference_leaf, root, lambda) = read(problem)?;
@@ -175,18 +177,18 @@ pub async fn fitted<B: Backend>(
     let base = recorded(&problem.cost, problem.source);
     let source = overlaid(&base, &problem.sets)?;
     let leaf = &problem.cost.leaves[reference_leaf];
-    let hearing = Hearing {
+    let reading = Reading {
         problem,
         tier,
         abandon,
         leaf: &problem.cost.leaves[model_leaf],
     };
-    let (clip, frames) = hearing.heard(&source, &leaf.target).await?;
+    let (clip, mono) = reading.read(&source, &leaf.target).await?;
+    let frames = mono.len();
     let graph = sva_ast::load_reaching(&source, &[root.as_str()]).map_err(CliError::Refusals)?;
     let model = Model::of(&graph, &root)?;
     let state = State::of(&model, &vars)?;
     let threads = problem.threads.unwrap_or_else(sva_engine::default_threads);
-    let reference = Reference::of(&clip, ear(clip.rate));
     let mut texts = std::collections::BTreeMap::new();
     let paths = model
         .nodes
@@ -198,30 +200,32 @@ pub async fn fitted<B: Backend>(
             texts.insert(p, t.into_owned());
         }
     }
+    let grid = Grid::of(clip.rate, mono.len());
+    let ear = Ear::of(grid, clip.spl_db);
     let fit = Fit {
-        grid: Grid::of(clip.rate, reference.frames, frames),
-        reference,
-        ear: ear(clip.rate),
+        thirds: ear.thirds(&internal::bin_power(&mono, &grid)),
+        reference: clip,
+        ear: std::sync::Arc::new(ear),
         threads,
         texts,
         renders: Renders::default(),
     };
     let lambdas = priced.path.clone().unwrap_or_else(|| vec![lambda]);
     let steps = priced.steps;
-    let (mut points, cancelled) = path(&fit, state, &lambdas, steps, abandon, heard).await?;
+    let (mut points, cancelled) = path(&fit, state, &lambdas, steps, abandon, report).await?;
     let text = |p: &str| -> Option<String> { source.get(p).ok().flatten().map(|t| t.into_owned()) };
     let model = format!("@{root}([0, {frames}sp])");
     for point in &mut points {
         let files = write::files(&point.state, &text)?;
         let over = sva_ast::Overlay::new(&source, files.into_iter().collect());
-        let (rendered, _) = hearing.heard(&over, &model).await?;
-        let mut tape = Tape::new();
-        let side = measured(&mut tape, &rendered, &fit.reference);
-        let d = distance(&mut tape, &fit.reference, &side);
-        point.heard = Some(Measured {
-            distance: tape.scalar_of(d.total),
-            axes: d.axes,
-        });
+        let (rendered, _) = reading.read(&over, &model).await?;
+        let d2: f64 = rendered
+            .elements
+            .iter()
+            .zip(&fit.reference.elements)
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum();
+        point.measured = Some(d2.sqrt());
     }
     let chosen = chosen(&points);
     let files = match chosen {

@@ -106,7 +106,7 @@ fn a_priced_solve_answers_its_path_and_writes_its_choice() {
     assert_eq!(data["method"], "prox");
     let path = data["path"]["items"].as_array().expect("a path");
     assert_eq!(path.len(), 1, "one point a price");
-    for key in ["price", "numbers", "bits", "heard", "predicted"] {
+    for key in ["price", "numbers", "bits", "measured", "predicted"] {
         assert!(
             !path[0][key].is_null(),
             "a point answers `{key}`: {}",
@@ -176,7 +176,7 @@ fn a_priced_solve_refuses_each_mistake_under_its_code() {
          gain*sin(2*pi*220*t)\n",
     );
     let dir = root.join("song");
-    let heard = format!("sum(repr.heard(@tone) - repr.heard(sample(\"{reference}\")))");
+    let heard = format!("norm(repr.internal(@tone) - repr.internal(sample(\"{reference}\")))");
     let priced = format!("{heard} + 0.012*repr.numbers(@tone)");
     let cases: [(Vec<String>, &str); 6] = [
         (

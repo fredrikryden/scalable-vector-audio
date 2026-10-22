@@ -2,10 +2,6 @@
 
 use sva_engine::Output;
 
-use crate::heard::distance::{Reference, distance, measured};
-use crate::heard::ear::ear;
-use crate::heard::tape::Tape;
-
 /// Every level is floored here before it subtracts: the profile's silence threshold.
 pub const FLOOR_DB: f64 = -120.0;
 /// What an event with no partner on the other side counts, in seconds.
@@ -59,12 +55,9 @@ pub const RULES: [(&str, &str); 11] = [
          side lacks it",
     ),
     (
-        "heard",
-        "the judge proxy's distance with the second side the reference, its four terms: half \
-         the whole clip's, the soft maximum over the reference's notes of each note's balance, \
-         sharpness, decay and half its beating in JND, at the reference's level, half the \
-         largest pitch error and 0.3 of the mean attack error, the first side's notes paired \
-         to the reference's by nearest onset; `sum` of it is the distance a priced fit lowers",
+        "internal",
+        "frame by frame, element by element, a - b, each already in its JND so `norm` of it is \
+         d'; a frame one side lacks read as that side's silence, every element 0",
     ),
     (
         "beating",
@@ -239,11 +232,21 @@ pub fn residual(a: &Output, b: &Output) -> Option<Vec<f64>> {
             };
             held_pairs(&phon(a), &phon(b), |x, y| x - y)
         }
-        (Output::Heard(a), Output::Heard(b)) => {
-            let reference = Reference::of(b, ear(b.rate));
-            let mut tape = Tape::new();
-            let side = measured(&mut tape, a, &reference);
-            distance(&mut tape, &reference, &side).terms.to_vec()
+        (Output::Internal(a), Output::Internal(b)) => {
+            let frames = a.frames.max(b.frames);
+            let mut out = Vec::with_capacity(a.sets * frames * sva_engine::internal::BARKS);
+            for s in 0..a.sets.max(b.sets) {
+                for m in 0..frames {
+                    let row = |r: &sva_engine::internal::Internal| -> Vec<f64> {
+                        match s < r.sets && m < r.frames {
+                            true => r.row(s, m).to_vec(),
+                            false => vec![0.0; sva_engine::internal::BARKS],
+                        }
+                    };
+                    out.extend(row(a).iter().zip(row(b)).map(|(x, y)| x - y));
+                }
+            }
+            out
         }
         (Output::Pitch(a), Output::Pitch(b)) => {
             let mut out = Vec::new();

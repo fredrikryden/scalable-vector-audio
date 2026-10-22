@@ -58,7 +58,7 @@ pub use render::{
 pub use schedule::{Order, Schedule, schedule_from};
 pub use sva_formula::{C64, Codomain, Held, Line, NodeId, SpectralSum, Ty, Var};
 pub use sva_samples::measure::{
-    bands, beating, harmony, heard, loudness_pattern, modulation, partials, periodicity, pitch,
+    bands, beating, harmony, internal, loudness_pattern, modulation, partials, periodicity, pitch,
     score, self_similarity, sharpness, sliding, spectrum,
 };
 pub use sva_samples::resample;

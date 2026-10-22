@@ -2776,15 +2776,15 @@ fn a_seeded_starter_solves_on_the_priced_path() {
         );
     }
     let cost = js_sys::JSON::parse(&format!(
-        r#"{{ "add": [ {{ "sum": {{ "sub": [ {{ "repr": "heard", "target": "@master" }},
-            {{ "repr": "heard", "target": {{ "samples": {{ "rate": {rate}, "channels": [] }} }} }} ] }} }},
+        r#"{{ "add": [ {{ "norm": {{ "sub": [ {{ "repr": "internal", "target": "@master" }},
+            {{ "repr": "internal", "target": {{ "samples": {{ "rate": {rate}, "channels": [] }} }} }} ] }} }},
             {{ "mul": [0.012, {{ "repr": "numbers", "target": "@master" }}] }} ] }}"#
     ))
     .unwrap_or_else(|_| unreachable!("the cost is JSON"));
     let reference = field(
         &field(
             &js_sys::Array::from(&field(
-                &field(&js_sys::Array::from(&field(&cost, "add")).get(0), "sum"),
+                &field(&js_sys::Array::from(&field(&cost, "add")).get(0), "norm"),
                 "sub",
             ))
             .get(1),

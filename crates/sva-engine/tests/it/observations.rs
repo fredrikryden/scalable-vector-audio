@@ -665,7 +665,7 @@ fn one_table_says_what_every_named_reading_consumes() {
         "loudness_pattern",
         "sharpness",
         "beating",
-        "heard",
+        "internal",
         "numbers",
         "bindings",
         "arguments",

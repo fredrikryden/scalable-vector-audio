@@ -3,7 +3,7 @@
 use serde_json::Value;
 use sva_engine::bands::BandFloor;
 use sva_engine::beating::{Beating, BeatingWindow};
-use sva_engine::heard::{BANDS, Heard, Note as HeardNote, Peak as HeardPeak};
+use sva_engine::internal::{BARKS, Internal};
 use sva_engine::loudness_pattern::{LoudnessPattern, PatternFrame};
 use sva_engine::pitch::Note;
 use sva_engine::score::{Cue, Event, Hit, Kind, Partial, Score, Sound, Tone, Voiced};
@@ -377,40 +377,35 @@ fn beating(at: At) -> Read<Output> {
     })))
 }
 
-fn heard(at: At) -> Read<Output> {
-    let frames = field!(at, "frames").items(|f| field!(f, "power").numbers())?;
-    if let Some(bad) = frames.iter().position(|p| p.len() != BANDS) {
-        return Err(format!("`frames` item {bad} holds no {BANDS} bands"));
-    }
+fn internal(at: At) -> Read<Output> {
+    let frames = field!(at, "frames").items(|f| {
+        let specific = field!(f, "specific").numbers()?;
+        let sets = field!(f, "jnd").items(|s| s.numbers())?;
+        Ok((specific, sets))
+    })?;
     let m = frames.len();
-    let mut power = vec![0.0; BANDS * m];
-    for (k, f) in frames.iter().enumerate() {
-        for (b, v) in f.iter().enumerate() {
-            power[b * m + k] = *v;
+    let sets = frames.first().map_or(0, |f| f.1.len());
+    let mut specific = Vec::with_capacity(m * BARKS);
+    let mut elements = vec![0.0; sets * m * BARKS];
+    for (k, (n, rows)) in frames.iter().enumerate() {
+        if n.len() != BARKS || rows.len() != sets || rows.iter().any(|r| r.len() != BARKS) {
+            return Err(format!(
+                "`frames` item {k} holds no {sets} sets of {BARKS} bands"
+            ));
+        }
+        specific.extend_from_slice(n);
+        for (s, row) in rows.iter().enumerate() {
+            elements[(s * m + k) * BARKS..(s * m + k + 1) * BARKS].copy_from_slice(row);
         }
     }
-    Ok(Output::Heard(Box::new(Heard {
+    Ok(Output::Internal(Box::new(Internal {
         rate: field!(at, "rate_hz").num()?,
         start_secs: field!(at, "start_secs").num()?,
-        duration_secs: field!(at, "duration_secs").num()?,
-        rms: field!(at, "rms").num()?,
+        spl_db: field!(at, "spl_db").num()?,
         frames: m,
-        power,
-        notes: field!(at, "notes").items(|n| {
-            Ok(HeardNote {
-                at_secs: field!(n, "at_secs").num()?,
-                next_secs: field!(n, "next_secs").num()?,
-                new: field!(n, "new").flag()?,
-                rms: field!(n, "rms").num()?,
-                rise_secs: field!(n, "rise_secs").maybe()?,
-                peaks: field!(n, "peaks").items(|p| {
-                    Ok(HeardPeak {
-                        hz: field!(p, "hz").num()?,
-                        amplitude: field!(p, "amplitude").num()?,
-                    })
-                })?,
-            })
-        })?,
+        sets,
+        specific,
+        elements,
     })))
 }
 
@@ -432,7 +427,7 @@ pub fn reading(representation: Representation, value: &Value, path: &str) -> Rea
         Representation::LoudnessPattern { .. } => loudness_pattern(at),
         Representation::Sharpness { .. } => sharpness(at),
         Representation::Beating { .. } => beating(at),
-        Representation::Heard => heard(at),
+        Representation::Internal { .. } => internal(at),
         other => Err(format!("`{other:?}` has no JSON reader")),
     }
 }

@@ -111,7 +111,7 @@ fn filtered_noise_renders_the_pinned_bits_on_four_threads() {
 
 /// A priced fit of a clip rendered here, seeded and solved as `new --from` and `solve
 /// --method prox` do: `<FNV-1a of each point's distance bits> <of the chosen files' bytes>`.
-const PRICED: &str = "c4e1f8d9f72a3a62 61c1e066f4c2c818";
+const PRICED: &str = "837ed46ba97e9c3c 4033d3b9d24c9c9f";
 
 fn priced(threads: usize) -> String {
     let clip_nodes: sva_ast::Composition = [(
@@ -144,19 +144,19 @@ fn priced(threads: usize) -> String {
         .map(|(p, t)| (p.as_str(), t.as_str()))
         .collect();
     use sva_core::solve::{Op, Target, Tree};
-    let heard = |target| Tree::Repr {
-        call: "heard".to_string(),
+    let internal = |target| Tree::Repr {
+        call: "internal".to_string(),
         target,
     };
     let planes = channels.clone();
     let tree = Tree::Bin(
         Op::Add,
         Box::new(Tree::Reduce(
-            "sum",
+            "norm",
             vec![Tree::Bin(
                 Op::Sub,
-                Box::new(heard(Target::Text("@master".to_string()))),
-                Box::new(heard(Target::Samples {
+                Box::new(internal(Target::Text("@master".to_string()))),
+                Box::new(internal(Target::Samples {
                     rate: 48_000,
                     planes,
                 })),

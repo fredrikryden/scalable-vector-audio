@@ -310,7 +310,6 @@ impl Asked {
             | R::Samples
             | R::Crest
             | R::Score
-            | R::Heard
             | R::Numbers
             | R::Bindings
             | R::Arguments => Vec::new(),
@@ -339,6 +338,7 @@ impl Asked {
                 (Arg::Window, secs(window_secs)),
                 (Arg::Spl, db(spl_db)),
             ],
+            R::Internal { spl_db } => vec![(Arg::Spl, db(spl_db))],
         };
         let buffer = match &self.dest {
             Some(Destination::Alsa { buffer_secs, .. }) => secs(*buffer_secs),
