@@ -1,4 +1,4 @@
-// Concern: runs a scheme: each stage solved fresh and measured over the last one's files, stopped on a signal, the least length chosen | Non-concern: what any stage is | IO: (Problem, Scheme) -> Ran
+// Concern: runs a scheme: each stage solved over the last one's files, stopped on a signal, the least predicted length chosen, measured | Non-concern: what any stage is | IO: (Problem, Scheme) -> Ran
 
 mod grow;
 pub mod improve;
@@ -167,6 +167,7 @@ pub struct Stage {
 pub struct Reached {
     pub stage: Stage,
     pub solution: Solution,
+    /// Off the stage's renders, the chosen stage's alone and only where the run was not stopped.
     pub measured: Option<Residual>,
 }
 
@@ -176,12 +177,9 @@ impl Reached {
         merged(&self.stage.files, &self.solution.files)
     }
 
-    pub fn residual_bits(&self) -> f64 {
-        self.measured.unwrap_or(self.solution.predicted).bits
-    }
-
+    /// The predicted residual's bits plus the numbers', the length a run chooses on.
     pub fn length(&self) -> f64 {
-        self.residual_bits() + self.solution.bits
+        self.solution.predicted.bits + self.solution.bits
     }
 }
 
@@ -192,19 +190,24 @@ pub struct Ran {
 }
 
 impl Ran {
-    /// A run stopped by a signal is chosen on its predictions alone.
+    /// Every stage is a candidate, chosen by its predicted length.
     pub fn of(stages: Vec<Reached>, cancelled: bool) -> Ran {
-        let length = |r: &Reached| match cancelled {
-            true => r.solution.predicted.bits + r.solution.bits,
-            false => r.length(),
-        };
         let chosen =
-            (0..stages.len()).min_by(|a, b| length(&stages[*a]).total_cmp(&length(&stages[*b])));
+            (0..stages.len()).min_by(|a, b| stages[*a].length().total_cmp(&stages[*b].length()));
         Ran {
             stages,
             chosen,
             cancelled,
         }
+    }
+
+    /// The chosen stage rendered once per draw and read, unless the run was stopped.
+    pub async fn measured<B: Backend>(mut self, cx: &Cx<'_, B>) -> Result<Ran, CliError> {
+        if let (false, Some(c)) = (self.cancelled, self.chosen) {
+            let r = &mut self.stages[c];
+            r.measured = Some(cx.measured(&r.stage, &r.solution).await?);
+        }
+        Ok(self)
     }
 }
 
@@ -303,7 +306,7 @@ fn scaled(steps: usize, fraction: f64) -> usize {
     ((steps as f64 * fraction).round() as usize).max(1)
 }
 
-/// `report` hears each step under its stage's label.
+/// `report` hears each step under its stage's label. The answer is unmeasured: [`Ran::measured`].
 pub async fn run<B: Backend>(
     scheme: &Scheme,
     cx: &Cx<'_, B>,
@@ -340,14 +343,10 @@ async fn driven<B: Backend>(
             .solved(&stage.files, &stage.cost, stage.steps, &mut heard)
             .await?;
         cancelled = solution.cancelled() || cx.abandon.abandoned().await;
-        let measured = match cancelled {
-            true => None,
-            false => Some(cx.measured(&stage, &solution).await?),
-        };
         reached.push(Reached {
             stage,
             solution,
-            measured,
+            measured: None,
         });
         if cancelled {
             break;

@@ -1,4 +1,4 @@
-// Concern: one priced fit as both front ends ask it: the solver alone or a scheme's stages, each measured, the choice, its JSON | Non-concern: minimising, stage order | IO: (Problem, Scheme?) -> Fitted
+// Concern: one priced fit as both front ends ask it: the solver or a scheme's stages, the choice measured, its JSON | Non-concern: minimising, stage order | IO: (Problem, Scheme?) -> Fitted
 
 use sva_engine::{Abandon, Backend, Tier};
 
@@ -36,8 +36,9 @@ fn progress_json(stage: &str, p: &Progress) -> String {
     )
 }
 
-/// Without a scheme, the solver once at the cost's own price, then measured; with one, its run.
-/// `report` hears each progress line as JSON.
+/// Without a scheme, the solver once at the cost's own price; with one, its run. The stage of
+/// least predicted length is chosen and it alone measured. `report` hears each progress line as
+/// JSON.
 pub async fn fitted<B: Backend>(
     problem: &Problem<'_>,
     settings: &Settings,
@@ -47,17 +48,19 @@ pub async fn fitted<B: Backend>(
     abandon: &dyn Abandon,
 ) -> Result<Fitted, CliError> {
     let shape = prox::checked(problem)?;
-    let (ran, files) = match scheme {
+    let cx = Cx {
+        problem,
+        shape: &shape,
+        settings,
+        tier,
+        abandon,
+    };
+    let ran = match scheme {
         None => {
             let label = format!("price {}", shape.price);
             let mut heard = |p: &Progress| report(&progress_json(&label, p));
             let solution = prox::solve(problem, settings, tier, &mut heard, abandon).await?;
             let cancelled = solution.cancelled() || abandon.abandoned().await;
-            let measured = match cancelled {
-                true => None,
-                false => Some(prox::measure(problem, &solution.files, tier, abandon).await?),
-            };
-            let files = solution.files.clone();
             let stage = Stage {
                 label,
                 files: Vec::new(),
@@ -68,26 +71,20 @@ pub async fn fitted<B: Backend>(
             let reached = Reached {
                 stage,
                 solution,
-                measured,
+                measured: None,
             };
-            (Ran::of(vec![reached], cancelled), files)
+            Ran::of(vec![reached], cancelled)
         }
         Some(scheme) => {
-            let cx = Cx {
-                problem,
-                shape: &shape,
-                settings,
-                tier,
-                abandon,
-            };
             let mut heard = |stage: &str, p: &Progress| report(&progress_json(stage, p));
-            let ran = continuation::run(scheme, &cx, &mut heard).await?;
-            let files = match ran.chosen {
-                Some(c) => continuation::written(&cx, &ran.stages[c])?,
-                None => Vec::new(),
-            };
-            (ran, files)
+            continuation::run(scheme, &cx, &mut heard).await?
         }
+    };
+    let ran = ran.measured(&cx).await?;
+    let files = match (scheme, ran.chosen) {
+        (None, _) => ran.stages[0].solution.files.clone(),
+        (Some(_), Some(c)) => continuation::written(&cx, &ran.stages[c])?,
+        (Some(_), None) => Vec::new(),
     };
     Ok(Fitted {
         ran,
@@ -126,7 +123,7 @@ fn stage_json(r: &Reached) -> String {
         num(s.price),
         s.numbers,
         num(s.bits),
-        num(r.residual_bits()),
+        num(s.predicted.bits),
         num(r.length()),
         num(s.cells),
         num(s.objective()),

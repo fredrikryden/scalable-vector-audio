@@ -1,1 +1,1 @@
-Concern: a scheme's stages, each a composition and cost solved fresh from the last one's files, and the stage of least length | Non-concern: how a stage is minimised | IO: (Problem, Scheme) -> stages
+Concern: a scheme's stages, each solved fresh from the last one's files, the least predicted length chosen and measured | Non-concern: how a stage is minimised | IO: (Problem, Scheme) -> stages

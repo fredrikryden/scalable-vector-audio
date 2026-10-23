@@ -646,33 +646,38 @@ PRICED FIT:
   1/(1 - beta1) steps), its least value over the last k/2 fell by less than its
   standard error from the draws, a fall the draws cannot tell from none.
   `--steps` (default {steps}) caps the descent, the debias at a quarter of it;
-  a stage that reaches its cap first warns `solve.steps_cap`. Its stage is then
-  rendered once per draw, each line's `ph` and `seed` its draw's, and read as
-  `internal`. CONTINUATION runs it as stages instead. The answer's `data`:
+  a stage that reaches its cap first warns `solve.steps_cap`. CONTINUATION
+  runs it as stages instead. Every stage is a candidate: `chosen` is the stage
+  of least predicted length, the predicted residual's bits plus the numbers',
+  the objective the descent and the ranking lower at price 1. The chosen
+  stage alone is then rendered once per draw, each line's `ph` and `seed` its
+  draw's, and read as `internal`. The answer's `data`:
   `stages`, each with its `label`, the structure `edits` kept before it, its
   `descents` (each phase's `steps` taken of its `cap`, and why it `ended`:
   `converged`, `cap` or `signal`), its `price`, its `numbers` and their `bits`, its
-  weighted `cells`, `measured` (off its renders) and `predicted` (what the
-  descent lowered), each with its
+  weighted `cells`, `predicted` (what the descent lowered) and, on the chosen
+  stage alone, `measured` (off its renders), each with its
   `residual_bits`, their `standard_error` from the draws' spread, `d_prime`
   (unweighted, root mean square over the draws) and `per_cell` (the root mean
   square d over the weighted cells, in JND), `error_bits` the measured less
-  the predicted, its `residual_bits` (the measured) and `length_bits`, the
-  residual's and the numbers' bits summed; `chosen`, the stage of least length;
-  `continuation`, the scheme or null; and `files`, the chosen stage's text. A
-  signal stops the solve: `stages` holds the stages it finished and, `stopped`
-  true, the one it stopped in, that one unrendered, `chosen` the least
-  predicted length, and no file is written. `--write --confirm` writes the
-  chosen stage in place: defaults in their node files, score lines without their
-  silent ones or the fields their node's default restates. Every 50th step and
+  the predicted (null where unmeasured), its `residual_bits` (the predicted)
+  and `length_bits`, the predicted residual's and the numbers' bits summed;
+  `chosen`, that stage; `continuation`, the scheme or null; and `files`, the
+  chosen stage's text. A signal stops the solve: `stages` holds the stages it
+  finished and, `stopped` true, the one it stopped in, `chosen` the least
+  predicted length, nothing measured, and no file is written.
+  `--write --confirm` writes the chosen stage in place: defaults in their node
+  files, score lines without their silent ones or the fields their node's
+  default restates. Every 50th step and
   the step a phase converges or reaches its cap at print a JSON line on
   stderr, its `stage` beside it, that last's `ended` why, null on the others. `sva-cli new <name> --from
   <clip>` writes a starter to fit.
 
 CONTINUATION:
   `--continuation <scheme>` runs a priced fit as stages, each a fresh solve
-  from the files the last one reached, under the same `--vary`s, each measured;
-  `chosen` is the stage of least `length_bits`, whatever its price. Without
+  from the files the last one reached, under the same `--vary`s; `chosen` is
+  the stage of least `length_bits`, the predicted, whatever its price, and it
+  alone is measured (PRICED FIT). Without
   it the cost is solved once, one stage. Each stage's steps below are its cap,
   its descent ending sooner where it stops falling (PRICED FIT). The schemes are
     path[:<p>,<p>...]   the price homotopy over the prices given, else the

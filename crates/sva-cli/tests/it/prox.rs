@@ -69,8 +69,8 @@ fn labels(data: &Value) -> Vec<String> {
 
 /// `new --from` answers the starter's files, here two harmonics a voice to keep each render
 /// short, and a `solve` it may run as written. Through `path`
-/// that solve answers a stage a phase and chooses the least length; without a continuation it
-/// answers one stage at the cost's own price, and writes it only when confirmed.
+/// that solve answers a stage a phase and chooses the least predicted length, it alone measured;
+/// without a continuation it answers one stage at the cost's price and writes it when confirmed.
 #[test]
 fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
     let (root, wav) = clip("prox-path");
@@ -136,7 +136,7 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
         .collect();
     assert_eq!(phases, ["start", "settle", "price 0.012", "price 0.1"]);
     let stages = data["stages"]["items"].as_array().expect("stages");
-    for key in ["label", "price", "numbers", "bits", "measured", "predicted"] {
+    for key in ["label", "price", "numbers", "bits", "predicted"] {
         assert!(
             !stages[0][key].is_null(),
             "a stage answers `{key}`: {}",
@@ -150,8 +150,16 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
     assert_eq!(
         data["chosen"]["length_bits"].as_f64(),
         Some(least),
-        "the chosen stage is the least length: {data}"
+        "the chosen stage is the least predicted length: {data}"
     );
+    for key in ["measured", "error_bits"] {
+        assert!(
+            !data["chosen"][key].is_null(),
+            "the chosen stage answers `{key}`: {data}"
+        );
+    }
+    let measured = stages.iter().filter(|s| !s["measured"].is_null()).count();
+    assert_eq!(measured, 1, "the chosen stage alone is measured: {data}");
     let master = std::fs::read_to_string(dir.join("master")).expect("master");
 
     alone.push("--write".to_string());
@@ -162,6 +170,10 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
     assert!(data["continuation"].is_null(), "{data}");
     let stages = data["stages"]["items"].as_array().expect("stages");
     assert_eq!(stages.len(), 1, "no continuation solves once: {data}");
+    assert!(
+        !stages[0]["measured"].is_null(),
+        "its one stage is measured: {data}"
+    );
     let cost = data["cost_expression"].as_str().expect("the cost");
     assert!(cost.ends_with("+ repr.numbers(@master)"), "{cost}");
     assert_eq!(
@@ -181,7 +193,7 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
 
 /// A starter whose limits drop what the clip holds names `--continuation grow` next; run as
 /// written, it answers the composition as given solved, then each level it grew, chooses the
-/// least length and writes it under `--confirm`.
+/// least predicted length and writes it under `--confirm`.
 #[test]
 fn a_coarse_starter_grows_and_writes_its_choice() {
     let (root, wav) = clip("prox-grow");
