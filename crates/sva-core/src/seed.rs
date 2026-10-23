@@ -1,4 +1,4 @@
-// Concern: the starter a priced fit shrinks: one structure per group the clip's readings find, a line per voice, partial and noise | Non-concern: fitting it | IO: (samples, rate) -> files, varies, cost
+// Concern: the starter a priced fit shrinks, a structure per group the clip's readings find, a line per voice, partial and noise | Non-concern: fitting it | IO: (samples, rate) -> readings -> starter
 
 use sva_samples::measure::partials::{self, Asked, Curve, Kind as TrackKind};
 use sva_samples::measure::{internal, score};
@@ -202,9 +202,21 @@ fn sigmoid(x: f64) -> f64 {
     1.0 / (1.0 + sva_formula::exp(-x))
 }
 
-/// `clip` is the recording's path as the cost's `sample` reads it, beside the composition;
-/// its channels are heard averaged.
+/// What a starter is written from, read off a clip once and written at any limits.
+pub struct Readings {
+    voices: Vec<Voice>,
+    tracks: Vec<partials::Track>,
+    events: Vec<score::Event>,
+    ear: internal::Internal,
+    dur: f64,
+}
+
 pub fn seed(channels: &[Vec<f32>], rate: f64, clip: &str, limits: Limits) -> Seeded {
+    starter(&read(channels, rate), clip, limits)
+}
+
+/// The channels are heard averaged.
+pub fn read(channels: &[Vec<f32>], rate: f64) -> Readings {
     let len = channels.first().map_or(0, Vec::len);
     let x: Vec<f64> = (0..len)
         .map(|i| channels.iter().map(|p| f64::from(p[i])).sum::<f64>() / channels.len() as f64)
@@ -270,17 +282,32 @@ pub fn seed(channels: &[Vec<f32>], rate: f64, clip: &str, limits: Limits) -> See
             })
             .collect();
     }
+    Readings {
+        voices,
+        tracks,
+        events: read.events,
+        ear: internal::measure(&planes, rate, 0.0, sva_engine::DEFAULT_SPL_DB),
+        dur,
+    }
+}
+
+/// `clip` is the recording's path as the cost's `sample` reads it, beside the composition.
+pub fn starter(r: &Readings, clip: &str, limits: Limits) -> Seeded {
+    let Readings {
+        voices,
+        tracks,
+        events,
+        ear,
+        dur,
+    } = r;
     let harmonics_past: usize = voices
-        .iter_mut()
+        .iter()
         .map(|v| {
-            let past = v
-                .levels
+            v.levels
                 .iter()
                 .skip(limits.harmonics)
                 .filter(|l| **l > 0.0)
-                .count();
-            v.levels.resize(limits.harmonics, 0.0);
-            past
+                .count()
         })
         .sum();
     let mut lines: Vec<(f64, String)> = Vec::new();
@@ -296,8 +323,10 @@ pub fn seed(channels: &[Vec<f32>], rate: f64, clip: &str, limits: Limits) -> See
             harmonic(limits.harmonics),
         ));
     }
-    for v in &voices {
-        let top = v.levels.iter().copied().fold(0.0, f64::max);
+    for v in voices {
+        let mut levels = v.levels.clone();
+        levels.resize(limits.harmonics, 0.0);
+        let top = levels.iter().copied().fold(0.0, f64::max);
         let mut fields = vec![
             format!("\"at\": \"{}s\"", s6(v.at)),
             format!("\"node\": \"@../instruments/voice-{}\"", v.tone),
@@ -305,7 +334,7 @@ pub fn seed(channels: &[Vec<f32>], rate: f64, clip: &str, limits: Limits) -> See
             format!("\"vel\": {}", g(top)),
             format!("\"len\": \"{}s\"", s6(v.len)),
         ];
-        for (k, level) in v.levels.iter().enumerate() {
+        for (k, level) in levels.iter().enumerate() {
             let db = match *level > 0.0 && top > 0.0 {
                 true => 20.0 * libm::log10(level / top) + 20.0 * libm::log10((k + 1) as f64),
                 false => ABSENT_DB,
@@ -320,7 +349,7 @@ pub fn seed(channels: &[Vec<f32>], rate: f64, clip: &str, limits: Limits) -> See
     }
     let mut lone_lines = 0;
     let mut lone_past = 0;
-    for e in &read.events {
+    for e in events {
         let t = e.at_secs + LONE_AFTER_SECS;
         let mut loud: Vec<(f64, f64)> = tracks
             .iter()
@@ -351,9 +380,7 @@ pub fn seed(channels: &[Vec<f32>], rate: f64, clip: &str, limits: Limits) -> See
     if lone_lines > 0 {
         files.push(("instruments/partial".to_string(), lone()));
     }
-    let ear = internal::measure(&planes, rate, 0.0, sva_engine::DEFAULT_SPL_DB);
-    let mut spans: Vec<(&str, f64, f64)> = read
-        .events
+    let mut spans: Vec<(&str, f64, f64)> = events
         .iter()
         .map(|e| (e.sound.key(), e.at_secs, e.next_secs - e.at_secs))
         .collect();
@@ -364,13 +391,13 @@ pub fn seed(channels: &[Vec<f32>], rate: f64, clip: &str, limits: Limits) -> See
         sounds.push(score::Sound::Noisy.key());
     }
     for sound in &sounds {
-        spans.push((sound, 0.0, dur));
+        spans.push((sound, 0.0, *dur));
     }
     for (n, sound) in sounds.iter().enumerate() {
         let held: Vec<(f64, f64, (f64, f64))> = spans
             .iter()
             .filter(|(k, ..)| k == sound)
-            .map(|(_, at, len)| (*at, *len, band(&ear, *at, *len)))
+            .map(|(_, at, len)| (*at, *len, band(ear, *at, *len)))
             .collect();
         let centre = |side: fn(&(f64, f64)) -> f64| {
             let mut logs: Vec<f64> = held.iter().map(|(.., b)| libm::log(side(b))).collect();
