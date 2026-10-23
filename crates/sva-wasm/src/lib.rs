@@ -178,6 +178,7 @@ struct Options {
     steps: Option<usize>,
     draws: Option<usize>,
     write: bool,
+    recordings: Vec<Arc<sva_ast::Recording>>,
 }
 
 /// Values per array: stdout's cap, another, or every one (`limit: null`).
@@ -264,6 +265,7 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                 }
             }
             "continuation" => held.continuation = Some(continuation(&value)?),
+            "recordings" => held.recordings = cost::recordings_of(&value)?,
             "steps" => held.steps = Some(whole(&key, &value)?),
             "draws" => held.draws = Some(whole(&key, &value)?),
             "write" => {
@@ -581,13 +583,13 @@ impl Composition {
         self.inner.0.borrow_mut().insert(path, text);
     }
 
-    /// `sva-cli solve`'s envelope. `cost` is a `SolveCost` tree, every reference a value:
-    /// `{ norm: { sub: [{ repr: "bands", target: "@lead([0, 5s])" }, { value: data }] } }`.
-    /// `vary`: `SolveVary`s. `options` as the CLI's flags, `signal` and `progress(line)`;
-    /// `continuation` as `--continuation`: `{ scheme: "grow", harmonics: 48, lone: 8 }`.
+    /// `sva-cli solve`'s envelope. `cost` is `solve <cost>`'s text, as `seed` answers it, each
+    /// `sample("<path>")` in `options.recordings`, or a `SolveCost` tree. `vary`: `SolveVary`s.
+    /// `options` as the CLI's flags, `signal`, `progress(line)` and `continuation`, as
+    /// `{ scheme: "grow", harmonics: 48, lone: 8 }`.
     pub async fn solve(
         &self,
-        #[wasm_bindgen(unchecked_param_type = "SolveCost")] cost: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "string | SolveCost")] cost: JsValue,
         #[wasm_bindgen(unchecked_param_type = "SolveVary[]")] vary: js_sys::Array,
         options: JsValue,
     ) -> Result<JsValue, JsValue> {
@@ -605,10 +607,15 @@ impl Composition {
             "steps",
             "draws",
             "write",
+            "recordings",
         ];
         let options = options_of(&options, &keys)?;
-        let tree = cost::tree_of(&cost, "cost")?;
-        let cost = sva_core::solve::built(tree).map_err(|e| thrown(&e))?;
+        let heard = sva_core::solve::Recordings::new(&self.inner, options.recordings.clone());
+        let cost = match cost.as_string() {
+            Some(text) => sva_core::solve::cost_of(&heard, &text),
+            None => sva_core::solve::built(cost::tree_of(&cost, "cost")?),
+        }
+        .map_err(|e| thrown(&e))?;
         let vary = cost::vary_of(&vary)?;
         let stops = sva_core::solve::Stops {
             max_renders: options
@@ -622,7 +629,7 @@ impl Composition {
                 .unwrap_or(sva_core::solve::DEFAULT_COST_TOL),
         };
         let problem = sva_core::solve::Problem {
-            source: &self.inner,
+            source: &heard,
             texts: &sva_core::solve::NoFiles,
             cost,
             vary: vary.clone(),

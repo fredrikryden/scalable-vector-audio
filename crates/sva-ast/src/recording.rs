@@ -69,7 +69,8 @@ impl Unheld {
             Some(why) => format!("`sample(\"{}\")` could not be read: {why}", self.path),
             None => format!(
                 "`sample(\"{}\")` names no recording: no file is there, relative to the \
-                 directory sva-cli runs in or absolute, and a page inserted none under that path",
+                 directory sva-cli runs in or absolute, and a page passed none under that path in a \
+                 solve's `recordings`",
                 self.path
             ),
         }

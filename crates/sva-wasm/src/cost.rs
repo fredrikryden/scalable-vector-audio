@@ -1,5 +1,8 @@
-// Concern: reads a solve's cost and variables as the plain objects a page builds, references as values | Non-concern: typing or running it (sva-core) | IO: (JsValue) -> Tree, Vec<Vary>
+// Concern: reads a solve's cost tree, recordings and variables as the plain objects a page builds, references as values | Non-concern: typing or running it (sva-core) | IO: (JsValue) -> Tree, Vec<Vary>
 
+use std::sync::Arc;
+
+use sva_ast::Recording;
 use sva_core::solve::{OPERATORS, REDUCERS, REPR, Target, Tree, Vary, takes, vary};
 use wasm_bindgen::{JsCast, JsValue};
 
@@ -31,6 +34,11 @@ export type SolveCost =
     | { neg: SolveCost }
     | { norm: SolveCost } | { sum: SolveCost } | { max: SolveCost } | { abs: SolveCost }
     | { dot: [number[], SolveCost] };
+/**
+ * The recording each `sample("<path>")` of a cost's text reads, under that path:
+ * `{ "clip.wav": { rate: 48000, channels: [plane] } }`, as the CLI reads the file there.
+ */
+export type SolveRecordings = Record<string, Samples["samples"]>;
 /** One variable a solve moves, as `--vary <name>=<lo>..<hi>[/<step>][,log]`, or that text. */
 export type SolveVary = string | SolveVaryFields;
 export interface SolveVaryFields {
@@ -204,9 +212,9 @@ fn target_of(value: &JsValue, at: &str) -> Result<Target, JsValue> {
     if let Some(text) = value.as_string() {
         return Ok(Target::Text(text));
     }
-    let samples = entries(value)
+    let inner = entries(value)
         .and_then(|f| match f.as_slice() {
-            [(key, inner)] if key == "samples" => entries(inner),
+            [(key, inner)] if key == "samples" => Some(inner.clone()),
             _ => None,
         })
         .ok_or_else(|| {
@@ -215,6 +223,22 @@ fn target_of(value: &JsValue, at: &str) -> Result<Target, JsValue> {
                 "is no render expression and no `{ samples: { rate, channels } }`".to_string(),
             )
         })?;
+    let (rate, planes) = samples_of(&inner, &format!("{at}.samples"), &bad)?;
+    Ok(Target::Samples { rate, planes })
+}
+
+/// `{ rate, channels }`, one Float32Array per channel at `rate` Hz; `bad` refuses one field.
+fn samples_of(
+    value: &JsValue,
+    at: &str,
+    bad: &dyn Fn(&str, String) -> JsValue,
+) -> Result<(u32, Vec<Vec<f32>>), JsValue> {
+    let samples = entries(value).ok_or_else(|| {
+        bad(
+            at,
+            "is no recording, which holds `rate` and `channels`".to_string(),
+        )
+    })?;
     let field = |key: &str| {
         samples
             .iter()
@@ -226,7 +250,7 @@ fn target_of(value: &JsValue, at: &str) -> Result<Target, JsValue> {
         .find(|(k, _)| !["rate", "channels"].contains(&k.as_str()))
     {
         return Err(bad(
-            &format!("{at}.samples.{extra}"),
+            &format!("{at}.{extra}"),
             "is no field of a recording, which holds `rate` and `channels`".to_string(),
         ));
     }
@@ -235,7 +259,7 @@ fn target_of(value: &JsValue, at: &str) -> Result<Target, JsValue> {
         .filter(|r| *r >= 1.0 && r.fract() == 0.0 && *r <= f64::from(u32::MAX))
         .ok_or_else(|| {
             bad(
-                &format!("{at}.samples.rate"),
+                &format!("{at}.rate"),
                 "is no rate in whole hertz, as `AudioBuffer.sampleRate`".to_string(),
             )
         })?;
@@ -243,7 +267,7 @@ fn target_of(value: &JsValue, at: &str) -> Result<Target, JsValue> {
         .filter(js_sys::Array::is_array)
         .ok_or_else(|| {
             bad(
-                &format!("{at}.samples.channels"),
+                &format!("{at}.channels"),
                 "is no list of Float32Arrays".to_string(),
             )
         })?;
@@ -251,15 +275,38 @@ fn target_of(value: &JsValue, at: &str) -> Result<Target, JsValue> {
     for (c, one) in channels.iter().enumerate() {
         if !one.is_instance_of::<js_sys::Float32Array>() {
             return Err(bad(
-                &format!("{at}.samples.channels[{c}]"),
+                &format!("{at}.channels[{c}]"),
                 "is no Float32Array, as `AudioBuffer.getChannelData(c)`".to_string(),
             ));
         }
     }
-    Ok(Target::Samples {
-        rate: rate as u32,
-        planes: planes_of(channels)?,
-    })
+    Ok((rate as u32, planes_of(channels)?))
+}
+
+/// `{ "clip.wav": { rate, channels } }`: the recording each `sample("<path>")` of a cost's text
+/// reads, as the CLI reads the file at that path.
+pub(crate) fn recordings_of(value: &JsValue) -> Result<Vec<Arc<Recording>>, JsValue> {
+    let held =
+        entries(value).ok_or_else(|| bad_recording("recordings", "is no object".to_string()))?;
+    held.iter()
+        .map(|(path, one)| {
+            let (rate, planes) =
+                samples_of(one, &format!("recordings[\"{path}\"]"), &bad_recording)?;
+            Ok(Arc::new(Recording {
+                path: path.clone(),
+                rate,
+                planes: Arc::new(planes),
+            }))
+        })
+        .collect()
+}
+
+fn bad_recording(at: &str, why: String) -> JsValue {
+    refuse(
+        format!("`{at}` {why}"),
+        "`recordings` is `{ \"clip.wav\": { rate: 48000, channels: [Float32Array] } }`, each \
+         path one `sample(\"<path>\")` of the cost reads",
+    )
 }
 
 /// `{ name, lo, hi, step?, log? }`, as `--vary <name>=<lo>..<hi>[/<step>][,log]` reads it.

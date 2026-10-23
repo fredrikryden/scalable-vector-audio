@@ -2764,14 +2764,13 @@ fn object(pairs: &[(&str, JsValue)]) -> js_sys::Object {
     object
 }
 
-/// A composition holding the starter `seeded` hands over, its priced cost at `price` against
-/// the clip, and the starter's varies.
+/// A composition holding the starter `seeded` hands over, the cost text `seed` hands with it,
+/// the starter's varies, and the clip as the recording that text's `sample("clip.wav")` reads.
 fn seeded_fit(
     rate: u32,
     channels: &js_sys::Array,
     seeded: &JsValue,
-    price: f64,
-) -> (Composition, JsValue, js_sys::Array) {
+) -> (Composition, JsValue, js_sys::Array, JsValue) {
     let mut comp = Composition::new(Some("a-fit".to_string()));
     for file in items(seeded, "files").iter() {
         let (path, text) = (field(&file, "path"), field(&file, "text"));
@@ -2780,27 +2779,10 @@ fn seeded_fit(
             &text.as_string().unwrap_or_default(),
         );
     }
-    let cost = js_sys::JSON::parse(&format!(
-        r#"{{ "add": [ {{ "norm": {{ "sub": [ {{ "repr": "internal", "target": "@master" }},
-            {{ "repr": "internal", "target": {{ "samples": {{ "rate": {rate}, "channels": [] }} }} }} ] }} }},
-            {{ "mul": [{price}, {{ "repr": "numbers", "target": "@master" }}] }} ] }}"#
-    ))
-    .unwrap_or_else(|_| unreachable!("the cost is JSON"));
-    let reference = field(
-        &field(
-            &js_sys::Array::from(&field(
-                &field(&js_sys::Array::from(&field(&cost, "add")).get(0), "norm"),
-                "sub",
-            ))
-            .get(1),
-            "target",
-        ),
-        "samples",
-    );
-    js_sys::Reflect::set(&reference, &"channels".into(), channels)
-        .unwrap_or_else(|_| unreachable!("an object takes a key"));
     let varies = js_sys::Array::from(&field(&field(seeded, "varies"), "items"));
-    (comp, cost, varies)
+    let clip = object(&[("rate", JsValue::from(rate)), ("channels", channels.into())]);
+    let recordings = object(&[("clip.wav", clip.into())]);
+    (comp, field(seeded, "cost"), varies, recordings.into())
 }
 
 /// `seed` hands a page the starter `new --from` writes; `solve` with `method: "prox"` and a
@@ -2821,7 +2803,7 @@ fn a_seeded_starter_solves_on_the_priced_path() {
         0,
         "one sine leaves nothing out"
     );
-    let (comp, cost, varies) = seeded_fit(rate, &channels, &seeded, 0.012);
+    let (comp, cost, varies, recordings) = seeded_fit(rate, &channels, &seeded);
     let asked = |scheme: &str, write: bool| {
         let continuation = object(&[
             ("scheme", JsValue::from(scheme)),
@@ -2832,6 +2814,7 @@ fn a_seeded_starter_solves_on_the_priced_path() {
             ("continuation", continuation.into()),
             ("steps", JsValue::from(2)),
             ("write", JsValue::from(write)),
+            ("recordings", recordings.clone()),
         ]))
     };
     let refused = now(comp.solve(cost.clone(), varies.clone(), asked("spiral", false)))
@@ -2868,7 +2851,7 @@ fn a_coarse_starter_grows_through_its_levels() {
     let limits = object(&[("harmonics", JsValue::from(1)), ("lone", JsValue::from(1))]);
     let seeded = sva_wasm::seed(rate, channels.clone(), "clip.wav", Some(limits))
         .unwrap_or_else(|e| unreachable!("a clip seeds: {}", as_text(&e)));
-    let (comp, cost, varies) = seeded_fit(rate, &channels, &seeded, 1.0);
+    let (comp, cost, varies, recordings) = seeded_fit(rate, &channels, &seeded);
     let continuation = object(&[
         ("scheme", JsValue::from("grow")),
         ("harmonics", JsValue::from(2)),
@@ -2879,6 +2862,7 @@ fn a_coarse_starter_grows_through_its_levels() {
         ("continuation", continuation.into()),
         ("steps", JsValue::from(3)),
         ("write", JsValue::from(true)),
+        ("recordings", recordings),
     ]);
     let answered = now(comp.solve(cost, varies, asked.into())).unwrap_or_else(|e| {
         unreachable!(
@@ -2906,5 +2890,66 @@ fn a_coarse_starter_grows_through_its_levels() {
     assert!(
         items(&data, "written").length() > 0,
         "the chosen stage is written"
+    );
+}
+
+/// `seed`'s cost text, its `sample("clip.wav")` read from `recordings`, solves to the same
+/// stages, choice and files as the tree it stands for, the clip passed as a value; a text the
+/// grammar refuses refuses as `sva-cli solve` does, and a recording no page passed is named.
+#[wasm_bindgen_test]
+fn a_seeded_cost_text_solves_as_its_tree() {
+    let (rate, channels) = sine_clip();
+    let seeded = sva_wasm::seed(rate, channels.clone(), "clip.wav", None)
+        .unwrap_or_else(|e| unreachable!("a clip seeds: {}", as_text(&e)));
+    let (comp, text, varies, recordings) = seeded_fit(rate, &channels, &seeded);
+    let leaf = |target: JsValue| {
+        JsValue::from(object(&[
+            ("repr", JsValue::from("internal")),
+            ("target", target),
+        ]))
+    };
+    let clip = object(&[(
+        "samples",
+        object(&[("rate", JsValue::from(rate)), ("channels", channels.into())]).into(),
+    )]);
+    let residual = js_sys::Array::of2(&leaf(JsValue::from("@master")), &leaf(clip.into()));
+    let numbers = object(&[
+        ("repr", JsValue::from("numbers")),
+        ("target", JsValue::from("@master")),
+    ]);
+    let norm = object(&[("norm", object(&[("sub", residual.into())]).into())]);
+    let tree = object(&[("add", js_sys::Array::of2(&norm, &numbers).into())]);
+    let asked = |recordings: Option<&JsValue>| {
+        let mut pairs = vec![
+            ("method", JsValue::from("prox")),
+            ("steps", JsValue::from(2)),
+        ];
+        pairs.extend(recordings.map(|r| ("recordings", r.clone())));
+        JsValue::from(object(&pairs))
+    };
+    let solved = |cost: JsValue| {
+        let answered = now(comp.solve(cost, varies.clone(), asked(Some(&recordings))))
+            .unwrap_or_else(|e| {
+                unreachable!(
+                    "the priced solve answers: {}",
+                    as_text(&field(&e, "refusal"))
+                )
+            });
+        let data = field(&answered, "data");
+        ["stages", "chosen", "files"].map(|key| as_text(&field(&data, key)))
+    };
+    assert_eq!(solved(text.clone()), solved(tree.into()));
+    let refusal = |cost: &str, recordings: Option<&JsValue>| {
+        let refused = now(comp.solve(cost.into(), varies.clone(), asked(recordings)))
+            .err()
+            .unwrap_or_else(|| unreachable!("`{cost}` refuses"));
+        as_text(&field(&refused, "refusal"))
+    };
+    let broken = refusal("norm(repr.internal(@master)", Some(&recordings));
+    assert!(broken.contains("solve.bad_cost"), "{broken}");
+    let unheld = refusal(&text.as_string().unwrap_or_default(), None);
+    assert!(
+        unheld.contains("`sample(\\\"clip.wav\\\")` names no recording"),
+        "{unheld}"
     );
 }

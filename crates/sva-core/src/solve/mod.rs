@@ -134,10 +134,16 @@ pub fn cost_of(source: &dyn Source, written: &str) -> Result<Cost, CliError> {
     cost::cost_file(path, &text)
 }
 
-/// `under` beside the recordings the cost's leaves hold as values, each under its leaf's key.
-pub(crate) struct Recordings<'a> {
+/// `under` beside recordings handed over as values, each answered under its own path.
+pub struct Recordings<'a> {
     under: &'a dyn Source,
-    held: Vec<(String, Arc<Recording>)>,
+    held: Vec<Arc<Recording>>,
+}
+
+impl<'a> Recordings<'a> {
+    pub fn new(under: &'a dyn Source, held: Vec<Arc<Recording>>) -> Recordings<'a> {
+        Recordings { under, held }
+    }
 }
 
 impl Source for Recordings<'_> {
@@ -158,21 +164,21 @@ impl Source for Recordings<'_> {
     }
 
     fn recording(&self, path: &str) -> Result<Option<Arc<Recording>>, String> {
-        match self.held.iter().find(|(key, _)| key == path) {
-            Some((_, held)) => Ok(Some(Arc::clone(held))),
+        match self.held.iter().find(|held| held.path == path) {
+            Some(held) => Ok(Some(Arc::clone(held))),
             None => self.under.recording(path),
         }
     }
 }
 
+/// `under` beside the recordings the cost's leaves hold as values, each under its leaf's key.
 pub(crate) fn recorded<'a>(cost: &Cost, under: &'a dyn Source) -> Recordings<'a> {
     let held = cost
         .leaves
         .iter()
         .filter_map(|leaf| leaf.recording.clone())
-        .map(|held| (held.path.clone(), held))
         .collect();
-    Recordings { under, held }
+    Recordings::new(under, held)
 }
 
 /// Every check the cost and the variables need, before anything renders: the variables' start
