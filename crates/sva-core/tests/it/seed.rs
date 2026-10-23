@@ -4,7 +4,7 @@ use sva_core::seed::{LIMITS, Limits, Seeded, read, seed, starter};
 const RATE: f64 = 48_000.0;
 
 /// FNV-1a of the starter's text at `LIMITS` and at `{1, 1}`.
-const PINNED: [u64; 2] = [0x927f_c60d_5460_5c55, 0xdb6b_53e7_d053_c66e];
+const PINNED: [u64; 2] = [0x68e4_e85f_1d5d_e0ee, 0x1362_776e_a3fe_1dbd];
 
 /// A plucked 220 Hz tone with its octave, 0.3 s.
 fn clip() -> Vec<Vec<f32>> {

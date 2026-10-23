@@ -52,7 +52,7 @@ pub const VARIES: [&str; 19] = [
     "len=0.02s..30s/0.1",
     "lo=30hz..22000hz/1.22,log",
     "hi=30hz..22000hz/1.22,log",
-    "cut=4000hz..22000hz/1.15,log",
+    "cut=30hz..22000hz/1.15,log",
 ];
 
 pub struct Seeded {
