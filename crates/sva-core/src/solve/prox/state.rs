@@ -17,18 +17,9 @@ pub struct Var {
     pub unit: &'static str,
 }
 
-fn si(unit: &str, x: f64) -> f64 {
-    match unit {
-        "ms" => x / 1000.0,
-        "khz" => x * 1000.0,
-        _ => x,
-    }
-}
-
 impl Var {
     pub fn of(v: &Vary) -> Result<Var, CliError> {
-        let (lo, hi) = (si(v.unit, v.lo), si(v.unit, v.hi));
-        let step = v.step.ok_or_else(|| {
+        let res = v.resolution().ok_or_else(|| {
             CliError::usage(
                 "solve.prox_needs_step",
                 format!(
@@ -38,16 +29,13 @@ impl Var {
                 ),
             )
         })?;
+        let (lo, hi) = v.bounds();
         Ok(Var {
             vary: v.clone(),
-            lo: if v.log { libm::log(lo) } else { lo },
-            hi: if v.log { libm::log(hi) } else { hi },
+            lo,
+            hi,
             log: v.log,
-            res: if v.log {
-                libm::log(step)
-            } else {
-                si(v.unit, step)
-            },
+            res,
             unit: match v.unit {
                 "s" | "ms" => "s",
                 "hz" | "khz" => "hz",
@@ -62,13 +50,6 @@ impl Var {
 
     pub fn bits(&self) -> f64 {
         self.vary.bits()
-    }
-
-    pub fn coord(&self, value: f64) -> f64 {
-        match self.log {
-            true => libm::log(value.max(1e-300)),
-            false => value,
-        }
     }
 
     pub fn value(&self, coord: f64) -> f64 {
@@ -157,7 +138,7 @@ impl State {
         for (n, path) in nodes.iter().enumerate() {
             for (name, value) in &model.nodes[path].defaults {
                 if let Some(v) = var_for(path, name) {
-                    let c = vars[v].coord(*value);
+                    let c = vars[v].vary.coord(*value);
                     s.push(
                         c,
                         v,
@@ -202,7 +183,7 @@ impl State {
                         let written = line.fields.iter().find(|(f, _)| f == name);
                         let value = written.map_or(*default, |(_, x)| *x);
                         s.push(
-                            vars[v].coord(value),
+                            vars[v].vary.coord(value),
                             v,
                             Role::Own {
                                 line: i,
@@ -222,7 +203,7 @@ impl State {
                     .fields
                     .iter()
                     .find(|(f, _)| f == name)
-                    .map_or(0.0, |(_, value)| vars[v].coord(*value) - c);
+                    .map_or(0.0, |(_, value)| vars[v].vary.coord(*value) - c);
                 s.push(
                     d,
                     v,
@@ -242,7 +223,7 @@ impl State {
                 };
                 let root = !vars[v].log && vars[v].lo == 0.0 && s.root[i].is_none();
                 s.push(
-                    vars[v].coord(*value),
+                    vars[v].vary.coord(*value),
                     v,
                     Role::Own {
                         line: i,

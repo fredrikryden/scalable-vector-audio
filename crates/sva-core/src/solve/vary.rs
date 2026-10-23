@@ -1,4 +1,4 @@
-// Concern: one `--vary` variable: bounds, step and scale in one unit, its start off its file, its value as text | Non-concern: searching over it | IO: (text) -> Vary; (file) -> a start
+// Concern: one `--vary` variable: bounds, step and scale in one unit, its coordinate and resolution, its start off its file, its text | Non-concern: searching it | IO: (text) -> Vary; (file) -> a start
 
 use sva_ast::{LogUnit, Source, TokenKind, VARIABLES, tokenize, variable};
 
@@ -166,6 +166,41 @@ impl Vary {
             (None, _) => 1.0 / crate::solve::FIRST_STEP_OF_SPAN,
         };
         libm::log2(cells.max(1.0))
+    }
+
+    /// `x` in this variable's unit, as the render reads it: seconds and hertz.
+    fn rendered(&self, x: f64) -> f64 {
+        match self.unit {
+            "ms" => x / 1000.0,
+            "khz" => x * 1000.0,
+            _ => x,
+        }
+    }
+
+    /// A value as the render reads it, in this variable's coordinate: its log on a log scale.
+    pub fn coord(&self, value: f64) -> f64 {
+        match self.log {
+            true => libm::log(value.max(1e-300)),
+            false => value,
+        }
+    }
+
+    /// The bounds in this variable's coordinate.
+    pub fn bounds(&self) -> (f64, f64) {
+        let (lo, hi) = (self.rendered(self.lo), self.rendered(self.hi));
+        match self.log {
+            true => (libm::log(lo), libm::log(hi)),
+            false => (lo, hi),
+        }
+    }
+
+    /// About a JND of what the number moves, in its coordinate: its step; none without one.
+    pub fn resolution(&self) -> Option<f64> {
+        let step = self.step?;
+        Some(match self.log {
+            true => libm::log(step),
+            false => self.rendered(step),
+        })
     }
 
     /// `value` as the variable's file would hold it, rounded where its grid runs out of digits.
