@@ -100,6 +100,13 @@ fn noise_limited(least: &[Least]) -> bool {
         .is_some_and(|(then, now)| then.objective - now.objective <= standard_error(&now.drawn))
 }
 
+struct Best {
+    state: State,
+    residual_bits: f64,
+    numbers: usize,
+    bits: f64,
+}
+
 struct Descent<'a> {
     fit: &'a Fit,
     weights: Vec<f64>,
@@ -109,6 +116,7 @@ struct Descent<'a> {
 }
 
 impl Descent<'_> {
+    /// Leaves `s` at its least evaluated objective, start included: Adam may climb.
     async fn descend(
         &mut self,
         s: &mut State,
@@ -131,8 +139,12 @@ impl Descent<'_> {
             return Ok(ran(0, Ended::Cap, false));
         }
         let mut least: Vec<Least> = Vec::with_capacity(cap + 1);
+        let mut best: Option<Best> = None;
         for k in 0..=cap {
             if self.abandon.abandoned().await {
+                if let Some(b) = best {
+                    *s = b.state;
+                }
                 return Ok(ran(k, Ended::Signal, false));
             }
             let e = evaluate(self.fit, s, k < cap, self.fit.threads)?;
@@ -143,10 +155,18 @@ impl Descent<'_> {
                     objective: l.objective,
                     drawn: l.drawn.clone(),
                 },
-                _ => Least {
-                    objective,
-                    drawn: e.drawn.as_slice().into(),
-                },
+                _ => {
+                    best = Some(Best {
+                        state: s.clone(),
+                        residual_bits: e.residual.bits,
+                        numbers,
+                        bits,
+                    });
+                    Least {
+                        objective,
+                        drawn: e.drawn.as_slice().into(),
+                    }
+                }
             };
             least.push(next);
             let ended = match k == cap {
@@ -154,18 +174,23 @@ impl Descent<'_> {
                 false => flat(&least).then_some(Ended::Converged),
             };
             if k % 50 == 0 || ended.is_some() {
+                let (residual_bits, numbers, bits) = match (ended, &best) {
+                    (Some(_), Some(b)) => (b.residual_bits, b.numbers, b.bits),
+                    _ => (e.residual.bits, numbers, bits),
+                };
                 (self.report)(&Progress {
                     phase,
                     lambda,
                     step: k,
                     draws,
-                    residual_bits: e.residual.bits,
+                    residual_bits,
                     numbers,
                     bits,
                     ended,
                 });
             }
             if let Some(ended) = ended {
+                *s = best.expect("the first step sets the least").state;
                 return Ok(ran(k, ended, noise_limited(&least)));
             }
             let grad = e.grad.expect("a gradient was asked");

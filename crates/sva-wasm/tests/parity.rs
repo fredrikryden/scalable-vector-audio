@@ -112,7 +112,7 @@ fn filtered_noise_renders_the_pinned_bits_on_four_threads() {
 /// A clip fitted as `new --from` and `solve --method prox --continuation path` do: `<FNV-1a
 /// of each stage's distance bits, solved and at the cap's draws> <of the chosen files' bytes>`.
 /// At 160 steps, descents end flat and at their cap, noise-limited and not.
-const PRICED: &str = "f5b3e70f5c4ac588 79cf6c62faf5e039";
+const PRICED: &str = "5980f5514d0347c2 ecd645c1b428724b";
 
 fn priced(threads: usize) -> String {
     let clip_nodes: sva_ast::Composition = [(

@@ -665,7 +665,11 @@ PRICED FIT:
   1/(1 - beta1) steps), its least value over the last k/2 fell by no more
   than that fall's standard error, paired over the draws: every step reads
   the same draws, so the error is the spread of each draw's own fall between
-  the two least states, a fall the draws cannot tell from none.
+  the two least states, a fall the draws cannot tell from none. Proximal Adam
+  is no descent method, so each phase answers the state of the least
+  objective it evaluated, its start included: that state is what the stage
+  carries and writes and what the next phase starts from, and no phase ends
+  higher than it started.
   `--steps` (default {steps}) caps the descent, the debias at a quarter of it;
   a stage that reaches its cap first warns `solve.steps_cap`. `--steps 0`
   descends nothing: the composition is scored as it is, one stage predicted
@@ -714,7 +718,9 @@ PRICED FIT:
   files, score lines without their silent ones or the fields their node's
   default restates. Every 50th step and
   the step a phase converges or reaches its cap at print a JSON line on
-  stderr, its `stage` beside it, that last's `ended` why, null on the others. `sva-cli new <name> --from
+  stderr, its `stage` beside it: that last's `ended` why and its residual,
+  numbers and bits the state the phase answers; the others' `ended` null and
+  their values their own step's. `sva-cli new <name> --from
   <clip>` writes a starter to fit.
 
 CONTINUATION:

@@ -82,9 +82,9 @@ fn labels(data: &Value) -> Vec<String> {
         .collect()
 }
 
-/// `new --from` answers the starter's files, here two harmonics a voice to keep each render
-/// short, and a `solve` it may run as written. Through `path`
-/// that solve answers a stage a phase and chooses the least predicted length, it alone measured;
+/// `new --from` answers the starter's files, two harmonics a voice, and a `solve` to run.
+/// Through `path` that solve answers a stage a phase, each phase ending no higher than it
+/// started, and chooses the least predicted length, it alone measured;
 /// without a continuation it answers one stage at the cost's price and writes it when confirmed.
 #[test]
 fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
@@ -131,8 +131,33 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
     words[at + 1] = "path:0.012,0.1".to_string();
     let mut solve = argv(&["solve", "@fits/clip", "--steps", "3", "--cache", "none"]);
     solve.extend(words);
-    let answered = json(&sva(&dir, &solve));
+    let out = sva(&dir, &solve);
+    let answered = json(&out);
     assert_eq!(answered["status"], "success", "{answered}");
+    let mut started = std::collections::HashMap::new();
+    for line in String::from_utf8_lossy(&out.stderr).lines() {
+        let Ok(p) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let objective = p["residual_bits"].as_f64().expect("a residual")
+            + p["price"].as_f64().expect("a price") * p["bits"].as_f64().expect("bits");
+        let phase = (
+            p["stage"].to_string(),
+            p["phase"].to_string(),
+            p["draws"].to_string(),
+        );
+        if p["step"] == 0 {
+            started.insert(phase.clone(), objective);
+        }
+        if !p["ended"].is_null() {
+            let start = started[&phase];
+            assert!(
+                objective <= start,
+                "a phase ends no higher than it starts, {start}: {line}"
+            );
+        }
+    }
+    assert!(!started.is_empty(), "each phase prints its start");
     let data = &answered["data"];
     assert_eq!(data["method"], "prox");
     assert_eq!(data["continuation"]["scheme"], "path", "{data}");
