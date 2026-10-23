@@ -176,6 +176,7 @@ struct Options {
     prox: bool,
     continuation: Option<sva_core::continuation::Scheme>,
     steps: Option<usize>,
+    draws: Option<usize>,
     write: bool,
 }
 
@@ -264,6 +265,7 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
             }
             "continuation" => held.continuation = Some(continuation(&value)?),
             "steps" => held.steps = Some(whole(&key, &value)?),
+            "draws" => held.draws = Some(whole(&key, &value)?),
             "write" => {
                 held.write = value.as_bool().ok_or_else(|| {
                     refuse("`write` is not a boolean".into(), "pass true or false")
@@ -601,6 +603,7 @@ impl Composition {
             "method",
             "continuation",
             "steps",
+            "draws",
             "write",
         ];
         let options = options_of(&options, &keys)?;
@@ -668,6 +671,9 @@ impl Composition {
             steps: options
                 .steps
                 .unwrap_or(sva_core::solve::prox::DEFAULT_STEPS),
+            draws: options
+                .draws
+                .unwrap_or(sva_core::solve::prox::DEFAULT_DRAWS),
         };
         let mut heard = |line: &str| {
             if let Some(progress) = &options.progress {
@@ -679,7 +685,7 @@ impl Composition {
             .await
             .map_err(|e| thrown(&e))?;
         let cost = &problem.cost.text;
-        let warnings = capped(&fitted, &settings, "`steps`");
+        let warnings = capped(&fitted, &settings, ("`steps`", "`draws`"));
         if fitted.ran.cancelled {
             let data = fitted_data(&fitted, &settings, cost, "");
             let message = "the priced solve was aborted; `refusal.data.stages` holds the stages it \

@@ -7,7 +7,7 @@ use sva_ast::{Arg, Expr, Literal};
 use sva_engine::Varied;
 use sva_formula::Tangents;
 
-use super::draws::{self, DRAWS, seed};
+use super::draws::{self, seed};
 use super::lines::{self, Filter, Line, Realisation};
 use super::state::{Slot, State};
 use crate::cli_error::CliError;
@@ -368,6 +368,7 @@ pub fn lowered(
     source: &dyn Fn(&str) -> Option<String>,
     g: &Grid,
     renders: &Renders,
+    draws: usize,
     threads: std::num::NonZeroUsize,
 ) -> Result<Lowered, CliError> {
     let text = text(s, source)?;
@@ -439,7 +440,7 @@ pub fn lowered(
             None => Vec::new(),
         };
         let noise_samples = match noise {
-            Some(n) if super::write::line_reads(s, i, "seed") => (0..DRAWS)
+            Some(n) if super::write::line_reads(s, i, "seed") => (0..draws)
                 .map(|k| rendered(renders, &n.source, Some(seed(keys[i], k)), *onset, g))
                 .collect::<Result<Vec<_>, _>>()?,
             Some(n) => vec![rendered(renders, &n.source, None, *onset, g)?],

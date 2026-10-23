@@ -1,9 +1,8 @@
-// Concern: a reached composition rendered once per draw and read against the reference, as the cost's leaf reads a render | Non-concern: minimising | IO: (Problem, files, Tier) -> Residual
+// Concern: a reached composition rendered once per draw and read against the reference, as the cost's leaf reads a render | Non-concern: minimising | IO: (Problem, files, draws, Tier) -> Residual
 
 use sva_ast::Source;
 use sva_engine::{Abandon, Backend, Tier};
 
-use super::draws::DRAWS;
 use super::eval::{Residual, residual, weights};
 use super::run::{Prepared, Reading, prepared};
 use super::write;
@@ -14,6 +13,7 @@ use crate::solve::{Problem, recorded};
 pub async fn measure<B: Backend>(
     problem: &Problem<'_>,
     files: &[(String, String)],
+    draws: usize,
     tier: &Tier<B>,
     abandon: &dyn Abandon,
 ) -> Result<Residual, CliError> {
@@ -25,7 +25,7 @@ pub async fn measure<B: Backend>(
         fit,
         state,
         frames,
-    } = prepared(problem, &source, tier, abandon).await?;
+    } = prepared(problem, &source, draws, tier, abandon).await?;
     let reading = Reading {
         problem,
         tier,
@@ -34,12 +34,12 @@ pub async fn measure<B: Backend>(
     };
     let text = |p: &str| -> Option<String> { source.get(p).ok().flatten().map(|t| t.into_owned()) };
     let model = format!("@{}([0, {frames}sp])", shape.root);
-    let mut draws = Vec::with_capacity(DRAWS);
-    for k in 0..DRAWS {
+    let mut read = Vec::with_capacity(draws);
+    for k in 0..draws {
         let drawn = write::drawn(&state, &text, k)?;
         let over = sva_ast::Overlay::new(&source, drawn.into_iter().collect());
         let (rendered, _) = reading.read(&over, &model).await?;
-        draws.push(rendered.elements);
+        read.push(rendered.elements);
     }
-    Ok(residual(&fit, &weights(&fit), &draws))
+    Ok(residual(&fit, &weights(&fit), &read))
 }

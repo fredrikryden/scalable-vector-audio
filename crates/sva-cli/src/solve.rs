@@ -155,7 +155,7 @@ fn priced_solve(
     ));
     persisted(tier, &mut warnings);
     let fitted = outcome?;
-    warnings.extend(capped(&fitted, settings, "`--steps`"));
+    warnings.extend(capped(&fitted, settings, ("`--steps`", "`--draws`")));
     let data = |extra: &str| fitted_data(&fitted, settings, &problem.cost.text, extra);
     if fitted.ran.cancelled {
         let message = "the priced solve was stopped by a signal; `data.stages` holds the stages \

@@ -1,4 +1,4 @@
-// Concern: structure edits ranked by one evaluation each, the best solved, kept where it falls | Non-concern: proposing edits, the descent | IO: (Problem, edits, price) -> files, kept
+// Concern: structure edits ranked by one evaluation each, the best solved, kept where it falls | Non-concern: proposing edits, the descent | IO: (Problem, edits, price, draws) -> files, kept
 
 //! A proposal is evaluated once and predicted `f(x) + g·(x⁺ - x) + λ·(b(x⁺) - b(x))`, `x⁺` the
 //! solver's first proximal step; the current files alike. Those predicted below them are solved
@@ -52,6 +52,7 @@ pub async fn improve<B: Backend>(
     cx: &Cx<'_, B>,
     files: Vec<(String, String)>,
     cost: &Cost,
+    draws: usize,
     propose: &Propose<'_>,
 ) -> Result<Improved, CliError> {
     let mut quiet = |_: &Progress| {};
@@ -65,7 +66,7 @@ pub async fn improve<B: Backend>(
         if proposals.is_empty() {
             break;
         }
-        let current = predicted(&cx.prepared(&files, cost).await?)?;
+        let current = predicted(&cx.prepared(&files, cost, draws).await?)?;
         let mut ranked = Vec::new();
         for p in proposals {
             if cx.abandon.abandoned().await {
@@ -73,7 +74,7 @@ pub async fn improve<B: Backend>(
             }
             let edited = applied(&model, &cx.texts(&files), &cx.problem.vary, &p)?;
             let start = merged(&files, &edited);
-            let at = predicted(&cx.prepared(&start, cost).await?)?;
+            let at = predicted(&cx.prepared(&start, cost, draws).await?)?;
             if at.predicted < current.predicted {
                 ranked.push((at.predicted, p.label, start));
             }
@@ -81,7 +82,7 @@ pub async fn improve<B: Backend>(
         ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
         for (_, label, start) in ranked {
             let solved = cx
-                .solved(&start, cost, cx.settings.steps, &mut quiet)
+                .solved(&start, cost, cx.settings.steps, draws, &mut quiet)
                 .await?;
             if solved.cancelled() {
                 break 'round;

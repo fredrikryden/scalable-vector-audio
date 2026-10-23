@@ -31,7 +31,7 @@ pub fn help_text() -> String {
     );
     let (steps, rate) = (solve::prox::DEFAULT_STEPS, solve::prox::BITS_PER_JND2);
     let flat_from = 2 * solve::prox::step::memory();
-    let draws = solve::prox::draws::DRAWS;
+    let (fewest, draws) = (sva_core::continuation::FEWEST, solve::prox::DEFAULT_DRAWS);
     let rounds = sva_core::structure::assign::REASSIGN_ROUNDS;
     let (harmonics, lone) = (
         sva_core::seed::LIMITS.harmonics,
@@ -383,7 +383,7 @@ SOLVE:
                 [--max-renders <n>] [--step-tol <x>] [--cost-tol <x>]
                 [--set <name>=<text>]... [--rate <hz>] [--threads <n>]
                 [--cache <path|none>] [--write [--confirm]]
-                [--method prox [--steps <n>]
+                [--method prox [--steps <n>] [--draws <n>]
                   [--continuation (path[:<p>,<p>...] | grow[:<h>,<l>])
                     [--rounds <n>]]]
 
@@ -614,11 +614,11 @@ PRICED FIT:
   biquads as H(f)); a node's filtered noise is its rendered realisation under
   H(f). The phases between lines and the noises' realisations are no part of
   the model, so the loss is its expectation over them: the residual's bits
-  averaged over {draws} draws, each line whose node reads `ph` offset by its own
+  averaged over K draws (DRAWS below), each line whose node reads `ph` offset by its own
   phase, 2 pi times splitmix64 of the line's key and the draw over 2^64, and
   each whose node reads `seed` given its own seed off the same key on a second
-  stream, the same draws every solve, the lines summed coherently as the
-  render sums them. A line's key is its onset, the fields it binds that no
+  stream, the same draws every solve, draw k of a line the same at every K,
+  the lines summed coherently as the render sums them. A line's key is its onset, the fields it binds that no
   `--vary` names and its node reads, and its rank in written order among the
   lines that agree on both: writing a fit, dropping a silent line, moving one
   to a split's node or reordering the score keeps every other line's draws,
@@ -646,25 +646,34 @@ PRICED FIT:
   1/(1 - beta1) steps), its least value over the last k/2 fell by less than its
   standard error from the draws, a fall the draws cannot tell from none.
   `--steps` (default {steps}) caps the descent, the debias at a quarter of it;
-  a stage that reaches its cap first warns `solve.steps_cap`. CONTINUATION
-  runs it as stages instead. Every stage is a candidate: `chosen` is the stage
-  of least predicted length, the predicted residual's bits plus the numbers',
-  the objective the descent and the ranking lower at price 1. The chosen
-  stage alone is then rendered once per draw, each line's `ph` and `seed` its
+  a stage that reaches its cap first warns `solve.steps_cap`.
+  DRAWS: a stage is solved at K draws: a run's first stage at {fewest}, the
+  fewest with a standard error, each later one at the K the last ended with.
+  A descent that ends `converged` stopped at its draws' standard error, so is
+  limited by their noise: the stage is solved again from its result at 2K,
+  the first 2K of the same draws, until K reaches `--draws` (default {draws}),
+  a cost bound, an evaluation's work growing with K; a stage whose last
+  descent converges at that cap warns `solve.draws_cap`. The ranking
+  (CONTINUATION) evaluates and solves at the stage's current K. Without
+  CONTINUATION the cost is one such stage; with it, it runs as stages.
+  Every stage is a candidate: `chosen` is the stage of least predicted
+  length, the predicted residual's bits plus the numbers', the objective the
+  descent and the ranking lower at price 1. The chosen stage alone is then
+  rendered once per draw of the cap's K, each line's `ph` and `seed` its
   draw's, and read as `internal`. The answer's `data`:
   `stages`, each with its `label`, the structure `edits` kept before it, its
-  `descents` (each phase's `steps` taken of its `cap`, and why it `ended`:
-  `converged`, `cap` or `signal`), its `price`, its `numbers` and their `bits`, its
-  weighted `cells`, `predicted` (what the descent lowered) and, on the chosen
-  stage alone, `measured` (off its renders), each with its
-  `residual_bits`, their `standard_error` from the draws' spread, `d_prime`
+  `descents` (each phase's `steps` taken of its `cap`, the K `draws` its loss
+  averaged, and why it `ended`: `converged`, `cap` or `signal`), its `price`,
+  its `numbers` and their `bits`, its weighted `cells`, `predicted` (what the
+  descent lowered) and, on the chosen stage alone, `measured` (off its
+  renders), each with its `residual_bits`, their `standard_error` from the draws' spread, `d_prime`
   (unweighted, root mean square over the draws) and `per_cell` (the root mean
   square d over the weighted cells, in JND), `error_bits` the measured less
   the predicted (null where unmeasured), its `residual_bits` (the predicted)
   and `length_bits`, the predicted residual's and the numbers' bits summed;
-  `chosen`, that stage; `continuation`, the scheme or null; and `files`, the
-  chosen stage's text. A signal stops the solve: `stages` holds the stages it
-  finished and, `stopped` true, the one it stopped in, `chosen` the least
+  `chosen`, that stage; `draws`, the cap; `continuation`, the scheme or null;
+  and `files`, the chosen stage's text. A signal stops the solve: `stages`
+  holds the stages it finished and, `stopped` true, the one it stopped in, `chosen` the least
   predicted length, nothing measured, and no file is written.
   `--write --confirm` writes the chosen stage in place: defaults in their node
   files, score lines without their silent ones or the fields their node's
@@ -678,7 +687,7 @@ CONTINUATION:
   from the files the last one reached, under the same `--vary`s; `chosen` is
   the stage of least `length_bits`, the predicted, whatever its price, and it
   alone is measured (PRICED FIT). Without
-  it the cost is solved once, one stage. Each stage's steps below are its cap,
+  it the cost is solved as one stage. Each stage's steps below are its cap,
   its descent ending sooner where it stops falling (PRICED FIT). The schemes are
     path[:<p>,<p>...]   the price homotopy over the prices given, else the
                         cost's own (a starter's `next` gives 0.01 up to 1):
@@ -711,8 +720,9 @@ CONTINUATION:
   from it predicts off its gradient, the residual taken linear over that step
   and the price exact; the current files are predicted the same way. Those
   predicted below the current files are solved in that order, each capped at
-  `--steps`, and the first whose objective falls below the current files' is
-  kept, then the rest offered again from it; a round keeping none ends.
+  `--steps`, all at the stage's current draws (DRAWS, PRICED FIT), and the
+  first whose objective falls below the current files' is kept, then the rest
+  offered again from it; a round keeping none ends.
   `--rounds <n>` (default {rounds}) sets the k-medians rounds of each cluster
   and split, a cost bound on how long reassignment runs.
 
@@ -889,6 +899,9 @@ DEFAULTS:
   --rounds <n>         a continuation's k-medians rounds. Default {rounds}.
   --steps <n>          caps each priced stage's descent, which ends sooner where
                        its objective stops falling. Default {steps}.
+  --draws <n>          the most draws a priced stage's schedule doubles to, at
+                       least {fewest}; the chosen stage is measured at it.
+                       Default {draws}.
   --write              a solve writes its fitted values to their `variables/`
                        files, with `--confirm`. Default off.
   --confirm            replaces a destination that already holds a file. Without

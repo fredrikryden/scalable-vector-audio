@@ -3,7 +3,7 @@
 use sva_engine::Backend;
 
 use super::improve::improve;
-use super::{Cx, Reached, Stage, Stages, merged, scaled};
+use super::{Cx, Reached, Stage, Stages, merged, scaled, started};
 use crate::cli_error::CliError;
 use crate::solve::prox::DEBIAS_STEPS;
 use crate::solve::with_price;
@@ -48,6 +48,7 @@ impl<B: Backend> Stages<B> for Path {
     ) -> Result<Option<Stage>, CliError> {
         let unpriced = || with_price(&cx.problem.cost, 0.0);
         let files = last.map(Reached::files).unwrap_or_default();
+        let draws = started(last);
         loop {
             match self.next {
                 Next::Start => {
@@ -94,11 +95,11 @@ impl<B: Backend> Stages<B> for Path {
                     let price = self.prices[k];
                     let cost = with_price(&cx.problem.cost, price)?;
                     let (varies, rounds) = (&cx.problem.vary, self.rounds);
-                    let split = improve(cx, files.clone(), &cost, &|m, _, _| {
+                    let split = improve(cx, files.clone(), &cost, draws, &|m, _, _| {
                         Ok(split::proposals(m, varies, rounds))
                     })
                     .await?;
-                    let merged = improve(cx, split.files, &cost, &|m, _, _| {
+                    let merged = improve(cx, split.files, &cost, draws, &|m, _, _| {
                         Ok(merge::proposals(m, varies))
                     })
                     .await?;

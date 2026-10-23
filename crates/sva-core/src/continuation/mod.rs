@@ -1,4 +1,8 @@
-// Concern: runs a scheme: each stage solved over the last one's files, stopped on a signal, the least predicted length chosen, measured | Non-concern: what any stage is | IO: (Problem, Scheme) -> Ran
+// Concern: runs a scheme: each stage solved from the last, its draws doubled while noise-limited, the least predicted chosen, measured | Non-concern: what a stage is | IO: (Problem, Scheme) -> Ran
+
+//! A run's first stage is solved at [`FEWEST`] draws, a later one at the last's. A descent ending
+//! `converged` is limited by its draws' noise, so its stage is solved again from its result at
+//! twice them, until `Settings::draws`.
 
 mod grow;
 pub mod improve;
@@ -14,7 +18,7 @@ use crate::model::Model;
 use crate::seed::{LIMITS, Limits};
 use crate::solve::prox::eval::Residual;
 use crate::solve::prox::run::Prepared;
-use crate::solve::prox::{self, Progress, Settings, Shape, Solution};
+use crate::solve::prox::{self, Ended, Progress, Settings, Shape, Solution};
 use crate::solve::{Cost, Problem, recorded};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -183,6 +187,13 @@ impl Reached {
     }
 }
 
+/// The fewest draws with a standard error.
+pub const FEWEST: usize = 2;
+
+fn started(last: Option<&Reached>) -> usize {
+    last.map_or(FEWEST, |r| r.solution.draws())
+}
+
 pub struct Ran {
     pub stages: Vec<Reached>,
     pub chosen: Option<usize>,
@@ -201,7 +212,7 @@ impl Ran {
         }
     }
 
-    /// The chosen stage rendered once per draw and read, unless the run was stopped.
+    /// The chosen stage rendered once per draw up to `Settings::draws` and read, unless stopped.
     pub async fn measured<B: Backend>(mut self, cx: &Cx<'_, B>) -> Result<Ran, CliError> {
         if let (false, Some(c)) = (self.cancelled, self.chosen) {
             let r = &mut self.stages[c];
@@ -232,31 +243,60 @@ impl<B: Backend> Cx<'_, B> {
         files: &[(String, String)],
         cost: &Cost,
         steps: usize,
+        draws: usize,
         report: &mut dyn FnMut(&Progress),
     ) -> Result<Solution, CliError> {
         let over = Overlay::new(self.problem.source, files.iter().cloned().collect());
         let problem = self.over(&over, cost.clone());
-        let settings = Settings { steps };
+        let settings = Settings { steps, draws };
         prox::solve(&problem, &settings, self.tier, report, self.abandon).await
     }
 
-    /// `files`' reference read and model's state, as a solve of them starts.
+    pub(crate) async fn scheduled(
+        &self,
+        files: &[(String, String)],
+        cost: &Cost,
+        steps: usize,
+        draws: usize,
+        report: &mut dyn FnMut(&Progress),
+    ) -> Result<Solution, CliError> {
+        let cap = self.settings.draws;
+        let mut solution = self.solved(files, cost, steps, draws, report).await?;
+        let mut ended = solution.descents[0].ended;
+        while ended == Ended::Converged && !solution.cancelled() && solution.draws() < cap {
+            let from = merged(files, &solution.files);
+            let twice = (2 * solution.draws()).min(cap);
+            let next = self.solved(&from, cost, steps, twice, report).await?;
+            ended = next.descents[0].ended;
+            let descents = [solution.descents, next.descents].concat();
+            solution = Solution {
+                files: merged(&solution.files, &next.files),
+                descents,
+                ..next
+            };
+        }
+        Ok(solution)
+    }
+
+    /// `files`' reference read and model's state, as a solve of them at `draws` starts.
     async fn prepared(
         &self,
         files: &[(String, String)],
         cost: &Cost,
+        draws: usize,
     ) -> Result<Prepared, CliError> {
         let over = Overlay::new(self.problem.source, files.iter().cloned().collect());
         let problem = self.over(&over, cost.clone());
         let base = recorded(&problem.cost, problem.source);
         let source = crate::overlaid(&base, &problem.sets)?;
-        prox::run::prepared(&problem, &source, self.tier, self.abandon).await
+        prox::run::prepared(&problem, &source, draws, self.tier, self.abandon).await
     }
 
     async fn measured(&self, stage: &Stage, solution: &Solution) -> Result<Residual, CliError> {
         let over = Overlay::new(self.problem.source, stage.files.iter().cloned().collect());
         let problem = self.over(&over, stage.cost.clone());
-        prox::measure(&problem, &solution.files, self.tier, self.abandon).await
+        let draws = self.settings.draws;
+        prox::measure(&problem, &solution.files, draws, self.tier, self.abandon).await
     }
 
     fn over<'s>(&'s self, source: &'s dyn Source, cost: Cost) -> Problem<'s> {
@@ -339,8 +379,9 @@ async fn driven<B: Backend>(
         }
         let label = stage.label.clone();
         let mut heard = |p: &Progress| report(&label, p);
+        let draws = started(reached.last());
         let solution = cx
-            .solved(&stage.files, &stage.cost, stage.steps, &mut heard)
+            .scheduled(&stage.files, &stage.cost, stage.steps, draws, &mut heard)
             .await?;
         cancelled = solution.cancelled() || cx.abandon.abandoned().await;
         reached.push(Reached {

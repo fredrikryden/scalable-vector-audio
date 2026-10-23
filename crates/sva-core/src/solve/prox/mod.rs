@@ -22,6 +22,8 @@ use state::State;
 use step::{Adam, Priced, step, zeros};
 
 pub const DEFAULT_STEPS: usize = 600;
+/// A cost bound: an evaluation's work grows with its draws.
+pub const DEFAULT_DRAWS: usize = 16;
 /// The exchange rate of a reading's residual into bits: each element a cell coded as a
 /// Gaussian of one JND's spread, `d^2/2` nats.
 pub const BITS_PER_JND2: f64 = 0.5 * std::f64::consts::LOG2_E;
@@ -49,6 +51,7 @@ pub struct Descended {
     pub phase: &'static str,
     pub steps: usize,
     pub cap: usize,
+    pub draws: usize,
     pub ended: Ended,
 }
 
@@ -56,6 +59,7 @@ pub struct Progress<'a> {
     pub phase: &'a str,
     pub lambda: f64,
     pub step: usize,
+    pub draws: usize,
     pub residual_bits: f64,
     pub numbers: usize,
     pub bits: f64,
@@ -88,10 +92,12 @@ impl Descent<'_> {
         held: Option<&[bool]>,
         phase: &'static str,
     ) -> Result<Descended, CliError> {
+        let draws = self.fit.draws;
         let ran = |steps, ended| Descended {
             phase,
             steps,
             cap,
+            draws,
             ended,
         };
         if cap == 0 {
@@ -115,6 +121,7 @@ impl Descent<'_> {
                     phase,
                     lambda,
                     step: k,
+                    draws,
                     residual_bits: e.residual.bits,
                     numbers,
                     bits,

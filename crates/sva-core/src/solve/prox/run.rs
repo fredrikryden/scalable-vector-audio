@@ -8,7 +8,7 @@ use sva_samples::measure::internal::{self, Ear, Grid, Internal};
 use super::eval::{Fit, Residual, evaluate};
 use super::played::Renders;
 use super::state::{State, Var, reaches};
-use super::{DEFAULT_STEPS, Descended, Ended, Progress, descended, price, write};
+use super::{DEFAULT_DRAWS, DEFAULT_STEPS, Descended, Ended, Progress, descended, price, write};
 use crate::cli_error::CliError;
 use crate::model::Model;
 use crate::query::{asked, call};
@@ -21,12 +21,15 @@ use crate::{Job, execute_over, overlaid};
 pub struct Settings {
     /// The priced descent's cap on its steps; the debias's is a quarter as many.
     pub steps: usize,
+    /// The draws each loss averages, a prefix of each line's; a fit's cap on its solves' own.
+    pub draws: usize,
 }
 
 impl Default for Settings {
     fn default() -> Settings {
         Settings {
             steps: DEFAULT_STEPS,
+            draws: DEFAULT_DRAWS,
         }
     }
 }
@@ -48,6 +51,13 @@ pub struct Solution {
 impl Solution {
     pub fn cancelled(&self) -> bool {
         self.descents.iter().any(|d| d.ended == Ended::Signal)
+    }
+
+    pub fn draws(&self) -> usize {
+        self.descents
+            .last()
+            .expect("a solve runs its descent")
+            .draws
     }
 
     pub fn objective(&self) -> f64 {
@@ -218,6 +228,7 @@ pub(crate) struct Prepared {
 pub(crate) async fn prepared<B: Backend>(
     problem: &Problem<'_>,
     source: &dyn Source,
+    draws: usize,
     tier: &Tier<B>,
     abandon: &dyn Abandon,
 ) -> Result<Prepared, CliError> {
@@ -258,6 +269,7 @@ pub(crate) async fn prepared<B: Backend>(
         reference: clip,
         ear: std::sync::Arc::new(ear),
         threads,
+        draws,
         texts,
         renders: Renders::default(),
     };
@@ -286,7 +298,7 @@ pub async fn solve<B: Backend>(
         fit,
         mut state,
         ..
-    } = prepared(problem, &source, tier, abandon).await?;
+    } = prepared(problem, &source, settings.draws, tier, abandon).await?;
     let lambda = shape.price;
     let descents = descended(&fit, &mut state, lambda, settings.steps, abandon, report).await?;
     let e = evaluate(&fit, &state, false, fit.threads)?;

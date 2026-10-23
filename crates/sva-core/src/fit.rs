@@ -3,7 +3,7 @@
 use sva_engine::{Abandon, Backend, Tier};
 
 use crate::cli_error::CliError;
-use crate::continuation::{self, Cx, Ran, Reached, Scheme, Stage};
+use crate::continuation::{self, Cx, FEWEST, Ran, Reached, Scheme, Stage};
 use crate::json::{escape, list, num};
 use crate::output::{Diagnostic, Severity};
 use crate::solve::Problem;
@@ -22,12 +22,13 @@ pub struct Fitted {
 /// One progress line, its stage's label beside the step.
 fn progress_json(stage: &str, p: &Progress) -> String {
     format!(
-        "{{\"stage\": \"{}\", \"phase\": \"{}\", \"price\": {}, \"step\": {}, \"residual_bits\": {}, \
-         \"numbers\": {}, \"bits\": {}, \"ended\": {}}}",
+        "{{\"stage\": \"{}\", \"phase\": \"{}\", \"price\": {}, \"step\": {}, \"draws\": {}, \
+         \"residual_bits\": {}, \"numbers\": {}, \"bits\": {}, \"ended\": {}}}",
         escape(stage),
         escape(p.phase),
         num(p.lambda),
         p.step,
+        p.draws,
         num(p.residual_bits),
         p.numbers,
         num(p.bits),
@@ -36,9 +37,9 @@ fn progress_json(stage: &str, p: &Progress) -> String {
     )
 }
 
-/// Without a scheme, the solver once at the cost's own price; with one, its run. The stage of
-/// least predicted length is chosen and it alone measured. `report` hears each progress line as
-/// JSON.
+/// Without a scheme, one stage at the cost's own price; with one, its run; either through the
+/// draws' schedule up to `settings.draws` ([`continuation`]). The stage of least predicted
+/// length is chosen and it alone measured. `report` hears each progress line as JSON.
 pub async fn fitted<B: Backend>(
     problem: &Problem<'_>,
     settings: &Settings,
@@ -48,6 +49,16 @@ pub async fn fitted<B: Backend>(
     abandon: &dyn Abandon,
 ) -> Result<Fitted, CliError> {
     let shape = prox::checked(problem)?;
+    if settings.draws < FEWEST {
+        return Err(CliError::usage(
+            "solve.prox_draws",
+            format!(
+                "a priced fit's draws are {FEWEST} or more, the fewest with a standard error, \
+                 not {}",
+                settings.draws
+            ),
+        ));
+    }
     let cx = Cx {
         problem,
         shape: &shape,
@@ -59,7 +70,9 @@ pub async fn fitted<B: Backend>(
         None => {
             let label = format!("price {}", shape.price);
             let mut heard = |p: &Progress| report(&progress_json(&label, p));
-            let solution = prox::solve(problem, settings, tier, &mut heard, abandon).await?;
+            let solution = cx
+                .scheduled(&[], &problem.cost, settings.steps, FEWEST, &mut heard)
+                .await?;
             let cancelled = solution.cancelled() || abandon.abandoned().await;
             let stage = Stage {
                 label,
@@ -114,10 +127,11 @@ fn stage_json(r: &Reached) -> String {
         escape(&r.stage.label),
         list(&r.stage.edits, |e| format!("\"{}\"", escape(e))),
         list(&s.descents, |d| format!(
-            "{{ \"phase\": \"{}\", \"steps\": {}, \"cap\": {}, \"ended\": \"{}\" }}",
+            "{{ \"phase\": \"{}\", \"steps\": {}, \"cap\": {}, \"draws\": {}, \"ended\": \"{}\" }}",
             d.phase,
             d.steps,
             d.cap,
+            d.draws,
             d.ended.name()
         )),
         num(s.price),
@@ -137,9 +151,52 @@ fn stage_json(r: &Reached) -> String {
     )
 }
 
-/// A warning naming `flag`, the front end's spelling of [`Settings::steps`], where a stage's
-/// descent or debias took its cap's steps with its objective still falling.
-pub fn capped(f: &Fitted, settings: &Settings, flag: &str) -> Vec<Diagnostic> {
+/// A warning naming `steps`, the front end's spelling of [`Settings::steps`], where a stage's
+/// descent or debias took its cap's steps with its objective still falling; and one naming
+/// `draws`, its spelling of [`Settings::draws`], where a stage's last descent stopped at the
+/// noise of the cap's draws.
+pub fn capped(f: &Fitted, settings: &Settings, (steps, draws): (&str, &str)) -> Vec<Diagnostic> {
+    let mut out = stepped(f, settings, steps);
+    out.extend(drawn(f, settings, draws));
+    out
+}
+
+fn drawn(f: &Fitted, settings: &Settings, flag: &str) -> Vec<Diagnostic> {
+    let ended: Vec<String> = f
+        .ran
+        .stages
+        .iter()
+        .filter(|r| {
+            r.solution
+                .descents
+                .iter()
+                .rfind(|d| d.phase == "descend")
+                .is_some_and(|d| d.ended == Ended::Converged && d.draws == settings.draws)
+        })
+        .map(|r| format!("`{}`", r.stage.label))
+        .collect();
+    if ended.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        Diagnostic::new(
+            "solve.draws_cap",
+            format!(
+                "{} stopped at the noise of the cap's {} draws, so may stop short of where more \
+                 would take it",
+                ended.join(", "),
+                settings.draws
+            ),
+        )
+        .with_severity(Severity::Warning)
+        .helped(format!(
+            "raise {flag} (now {}), the most draws a stage's schedule doubles to",
+            settings.draws
+        )),
+    ]
+}
+
+fn stepped(f: &Fitted, settings: &Settings, flag: &str) -> Vec<Diagnostic> {
     let ended: Vec<String> = f
         .ran
         .stages
@@ -180,13 +237,14 @@ pub fn fitted_data(f: &Fitted, settings: &Settings, cost: &str, extra: &str) -> 
         .map_or("null".to_string(), |c| stage_json(&ran.stages[c]));
     format!(
         "{{\"method\": \"prox\", \"cost_expression\": \"{}\", \"model\": \"{}\", \"reference\": \
-         \"{}\", \"bits_per_jnd2\": {}, \"steps\": {}, \"continuation\": {}, \"stopped_by\": \
-         \"{}\", \"chosen\": {chosen}, \"files\": {}{extra}, \"stages\": {}}}",
+         \"{}\", \"bits_per_jnd2\": {}, \"steps\": {}, \"draws\": {}, \"continuation\": {}, \
+         \"stopped_by\": \"{}\", \"chosen\": {chosen}, \"files\": {}{extra}, \"stages\": {}}}",
         escape(cost),
         escape(&f.model),
         escape(&f.reference),
         num(BITS_PER_JND2),
         settings.steps,
+        settings.draws,
         f.scheme.as_ref().map_or("null".to_string(), Scheme::json),
         match ran.cancelled {
             true => "cancelled",

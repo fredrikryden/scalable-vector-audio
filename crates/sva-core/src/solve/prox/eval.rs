@@ -7,7 +7,7 @@ use std::sync::Arc;
 use sva_formula::C64;
 use sva_samples::measure::internal::{Ear, Grid, Internal};
 
-use super::draws::{self, DRAWS, phase};
+use super::draws::{self, phase};
 use super::lines::{Adjoint, Bins};
 use super::played::{self, Lowered, ROOT_SEED, Renders};
 use super::state::{Slot, State};
@@ -20,6 +20,8 @@ pub struct Fit {
     pub thirds: Vec<f64>,
     pub ear: Arc<Ear>,
     pub threads: NonZeroUsize,
+    /// The draws the loss is the mean over: the first `draws` of each line's keyed sequence.
+    pub draws: usize,
     /// The text of every file the composition's model reads, by path.
     pub texts: BTreeMap<String, String>,
     pub renders: Renders,
@@ -50,7 +52,7 @@ impl Fit {
 
     fn lowered(&self, s: &State, threads: NonZeroUsize) -> Result<Lowered, CliError> {
         let text = |p: &str| self.texts.get(p).cloned();
-        played::lowered(s, &text, &self.ear.grid, &self.renders, threads)
+        played::lowered(s, &text, &self.ear.grid, &self.renders, self.draws, threads)
     }
 }
 
@@ -169,7 +171,7 @@ pub fn evaluate(
     let low = fit.lowered(s, threads)?;
     let tasks: Vec<usize> = (0..low.lines.len()).collect();
     let reads = sva_engine::each(threads, tasks, |i| low.lines[i].line.bins(&g, &low.master));
-    let draws = DRAWS;
+    let draws = fit.draws;
     let phased: Vec<bool> = (0..s.model.lines.len())
         .map(|l| write::line_reads(s, l, "ph"))
         .collect();

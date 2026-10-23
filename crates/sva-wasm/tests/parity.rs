@@ -113,7 +113,7 @@ fn filtered_noise_renders_the_pinned_bits_on_four_threads() {
 /// --method prox --continuation path` do: `<FNV-1a of each stage's distance bits> <of the chosen files' bytes>`.
 /// Capped at 40 steps, past the stop rule's floor of 20, its price stages end where their
 /// objective flattens and the rest at their cap, so both endings are pinned.
-const PRICED: &str = "0a03bf4255eaecc3 1da4537183b0b868";
+const PRICED: &str = "0d8962b4927adef2 c1988601158291fa";
 
 fn priced(threads: usize) -> String {
     let clip_nodes: sva_ast::Composition = [(
@@ -191,7 +191,10 @@ fn priced(threads: usize) -> String {
             cost_tol: 0.0,
         },
     };
-    let settings = sva_core::solve::prox::Settings { steps: 40 };
+    let settings = sva_core::solve::prox::Settings {
+        steps: 40,
+        ..Default::default()
+    };
     let scheme = sva_core::continuation::Scheme::of(
         "path",
         sva_core::continuation::Asked {

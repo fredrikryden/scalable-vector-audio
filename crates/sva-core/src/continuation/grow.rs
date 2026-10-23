@@ -5,7 +5,7 @@ use sva_engine::Backend;
 
 use super::improve::improve;
 use super::path::START_STEPS;
-use super::{Cx, Reached, Stage, Stages, merged, scaled};
+use super::{Cx, Reached, Stage, Stages, merged, scaled, started};
 use crate::cli_error::CliError;
 use crate::seed::{self, Limits, Readings};
 use crate::solve::{recorded, with_price};
@@ -92,6 +92,7 @@ impl<B: Backend> Stages<B> for Grow {
         let files = last.map(Reached::files).unwrap_or_default();
         let cost = &cx.problem.cost;
         let varies = &cx.problem.vary;
+        let draws = started(last);
         match self.next {
             Next::Start => {
                 self.next = Next::Settle;
@@ -133,7 +134,7 @@ impl<B: Backend> Stages<B> for Grow {
                     return Ok(None);
                 }
                 let (readings, rounds) = (&self.readings, self.rounds);
-                let grown = improve(cx, files, cost, &|m, texts, kept| {
+                let grown = improve(cx, files, cost, draws, &|m, texts, kept| {
                     let offered = grow::proposals(m, texts, varies, readings, from, to)?;
                     Ok(offered
                         .into_iter()
@@ -144,11 +145,11 @@ impl<B: Backend> Stages<B> for Grow {
                 if grown.kept.is_empty() {
                     return Ok(None);
                 }
-                let split = improve(cx, grown.files, cost, &|m, _, _| {
+                let split = improve(cx, grown.files, cost, draws, &|m, _, _| {
                     Ok(split::proposals(m, varies, rounds))
                 })
                 .await?;
-                let merged = improve(cx, split.files, cost, &|m, _, _| {
+                let merged = improve(cx, split.files, cost, draws, &|m, _, _| {
                     Ok(merge::proposals(m, varies))
                 })
                 .await?;

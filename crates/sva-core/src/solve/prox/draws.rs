@@ -5,8 +5,6 @@ use std::collections::BTreeSet;
 use super::price::reads;
 use super::state::{Slot, State};
 
-pub const DRAWS: usize = 16;
-
 fn splitmix(z: u64) -> u64 {
     let mut z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
