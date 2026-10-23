@@ -351,14 +351,17 @@ fn texts(key: &str, value: &JsValue) -> Result<Vec<(String, String)>, JsValue> {
         .collect()
 }
 
-/// `{ scheme: "path", prices: [0.01, 0.1], rounds: 6 }`, `prices` and `rounds` optional.
+/// `{ scheme: "path", prices: [0.01, 0.1], rounds: 6 }` or `{ scheme: "grow", harmonics: 48,
+/// lone: 8, rounds: 6 }`, all but `scheme` optional.
 fn continuation(value: &JsValue) -> Result<sva_core::continuation::Scheme, JsValue> {
-    let help = "pass { scheme: \"path\" }, with `prices` above 0 and `rounds` if wanted";
+    let help = "pass { scheme: \"path\" }, with `prices` above 0 and `rounds` if wanted, or \
+                { scheme: \"grow\" }, with `harmonics`, `lone` and `rounds` if wanted";
     let object = value
         .dyn_ref::<js_sys::Object>()
         .filter(|_| !js_sys::Array::is_array(value))
         .ok_or_else(|| refuse("`continuation` is not an object".into(), help))?;
-    let (mut scheme, mut prices, mut rounds) = (None, None, None);
+    let mut scheme = None;
+    let mut asked = sva_core::continuation::Asked::default();
     for entry in js_sys::Object::entries(object).iter() {
         let pair = js_sys::Array::from(&entry);
         let key = pair.get(0).as_string().unwrap_or_default();
@@ -370,23 +373,25 @@ fn continuation(value: &JsValue) -> Result<sva_core::continuation::Scheme, JsVal
                 let list = value
                     .dyn_ref::<js_sys::Array>()
                     .ok_or_else(|| refuse("`prices` is not an array".into(), help))?;
-                prices = Some(
+                asked.prices = Some(
                     list.iter()
                         .map(|p| p.as_f64().unwrap_or(f64::NAN))
                         .collect(),
                 );
             }
-            "rounds" => rounds = Some(whole("rounds", &value)?),
+            "harmonics" => asked.harmonics = Some(whole("harmonics", &value)?),
+            "lone" => asked.lone = Some(whole("lone", &value)?),
+            "rounds" => asked.rounds = Some(whole("rounds", &value)?),
             _ => {
                 return Err(refuse(
                     format!("`continuation` holds `{key}`"),
-                    "its keys are scheme, prices and rounds",
+                    "its keys are scheme, prices, harmonics, lone and rounds",
                 ));
             }
         }
     }
     let scheme = scheme.ok_or_else(|| refuse("`continuation` names no `scheme`".into(), help))?;
-    sva_core::continuation::Scheme::of(&scheme, prices, rounds).map_err(|e| thrown(&e))
+    sva_core::continuation::Scheme::of(&scheme, asked).map_err(|e| thrown(&e))
 }
 
 fn whole<N: TryFrom<u64>>(key: &str, value: &JsValue) -> Result<N, JsValue> {
@@ -577,7 +582,7 @@ impl Composition {
     /// `sva-cli solve`'s envelope. `cost` is a `SolveCost` tree, every reference a value:
     /// `{ norm: { sub: [{ repr: "bands", target: "@lead([0, 5s])" }, { value: data }] } }`.
     /// `vary`: `SolveVary`s. `options` as the CLI's flags, `signal` and `progress(line)`;
-    /// `continuation: { scheme: "path", prices: [0.01, 0.1] }` as `--continuation path:0.01,0.1`.
+    /// `continuation` as `--continuation`: `{ scheme: "grow", harmonics: 48, lone: 8 }`.
     pub async fn solve(
         &self,
         #[wasm_bindgen(unchecked_param_type = "SolveCost")] cost: JsValue,

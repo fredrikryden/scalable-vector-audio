@@ -1,5 +1,6 @@
 // Concern: runs a scheme: each stage solved fresh and measured over the last one's files, stopped on a signal, the least length chosen | Non-concern: what any stage is | IO: (Problem, Scheme) -> Ran
 
+mod grow;
 pub mod improve;
 pub mod path;
 
@@ -10,6 +11,7 @@ use sva_engine::{Abandon, Backend, Tier};
 
 use crate::cli_error::CliError;
 use crate::model::Model;
+use crate::seed::{LIMITS, Limits};
 use crate::solve::prox::eval::Residual;
 use crate::solve::prox::{self, Progress, Settings, Shape, Solution};
 use crate::solve::{Cost, Problem};
@@ -22,55 +24,116 @@ pub enum Scheme {
         prices: Option<Vec<f64>>,
         rounds: usize,
     },
+    /// Coarse to fine: the composition's limits doubled a level at a time up to `ceiling`, at
+    /// the cost's own price.
+    Grow { ceiling: Limits, rounds: usize },
 }
 
-const SCHEMES: &str = "the one scheme is `path`, with prices above 0 or none for the cost's own: \
-     `path:0.01,0.1` on the command line, `{ scheme: \"path\", prices: [0.01, 0.1] }` in wasm";
+/// A scheme's arguments as a front end hands them over, each optional.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Asked {
+    pub prices: Option<Vec<f64>>,
+    pub harmonics: Option<usize>,
+    pub lone: Option<usize>,
+    pub rounds: Option<usize>,
+}
+
+const SCHEMES: &str = "the schemes are `path`, with prices above 0 or none for the cost's own: \
+     `path:0.01,0.1` on the command line, `{ scheme: \"path\", prices: [0.01, 0.1] }` in wasm; \
+     and `grow`, with its ceiling's harmonics above 0 and lone partials, or none for 48 and 8: \
+     `grow:48,8`, `{ scheme: \"grow\", harmonics: 48, lone: 8 }`";
 
 fn refused(what: String) -> CliError {
     CliError::usage("solve.bad_continuation", format!("{what}; {SCHEMES}"))
 }
 
 impl Scheme {
-    pub fn of(
-        name: &str,
-        prices: Option<Vec<f64>>,
-        rounds: Option<usize>,
-    ) -> Result<Scheme, CliError> {
-        if name != "path" {
-            return Err(refused(format!("`{name}` names no continuation")));
-        }
-        if let Some(p) = &prices
-            && (p.is_empty() || p.iter().any(|x| !x.is_finite() || *x <= 0.0))
-        {
-            return Err(refused(format!("`path` takes prices above 0, not {p:?}")));
-        }
+    pub fn of(name: &str, asked: Asked) -> Result<Scheme, CliError> {
+        let Asked {
+            prices,
+            harmonics,
+            lone,
+            rounds,
+        } = asked;
         let rounds = rounds.unwrap_or(crate::structure::assign::REASSIGN_ROUNDS);
         if rounds == 0 {
             return Err(refused(
                 "`rounds` 0 clusters nothing; the k-medians rounds are 1 or more".to_string(),
             ));
         }
-        Ok(Scheme::Path { prices, rounds })
+        match name {
+            "path" => {
+                if harmonics.is_some() || lone.is_some() {
+                    return Err(refused("`path` takes prices, not limits".to_string()));
+                }
+                if let Some(p) = &prices
+                    && (p.is_empty() || p.iter().any(|x| !x.is_finite() || *x <= 0.0))
+                {
+                    return Err(refused(format!("`path` takes prices above 0, not {p:?}")));
+                }
+                Ok(Scheme::Path { prices, rounds })
+            }
+            "grow" => {
+                if prices.is_some() {
+                    return Err(refused(
+                        "`grow` runs at the cost's own price and takes no prices".to_string(),
+                    ));
+                }
+                let ceiling = Limits {
+                    harmonics: harmonics.unwrap_or(LIMITS.harmonics),
+                    lone: lone.unwrap_or(LIMITS.lone),
+                };
+                if ceiling.harmonics == 0 {
+                    return Err(refused(
+                        "`grow`'s harmonics are 1 or more, a voice's first".to_string(),
+                    ));
+                }
+                Ok(Scheme::Grow { ceiling, rounds })
+            }
+            _ => Err(refused(format!("`{name}` names no continuation"))),
+        }
     }
 
+    /// `path[:<p>,<p>...]` or `grow[:<harmonics>,<lone>]`.
     pub fn parse(text: &str, rounds: Option<usize>) -> Result<Scheme, CliError> {
         let (name, list) = match text.split_once(':') {
             Some((name, list)) => (name, Some(list)),
             None => (text, None),
         };
-        let prices = list
-            .map(|l| {
+        let numbers = |what: &str| {
+            list.map(|l| {
                 l.split(',')
                     .map(|x| {
                         x.trim()
                             .parse::<f64>()
-                            .map_err(|_| refused(format!("`{x}` in `{text}` is no price")))
+                            .map_err(|_| refused(format!("`{x}` in `{text}` is no {what}")))
                     })
                     .collect::<Result<Vec<_>, _>>()
             })
-            .transpose()?;
-        Scheme::of(name, prices, rounds)
+            .transpose()
+        };
+        let mut asked = Asked {
+            rounds,
+            ..Asked::default()
+        };
+        match name {
+            "grow" => {
+                if let Some(limits) = numbers("limit")? {
+                    let whole = |x: f64| (x >= 0.0 && x.fract() == 0.0).then_some(x as usize);
+                    let (Some(h), Some(l)) = (match limits.as_slice() {
+                        &[h, l] => (whole(h), whole(l)),
+                        _ => (None, None),
+                    }) else {
+                        return Err(refused(format!(
+                            "`{text}` names no two whole limits, harmonics then lone partials"
+                        )));
+                    };
+                    (asked.harmonics, asked.lone) = (Some(h), Some(l));
+                }
+            }
+            _ => asked.prices = numbers("price")?,
+        }
+        Scheme::of(name, asked)
     }
 
     pub fn json(&self) -> String {
@@ -82,6 +145,10 @@ impl Scheme {
                     "[{}]",
                     p.iter().map(|x| num(*x)).collect::<Vec<_>>().join(", ")
                 ))
+            ),
+            Scheme::Grow { ceiling, rounds } => format!(
+                "{{ \"scheme\": \"grow\", \"harmonics\": {}, \"lone\": {}, \"rounds\": {rounds} }}",
+                ceiling.harmonics, ceiling.lone
             ),
         }
     }
@@ -232,6 +299,10 @@ pub async fn run<B: Backend>(
         Scheme::Path { prices, rounds } => {
             let prices = prices.clone().unwrap_or_else(|| vec![cx.shape.price]);
             let mut stages = path::Path::new(prices, *rounds, cx.settings.steps);
+            driven(&mut stages, cx, report).await
+        }
+        Scheme::Grow { ceiling, rounds } => {
+            let mut stages = grow::Grow::new(cx, *ceiling, *rounds)?;
             driven(&mut stages, cx, report).await
         }
     }

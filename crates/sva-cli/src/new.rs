@@ -201,18 +201,31 @@ fn seeded(from: &Path, limits: sva_core::seed::Limits) -> Result<Tree, CliError>
         .iter()
         .map(|v| format!("--vary '{v}'"))
         .collect();
+    let (continuation, why) = match seeded.dropped.is_empty() {
+        true => (
+            format!(
+                "path:{}",
+                sva_core::continuation::path::DEFAULT_PRICES
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            "shrinks the starter to the stage of least description length its price path \
+             holds, each price per number a stage, and writes it in place",
+        ),
+        false => (
+            "grow".to_string(),
+            "fits the starter, then grows back what its limits dropped a level at a time, \
+             each growth kept where it lowers the description length, and writes the stage of \
+             least length in place",
+        ),
+    };
     let solve = format!(
-        "sva-cli solve @{} --method prox --continuation path:{} {} --write --confirm",
+        "sva-cli solve @{} --method prox --continuation {continuation} {} --write --confirm",
         sva_core::seed::COST,
-        sva_core::continuation::path::DEFAULT_PRICES
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(","),
         varies.join(" ")
     );
-    let why = "shrinks the starter to the stage of least description length its price path \
-               holds, each price per number a stage, and writes it in place";
     Ok(Tree {
         files,
         next: vec![(solve, why.to_string())],

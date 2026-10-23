@@ -190,8 +190,14 @@ fn priced(threads: usize) -> String {
         },
     };
     let settings = sva_core::solve::prox::Settings { steps: 12 };
-    let scheme =
-        sva_core::continuation::Scheme::of("path", Some(vec![0.004, 0.04]), None).expect("a path");
+    let scheme = sva_core::continuation::Scheme::of(
+        "path",
+        sva_core::continuation::Asked {
+            prices: Some(vec![0.004, 0.04]),
+            ..Default::default()
+        },
+    )
+    .expect("a path");
     let tier = Tier::default();
     let mut quiet = |_: &str| {};
     let fit = sva_core::fit::fitted(

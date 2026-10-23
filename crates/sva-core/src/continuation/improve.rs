@@ -15,12 +15,18 @@ pub struct Improved {
     pub kept: Vec<String>,
 }
 
+/// What a round offers: the edits of a composition, given its model, its files' texts and the
+/// labels kept in the rounds before.
+pub type Propose<'a> =
+    dyn Fn(&Model, &Texts<'_>, &[String]) -> Result<Vec<Proposal>, CliError> + 'a;
+type Texts<'t> = dyn Fn(&str) -> Option<String> + 't;
+
 /// Each round keeps the proposal whose trial lowers the objective most, with its trial's numbers.
 pub async fn improve<B: Backend>(
     cx: &Cx<'_, B>,
     files: Vec<(String, String)>,
     cost: &Cost,
-    propose: &dyn Fn(&Model) -> Vec<Proposal>,
+    propose: &Propose<'_>,
 ) -> Result<Improved, CliError> {
     let trial = scaled(cx.settings.steps, TRIAL_STEPS);
     let mut quiet = |_: &crate::solve::prox::Progress| {};
@@ -30,7 +36,7 @@ pub async fn improve<B: Backend>(
             break;
         }
         let model = cx.model(&files)?;
-        let proposals = propose(&model);
+        let proposals = propose(&model, &cx.texts(&files), &kept)?;
         if proposals.is_empty() {
             break;
         }

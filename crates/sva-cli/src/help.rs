@@ -383,7 +383,8 @@ SOLVE:
                 [--set <name>=<text>]... [--rate <hz>] [--threads <n>]
                 [--cache <path|none>] [--write [--confirm]]
                 [--method prox [--steps <n>]
-                  [--continuation path[:<p>,<p>...] [--rounds <n>]]]
+                  [--continuation (path[:<p>,<p>...] | grow[:<h>,<l>])
+                    [--rounds <n>]]]
 
   Fits variables under `variables/` so the targets a cost reads match a
   reference, and prints the values it found. It edits no file unless `--write
@@ -663,7 +664,7 @@ CONTINUATION:
   `--continuation <scheme>` runs a priced fit as stages, each a fresh solve
   from the files the last one reached, under the same `--vary`s, each measured;
   `chosen` is the stage of least `length_bits`, whatever its price. Without
-  it the cost is solved once, one stage. The one scheme is
+  it the cost is solved once, one stage. The schemes are
     path[:<p>,<p>...]   the price homotopy over the prices given, else the
                         cost's own (a starter's `next` gives 0.01 up to 1):
                         `start`, unpriced for 5/6 of `--steps`; `settle`,
@@ -675,6 +676,21 @@ CONTINUATION:
                         one node's lines into another of its kind, lowers the
                         objective after a trial of 2/15 of `--steps`, solved
                         for a quarter of `--steps`.
+    grow[:<h>,<l>]      coarse to fine, at the cost's own price, up to <h>
+                        harmonics a voice and <l> lone partials an onset
+                        (default {harmonics} and {lone}), from the limits
+                        the composition holds (a starter's `--harmonics`
+                        and `--lone`): `start` and `settle` as path's,
+                        `settle` priced and `--steps` long; then
+                        `grow h=<h> lone=<l>` a level, each limit doubled
+                        (lone partials from none to one), held at the
+                        ceiling: each voice kind's harmonics raised and each
+                        onset's next loudest partials added, off the
+                        recording the cost's reference samples, where the
+                        objective falls after a trial; then split and fold
+                        as path's; then solved `--steps` long. It stops at
+                        the ceiling, at a level that keeps no growth, or at
+                        one no shorter than the last.
   `--rounds <n>` (default {rounds}) sets the k-medians rounds of each cluster
   and split, a cost bound on how long reassignment runs.
 
@@ -690,9 +706,10 @@ NEW:
   band where `internal` puts that sound's loudness; every voice, partial and noise
   they offer as a score line, `fits/clip` and the recording itself, and no
   annotation. `--harmonics <n>` (default {harmonics}) sets the harmonics a
-  series holds and `--lone <n>` (default {lone}) the lone partials an onset
-  offers; `dropped` names what each left out of the recording. `next` is the
-  `solve` that fits it. `--idempotency-key <key>` records the key beside the composition, so a
+  series holds and `--lone <n>` (default {lone}, 0 for none) the lone
+  partials an onset offers; `dropped` names what each left out of the
+  recording. `next` is the `solve` that fits it: through `--continuation grow`
+  where `dropped` names anything, else through `path`. `--idempotency-key <key>` records the key beside the composition, so a
   retry under the same key succeeds identically while the tree still holds what
   was written. Any other key, or an edited tree, refuses.
 

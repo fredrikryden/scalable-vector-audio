@@ -23,12 +23,13 @@ pub fn seed(
             if value.is_undefined() {
                 continue;
             }
+            let least = f64::from(u8::from(key == "harmonics"));
             *slot = value
                 .as_f64()
-                .filter(|n| n.fract() == 0.0 && *n >= 1.0)
+                .filter(|n| n.fract() == 0.0 && *n >= least)
                 .ok_or_else(|| {
                     crate::refuse(
-                        format!("`limits.{key}` is no whole number above 0"),
+                        format!("`limits.{key}` is no whole number from {least}"),
                         "pass `{ harmonics: 48, lone: 8 }` or leave a key out for its default",
                     )
                 })? as usize;

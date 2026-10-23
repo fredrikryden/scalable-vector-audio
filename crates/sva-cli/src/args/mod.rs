@@ -177,14 +177,15 @@ fn new_args(rest: &[String]) -> Result<Command, CliError> {
             "--idempotency-key" => idempotency_key = Some(value(&mut it, "--idempotency-key")?),
             "--from" => from = Some(PathBuf::from(value(&mut it, "--from")?)),
             "--harmonics" | "--lone" => {
+                let least = usize::from(flag == "--harmonics");
                 let n = value(&mut it, flag)?
                     .parse::<usize>()
                     .ok()
-                    .filter(|n| *n > 0)
+                    .filter(|n| *n >= least)
                     .ok_or_else(|| {
                         CliError::usage(
                             "cli.bad_value",
-                            format!("`{flag}` takes a whole number above 0"),
+                            format!("`{flag}` takes a whole number from {least}"),
                         )
                     })?;
                 match flag.as_str() {

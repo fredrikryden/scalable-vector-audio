@@ -2740,11 +2740,8 @@ fn every_reading_a_render_answers_is_listed() {
     }
 }
 
-/// `seed` hands a page the starter `new --from` writes; `solve` with `method: "prox"` and a
-/// `path` continuation answers a stage a phase and, asked to `write`, puts the chosen stage's
-/// files in the composition; a continuation naming no scheme refuses.
-#[wasm_bindgen_test]
-fn a_seeded_starter_solves_on_the_priced_path() {
+/// A one-sine clip at 48 kHz, as `seed` and a cost's reference take its channels.
+fn sine_clip() -> (u32, js_sys::Array) {
     let rate = 48_000u32;
     let clip: Vec<f32> = (0..rate * 3 / 10)
         .map(|n| {
@@ -2754,22 +2751,29 @@ fn a_seeded_starter_solves_on_the_priced_path() {
         })
         .collect();
     let channels = js_sys::Array::of1(&js_sys::Float32Array::from(clip.as_slice()));
-    let zero = js_sys::Object::new();
-    js_sys::Reflect::set(&zero, &"lone".into(), &JsValue::from(0))
-        .unwrap_or_else(|_| unreachable!("an object takes a key"));
-    assert!(
-        sva_wasm::seed(rate, channels.clone(), "clip.wav", Some(zero)).is_err(),
-        "a limit of 0 refuses"
-    );
-    let seeded = sva_wasm::seed(rate, channels.clone(), "clip.wav", None)
-        .unwrap_or_else(|e| unreachable!("a clip seeds: {}", as_text(&e)));
-    assert_eq!(
-        items(&seeded, "dropped").length(),
-        0,
-        "one sine leaves nothing out"
-    );
+    (rate, channels)
+}
+
+/// `{ key: value, ... }` as a page writes it.
+fn object(pairs: &[(&str, JsValue)]) -> js_sys::Object {
+    let object = js_sys::Object::new();
+    for (key, value) in pairs {
+        js_sys::Reflect::set(&object, &(*key).into(), value)
+            .unwrap_or_else(|_| unreachable!("an object takes a key"));
+    }
+    object
+}
+
+/// A composition holding the starter `seeded` hands over, its priced cost at `price` against
+/// the clip, and the starter's varies.
+fn seeded_fit(
+    rate: u32,
+    channels: &js_sys::Array,
+    seeded: &JsValue,
+    price: f64,
+) -> (Composition, JsValue, js_sys::Array) {
     let mut comp = Composition::new(Some("a-fit".to_string()));
-    for file in items(&seeded, "files").iter() {
+    for file in items(seeded, "files").iter() {
         let (path, text) = (field(&file, "path"), field(&file, "text"));
         comp.insert(
             &path.as_string().unwrap_or_default(),
@@ -2779,7 +2783,7 @@ fn a_seeded_starter_solves_on_the_priced_path() {
     let cost = js_sys::JSON::parse(&format!(
         r#"{{ "add": [ {{ "norm": {{ "sub": [ {{ "repr": "internal", "target": "@master" }},
             {{ "repr": "internal", "target": {{ "samples": {{ "rate": {rate}, "channels": [] }} }} }} ] }} }},
-            {{ "mul": [0.012, {{ "repr": "numbers", "target": "@master" }}] }} ] }}"#
+            {{ "mul": [{price}, {{ "repr": "numbers", "target": "@master" }}] }} ] }}"#
     ))
     .unwrap_or_else(|_| unreachable!("the cost is JSON"));
     let reference = field(
@@ -2793,29 +2797,42 @@ fn a_seeded_starter_solves_on_the_priced_path() {
         ),
         "samples",
     );
-    js_sys::Reflect::set(&reference, &"channels".into(), &channels)
+    js_sys::Reflect::set(&reference, &"channels".into(), channels)
         .unwrap_or_else(|_| unreachable!("an object takes a key"));
-    let varies = js_sys::Array::from(&field(&field(&seeded, "varies"), "items"));
+    let varies = js_sys::Array::from(&field(&field(seeded, "varies"), "items"));
+    (comp, cost, varies)
+}
+
+/// `seed` hands a page the starter `new --from` writes; `solve` with `method: "prox"` and a
+/// `path` continuation answers a stage a phase and, asked to `write`, puts the chosen stage's
+/// files in the composition; a continuation naming no scheme refuses.
+#[wasm_bindgen_test]
+fn a_seeded_starter_solves_on_the_priced_path() {
+    let (rate, channels) = sine_clip();
+    let zero = object(&[("harmonics", JsValue::from(0))]);
+    assert!(
+        sva_wasm::seed(rate, channels.clone(), "clip.wav", Some(zero)).is_err(),
+        "no harmonics refuses"
+    );
+    let seeded = sva_wasm::seed(rate, channels.clone(), "clip.wav", None)
+        .unwrap_or_else(|e| unreachable!("a clip seeds: {}", as_text(&e)));
+    assert_eq!(
+        items(&seeded, "dropped").length(),
+        0,
+        "one sine leaves nothing out"
+    );
+    let (comp, cost, varies) = seeded_fit(rate, &channels, &seeded, 0.012);
     let asked = |scheme: &str, write: bool| {
-        let continuation = js_sys::Object::new();
-        for (key, value) in [
+        let continuation = object(&[
             ("scheme", JsValue::from(scheme)),
             ("prices", js_sys::Array::of1(&JsValue::from(0.012)).into()),
-        ] {
-            js_sys::Reflect::set(&continuation, &key.into(), &value)
-                .unwrap_or_else(|_| unreachable!("an object takes a key"));
-        }
-        let asked = js_sys::Object::new();
-        for (key, value) in [
+        ]);
+        JsValue::from(object(&[
             ("method", JsValue::from("prox")),
             ("continuation", continuation.into()),
             ("steps", JsValue::from(2)),
             ("write", JsValue::from(write)),
-        ] {
-            js_sys::Reflect::set(&asked, &key.into(), &value)
-                .unwrap_or_else(|_| unreachable!("an object takes a key"));
-        }
-        JsValue::from(asked)
+        ]))
     };
     let refused = now(comp.solve(cost.clone(), varies.clone(), asked("spiral", false)))
         .err()
@@ -2840,5 +2857,54 @@ fn a_seeded_starter_solves_on_the_priced_path() {
     assert!(
         items(&data, "written").length() > 0,
         "the chosen point is written"
+    );
+}
+
+/// A starter seeded at `{ harmonics: 1, lone: 1 }` solves through `grow` up to two harmonics:
+/// the composition as given solved, then each level grown, the chosen stage written.
+#[wasm_bindgen_test]
+fn a_coarse_starter_grows_through_its_levels() {
+    let (rate, channels) = sine_clip();
+    let limits = object(&[("harmonics", JsValue::from(1)), ("lone", JsValue::from(1))]);
+    let seeded = sva_wasm::seed(rate, channels.clone(), "clip.wav", Some(limits))
+        .unwrap_or_else(|e| unreachable!("a clip seeds: {}", as_text(&e)));
+    let (comp, cost, varies) = seeded_fit(rate, &channels, &seeded, 1.0);
+    let continuation = object(&[
+        ("scheme", JsValue::from("grow")),
+        ("harmonics", JsValue::from(2)),
+        ("lone", JsValue::from(1)),
+    ]);
+    let asked = object(&[
+        ("method", JsValue::from("prox")),
+        ("continuation", continuation.into()),
+        ("steps", JsValue::from(3)),
+        ("write", JsValue::from(true)),
+    ]);
+    let answered = now(comp.solve(cost, varies, asked.into())).unwrap_or_else(|e| {
+        unreachable!(
+            "the priced solve answers: {}",
+            as_text(&field(&e, "refusal"))
+        )
+    });
+    let data = field(&answered, "data");
+    assert_eq!(
+        field(&field(&data, "continuation"), "scheme")
+            .as_string()
+            .as_deref(),
+        Some("grow")
+    );
+    let labels: Vec<String> = items(&data, "stages")
+        .iter()
+        .filter_map(|s| field(&s, "label").as_string())
+        .collect();
+    assert_eq!(labels[..2], ["start", "settle"], "{labels:?}");
+    assert!(
+        labels[2..].iter().all(|l| l == "grow h=2 lone=1"),
+        "{labels:?}"
+    );
+    assert!(field(&data, "chosen").is_object());
+    assert!(
+        items(&data, "written").length() > 0,
+        "the chosen stage is written"
     );
 }

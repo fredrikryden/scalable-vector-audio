@@ -179,6 +179,61 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A starter whose limits drop what the clip holds names `--continuation grow` next; run as
+/// written, it answers the composition as given solved, then each level it grew, chooses the
+/// least length and writes it under `--confirm`.
+#[test]
+fn a_coarse_starter_grows_and_writes_its_choice() {
+    let (root, wav) = clip("prox-grow");
+    let made = json(&sva(
+        &root,
+        &argv(&[
+            "new",
+            "fit",
+            "--from",
+            &wav.display().to_string(),
+            "--harmonics",
+            "1",
+            "--lone",
+            "0",
+        ]),
+    ));
+    assert_eq!(made["status"], "success", "{made}");
+    let next = made["data"]["next"]["items"][0]["command"]
+        .as_str()
+        .expect("a next command");
+    assert!(next.contains(" --continuation grow "), "{next}");
+    let dir = root.join("fit");
+    let mut solve = argv(&["solve", "@fits/clip", "--steps", "3", "--cache", "none"]);
+    solve.extend(next.split(" --").skip(1).flat_map(|flag| {
+        let (key, value) = flag.split_once(' ').unwrap_or((flag, ""));
+        let mut out = vec![format!("--{key}")];
+        if !value.is_empty() {
+            out.push(value.trim_matches('\'').to_string());
+        }
+        out
+    }));
+    let master = std::fs::read_to_string(dir.join("master")).expect("master");
+    let answered = json(&sva(&dir, &solve));
+    assert_eq!(answered["status"], "success", "{answered}");
+    let data = &answered["data"];
+    assert_eq!(data["continuation"]["scheme"], "grow", "{data}");
+    let labels = labels(data);
+    assert_eq!(labels[..2], ["start", "settle"], "{labels:?}");
+    assert!(
+        labels[2..].iter().all(|l| l.starts_with("grow h=")),
+        "{labels:?}"
+    );
+    assert!(data["chosen"].is_object(), "{data}");
+    assert!(data["written"].is_object(), "{data}");
+    assert_ne!(
+        std::fs::read_to_string(dir.join("master")).expect("master"),
+        master,
+        "the chosen stage is written in place"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// `--harmonics` and `--lone` size the starter, and the answer names what each left out.
 #[test]
 fn a_starter_names_what_its_limits_leave_out() {
@@ -226,7 +281,7 @@ fn a_priced_solve_refuses_each_mistake_under_its_code() {
     let dir = root.join("song");
     let heard = format!("norm(repr.internal(@tone) - repr.internal(sample(\"{reference}\")))");
     let priced = format!("{heard} + 0.012*repr.numbers(@tone)");
-    let cases: [(Vec<String>, &str); 7] = [
+    let cases: [(Vec<String>, &str); 8] = [
         (
             argv(&[
                 "solve",
@@ -261,6 +316,19 @@ fn a_priced_solve_refuses_each_mistake_under_its_code() {
                 "gain=0..1/0.1",
                 "--continuation",
                 "spiral",
+            ]),
+            "solve.bad_continuation",
+        ),
+        (
+            argv(&[
+                "solve",
+                &priced,
+                "--method",
+                "prox",
+                "--vary",
+                "gain=0..1/0.1",
+                "--continuation",
+                "grow:4",
             ]),
             "solve.bad_continuation",
         ),

@@ -12,7 +12,7 @@ use crate::structure::{applied, assign, merge, split};
 /// Prices in bits per bit: a homotopy from nearly unpriced to 1, where the objective is the
 /// description length itself.
 pub const DEFAULT_PRICES: [f64; 5] = [0.01, 0.03, 0.1, 0.3, 1.0];
-const START_STEPS: f64 = 500.0 / 600.0;
+pub(super) const START_STEPS: f64 = 500.0 / 600.0;
 const SETTLE_STEPS: f64 = 200.0 / 600.0;
 
 enum Next {
@@ -94,12 +94,14 @@ impl<B: Backend> Stages<B> for Path {
                     let price = self.prices[k];
                     let cost = with_price(&cx.problem.cost, price)?;
                     let (varies, rounds) = (&cx.problem.vary, self.rounds);
-                    let split = improve(cx, files.clone(), &cost, &|m| {
-                        split::proposals(m, varies, rounds)
+                    let split = improve(cx, files.clone(), &cost, &|m, _, _| {
+                        Ok(split::proposals(m, varies, rounds))
                     })
                     .await?;
-                    let merged =
-                        improve(cx, split.files, &cost, &|m| merge::proposals(m, varies)).await?;
+                    let merged = improve(cx, split.files, &cost, &|m, _, _| {
+                        Ok(merge::proposals(m, varies))
+                    })
+                    .await?;
                     if split.kept.is_empty() && merged.kept.is_empty() {
                         continue;
                     }

@@ -1,8 +1,10 @@
 // Concern: the growths a finer starter offers: a voice kind's harmonics raised, lone partials added at an onset | Non-concern: reading the clip, scoring | IO: (Model, Readings, Limits) -> Vec<Proposal>
 
+use sva_ast::{Arg, Binds, Expr};
+
 use super::{Edit, Proposal, alive, lines_of, played, varied};
 use crate::cli_error::CliError;
-use crate::model::{Model, header, relative};
+use crate::model::{Model, constant, header, relative};
 use crate::seed::{self, Limits, Readings, SAME_PITCH_CENTS};
 use crate::solve::Vary;
 
@@ -105,6 +107,44 @@ pub fn proposals(
         });
     }
     Ok(out)
+}
+
+/// The limits a starter was written at, as its composition still holds them: the most
+/// harmonics a voice node sums, the most lone partials one onset places.
+pub fn written(model: &Model) -> Limits {
+    let harmonics = model
+        .nodes
+        .iter()
+        .filter(|(n, _)| n.starts_with(&seed::voice("")))
+        .filter_map(|(_, node)| summed(&node.body))
+        .max()
+        .unwrap_or(0);
+    let mut onsets: Vec<u64> = model
+        .lines
+        .iter()
+        .filter(|l| l.node == seed::PARTIAL)
+        .map(|l| l.at.to_bits())
+        .collect();
+    onsets.sort_unstable();
+    let lone = onsets
+        .chunk_by(|a, b| a == b)
+        .map(<[u64]>::len)
+        .max()
+        .unwrap_or(0);
+    Limits { harmonics, lone }
+}
+
+/// The upper bound of the series `e` sums.
+fn summed(e: &Expr) -> Option<usize> {
+    if let Expr::Call { name, args, .. } = e
+        && name == sva_ast::SERIES
+        && let Some(Arg::Pos(top)) = args.get(2)
+    {
+        return constant(top).map(|n| n as usize);
+    }
+    sva_ast::children(e, Binds::Keep)
+        .into_iter()
+        .find_map(summed)
 }
 
 /// `node` is `base` or a split's copy of it, `<base>-<k>`.
