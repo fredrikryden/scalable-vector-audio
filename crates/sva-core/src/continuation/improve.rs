@@ -1,8 +1,10 @@
-// Concern: structure edits ranked by one evaluation, solved best first, the first that falls kept | Non-concern: proposing edits, the descent | IO: (Problem, edits, price, draws, report) -> files, kept
+// Concern: structure edits ranked by one evaluation each, in parallel, solved best first, the first that falls kept | Non-concern: proposing edits, the descent | IO: (Problem, edits) -> files, kept
 
 //! Each proposal is predicted from one proximal step (`f + g·Δx + λ·Δb`), as are the current
-//! files. The best-ranked is always solved, the rest only while predicted below the current
-//! files; the first solved below them is kept.
+//! files, the proposals' in parallel, ties in proposal order. The best-ranked is always solved,
+//! the rest only while predicted below the current files; the first solved below them is kept.
+
+use std::num::NonZeroUsize;
 
 use sva_engine::Backend;
 
@@ -67,17 +69,31 @@ pub async fn improve<B: Backend>(
         if proposals.is_empty() {
             break;
         }
-        let current = predicted(&cx.prepared(&files, cost, draws).await?)?;
-        let mut ranked = Vec::new();
+        let here = cx.prepared(&files, cost, draws).await?;
+        let threads = here.fit.threads;
+        let current = predicted(&here)?;
+        let mut starts = Vec::new();
+        let mut jobs = Vec::new();
         for p in proposals {
             if cx.abandon.abandoned().await {
                 break 'round;
             }
             let edited = applied(&model, &cx.texts(&files), &cx.problem.vary, &p)?;
             let start = merged(&files, &edited);
-            let at = predicted(&cx.prepared(&start, cost, draws).await?)?;
-            ranked.push((at.predicted, p.label, start));
+            jobs.push(cx.prepared(&start, cost, draws).await?);
+            starts.push((p.label, start));
         }
+        let per_job = NonZeroUsize::new(threads.get() / threads.get().min(jobs.len()))
+            .expect("a worker per thread");
+        let predictions = sva_engine::each(threads, jobs, |mut at| {
+            at.fit.threads = per_job;
+            predicted(&at).map(|p| p.predicted)
+        });
+        let mut ranked = predictions
+            .into_iter()
+            .zip(starts)
+            .map(|(p, (label, start))| Ok((p?, label, start)))
+            .collect::<Result<Vec<_>, CliError>>()?;
         ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
         for (rank, (predicted, label, start)) in ranked.into_iter().enumerate() {
             if rank > 0 && predicted >= current.predicted {
