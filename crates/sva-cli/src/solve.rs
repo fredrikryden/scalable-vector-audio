@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use sva_ast::variable;
 use sva_core::continuation::Scheme;
-use sva_core::fit::{capped, fitted, fitted_data, writable};
+use sva_core::fit::{capped, fitted, fitted_data, heard_json, writable};
 use sva_core::solve::prox::Settings;
 use sva_core::solve::{
     Point, Problem, Solved, Stopped, Vary, cost_of, findings, point_json, solve as solved,
@@ -145,8 +145,8 @@ fn priced_solve(
     if args.write {
         writable(settings, ("`--write`", "`--steps`"))?;
     }
-    let mut heard = |line: &str| {
-        let _ = writeln!(std::io::stderr(), "{line}");
+    let mut heard = |heard: &sva_core::continuation::Heard| {
+        let _ = writeln!(std::io::stderr(), "{}", heard_json(heard, false));
     };
     let outcome = wait(fitted(
         problem,

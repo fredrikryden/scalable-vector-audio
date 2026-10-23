@@ -135,10 +135,20 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
     let answered = json(&out);
     assert_eq!(answered["status"], "success", "{answered}");
     let mut started = std::collections::HashMap::new();
+    let mut finished = Vec::new();
     for line in String::from_utf8_lossy(&out.stderr).lines() {
         let Ok(p) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if p["finished"] == true {
+            let files = p["files"]["items"].as_array().expect("files");
+            assert!(
+                files.iter().all(|f| f["text"].is_null()),
+                "no texts: {line}"
+            );
+            finished.push(p["stage"].as_str().expect("a stage").to_string());
+            continue;
+        }
         let objective = p["residual_bits"].as_f64().expect("a residual")
             + p["price"].as_f64().expect("a price") * p["bits"].as_f64().expect("bits");
         let phase = (
@@ -166,6 +176,11 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
         .filter(|l| !l.ends_with(", restructured"))
         .collect();
     assert_eq!(phases, ["start", "settle", "price 0.012", "price 0.1"]);
+    assert_eq!(
+        finished,
+        labels(data),
+        "a stage finished line per listed stage"
+    );
     let stages = data["stages"]["items"].as_array().expect("stages");
     for key in ["label", "price", "numbers", "bits", "predicted"] {
         assert!(

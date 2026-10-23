@@ -469,6 +469,41 @@ impl sva_ast::Source for Live {
     }
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const SOLVE_PROGRESS: &str = r#"
+/** A priced solve's `progress` line: a step, or a stage as it finishes. */
+export type SolveProgress = SolveStep | SolveStageFinished;
+/**
+ * Every 50th step and the step a phase converges or reaches its cap at, `ended` why it did,
+ * null otherwise. A trial's `stage` is `<stage> trial <edit>`.
+ */
+export interface SolveStep {
+    stage: string;
+    phase: string;
+    price: number;
+    step: number;
+    draws: number;
+    residual_bits: number;
+    numbers: number;
+    bits: number;
+    ended: "converged" | "cap" | "signal" | null;
+}
+/**
+ * A stage as `data.stages` will list it, heard as it finishes: `files` the `{ path, text }`s
+ * `write` would insert for it, `least` true where its `length_bits` is below every earlier
+ * stage's, so the last such is `data.chosen`. Writing them loads the stage's composition once
+ * and renders nothing, cheap next to its solve.
+ */
+export interface SolveStageFinished {
+    stage: string;
+    finished: true;
+    stopped: boolean;
+    length_bits: number | null;
+    least: boolean;
+    files: { items: { path: string; text: string }[] };
+}
+"#;
+
 #[wasm_bindgen]
 pub struct Composition {
     inner: Live,
@@ -586,7 +621,7 @@ impl Composition {
     /// `sva-cli solve`'s envelope. `cost` is `solve <cost>`'s text, as `seed` answers it, each
     /// `sample("<path>")` in `options.recordings`, or a `SolveCost` tree. `vary`: `SolveVary`s.
     /// `options` as the CLI's flags, `signal`, `progress(line)` and `continuation`, as
-    /// `{ scheme: "grow", harmonics: 48, lone: 8 }`.
+    /// `{ scheme: "grow", harmonics: 48, lone: 8 }`; priced, `line` is a `SolveProgress`.
     pub async fn solve(
         &self,
         #[wasm_bindgen(unchecked_param_type = "string | SolveCost")] cost: JsValue,
@@ -673,7 +708,7 @@ impl Composition {
         options: &Options,
         abandon: &dyn Abandon,
     ) -> Result<JsValue, JsValue> {
-        use sva_core::fit::{capped, fitted, fitted_data, writable};
+        use sva_core::fit::{capped, fitted, fitted_data, heard_json, writable};
         let settings = sva_core::solve::prox::Settings {
             steps: options
                 .steps
@@ -685,9 +720,10 @@ impl Composition {
         if options.write {
             writable(&settings, ("`write`", "`steps`")).map_err(|e| thrown(&e))?;
         }
-        let mut heard = |line: &str| {
+        let mut heard = |heard: &sva_core::continuation::Heard| {
             if let Some(progress) = &options.progress {
-                let _ = progress.call1(&JsValue::NULL, &parse(line).unwrap_or(line.into()));
+                let line = heard_json(heard, true);
+                let _ = progress.call1(&JsValue::NULL, &parse(&line).unwrap_or(line.into()));
             }
         };
         let scheme = options.continuation.as_ref();

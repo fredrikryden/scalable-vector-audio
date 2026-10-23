@@ -2844,7 +2844,9 @@ fn a_seeded_starter_solves_on_the_priced_path() {
 }
 
 /// A starter seeded at `{ harmonics: 1, lone: 1 }` solves through `grow` up to two harmonics:
-/// the composition as given solved, then each level grown, the chosen stage written.
+/// the composition as given solved, then each level grown, the chosen stage written. `progress`
+/// hears each listed stage as it finishes, its files rendering over the starter, the last least
+/// one's the answer's `files`.
 #[wasm_bindgen_test]
 fn a_coarse_starter_grows_through_its_levels() {
     let (rate, channels) = sine_clip();
@@ -2852,6 +2854,8 @@ fn a_coarse_starter_grows_through_its_levels() {
     let seeded = sva_wasm::seed(rate, channels.clone(), "clip.wav", Some(limits))
         .unwrap_or_else(|e| unreachable!("a clip seeds: {}", as_text(&e)));
     let (comp, cost, varies, recordings) = seeded_fit(rate, &channels, &seeded);
+    let heard = js_sys::Array::new();
+    let push = js_sys::Function::new_with_args("line", "this.push(line)");
     let continuation = object(&[
         ("scheme", JsValue::from("grow")),
         ("harmonics", JsValue::from(2)),
@@ -2863,6 +2867,7 @@ fn a_coarse_starter_grows_through_its_levels() {
         ("steps", JsValue::from(3)),
         ("write", JsValue::from(true)),
         ("recordings", recordings),
+        ("progress", push.bind0(&heard).into()),
     ]);
     let answered = now(comp.solve(cost, varies, asked.into())).unwrap_or_else(|e| {
         unreachable!(
@@ -2890,6 +2895,49 @@ fn a_coarse_starter_grows_through_its_levels() {
     assert!(
         items(&data, "written").length() > 0,
         "the chosen stage is written"
+    );
+    let finished: Vec<JsValue> = heard
+        .iter()
+        .filter(|l| field(l, "finished").as_bool() == Some(true))
+        .collect();
+    assert!(
+        heard.length() as usize > finished.len(),
+        "the steps are heard too"
+    );
+    let heard_labels: Vec<String> = finished
+        .iter()
+        .filter_map(|l| field(l, "stage").as_string())
+        .collect();
+    assert_eq!(heard_labels, labels, "a finished line per listed stage");
+    for line in &finished {
+        let (mut fresh, ..) = seeded_fit(rate, &channels, &seeded);
+        for file in items(line, "files").iter() {
+            fresh.insert(
+                &field(&file, "path").as_string().unwrap_or_default(),
+                &field(&file, "text").as_string().unwrap_or_default(),
+            );
+        }
+        assert!(
+            fresh
+                .rendered("@master([0, 0.1s])", None, options(&[]))
+                .is_ok(),
+            "a stage's files render: {}",
+            as_text(line)
+        );
+    }
+    let least = finished
+        .iter()
+        .rfind(|l| field(l, "least").as_bool() == Some(true))
+        .unwrap_or_else(|| unreachable!("a stage is least"));
+    assert_eq!(
+        field(least, "length_bits").as_f64(),
+        field(&field(&data, "chosen"), "length_bits").as_f64(),
+        "the last least stage is the chosen one"
+    );
+    assert_eq!(
+        as_text(&field(least, "files")),
+        as_text(&field(&data, "files")),
+        "its files are the answer's"
     );
 }
 

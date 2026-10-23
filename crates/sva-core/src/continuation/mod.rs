@@ -220,12 +220,11 @@ pub struct Ran {
 }
 
 impl Ran {
-    /// Every finished stage is a candidate, chosen by its length at the cap's draws.
     pub fn of(stages: Vec<Reached>, cancelled: bool) -> Ran {
+        let mut least = None;
         let chosen = (0..stages.len())
-            .filter_map(|i| Some((i, stages[i].length()?)))
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| i);
+            .filter(|&i| below(&stages[i], &mut least))
+            .last();
         Ran {
             stages,
             chosen,
@@ -241,6 +240,15 @@ impl Ran {
         }
         Ok(self)
     }
+}
+
+/// `r` shorter than `least`, then the least; a run's last such stage is chosen.
+pub(crate) fn below(r: &Reached, least: &mut Option<f64>) -> bool {
+    let shorter = r.length().is_some_and(|l| least.is_none_or(|b| l < b));
+    if shorter {
+        *least = r.length();
+    }
+    shorter
 }
 
 /// `a` with `b` laid over it, `b` winning a path both write.
@@ -401,11 +409,22 @@ fn scaled(steps: usize, fraction: f64) -> usize {
     ((steps as f64 * fraction).round() as usize).max(1)
 }
 
-/// `report` hears each step under its stage's label. The answer is unmeasured: [`Ran::measured`].
+pub enum Heard<'a> {
+    Step(&'a str, &'a Progress<'a>),
+    /// A stage as listed, the files `--write` writes for it, `least` below every earlier one.
+    Listed {
+        reached: &'a Reached,
+        files: &'a [(String, String)],
+        least: bool,
+    },
+}
+
+/// `report` hears each step and each stage as it is listed. The answer is unmeasured:
+/// [`Ran::measured`].
 pub async fn run<B: Backend>(
     scheme: &Scheme,
     cx: &Cx<'_, B>,
-    report: &mut dyn FnMut(&str, &Progress),
+    report: &mut dyn FnMut(&Heard),
 ) -> Result<Ran, CliError> {
     match scheme {
         Scheme::Path { prices, rounds } => {
@@ -423,14 +442,29 @@ pub async fn run<B: Backend>(
 async fn driven<B: Backend>(
     stages: &mut impl Stages<B>,
     cx: &Cx<'_, B>,
-    report: &mut dyn FnMut(&str, &Progress),
+    report: &mut dyn FnMut(&Heard),
 ) -> Result<Ran, CliError> {
     let mut reached: Vec<Reached> = Vec::new();
+    let mut least: Option<f64> = None;
+    let mut listed = |r: &Reached, report: &mut dyn FnMut(&Heard)| -> Result<(), CliError> {
+        let files = written(cx, r)?;
+        report(&Heard::Listed {
+            reached: r,
+            files: &files,
+            least: below(r, &mut least),
+        });
+        Ok(())
+    };
     let mut cancelled = false;
-    while let Some(built) = stages.next(reached.last(), cx, report).await? {
+    loop {
+        let mut step = |s: &str, p: &Progress| report(&Heard::Step(s, p));
+        let Some(built) = stages.next(reached.last(), cx, &mut step).await? else {
+            break;
+        };
         let stage = match built {
             Built::Stage(stage) => stage,
             Built::Stopped(r) => {
+                listed(&r, report)?;
                 reached.push(r);
                 cancelled = true;
                 break;
@@ -441,13 +475,14 @@ async fn driven<B: Backend>(
             break;
         }
         let label = stage.label.clone();
-        let mut heard = |p: &Progress| report(&label, p);
+        let mut heard = |p: &Progress| report(&Heard::Step(&label, p));
         let draws = started(reached.last());
         let solution = cx
             .scheduled(&stage.files, &stage.cost, stage.steps, draws, &mut heard)
             .await?;
         let r = cx.reached(stage, solution).await?;
         cancelled = r.at_cap.is_none() || cx.abandon.abandoned().await;
+        listed(&r, report)?;
         reached.push(r);
         if cancelled {
             break;

@@ -3,7 +3,7 @@
 use sva_engine::{Abandon, Backend, Tier};
 
 use crate::cli_error::CliError;
-use crate::continuation::{self, Cx, FEWEST, Ran, Reached, Scheme, Stage};
+use crate::continuation::{self, Cx, FEWEST, Heard, Ran, Reached, Scheme, Stage};
 use crate::json::{escape, list, num};
 use crate::output::{Diagnostic, Severity};
 use crate::solve::Problem;
@@ -19,7 +19,33 @@ pub struct Fitted {
     pub scheme: Option<Scheme>,
 }
 
-/// One progress line, its stage's label beside the step.
+/// One progress line: a step, its stage's label beside it; or a stage listed, its files' texts
+/// where `texts`, their paths alone otherwise.
+pub fn heard_json(heard: &Heard, texts: bool) -> String {
+    match heard {
+        Heard::Step(stage, p) => progress_json(stage, p),
+        Heard::Listed {
+            reached,
+            files,
+            least,
+        } => format!(
+            "{{\"stage\": \"{}\", \"finished\": true, \"stopped\": {}, \"length_bits\": {}, \
+             \"least\": {least}, \"files\": {}}}",
+            escape(&reached.stage.label),
+            reached.solution.cancelled(),
+            reached.length().map_or("null".to_string(), num),
+            list(files, |(p, t)| match texts {
+                true => format!(
+                    "{{ \"path\": \"{}\", \"text\": \"{}\" }}",
+                    escape(p),
+                    escape(t)
+                ),
+                false => format!("{{ \"path\": \"{}\" }}", escape(p)),
+            }),
+        ),
+    }
+}
+
 fn progress_json(stage: &str, p: &Progress) -> String {
     format!(
         "{{\"stage\": \"{}\", \"phase\": \"{}\", \"price\": {}, \"step\": {}, \"draws\": {}, \
@@ -54,14 +80,14 @@ pub fn writable(settings: &Settings, (write, steps): (&str, &str)) -> Result<(),
 
 /// Without a scheme, one stage at the cost's own price; with one, its run; either through the
 /// draws' schedule up to `settings.draws` ([`continuation`]). The stage of least predicted
-/// length at that cap's draws is chosen and it alone measured. `report` hears each progress
-/// line as JSON.
+/// length at that cap's draws is chosen and it alone measured. `report` hears each step and each
+/// stage as `data.stages` will list it ([`heard_json`]).
 pub async fn fitted<B: Backend>(
     problem: &Problem<'_>,
     settings: &Settings,
     scheme: Option<&Scheme>,
     tier: &Tier<B>,
-    report: &mut dyn FnMut(&str),
+    report: &mut dyn FnMut(&Heard),
     abandon: &dyn Abandon,
 ) -> Result<Fitted, CliError> {
     let shape = prox::checked(problem)?;
@@ -92,7 +118,7 @@ pub async fn fitted<B: Backend>(
     let ran = match scheme {
         None => {
             let label = format!("price {}", shape.price);
-            let mut heard = |p: &Progress| report(&progress_json(&label, p));
+            let mut heard = |p: &Progress| report(&Heard::Step(&label, p));
             let solution = cx
                 .scheduled(&[], &problem.cost, settings.steps, FEWEST, &mut heard)
                 .await?;
@@ -104,13 +130,15 @@ pub async fn fitted<B: Backend>(
                 edits: Vec::new(),
             };
             let reached = cx.reached(stage, solution).await?;
+            report(&Heard::Listed {
+                reached: &reached,
+                files: &reached.solution.files,
+                least: continuation::below(&reached, &mut None),
+            });
             let cancelled = reached.at_cap.is_none() || abandon.abandoned().await;
             Ran::of(vec![reached], cancelled)
         }
-        Some(scheme) => {
-            let mut heard = |stage: &str, p: &Progress| report(&progress_json(stage, p));
-            continuation::run(scheme, &cx, &mut heard).await?
-        }
+        Some(scheme) => continuation::run(scheme, &cx, report).await?,
     };
     let ran = ran.measured(&cx).await?;
     let files = match (scheme, ran.chosen) {

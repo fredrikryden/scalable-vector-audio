@@ -722,8 +722,14 @@ PRICED FIT:
   the step a phase converges or reaches its cap at print a JSON line on
   stderr, its `stage` beside it: that last's `ended` why and its residual,
   numbers and bits the state the phase answers; the others' `ended` null and
-  their values their own step's. `sva-cli new <name> --from
-  <clip>` writes a starter to fit.
+  their values their own step's. Each stage `stages` lists prints one more
+  as it is listed: `{{"stage", "finished": true, "stopped", "length_bits",
+  "least", "files"}}`, `least` true where its `length_bits` is below every
+  earlier stage's (the last such is `chosen`) and `files` the paths
+  `--write` would write for it; sva-wasm's `progress` hears their texts too.
+  Writing them loads the stage's composition once and renders nothing,
+  cheap next to its solve. `sva-cli new <name> --from <clip>` writes a
+  starter to fit.
 
 CONTINUATION:
   `--continuation <scheme>` runs a priced fit as stages, each a fresh solve
