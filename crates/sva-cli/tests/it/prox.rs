@@ -57,6 +57,21 @@ fn clip(name: &str) -> (PathBuf, PathBuf) {
     (root, wav)
 }
 
+/// A `next` command's flags as argv words, each quoted value unquoted.
+fn flags(next: &str) -> Vec<String> {
+    next.split(" --")
+        .skip(1)
+        .flat_map(|flag| {
+            let (key, value) = flag.split_once(' ').unwrap_or((flag, ""));
+            let mut out = vec![format!("--{key}")];
+            if !value.is_empty() {
+                out.push(value.trim_matches('\'').to_string());
+            }
+            out
+        })
+        .collect()
+}
+
 /// The answer's stages, each stage's label.
 fn labels(data: &Value) -> Vec<String> {
     data["stages"]["items"]
@@ -102,17 +117,8 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
         .as_str()
         .expect("a next command");
     let dir = root.join("fit");
-    let mut words: Vec<String> = next
-        .split(" --")
-        .skip(1)
-        .flat_map(|flag| {
-            let (key, value) = flag.split_once(' ').unwrap_or((flag, ""));
-            let mut out = vec![format!("--{key}")];
-            if !value.is_empty() {
-                out.push(value.trim_matches('\'').to_string());
-            }
-            out
-        })
+    let mut words: Vec<String> = flags(next)
+        .into_iter()
         .filter(|w| w != "--write" && w != "--confirm")
         .collect();
     let at = words
@@ -217,14 +223,7 @@ fn a_coarse_starter_grows_and_writes_its_choice() {
     assert!(next.contains(" --continuation grow "), "{next}");
     let dir = root.join("fit");
     let mut solve = argv(&["solve", "@fits/clip", "--steps", "3", "--cache", "none"]);
-    solve.extend(next.split(" --").skip(1).flat_map(|flag| {
-        let (key, value) = flag.split_once(' ').unwrap_or((flag, ""));
-        let mut out = vec![format!("--{key}")];
-        if !value.is_empty() {
-            out.push(value.trim_matches('\'').to_string());
-        }
-        out
-    }));
+    solve.extend(flags(next));
     let master = std::fs::read_to_string(dir.join("master")).expect("master");
     let answered = json(&sva(&dir, &solve));
     assert_eq!(answered["status"], "success", "{answered}");
@@ -242,6 +241,58 @@ fn a_coarse_starter_grows_and_writes_its_choice() {
         std::fs::read_to_string(dir.join("master")).expect("master"),
         master,
         "the chosen stage is written in place"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A cost whose d' reads the clip's first half, `[0, 0.15s]` of 0.3 s, solves, and its stage's
+/// cells are that half's 10 ms frames' share of the whole clip's: 16 of 31.
+#[test]
+fn a_priced_solve_counts_only_its_interval() {
+    let (root, wav) = clip("prox-interval");
+    let made = json(&sva(
+        &root,
+        &argv(&[
+            "new",
+            "fit",
+            "--from",
+            &wav.display().to_string(),
+            "--harmonics",
+            "2",
+        ]),
+    ));
+    assert_eq!(made["status"], "success", "{made}");
+    let next = made["data"]["next"]["items"][0]["command"]
+        .as_str()
+        .expect("a next command");
+    let varies: Vec<String> = flags(next)
+        .chunks(2)
+        .filter(|f| f[0] == "--vary")
+        .flatten()
+        .cloned()
+        .collect();
+    let dir = root.join("fit");
+    let cells = |cost: &str| {
+        let mut solve = argv(&["solve", cost, "--method", "prox", "--steps", "1"]);
+        solve.extend(argv(&["--cache", "none"]));
+        solve.extend(varies.iter().cloned());
+        let answered = json(&sva(&dir, &solve));
+        assert_eq!(answered["status"], "success", "{cost}: {answered}");
+        answered["data"]["stages"]["items"][0]["cells"]
+            .as_f64()
+            .expect("a stage's cells")
+    };
+    let whole = cells(
+        "norm(repr.internal(@master) - repr.internal(sample(\"clip.wav\"))) \
+         + repr.numbers(@master)",
+    );
+    let half = cells(
+        "norm(repr.internal(@master([0, 0.15s])) \
+         - repr.internal(sample(\"clip.wav\")([0, 0.15s]))) + repr.numbers(@master)",
+    );
+    assert!(
+        (half / whole - 16.0 / 31.0).abs() < 1e-9,
+        "the first half's cells are 16 of 31 frames' share: {half} of {whole}"
     );
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -293,7 +344,22 @@ fn a_priced_solve_refuses_each_mistake_under_its_code() {
     let dir = root.join("song");
     let heard = format!("norm(repr.internal(@tone) - repr.internal(sample(\"{reference}\")))");
     let priced = format!("{heard} + 0.012*repr.numbers(@tone)");
-    let cases: [(Vec<String>, &str); 8] = [
+    let cropped = format!(
+        "norm(repr.internal(@tone([0, 0.1s])) - repr.internal(sample(\"{reference}\")([0, 0.2s]))) \
+         + 0.012*repr.numbers(@tone)"
+    );
+    let cases: [(Vec<String>, &str); 9] = [
+        (
+            argv(&[
+                "solve",
+                &cropped,
+                "--method",
+                "prox",
+                "--vary",
+                "gain=0..1/0.1",
+            ]),
+            "solve.prox_cost",
+        ),
         (
             argv(&[
                 "solve",

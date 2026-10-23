@@ -14,6 +14,7 @@ use crate::model::Model;
 use crate::query::{asked, call};
 use crate::solve::cost::{Cost, Node, Op};
 use crate::solve::{Leaf, Problem, recorded};
+use crate::target::Edge;
 use crate::{Job, execute_over, overlaid};
 
 /// `--method prox`'s own settings.
@@ -71,16 +72,52 @@ pub struct Shape {
     pub price: f64,
     pub model: String,
     pub reference: String,
+    /// The interval both readings are written over; `None` reads the reference whole.
+    pub interval: Option<(Edge, Edge)>,
     pub(super) model_leaf: usize,
-    pub(super) reference_leaf: usize,
+}
+
+impl Shape {
+    /// The reference as the fit renders it: from 0 to its interval's end, so the reading of
+    /// each frame inside the interval holds what came before it.
+    pub(crate) fn read(&self) -> Result<String, CliError> {
+        crate::target::from_zero(&self.reference)
+    }
+
+    /// The interval's start and its end where closed, in samples at the rate the fit renders
+    /// at, so an end in `sp` is that render's sample; [`shape`] refused a start before 0.
+    pub(crate) fn span(&self, per_bar: Option<f64>) -> Result<(usize, Option<usize>), CliError> {
+        let Some((start, end)) = self.interval else {
+            return Ok((0, None));
+        };
+        let at = |e: Edge| e.sample(FIT_RATE, per_bar).map(|s| s.map(|s| s as usize));
+        Ok((at(start)?.unwrap_or(0), at(end)?))
+    }
 }
 
 const SHAPE: &str = "under `--method prox` a cost is `norm(repr.internal(@<model>) - \
      repr.internal(<reference>)) + <price>*repr.numbers(@<model>)`: the d' of the model from \
-     the reference, plus a price in d' on each bit of the numbers the model writes";
+     the reference, plus a price in d' on each bit of the numbers the model writes; the d' may \
+     read an interval, `@<model>([a, b])` and the reference over the same `[a, b]`, as \
+     `sample(\"<clip>\")([a, b])`";
 
 fn shaped(what: String) -> CliError {
     CliError::usage("solve.prox_cost", format!("{what}; {SHAPE}"))
+}
+
+/// `[a, b]` as a target writes it.
+fn written((start, end): (Edge, Edge)) -> String {
+    let edge = |e: Edge| match e {
+        Edge::Secs(0.0) => "0".to_string(),
+        Edge::Secs(s) => format!("{s}s"),
+        Edge::Bars(b) => format!("{b}b"),
+        Edge::Samples(n) => format!("{n}sp"),
+        Edge::Inf => "inf".to_string(),
+    };
+    match end {
+        Edge::Inf => format!("[{}, inf)", edge(start)),
+        end => format!("[{}, {}]", edge(start), edge(end)),
+    }
 }
 
 pub fn shape(cost: &Cost) -> Result<Shape, CliError> {
@@ -123,23 +160,60 @@ pub fn shape(cost: &Cost) -> Result<Shape, CliError> {
     let (a, b) = pair.ok_or_else(|| shaped("the cost holds no internal d'".to_string()))?;
     let (sized, lambda) =
         price.ok_or_else(|| shaped("the cost prices no `repr.numbers`".to_string()))?;
-    if cost.leaves[a].target != sized {
-        return Err(shaped(format!(
-            "`repr.numbers({sized})` prices another target than the distance's model `{}`",
-            cost.leaves[a].target
-        )));
-    }
     let root = sized
         .strip_prefix('@')
         .filter(|p| sva_ast::whole_ref_path(p))
         .ok_or_else(|| shaped(format!("`{sized}` is no bare `@<node>`")))?;
+    let model = &cost.leaves[a].target;
+    let reference = &cost.leaves[b].target;
+    let read = crate::target::target(model)?;
+    let tight = |t: &str| t.split_whitespace().collect::<String>();
+    let bare = match read.interval {
+        Some(_) => tight(&read.expr) == format!("{sized}(t)"),
+        None => *model == sized,
+    };
+    if !bare {
+        return Err(shaped(format!(
+            "`repr.numbers({sized})` prices another target than the distance's model `{model}`; \
+             the model is `{sized}`, or `{sized}([a, b])` over an interval"
+        )));
+    }
+    let interval = read.interval;
+    let theirs = crate::target::target(reference)?.interval;
+    if theirs != interval {
+        let fix = match interval {
+            Some(i) => format!("read the reference over `{}` as well", written(i)),
+            None => format!(
+                "read the model over the reference's interval, `{sized}({})`",
+                written(theirs.expect("the two differ"))
+            ),
+        };
+        let shown = |i: Option<(Edge, Edge)>| i.map_or("its whole span".to_string(), written);
+        return Err(shaped(format!(
+            "the model `{model}` reads {} and the reference `{reference}` {}; {fix}",
+            shown(interval),
+            shown(theirs)
+        )));
+    }
+    if let Some((start, _)) = interval {
+        let negative = match start {
+            Edge::Secs(x) | Edge::Bars(x) | Edge::Samples(x) => x < 0.0,
+            Edge::Inf => false,
+        };
+        if negative {
+            return Err(shaped(format!(
+                "`{model}` starts its interval before 0, where a priced fit reads nothing; \
+                 start it at 0 or later"
+            )));
+        }
+    }
     Ok(Shape {
         root: root.to_string(),
         price: lambda,
-        model: cost.leaves[a].target.clone(),
-        reference: cost.leaves[b].target.clone(),
+        model: model.clone(),
+        reference: reference.clone(),
+        interval,
         model_leaf: a,
-        reference_leaf: b,
     })
 }
 
@@ -214,7 +288,7 @@ impl<B: Backend> Reading<'_, B> {
 }
 
 /// The rate a priced fit reads its reference and renders its model at.
-const FIT_RATE: u32 = 48_000;
+pub(crate) const FIT_RATE: u32 = 48_000;
 
 /// What a solve and a measure both read before either renders the model.
 pub(crate) struct Prepared {
@@ -244,10 +318,21 @@ pub(crate) async fn prepared<B: Backend>(
         abandon,
         leaf: &problem.cost.leaves[shape.model_leaf],
     };
-    let reference = &problem.cost.leaves[shape.reference_leaf].target;
-    let (clip, mono) = reading.read(source, reference).await?;
+    let (clip, mono) = reading.read(source, &shape.read()?).await?;
     let root = shape.root.as_str();
     let graph = sva_ast::load_reaching(source, &[root]).map_err(CliError::Refusals)?;
+    let grid = Grid::of(clip.rate, mono.len());
+    let per_bar = graph.tempo().map(|t| t.seconds_per_bar());
+    let (start, _) = shape.span(per_bar)?;
+    let from = start.div_ceil(grid.hop);
+    if from >= grid.frames {
+        return Err(shaped(format!(
+            "`{}` starts its interval at sample {start}, past the reference's last frame at \
+             sample {}; start it inside the reference",
+            shape.model,
+            (grid.frames - 1) * grid.hop
+        )));
+    }
     let model = Model::of(&graph, root)?;
     let state = State::of(&model, &vars)?;
     let threads = problem.threads.unwrap_or_else(sva_engine::default_threads);
@@ -262,11 +347,11 @@ pub(crate) async fn prepared<B: Backend>(
             texts.insert(p, t.into_owned());
         }
     }
-    let grid = Grid::of(clip.rate, mono.len());
     let ear = Ear::of(grid, clip.spl_db);
     let fit = Fit {
         thirds: ear.thirds(&internal::bin_power(&mono, &grid)),
         reference: clip,
+        from,
         ear: std::sync::Arc::new(ear),
         threads,
         draws,

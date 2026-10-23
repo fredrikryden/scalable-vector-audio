@@ -172,7 +172,8 @@ RENDER:
   rate; `analyze` prints the same.
 
   The target's own ref may read an interval: `@piano4([0, 2b], f0=C4,
-  vel=0.5, release=1s)`, where `release` is the instrument's own parameter. Its ends are the language's literals (`s`, `ms`, `b`,
+  vel=0.5, release=1s)`, where `release` is the instrument's own parameter,
+  and so may a recording, `sample("ref.wav")([0, 2b])`. Its ends are the language's literals (`s`, `ms`, `b`,
   `sp`, or a bare `0`); `[a, inf)` and `[a,)` leave the end open; the other
   arguments are the node's own named ones. The start trims the output alone:
   history before it is still computed, so a loop or a filter carries the state
@@ -626,6 +627,17 @@ PRICED FIT:
   Each partial is exact where its
   amplitude and frequency hold over the 20 ms window; a form with no partial
   in it refuses by name.
+  The d' may read an interval: the model `@<model>([a, b])` and the reference
+  over the same one, as `sample("<clip>")([a, b])`, `[a, inf)` to the
+  reference's end. Both are then read from 0 to b, so each frame inside the
+  interval reads what came before it, and the residual counts only the frames
+  from a to b, a frame at a or b among them, as `cells` does;
+  `repr.numbers(@<model>)` prices the whole composition still. A model and a
+  reference over different intervals refuse as `solve.prox_cost`. A fit held
+  out is fitted over `[0, T]` and scored over `[T, inf)`:
+    sva-cli solve 'norm(repr.internal(@master([0, 1.35s]))
+      - repr.internal(sample("clip.wav")([0, 1.35s])))
+      + repr.numbers(@master)' --method prox --vary ...
   Each number written costs its `--vary`'s bits, log2((hi-lo)/step), or of
   ln(hi/lo)/ln(step) where log; one no `--vary` names costs none. Written are:
   each score line's onset and each field its node has no default for, the line
@@ -722,7 +734,8 @@ CONTINUATION:
                         (lone partials from none to one), held at the
                         ceiling: each voice kind's harmonics raised and each
                         onset's next loudest partials added, off the
-                        recording the cost's reference samples, where the
+                        recording the cost's reference samples (up to its
+                        interval's end, PRICED FIT), where the
                         objective falls as ranked below; then split and fold
                         as path's; then solved `--steps` long. It stops at
                         the ceiling, at a level that keeps no growth, or at

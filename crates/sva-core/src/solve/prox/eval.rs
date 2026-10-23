@@ -5,7 +5,8 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use sva_formula::C64;
-use sva_samples::measure::internal::{Ear, Grid, Internal};
+use sva_samples::measure::internal::iso::THIRDS;
+use sva_samples::measure::internal::{BARKS, Ear, Grid, Internal};
 
 use super::draws::{self, phase};
 use super::lines::{Adjoint, Bins};
@@ -16,6 +17,8 @@ use crate::cli_error::CliError;
 
 pub struct Fit {
     pub reference: Internal,
+    /// The first frame the residual counts.
+    pub from: usize,
     /// The reference's third-octave mean squares per frame, `[m * THIRDS + b]`.
     pub thirds: Vec<f64>,
     pub ear: Arc<Ear>,
@@ -52,6 +55,10 @@ impl Fit {
         self.ear.grid
     }
 
+    fn counts(&self, e: usize) -> bool {
+        (e / BARKS) % self.reference.frames >= self.from
+    }
+
     fn lowered(&self, s: &State, threads: NonZeroUsize) -> Result<Lowered, CliError> {
         let text = |p: &str| self.texts.get(p).cloned();
         played::lowered(s, &text, &self.ear.grid, &self.renders, self.draws, threads)
@@ -61,9 +68,12 @@ impl Fit {
 /// Each element's weight: its set's independent samples per frame.
 pub fn weights(fit: &Fit) -> Vec<f64> {
     let per_set = sva_samples::measure::internal::weights(fit.ear.grid.step_secs());
-    let set = fit.reference.frames * sva_samples::measure::internal::BARKS;
+    let set = fit.reference.frames * BARKS;
     (0..fit.reference.elements.len())
-        .map(|e| per_set[e / set])
+        .map(|e| match fit.counts(e) {
+            true => per_set[e / set],
+            false => 0.0,
+        })
         .collect()
 }
 
@@ -78,10 +88,17 @@ fn drawn(fit: &Fit, w: &[f64], draws: &[Vec<f64>]) -> (Vec<f64>, f64) {
     let (mut weighted, mut plain) = (Vec::new(), 0.0);
     for elements in draws {
         let (mut a, mut b) = (0.0, 0.0);
-        for ((x, y), w) in elements.iter().zip(&fit.reference.elements).zip(w) {
-            let d = x - y;
-            a += w * d * d;
-            b += d * d;
+        for (e, ((x, y), w)) in elements
+            .iter()
+            .zip(&fit.reference.elements)
+            .zip(w)
+            .enumerate()
+        {
+            if fit.counts(e) {
+                let d = x - y;
+                a += w * d * d;
+                b += d * d;
+            }
         }
         weighted.push(BITS_PER_JND2 * a);
         plain += b;
@@ -296,7 +313,8 @@ pub fn scales(fit: &Fit, s: &State) -> Result<Vec<f64>, CliError> {
             .ear
             .thirds(&power(&g, std::slice::from_ref(&read), &[(1.0, 0.0)], 0));
         let (mut num, mut den) = (0.0, 0.0);
-        for (e1, r) in own.iter().zip(&fit.thirds) {
+        let counted = fit.from * THIRDS;
+        for (e1, r) in own.iter().zip(&fit.thirds).skip(counted) {
             num += r * e1;
             den += e1 * e1;
         }

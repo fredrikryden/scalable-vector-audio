@@ -355,6 +355,14 @@ impl<B: Backend> Cx<'_, B> {
         Model::of(&graph, root)
     }
 
+    /// The seconds a bar of the composition lasts, where it states a tempo.
+    fn per_bar(&self) -> Result<Option<f64>, CliError> {
+        let set = crate::overlaid(self.problem.source, &self.problem.sets)?;
+        let root = self.shape.root.as_str();
+        let graph = sva_ast::load_reaching(&set, &[root]).map_err(CliError::Refusals)?;
+        Ok(graph.tempo().map(|t| t.seconds_per_bar()))
+    }
+
     fn texts<'f>(&self, files: &'f [(String, String)]) -> impl Fn(&str) -> Option<String> + 'f
     where
         Self: 'f,

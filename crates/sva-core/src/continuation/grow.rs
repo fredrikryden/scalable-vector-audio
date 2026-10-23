@@ -8,6 +8,7 @@ use super::path::START_STEPS;
 use super::{Cx, Reached, Stage, Stages, merged, scaled, started};
 use crate::cli_error::CliError;
 use crate::seed::{self, Limits, Readings};
+use crate::solve::prox::run::FIT_RATE;
 use crate::solve::{recorded, with_price};
 use crate::structure::{applied, assign, grow, merge, split};
 
@@ -44,7 +45,7 @@ impl Grow {
     }
 }
 
-/// The clip the cost's reference samples, read as a starter reads it.
+/// The clip the cost's reference samples up to its interval's end, read as a starter reads it.
 fn readings<B: Backend>(cx: &Cx<'_, B>) -> Result<Readings, CliError> {
     let target = &cx.shape.reference;
     let refused = || {
@@ -57,21 +58,33 @@ fn readings<B: Backend>(cx: &Cx<'_, B>) -> Result<Readings, CliError> {
         )
     };
     let source = recorded(&cx.problem.cost, cx.problem.source);
-    let parsed = sva_ast::parse_expr(target).map_err(|_| refused())?;
+    let expr = crate::target::target(target)?.expr;
+    let parsed = sva_ast::parse_expr(&expr).map_err(|_| refused())?;
     let resolved =
         sva_ast::resolve_recordings(&parsed, &source).map_err(|unheld| match unheld.why {
             None => CliError::NotFound(unheld.message()),
             Some(_) => CliError::usage(crate::RECORDING_UNREADABLE, unheld.message()),
         })?;
-    match resolved {
+    let r = match resolved {
         Expr::Call { name, args, .. } if name == "sample" => match args.as_slice() {
-            [Arg::Pos(Expr::Lit(Literal::Recorded(r)))] => {
-                Ok(seed::read(&r.planes, f64::from(r.rate)))
-            }
-            _ => Err(refused()),
+            [Arg::Pos(Expr::Lit(Literal::Recorded(r)))] => r.clone(),
+            _ => return Err(refused()),
         },
-        _ => Err(refused()),
-    }
+        _ => return Err(refused()),
+    };
+    let rate = f64::from(r.rate);
+    Ok(match cx.shape.span(cx.per_bar()?)? {
+        (_, None) => seed::read(&r.planes, rate),
+        (_, Some(at)) => {
+            let end = (at as u64 * u64::from(r.rate)).div_ceil(u64::from(FIT_RATE)) as usize;
+            let cut: Vec<Vec<f32>> = r
+                .planes
+                .iter()
+                .map(|p| p[..end.min(p.len())].to_vec())
+                .collect();
+            seed::read(&cut, rate)
+        }
+    })
 }
 
 /// Each limit doubled, lone partials from none to one, held at the ceiling's.
