@@ -1,10 +1,12 @@
 // Concern: structure edits ranked by one evaluation each, in parallel, solved best first, the first that falls kept | Non-concern: proposing edits, the descent | IO: (Problem, edits) -> files, kept
 
 //! Each proposal is predicted from one proximal step (`f + g·Δx + λ·Δb`), as are the current
-//! files, the proposals' in parallel, ties in proposal order. The best-ranked is always solved,
-//! the rest only while predicted below the current files; the first solved below them is kept.
+//! files, `threads` proposals at a time over their noise renders, ties in proposal order. The
+//! best-ranked is always solved, the rest only while predicted below the current files; the
+//! first solved below them is kept.
 
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use sva_engine::Backend;
 
@@ -12,6 +14,7 @@ use super::{Cx, merged};
 use crate::cli_error::CliError;
 use crate::model::Model;
 use crate::solve::Cost;
+use crate::solve::prox::played::Renders;
 use crate::solve::prox::run::Prepared;
 use crate::solve::prox::{self, Progress, price};
 use crate::structure::{Proposal, applied};
@@ -72,28 +75,37 @@ pub async fn improve<B: Backend>(
         let here = cx.prepared(&files, cost, draws).await?;
         let threads = here.fit.threads;
         let current = predicted(&here)?;
-        let mut starts = Vec::new();
-        let mut jobs = Vec::new();
-        for p in proposals {
-            if cx.abandon.abandoned().await {
-                break 'round;
+        let mut ranked = Vec::new();
+        let mut proposals = proposals.into_iter().peekable();
+        while proposals.peek().is_some() {
+            let mut starts = Vec::new();
+            let mut jobs = Vec::new();
+            for p in proposals.by_ref().take(threads.get()) {
+                if cx.abandon.abandoned().await {
+                    break 'round;
+                }
+                let edited = applied(&model, &cx.texts(&files), &cx.problem.vary, &p)?;
+                let start = merged(&files, &edited);
+                let mut job = cx.prepared(&start, cost, draws).await?;
+                assert_eq!(
+                    job.fit.grid(),
+                    here.fit.grid(),
+                    "a round reads one reference"
+                );
+                job.fit.renders = Arc::new(Renders::over(Arc::clone(&here.fit.renders)));
+                jobs.push(job);
+                starts.push((p.label, start));
             }
-            let edited = applied(&model, &cx.texts(&files), &cx.problem.vary, &p)?;
-            let start = merged(&files, &edited);
-            jobs.push(cx.prepared(&start, cost, draws).await?);
-            starts.push((p.label, start));
+            let per_job =
+                NonZeroUsize::new(threads.get() / jobs.len()).expect("a worker per thread");
+            let predictions = sva_engine::each(threads, jobs, |mut at| {
+                at.fit.threads = per_job;
+                predicted(&at).map(|p| p.predicted)
+            });
+            for (p, (label, start)) in predictions.into_iter().zip(starts) {
+                ranked.push((p?, label, start));
+            }
         }
-        let per_job = NonZeroUsize::new(threads.get() / threads.get().min(jobs.len()))
-            .expect("a worker per thread");
-        let predictions = sva_engine::each(threads, jobs, |mut at| {
-            at.fit.threads = per_job;
-            predicted(&at).map(|p| p.predicted)
-        });
-        let mut ranked = predictions
-            .into_iter()
-            .zip(starts)
-            .map(|(p, (label, start))| Ok((p?, label, start)))
-            .collect::<Result<Vec<_>, CliError>>()?;
         ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
         for (rank, (predicted, label, start)) in ranked.into_iter().enumerate() {
             if rank > 0 && predicted >= current.predicted {

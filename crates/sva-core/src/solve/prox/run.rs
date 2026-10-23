@@ -6,7 +6,6 @@ use sva_engine::{Abandon, Backend, Output, Session, Tier};
 use sva_samples::measure::internal::{self, Ear, Grid, Internal};
 
 use super::eval::{Fit, Residual, evaluate};
-use super::played::Renders;
 use super::state::{State, Var, reaches};
 use super::{DEFAULT_DRAWS, DEFAULT_STEPS, Descended, Ended, Progress, descended, price, write};
 use crate::cli_error::CliError;
@@ -360,7 +359,7 @@ pub(crate) async fn prepared<B: Backend>(
         threads,
         draws,
         texts,
-        renders: Renders::default(),
+        renders: std::sync::Arc::default(),
     };
     Ok(Prepared {
         shape,

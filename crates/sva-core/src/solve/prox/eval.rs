@@ -27,7 +27,7 @@ pub struct Fit {
     pub draws: usize,
     /// The text of every file the composition's model reads, by path.
     pub texts: BTreeMap<String, String>,
-    pub renders: Renders,
+    pub renders: Arc<Renders>,
 }
 
 /// A residual over the phase draws.

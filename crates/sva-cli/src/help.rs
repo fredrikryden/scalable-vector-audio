@@ -755,18 +755,22 @@ CONTINUATION:
   A split, fold or growth is ranked without a descent: applied to the current
   files and evaluated once, its objective plus the change one proximal step
   from it predicts off its gradient, the residual taken linear over that step
-  and the price exact; the current files are predicted the same way. The
-  prediction ranks and does not veto: a growth's new numbers start at the
-  readings' levels and can need a whole descent to pay, which one step cannot
-  show. So a round solves the best-ranked edit whatever its prediction, then
-  each next one in rank order only while it is predicted below the current
-  files, each a descent capped at `--steps` and ending where it stops falling,
-  all at the stage's current draws (DRAWS, PRICED FIT). The first whose
-  objective falls below the current files' is kept, then the rest offered
-  again from it; a round keeping none ends at the first edit past the best
-  predicted no lower than the current files, or when none is left. Each
-  trial's steps print as progress lines whose `stage` is `<stage> trial
-  <edit>`.
+  and the price exact; the current files are predicted the same way. A
+  round's edits are evaluated `--threads` at a time in parallel, each reading
+  the current files' noise renders and holding only those it adds until it is
+  predicted, so its peak memory is the current files' renders once plus, a
+  thread, one edit's evaluation and new noises: it grows with `--threads`,
+  not with how many edits it ranks. The prediction
+  ranks and does not veto: a growth's new numbers start at the readings'
+  levels and can need a whole descent to pay, which one step cannot show. So a
+  round solves the best-ranked edit whatever its prediction, then each next
+  one in rank order only while it is predicted below the current files, each
+  a descent capped at `--steps` and ending where it stops falling, all at the
+  stage's current draws (DRAWS, PRICED FIT). The first whose objective falls
+  below the current files' is kept, then the rest offered again from it; a
+  round keeping none ends at the first edit past the best predicted no lower
+  than the current files, or when none is left. Each trial's steps print as
+  progress lines whose `stage` is `<stage> trial <edit>`.
   `--rounds <n>` (default {rounds}) sets the k-medians rounds of each cluster
   and split, a cost bound on how long reassignment runs.
 

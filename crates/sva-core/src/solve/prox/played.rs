@@ -234,9 +234,30 @@ fn text(s: &State, source: &dyn Fn(&str) -> Option<String>) -> Result<Text, CliE
 type Rendered = BTreeMap<(String, u64), Arc<Realisation>>;
 
 /// Each noise rendered once at the clip's samples, by its text, seed and onset. No number a fit
-/// varies moves an onset or a noise's text, so it holds one render per noisy line and seed.
+/// varies moves an onset or a noise's text, so it holds one render per noisy line and seed. A
+/// fit ranked in a structure round reads the current files' renders `under` its own first.
 #[derive(Default)]
-pub struct Renders(Mutex<Rendered>);
+pub struct Renders {
+    held: Mutex<Rendered>,
+    under: Option<Arc<Renders>>,
+}
+
+impl Renders {
+    /// A cache reading `under`'s renders, holding only those it adds; they drop with it.
+    pub fn over(under: Arc<Renders>) -> Renders {
+        Renders {
+            held: Mutex::default(),
+            under: Some(under),
+        }
+    }
+
+    fn get(&self, key: &(String, u64)) -> Option<Arc<Realisation>> {
+        self.under.as_ref().and_then(|u| u.get(key)).or_else(|| {
+            let held = self.held.lock().expect("the noise renders");
+            held.get(key).map(Arc::clone)
+        })
+    }
+}
 
 fn rendered(
     renders: &Renders,
@@ -250,8 +271,8 @@ fn rendered(
         None => sva_ast::render_expr(source),
     };
     let key = (text.clone(), at.to_bits());
-    if let Some(x) = renders.0.lock().expect("the noise renders").get(&key) {
-        return Ok(Arc::clone(x));
+    if let Some(x) = renders.get(&key) {
+        return Ok(x);
     }
     let mut c = sva_ast::Composition::new();
     c.insert("noise-source".to_string(), format!("{text}\n"));
@@ -277,12 +298,8 @@ fn rendered(
         .to_vec();
     x.resize(g.len, 0.0);
     let x = Arc::new(Realisation::of(x, g));
-    renders
-        .0
-        .lock()
-        .expect("the noise renders")
-        .insert(key, Arc::clone(&x));
-    Ok(x)
+    let mut cached = renders.held.lock().expect("the noise renders");
+    Ok(Arc::clone(cached.entry(key).or_insert(x)))
 }
 
 /// A name's played value, and the local index its tangent seeds where it varies.
