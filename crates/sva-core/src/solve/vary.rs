@@ -185,6 +185,23 @@ impl Vary {
         }
     }
 
+    /// The value a coordinate stands for, as the render reads it.
+    pub fn value(&self, coord: f64) -> f64 {
+        match self.log {
+            true => sva_formula::exp(coord),
+            false => coord,
+        }
+    }
+
+    /// The unit a value as the render reads it is written in: seconds, hertz or none.
+    pub fn rendered_unit(&self) -> &'static str {
+        match self.unit {
+            "s" | "ms" => "s",
+            "hz" | "khz" => "hz",
+            _ => "",
+        }
+    }
+
     /// The bounds in this variable's coordinate.
     pub fn bounds(&self) -> (f64, f64) {
         let (lo, hi) = (self.rendered(self.lo), self.rendered(self.hi));

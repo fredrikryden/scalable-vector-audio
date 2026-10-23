@@ -11,7 +11,7 @@ use super::draws::{self, DRAWS, seed};
 use super::lines::{self, Filter, Line, Realisation};
 use super::state::{Slot, State};
 use crate::cli_error::CliError;
-use crate::model::constant;
+use crate::model::{constant, header, relative};
 use sva_samples::measure::internal::Grid;
 
 /// The local index a root default's tangent seeds, past every line's own.
@@ -120,13 +120,6 @@ fn cut(e: &Expr, out: &mut Option<Noise>) -> Expr {
     x
 }
 
-fn header(line: &str) -> Option<&str> {
-    let (name, _) = line.split_once('=')?;
-    let name = name.trim();
-    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-        .then_some(name)
-}
-
 /// How far the played value moves a unit of its coordinate: none where held at a bound.
 pub fn slope(s: &State, slot: Slot) -> f64 {
     match slot {
@@ -216,13 +209,11 @@ fn text(s: &State, source: &dyn Fn(&str) -> Option<String>) -> Result<Text, CliE
             };
             let mut written: serde_json::Map<String, serde_json::Value> = serde_json::from_str(row)
                 .map_err(|e| refused(format!("score line {}: {e}", i + 1)))?;
-            let depth = score.matches('/').count();
             written.insert(
                 "node".to_string(),
                 serde_json::Value::String(format!(
-                    "@{}{}",
-                    "../".repeat(depth),
-                    s.model.lines[line].node
+                    "@{}",
+                    relative(score, &s.model.lines[line].node)
                 )),
             );
             for (name, slot) in s.slots(line) {

@@ -4,18 +4,11 @@ use std::collections::BTreeSet;
 
 use sva_ast::{Arg, Expr};
 
-use crate::model::constant;
+use crate::model::{constant, header, relative};
 
 use super::price::{reads, simplify};
 use super::state::{Slot, State};
 use crate::cli_error::CliError;
-
-fn header(line: &str) -> Option<&str> {
-    let (name, _) = line.split_once('=')?;
-    let name = name.trim();
-    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-        .then_some(name)
-}
 
 /// The defaults a node's lines all leave at a zero that silences them: written out of its body.
 fn silent(s: &State, node: usize) -> BTreeSet<String> {
@@ -222,12 +215,6 @@ fn score_text(s: &State, text: &str, draw: Option<usize>) -> Result<String, CliE
         out.push_str(&format!("{{{}}}\n", parts.join(", ")));
     }
     Ok(out)
-}
-
-/// `to` as a ref from the score at `from`.
-fn relative(from: &str, to: &str) -> String {
-    let depth = from.matches('/').count();
-    format!("{}{to}", "../".repeat(depth))
 }
 
 /// Every file the state changes, under the paths the composition reads them at.

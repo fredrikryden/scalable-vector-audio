@@ -36,11 +36,7 @@ impl Var {
             hi,
             log: v.log,
             res,
-            unit: match v.unit {
-                "s" | "ms" => "s",
-                "hz" | "khz" => "hz",
-                _ => "",
-            },
+            unit: v.rendered_unit(),
         })
     }
 
@@ -53,10 +49,7 @@ impl Var {
     }
 
     pub fn value(&self, coord: f64) -> f64 {
-        match self.log {
-            true => sva_formula::exp(coord),
-            false => coord,
-        }
+        self.vary.value(coord)
     }
 
     /// Zero inside linear bounds is the number's absence.

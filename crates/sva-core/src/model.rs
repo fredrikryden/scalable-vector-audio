@@ -75,6 +75,20 @@ pub fn constant(e: &Expr) -> Option<f64> {
     })
 }
 
+/// The default a node file's line sets, as `name = value`.
+pub fn header(line: &str) -> Option<&str> {
+    let (name, _) = line.split_once('=')?;
+    let name = name.trim();
+    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .then_some(name)
+}
+
+/// `to` as a ref from the score at `from`.
+pub fn relative(from: &str, to: &str) -> String {
+    let depth = from.matches('/').count();
+    format!("{}{to}", "../".repeat(depth))
+}
+
 impl Model {
     pub fn of(graph: &Graph, root: &str) -> Result<Model, CliError> {
         let mut nodes = BTreeMap::new();

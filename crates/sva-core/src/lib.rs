@@ -16,6 +16,7 @@ pub mod seed;
 mod set;
 pub mod solve;
 mod song;
+pub mod structure;
 mod target;
 mod until;
 

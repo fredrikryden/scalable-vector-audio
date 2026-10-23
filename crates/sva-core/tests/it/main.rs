@@ -8,3 +8,4 @@ mod pipeline;
 mod sampled;
 mod session;
 mod stream;
+mod structure;
