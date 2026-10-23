@@ -5,7 +5,7 @@ use sva_engine::Backend;
 
 use super::improve::improve;
 use super::path::START_STEPS;
-use super::{Cx, Reached, Stage, Stages, merged, scaled, started};
+use super::{Built, Cx, Reached, Stage, Stages, merged, scaled, started};
 use crate::cli_error::CliError;
 use crate::seed::{self, Limits, Readings};
 use crate::solve::prox::Progress;
@@ -103,7 +103,7 @@ impl<B: Backend> Stages<B> for Grow {
         last: Option<&Reached>,
         cx: &Cx<'_, B>,
         report: &mut dyn FnMut(&str, &Progress),
-    ) -> Result<Option<Stage>, CliError> {
+    ) -> Result<Option<Built>, CliError> {
         let files = last.map(Reached::files).unwrap_or_default();
         let cost = &cx.problem.cost;
         let varies = &cx.problem.vary;
@@ -111,13 +111,13 @@ impl<B: Backend> Stages<B> for Grow {
         match self.next {
             Next::Start => {
                 self.next = Next::Settle;
-                Ok(Some(Stage {
+                Ok(Some(Built::Stage(Stage {
                     label: "start".to_string(),
                     files,
                     cost: with_price(cost, 0.0)?,
                     steps: scaled(self.steps, START_STEPS),
                     edits: Vec::new(),
-                }))
+                })))
             }
             Next::Settle => {
                 self.next = Next::Level(None);
@@ -128,13 +128,13 @@ impl<B: Backend> Stages<B> for Grow {
                     true => Vec::new(),
                     false => vec![cluster.label],
                 };
-                Ok(Some(Stage {
+                Ok(Some(Built::Stage(Stage {
                     label: "settle".to_string(),
                     files: merged(&files, &edited),
                     cost: cost.clone(),
                     steps: self.steps,
                     edits,
-                }))
+                })))
             }
             Next::Level(before) => {
                 let length = last.and_then(Reached::length);
@@ -166,6 +166,9 @@ impl<B: Backend> Stages<B> for Grow {
                     report,
                 )
                 .await?;
+                if let Some(r) = grown.stopped {
+                    return Ok(Some(Built::Stopped(r)));
+                }
                 if grown.kept.is_empty() {
                     return Ok(None);
                 }
@@ -179,6 +182,9 @@ impl<B: Backend> Stages<B> for Grow {
                     report,
                 )
                 .await?;
+                if let Some(r) = split.stopped {
+                    return Ok(Some(Built::Stopped(r.after(&grown.kept))));
+                }
                 let merged = improve(
                     cx,
                     &label,
@@ -189,14 +195,18 @@ impl<B: Backend> Stages<B> for Grow {
                     report,
                 )
                 .await?;
+                let kept = [grown.kept, split.kept].concat();
+                if let Some(r) = merged.stopped {
+                    return Ok(Some(Built::Stopped(r.after(&kept))));
+                }
                 self.at = to;
-                Ok(Some(Stage {
+                Ok(Some(Built::Stage(Stage {
                     label,
                     files: merged.files,
                     cost: cost.clone(),
                     steps: self.steps,
-                    edits: [grown.kept, split.kept, merged.kept].concat(),
-                }))
+                    edits: [kept, merged.kept].concat(),
+                })))
             }
         }
     }

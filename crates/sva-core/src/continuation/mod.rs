@@ -193,6 +193,17 @@ impl Reached {
     pub fn solved_length(&self) -> f64 {
         self.solution.predicted.bits + self.solution.bits
     }
+
+    fn after(mut self, kept: &[String]) -> Reached {
+        self.stage.edits.splice(0..0, kept.iter().cloned());
+        self
+    }
+}
+
+/// A stage to solve, or a trial a signal stopped.
+enum Built {
+    Stage(Stage),
+    Stopped(Reached),
 }
 
 /// The fewest draws with a standard error.
@@ -383,7 +394,7 @@ trait Stages<B: Backend> {
         last: Option<&Reached>,
         cx: &Cx<'_, B>,
         report: &mut dyn FnMut(&str, &Progress),
-    ) -> Result<Option<Stage>, CliError>;
+    ) -> Result<Option<Built>, CliError>;
 }
 
 fn scaled(steps: usize, fraction: f64) -> usize {
@@ -416,7 +427,15 @@ async fn driven<B: Backend>(
 ) -> Result<Ran, CliError> {
     let mut reached: Vec<Reached> = Vec::new();
     let mut cancelled = false;
-    while let Some(stage) = stages.next(reached.last(), cx, report).await? {
+    while let Some(built) = stages.next(reached.last(), cx, report).await? {
+        let stage = match built {
+            Built::Stage(stage) => stage,
+            Built::Stopped(r) => {
+                reached.push(r);
+                cancelled = true;
+                break;
+            }
+        };
         if cx.abandon.abandoned().await {
             cancelled = true;
             break;

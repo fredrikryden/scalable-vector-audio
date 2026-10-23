@@ -3,7 +3,7 @@
 use sva_engine::Backend;
 
 use super::improve::improve;
-use super::{Cx, Reached, Stage, Stages, merged, scaled, started};
+use super::{Built, Cx, Reached, Stage, Stages, merged, scaled, started};
 use crate::cli_error::CliError;
 use crate::solve::prox::DEBIAS_STEPS;
 use crate::solve::prox::Progress;
@@ -47,7 +47,7 @@ impl<B: Backend> Stages<B> for Path {
         last: Option<&Reached>,
         cx: &Cx<'_, B>,
         report: &mut dyn FnMut(&str, &Progress),
-    ) -> Result<Option<Stage>, CliError> {
+    ) -> Result<Option<Built>, CliError> {
         let unpriced = || with_price(&cx.problem.cost, 0.0);
         let files = last.map(Reached::files).unwrap_or_default();
         let draws = started(last);
@@ -55,13 +55,13 @@ impl<B: Backend> Stages<B> for Path {
             match self.next {
                 Next::Start => {
                     self.next = Next::Settle;
-                    return Ok(Some(Stage {
+                    return Ok(Some(Built::Stage(Stage {
                         label: "start".to_string(),
                         files,
                         cost: unpriced()?,
                         steps: scaled(self.steps, START_STEPS),
                         edits: Vec::new(),
-                    }));
+                    })));
                 }
                 Next::Settle => {
                     self.next = Next::Price(0);
@@ -72,25 +72,25 @@ impl<B: Backend> Stages<B> for Path {
                         true => Vec::new(),
                         false => vec![cluster.label],
                     };
-                    return Ok(Some(Stage {
+                    return Ok(Some(Built::Stage(Stage {
                         label: "settle".to_string(),
                         files: merged(&files, &edited),
                         cost: unpriced()?,
                         steps: scaled(self.steps, SETTLE_STEPS),
                         edits,
-                    }));
+                    })));
                 }
                 Next::Price(k) if k == self.prices.len() => return Ok(None),
                 Next::Price(k) => {
                     self.next = Next::Restructure(k);
                     let price = self.prices[k];
-                    return Ok(Some(Stage {
+                    return Ok(Some(Built::Stage(Stage {
                         label: format!("price {price}"),
                         files,
                         cost: with_price(&cx.problem.cost, price)?,
                         steps: self.steps,
                         edits: Vec::new(),
-                    }));
+                    })));
                 }
                 Next::Restructure(k) => {
                     self.next = Next::Price(k + 1);
@@ -108,6 +108,9 @@ impl<B: Backend> Stages<B> for Path {
                         report,
                     )
                     .await?;
+                    if let Some(r) = split.stopped {
+                        return Ok(Some(Built::Stopped(r)));
+                    }
                     let merged = improve(
                         cx,
                         &label,
@@ -118,16 +121,19 @@ impl<B: Backend> Stages<B> for Path {
                         report,
                     )
                     .await?;
+                    if let Some(r) = merged.stopped {
+                        return Ok(Some(Built::Stopped(r.after(&split.kept))));
+                    }
                     if split.kept.is_empty() && merged.kept.is_empty() {
                         continue;
                     }
-                    return Ok(Some(Stage {
+                    return Ok(Some(Built::Stage(Stage {
                         label,
                         files: merged.files,
                         cost,
                         steps: scaled(self.steps, DEBIAS_STEPS),
                         edits: split.kept.into_iter().chain(merged.kept).collect(),
-                    }));
+                    })));
                 }
             }
         }

@@ -162,8 +162,10 @@ fn priced_solve(
     let data = |extra: &str| fitted_data(&fitted, settings, &problem.cost.text, extra);
     if fitted.ran.cancelled {
         let message = "the priced solve was stopped by a signal; `data.stages` holds the stages \
-                       it finished and the one it stopped in, `data.chosen` the finished one of \
-                       least predicted length at the cap's draws, and no file was written";
+                       it finished and, `stopped` true, the solve it stopped in where one was \
+                       running: a stage's own, or a trial of an edit building the next, labelled \
+                       as its progress lines; `data.chosen` the finished one of least predicted \
+                       length at the cap's draws, and no file was written";
         let json = error_envelope_with("cancelled", message, &data(""), &warnings);
         return Ok((json, CANCELLED));
     }

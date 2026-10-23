@@ -711,9 +711,11 @@ PRICED FIT:
   same at the cap's K, null where stopped); `chosen`, that stage; `draws`,
   the cap; `continuation`, the scheme or null; and `files`, the chosen stage's
   text. A signal stops the solve: `stages` holds the stages it finished and,
-  `stopped` true, the one it stopped in, no candidate; `chosen` the least
-  `length_bits` of those finished, null where none; nothing measured, and no
-  file is written.
+  `stopped` true, the solve it stopped in where one was running, no
+  candidate: a stage's own, or a trial of a structure edit building the next,
+  labelled as its progress lines, its `edits` those kept before it then its
+  own; `chosen` the least `length_bits` of those finished, null where none;
+  nothing measured, and no file is written.
   `--write --confirm` writes the chosen stage in place: defaults in their node
   files, score lines without their silent ones or the fields their node's
   default restates. Every 50th step and

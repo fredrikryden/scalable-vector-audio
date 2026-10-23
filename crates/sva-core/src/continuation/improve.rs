@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use sva_engine::Backend;
 
-use super::{Cx, merged};
+use super::{Cx, Reached, Stage, merged};
 use crate::cli_error::CliError;
 use crate::model::Model;
 use crate::solve::Cost;
@@ -23,6 +23,9 @@ use crate::structure::{Proposal, applied};
 pub struct Improved {
     pub files: Vec<(String, String)>,
     pub kept: Vec<String>,
+    /// The trial a signal stopped, labelled as its progress lines are, its edits the kept then
+    /// its own.
+    pub stopped: Option<Reached>,
 }
 
 /// A round's edits, given the model, its files' texts and the labels kept before.
@@ -142,7 +145,24 @@ pub async fn improve<B: Backend>(
                 .solved(&start, cost, cx.settings.steps, draws, &mut heard)
                 .await?;
             if solved.cancelled() {
-                break 'round;
+                let stage = Stage {
+                    label: trial,
+                    files: start,
+                    cost: cost.clone(),
+                    steps: cx.settings.steps,
+                    edits: [kept.as_slice(), &[label]].concat(),
+                };
+                let stopped = Some(Reached {
+                    stage,
+                    solution: solved,
+                    at_cap: None,
+                    measured: None,
+                });
+                return Ok(Improved {
+                    files,
+                    kept,
+                    stopped,
+                });
             }
             if solved.objective() < current.objective {
                 files = merged(&start, &solved.files);
@@ -152,5 +172,9 @@ pub async fn improve<B: Backend>(
         }
         break;
     }
-    Ok(Improved { files, kept })
+    Ok(Improved {
+        files,
+        kept,
+        stopped: None,
+    })
 }

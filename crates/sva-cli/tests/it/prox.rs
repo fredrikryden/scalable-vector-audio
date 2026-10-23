@@ -270,6 +270,96 @@ fn a_coarse_starter_grows_and_writes_its_choice() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A signal during a trial that builds a later stage stops the run there: exit 130, and the
+/// last of `stages` is that trial under its progress lines' label, `stopped` with the descents
+/// it ran, no length at the cap's draws and not chosen.
+#[cfg(unix)]
+#[test]
+fn a_signal_in_a_stage_lists_it_stopped() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    let (root, wav) = clip("prox-signal");
+    let made = json(&sva(
+        &root,
+        &argv(&[
+            "new",
+            "fit",
+            "--from",
+            &wav.display().to_string(),
+            "--harmonics",
+            "1",
+            "--lone",
+            "0",
+        ]),
+    ));
+    let next = made["data"]["next"]["items"][0]["command"]
+        .as_str()
+        .expect("a next command");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sva-cli"))
+        .current_dir(root.join("fit"))
+        .args(argv(&[
+            "solve",
+            "@fits/clip",
+            "--steps",
+            "30",
+            "--cache",
+            "none",
+        ]))
+        .args(
+            flags(next)
+                .into_iter()
+                .filter(|w| w != "--write" && w != "--confirm"),
+        )
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("sva-cli runs");
+    let mut lines = BufReader::new(child.stderr.take().expect("stderr"));
+    let trial = loop {
+        let mut line = String::new();
+        assert_ne!(
+            lines.read_line(&mut line).expect("a line"),
+            0,
+            "a trial runs"
+        );
+        let Ok(p) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let stage = p["stage"].as_str().expect("a stage").to_string();
+        if stage.contains(" trial ") {
+            break stage;
+        }
+    };
+    Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("kill runs");
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut lines, &mut rest).expect("the progress after it");
+    let out = child.wait_with_output().expect("it exits");
+    let answer = json(&out);
+    assert_eq!(out.status.code(), Some(130), "{answer}");
+    assert_eq!(answer["error"]["code"], "cancelled", "{answer}");
+    let data = &answer["data"];
+    let stages = data["stages"]["items"].as_array().expect("stages");
+    let (stopped, finished) = stages.split_last().expect("a stage");
+    assert_eq!(stopped["label"], trial.as_str(), "{data}");
+    assert_eq!(stopped["stopped"], true, "{stopped}");
+    assert!(stopped["length_bits"].is_null(), "{stopped}");
+    let descents = stopped["descents"]["items"].as_array().expect("descents");
+    assert_eq!(
+        descents.last().expect("a descent")["ended"],
+        "signal",
+        "{stopped}"
+    );
+    assert!(
+        finished.iter().all(|s| s["stopped"] == false),
+        "the stages before it finished: {data}"
+    );
+    assert_ne!(data["chosen"]["label"], trial.as_str(), "{data}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Every file under `dir` and its text.
 fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut out = Vec::new();

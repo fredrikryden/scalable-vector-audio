@@ -692,9 +692,10 @@ impl Composition {
         if fitted.ran.cancelled {
             let data = fitted_data(&fitted, &settings, cost, "");
             let message = "the priced solve was aborted; `refusal.data.stages` holds the stages it \
-                           finished and the one it stopped in, `refusal.data.chosen` the finished \
-                           one of least predicted length at the cap's draws, and nothing was \
-                           written";
+                           finished and, `stopped` true, the solve it stopped in where one was \
+                           running: a stage's own, or a trial of an edit building the next, \
+                           labelled as its progress lines; `refusal.data.chosen` the finished one \
+                           of least predicted length at the cap's draws, and nothing was written";
             let error = JsErr::new(message);
             error.set_name("AbortError");
             let envelope = sva_core::error_envelope_with("cancelled", message, &data, &warnings);
