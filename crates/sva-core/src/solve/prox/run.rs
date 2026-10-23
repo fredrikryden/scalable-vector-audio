@@ -11,11 +11,11 @@ use super::state::{State, Var, reaches};
 use super::{DEFAULT_DRAWS, DEFAULT_STEPS, Descended, Ended, Progress, descended, price, write};
 use crate::cli_error::CliError;
 use crate::model::Model;
-use crate::query::{asked, call};
+use crate::query::{Asked, asked, call};
 use crate::solve::cost::{Cost, Node, Op};
 use crate::solve::{Leaf, Problem, recorded};
 use crate::target::Edge;
-use crate::{Job, execute_over, overlaid};
+use crate::{Job, Rendered, execute_over, overlaid};
 
 /// `--method prox`'s own settings.
 #[derive(Clone, Debug, PartialEq)]
@@ -267,24 +267,28 @@ impl<B: Backend> Reading<'_, B> {
             ..Job::over(source, target)
         };
         let rendered = execute_over(job, self.tier, &mut Session::default()).await?;
-        let Output::Samples(buffer) = rendered.answered(&samples)?.value else {
-            unreachable!("`samples` answers samples");
-        };
-        let per_bar = rendered.graph.tempo().map(|t| t.seconds_per_bar());
-        let representation = self
-            .leaf
-            .asked
-            .representation(rendered.config.rate, per_bar)?;
-        let profile = rendered.config.profile.name;
-        let planes: Vec<&[f64]> = (0..buffer.width()).map(|c| buffer.plane(c)).collect();
-        let mono = internal::mono(&planes);
-        let answer =
-            sva_engine::answer_buffer(&self.leaf.written, &buffer, representation, profile)?;
-        let Output::Internal(read) = answer.value else {
-            unreachable!("`internal` answers its reading");
-        };
-        Ok((*read, mono))
+        read_off(self.leaf, &rendered, &samples)
     }
+}
+
+pub(super) fn read_off(
+    leaf: &Leaf,
+    rendered: &Rendered,
+    samples: &Asked,
+) -> Result<(Internal, Vec<f64>), CliError> {
+    let Output::Samples(buffer) = rendered.answered(samples)?.value else {
+        unreachable!("`samples` answers samples");
+    };
+    let per_bar = rendered.graph.tempo().map(|t| t.seconds_per_bar());
+    let representation = leaf.asked.representation(rendered.config.rate, per_bar)?;
+    let profile = rendered.config.profile.name;
+    let planes: Vec<&[f64]> = (0..buffer.width()).map(|c| buffer.plane(c)).collect();
+    let mono = internal::mono(&planes);
+    let answer = sva_engine::answer_buffer(&leaf.written, &buffer, representation, profile)?;
+    let Output::Internal(read) = answer.value else {
+        unreachable!("`internal` answers its reading");
+    };
+    Ok((*read, mono))
 }
 
 /// The rate a priced fit reads its reference and renders its model at.

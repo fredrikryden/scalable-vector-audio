@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::diag::{ByteSpan, DiagCode};
 use crate::expr::{Address, Arg, BinOp, Expr, Literal};
@@ -75,7 +75,7 @@ pub(crate) fn shifted(at: Option<Pos>, by: Offset, curve: &Curve) -> Option<Pos>
 
 /// How a line came to be placed, innermost first.
 #[derive(Clone, Debug, Default)]
-pub struct Chain(Option<Rc<Link>>);
+pub struct Chain(Option<Arc<Link>>);
 
 #[derive(Debug)]
 struct Link {
@@ -92,7 +92,7 @@ struct Link {
 impl Chain {
     /// Placed by line `number`'s item `item` of score `file` at `at`.
     fn by(&self, file: String, (number, item): (usize, usize), at: Option<Pos>) -> Chain {
-        Chain(Some(Rc::new(Link {
+        Chain(Some(Arc::new(Link {
             file,
             line: Some(number),
             item,
@@ -104,7 +104,7 @@ impl Chain {
 
     /// Read by equation `file` at `at`, a view delaying what it reads by `delay` seconds.
     fn read(&self, file: String, at: Option<Pos>, delay: f64) -> Chain {
-        Chain(Some(Rc::new(Link {
+        Chain(Some(Arc::new(Link {
             file,
             line: None,
             item: 0,
@@ -182,7 +182,7 @@ pub(crate) struct Term {
 
 pub(crate) enum Target {
     /// Shared by every read of one placement.
-    Container(Rc<Container>),
+    Container(Arc<Container>),
     Instance(usize),
 }
 
@@ -269,7 +269,7 @@ pub(crate) struct Placing<'g> {
     pub placed: BTreeSet<String>,
     lost: Option<Lost>,
     /// Each placement once, however many read paths reach it.
-    held: HashMap<Placement, (Rc<Container>, usize)>,
+    held: HashMap<Placement, (Arc<Container>, usize)>,
     /// Per placement, in the order placing began.
     reads: Vec<Reads>,
     /// Placements in the order each finished: every reader after what it reads.
@@ -448,7 +448,7 @@ impl<'g> Placing<'g> {
     }
 
     /// The song from `root`, each instance told the earliest it sounds.
-    pub fn song(&mut self, root: &str) -> Rc<Container> {
+    pub fn song(&mut self, root: &str) -> Arc<Container> {
         let zero = Some(Pos::Bars(Ratio::ZERO));
         let tree = self.place(root, zero, None, Chain::default(), 0.0);
         self.sound();
@@ -464,7 +464,7 @@ impl<'g> Placing<'g> {
         crop: Option<Pos>,
         chain: Chain,
         delay: f64,
-    ) -> Rc<Container> {
+    ) -> Arc<Container> {
         let key = Placement {
             path: path.to_string(),
             at: exact(at),
@@ -492,7 +492,7 @@ impl<'g> Placing<'g> {
         };
         self.open.pop();
         self.finished.push(id);
-        let container = Rc::new(Container {
+        let container = Arc::new(Container {
             path: path.to_string(),
             at,
             body,

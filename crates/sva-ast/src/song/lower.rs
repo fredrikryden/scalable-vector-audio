@@ -1,7 +1,7 @@
 // Concern: lowers a placed song to equations: each container per placement, lanes folded or passed, each lane's closed form | Non-concern: placing (place.rs) | IO: (&Song, spans) -> nodes or Refusals
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::diag::{ByteSpan, DiagCode};
 use crate::expr::{Address, Arg, BinOp, Binds, DEGREE, Expr, Literal, map_children};
@@ -410,8 +410,11 @@ impl<'a> Lowering<'a> {
 
     /// A container's lowered node, and the lanes its body reads as parameters: lowered once
     /// per placement, however many reads share it.
-    fn container(&mut self, c: &Rc<Container>) -> Result<(String, BTreeSet<LaneId>), Vec<Refusal>> {
-        if let Some(held) = self.lowered.get(&Rc::as_ptr(c)) {
+    fn container(
+        &mut self,
+        c: &Arc<Container>,
+    ) -> Result<(String, BTreeSet<LaneId>), Vec<Refusal>> {
+        if let Some(held) = self.lowered.get(&Arc::as_ptr(c)) {
             return Ok(held.clone());
         }
         let (defined, params) = match &c.body {
@@ -421,7 +424,7 @@ impl<'a> Lowering<'a> {
         let values = self.values.as_ref().expect("read before lowering");
         let defined = self.graph.lowered(&c.path, &defined, values)?;
         let held = (self.variant(&c.path, defined), params);
-        self.lowered.insert(Rc::as_ptr(c), held.clone());
+        self.lowered.insert(Arc::as_ptr(c), held.clone());
         Ok(held)
     }
 

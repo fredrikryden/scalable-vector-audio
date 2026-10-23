@@ -292,9 +292,32 @@ fn instance_read(graph: &Graph, text: &str) -> Option<sva_ast::Expr> {
 }
 
 pub fn execute(job: Job, tier: &Tier) -> Result<Rendered, CliError> {
-    let (graph, config, song) = settle(&job)?;
-    let render = render(&graph, PROBE, config, tier);
-    rendered(&job, (graph, song), render)
+    Settled::of(&job)?.execute(tier)
+}
+
+/// A job settled: everything its render reads, owned apart from the job's source and hooks.
+pub(crate) struct Settled {
+    graph: Graph,
+    config: RenderConfig,
+    song: Song,
+    expression: String,
+}
+
+impl Settled {
+    pub(crate) fn of(job: &Job) -> Result<Settled, CliError> {
+        let (graph, config, song) = settle(job)?;
+        Ok(Settled {
+            graph,
+            config,
+            song,
+            expression: job.target.to_string(),
+        })
+    }
+
+    pub(crate) fn execute(self, tier: &Tier) -> Result<Rendered, CliError> {
+        let render = render(&self.graph, PROBE, self.config, tier);
+        rendered(&self.expression, (self.graph, self.song), render)
+    }
 }
 
 /// `job` over `tier`, typing anew only what `session` typed otherwise; only `persist` commits
@@ -308,19 +331,19 @@ pub async fn execute_over<B: Backend>(
     let (graph, config, song) = settle(&job)?;
     let hooks = (job.abandon, job.hear);
     let render = render_called(session, &graph, PROBE, config, tier, hooks, call).await;
-    rendered(&job, (graph, song), render)
+    rendered(job.target, (graph, song), render)
 }
 
 fn rendered(
-    job: &Job,
+    expression: &str,
     (graph, song): (Graph, Song),
     render: Result<sva_engine::Render, EngineError>,
 ) -> Result<Rendered, CliError> {
-    let render = render.map_err(|e| refused(&song, &graph, e, job.target))?;
+    let render = render.map_err(|e| refused(&song, &graph, e, expression))?;
     Ok(Rendered {
         warnings: song.warnings().to_vec(),
         config: render.config.clone(),
-        expression: job.target.to_string(),
+        expression: expression.to_string(),
         target: PROBE.to_string(),
         render,
         graph,

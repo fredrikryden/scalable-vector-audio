@@ -7,7 +7,7 @@ mod reach;
 mod tempo;
 
 use std::collections::BTreeSet;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub use lanes::{Held, Hold, Home, Lane, LaneId, Swept};
 pub use place::parameters;
@@ -47,7 +47,7 @@ pub struct Warning {
 pub struct Song {
     root: String,
     curve: Curve,
-    tree: Rc<Container>,
+    tree: Arc<Container>,
     instances: Vec<Instance>,
     lanes: Vec<Lane>,
     marks: Vec<PlacedMark>,
