@@ -666,7 +666,7 @@ impl Composition {
         options: &Options,
         abandon: &dyn Abandon,
     ) -> Result<JsValue, JsValue> {
-        use sva_core::fit::{capped, fitted, fitted_data};
+        use sva_core::fit::{capped, fitted, fitted_data, writable};
         let settings = sva_core::solve::prox::Settings {
             steps: options
                 .steps
@@ -675,6 +675,9 @@ impl Composition {
                 .draws
                 .unwrap_or(sva_core::solve::prox::DEFAULT_DRAWS),
         };
+        if options.write {
+            writable(&settings, ("`write`", "`steps`")).map_err(|e| thrown(&e))?;
+        }
         let mut heard = |line: &str| {
             if let Some(progress) = &options.progress {
                 let _ = progress.call1(&JsValue::NULL, &parse(line).unwrap_or(line.into()));

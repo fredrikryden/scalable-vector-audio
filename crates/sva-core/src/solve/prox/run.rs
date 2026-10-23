@@ -372,7 +372,7 @@ pub(crate) async fn prepared<B: Backend>(
 
 /// The problem's composition descended at its cost's price from the numbers it holds, each
 /// phase until its objective stops falling or `settings.steps` caps it; zero steps answer the
-/// start.
+/// start as written, no number rounded.
 pub async fn solve<B: Backend>(
     problem: &Problem<'_>,
     settings: &Settings,
@@ -395,7 +395,10 @@ pub async fn solve<B: Backend>(
     let text = |p: &str| -> Option<String> { source.get(p).ok().flatten().map(|t| t.into_owned()) };
     Ok(Solution {
         price: lambda,
-        files: write::files(&state, &text)?,
+        files: match settings.steps {
+            0 => Vec::new(),
+            _ => write::files(&state, &text)?,
+        },
         numbers,
         bits,
         predicted: e.residual,

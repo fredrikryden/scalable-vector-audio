@@ -660,7 +660,11 @@ PRICED FIT:
   the same draws, so the error is the spread of each draw's own fall between
   the two least states, a fall the draws cannot tell from none.
   `--steps` (default {steps}) caps the descent, the debias at a quarter of it;
-  a stage that reaches its cap first warns `solve.steps_cap`.
+  a stage that reaches its cap first warns `solve.steps_cap`. `--steps 0`
+  descends nothing: the composition is scored as it is, one stage predicted
+  and measured, `files` empty and no file changed. It refuses `--write`
+  (`solve.prox_write`), there being nothing to write, and `--continuation`
+  (`solve.prox_steps`), whose stages are descents.
   DRAWS: a stage is solved at K draws: a run's first stage at {fewest}, the
   fewest with a standard error, each later one at the K the last ended with.
   A descent of at least {flat_from} steps whose least objective over its later
@@ -924,7 +928,8 @@ DEFAULTS:
   --continuation <s>   runs a priced fit as a scheme's stages: CONTINUATION.
   --rounds <n>         a continuation's k-medians rounds. Default {rounds}.
   --steps <n>          caps each priced stage's descent, which ends sooner where
-                       its objective stops falling. Default {steps}.
+                       its objective stops falling; 0 scores the composition as
+                       it is, without a continuation. Default {steps}.
   --draws <n>          the most draws a priced stage's schedule doubles to, at
                        least {fewest}; every finished stage is predicted
                        and the chosen one measured at it.

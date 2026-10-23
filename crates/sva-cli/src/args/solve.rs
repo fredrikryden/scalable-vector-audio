@@ -84,7 +84,16 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
                 prox_flag = Some("--rounds");
             }
             "--steps" => {
-                settings.steps = count(&value(&mut it, "--steps")?, "--steps", "steps")?.get();
+                let raw = value(&mut it, "--steps")?;
+                settings.steps = raw.parse::<usize>().map_err(|_| {
+                    CliError::usage(
+                        "cli.bad_value",
+                        format!(
+                            "--steps needs a whole number of steps, 0 to evaluate the \
+                             composition as it is, got `{raw}`"
+                        ),
+                    )
+                })?;
                 prox_flag = Some("--steps");
             }
             "--draws" => {

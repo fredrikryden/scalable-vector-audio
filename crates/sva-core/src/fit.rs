@@ -37,6 +37,21 @@ fn progress_json(stage: &str, p: &Progress) -> String {
     )
 }
 
+/// Zero steps evaluate the composition as it is and change no number, so a write of them, spelt
+/// `(write, steps)` by the front end, has nothing to write.
+pub fn writable(settings: &Settings, (write, steps): (&str, &str)) -> Result<(), CliError> {
+    match settings.steps {
+        0 => Err(CliError::usage(
+            "solve.prox_write",
+            format!(
+                "{write} with {steps} 0 has nothing to write: 0 steps evaluate the composition \
+                 as it is and change no number; drop {write}, or take {steps} above 0"
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Without a scheme, one stage at the cost's own price; with one, its run; either through the
 /// draws' schedule up to `settings.draws` ([`continuation`]). The stage of least predicted
 /// length at that cap's draws is chosen and it alone measured. `report` hears each progress
@@ -58,6 +73,13 @@ pub async fn fitted<B: Backend>(
                  not {}",
                 settings.draws
             ),
+        ));
+    }
+    if settings.steps == 0 && scheme.is_some() {
+        return Err(CliError::usage(
+            "solve.prox_steps",
+            "a continuation's stages are descents, so 0 steps leave it nothing to do; take \
+             steps above 0, or drop the continuation to evaluate the composition as it is",
         ));
     }
     let cx = Cx {

@@ -1,4 +1,4 @@
-// Concern: freezes `new --from` and `solve --method prox`: the starter, the answer's stages, the write, each refusal code | Non-concern: which model a stage finds | IO: (argv, a clip) -> envelope
+// Concern: freezes `new --from` and `solve --method prox`: the starter, its stages, the write, a zero-step score, each refusal code | Non-concern: the model a stage finds | IO: (argv, clip) -> envelope
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -242,6 +242,115 @@ fn a_coarse_starter_grows_and_writes_its_choice() {
         master,
         "the chosen stage is written in place"
     );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Every file under `dir` and its text.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).expect("a directory") {
+        let path = entry.expect("an entry").path();
+        match path.is_dir() {
+            true => out.extend(snapshot(&path)),
+            false => out.push((path.clone(), std::fs::read(&path).expect("a file"))),
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `--steps 0` scores a composition as it is: a fit written under `--confirm`, solved again with
+/// no steps, answers one stage measured as the fit measured what it wrote, changes no file and
+/// lists none; with `--write` or a continuation it refuses instead.
+#[test]
+fn zero_steps_measure_the_composition_as_written() {
+    let (root, wav) = clip("prox-zero");
+    let made = json(&sva(
+        &root,
+        &argv(&[
+            "new",
+            "fit",
+            "--from",
+            &wav.display().to_string(),
+            "--harmonics",
+            "2",
+        ]),
+    ));
+    assert_eq!(made["status"], "success", "{made}");
+    let next = made["data"]["next"]["items"][0]["command"]
+        .as_str()
+        .expect("a next command");
+    let mut varies: Vec<Vec<String>> = flags(next)
+        .chunks(2)
+        .filter(|f| f[0] == "--vary")
+        .map(<[String]>::to_vec)
+        .collect();
+    let dir = root.join("fit");
+    let solve = |extra: &[&str], varies: &[Vec<String>]| {
+        let mut words = argv(&["solve", "@fits/clip", "--method", "prox", "--cache", "none"]);
+        words.extend(argv(extra));
+        words.extend(varies.iter().flatten().cloned());
+        json(&sva(&dir, &words))
+    };
+    let fitted = solve(&["--steps", "3", "--write", "--confirm"], &varies);
+    assert_eq!(fitted["status"], "success", "{fitted}");
+    let written = snapshot(&dir);
+
+    // The write drops the silent lines and the numbers only they read; so do their `--vary`s.
+    let scored = loop {
+        let scored = solve(&["--steps", "0"], &varies);
+        let refusal = &scored["data"]["diagnostics"]["items"][0];
+        if refusal["code"] != "solve.reaches_nothing" {
+            break scored;
+        }
+        let message = refusal["message"].as_str().expect("a message");
+        let name = message
+            .strip_prefix("`--vary ")
+            .and_then(|m| m.split_once('`'))
+            .expect("the refusal names its `--vary`")
+            .0;
+        let before = varies.len();
+        varies.retain(|v| v[1].split_once('=').expect("a vary").0 != name);
+        assert!(
+            varies.len() < before,
+            "`{name}` is a `--vary` given: {message}"
+        );
+    };
+    assert_eq!(scored["status"], "success", "{scored}");
+    let data = &scored["data"];
+    let stages = data["stages"]["items"].as_array().expect("stages");
+    assert_eq!(stages.len(), 1, "no scheme answers one stage: {data}");
+    let descents = data["chosen"]["descents"]["items"]
+        .as_array()
+        .expect("descents");
+    assert!(
+        descents.iter().all(|d| d["steps"] == 0),
+        "no step is taken: {descents:?}"
+    );
+    assert!(!data["chosen"]["predicted"].is_null(), "{data}");
+    assert_eq!(
+        data["chosen"]["measured"], fitted["data"]["chosen"]["measured"],
+        "the composition as written measures as the fit that wrote it measured it"
+    );
+    assert_eq!(data["files"]["items"], serde_json::json!([]), "{data}");
+    assert!(
+        snapshot(&dir) == written,
+        "no file under the composition changes"
+    );
+
+    for (extra, code) in [
+        (["--write", "--confirm"], "solve.prox_write"),
+        (["--continuation", "path:0.1"], "solve.prox_steps"),
+    ] {
+        let mut words = vec!["--steps", "0"];
+        words.extend(extra);
+        let refused = solve(&words, &varies);
+        assert_eq!(
+            refused["data"]["diagnostics"]["items"][0]["code"], code,
+            "{extra:?}: {refused}"
+        );
+    }
+    assert!(snapshot(&dir) == written, "a refusal changes no file");
     let _ = std::fs::remove_dir_all(&root);
 }
 
