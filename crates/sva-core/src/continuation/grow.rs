@@ -8,6 +8,7 @@ use super::path::START_STEPS;
 use super::{Cx, Reached, Stage, Stages, merged, scaled, started};
 use crate::cli_error::CliError;
 use crate::seed::{self, Limits, Readings};
+use crate::solve::prox::Progress;
 use crate::solve::prox::run::FIT_RATE;
 use crate::solve::{recorded, with_price};
 use crate::structure::{applied, assign, grow, merge, split};
@@ -101,6 +102,7 @@ impl<B: Backend> Stages<B> for Grow {
         &mut self,
         last: Option<&Reached>,
         cx: &Cx<'_, B>,
+        report: &mut dyn FnMut(&str, &Progress),
     ) -> Result<Option<Stage>, CliError> {
         let files = last.map(Reached::files).unwrap_or_default();
         let cost = &cx.problem.cost;
@@ -147,28 +149,49 @@ impl<B: Backend> Stages<B> for Grow {
                     return Ok(None);
                 }
                 let (readings, rounds) = (&self.readings, self.rounds);
-                let grown = improve(cx, files, cost, draws, &|m, texts, kept| {
-                    let offered = grow::proposals(m, texts, varies, readings, from, to)?;
-                    Ok(offered
-                        .into_iter()
-                        .filter(|p| !kept.contains(&p.label))
-                        .collect())
-                })
+                let label = format!("grow h={} lone={}", to.harmonics, to.lone);
+                let grown = improve(
+                    cx,
+                    &label,
+                    files,
+                    cost,
+                    draws,
+                    &|m, texts, kept| {
+                        let offered = grow::proposals(m, texts, varies, readings, from, to)?;
+                        Ok(offered
+                            .into_iter()
+                            .filter(|p| !kept.contains(&p.label))
+                            .collect())
+                    },
+                    report,
+                )
                 .await?;
                 if grown.kept.is_empty() {
                     return Ok(None);
                 }
-                let split = improve(cx, grown.files, cost, draws, &|m, _, _| {
-                    Ok(split::proposals(m, varies, rounds))
-                })
+                let split = improve(
+                    cx,
+                    &label,
+                    grown.files,
+                    cost,
+                    draws,
+                    &|m, _, _| Ok(split::proposals(m, varies, rounds)),
+                    report,
+                )
                 .await?;
-                let merged = improve(cx, split.files, cost, draws, &|m, _, _| {
-                    Ok(merge::proposals(m, varies))
-                })
+                let merged = improve(
+                    cx,
+                    &label,
+                    split.files,
+                    cost,
+                    draws,
+                    &|m, _, _| Ok(merge::proposals(m, varies)),
+                    report,
+                )
                 .await?;
                 self.at = to;
                 Ok(Some(Stage {
-                    label: format!("grow h={} lone={}", to.harmonics, to.lone),
+                    label,
                     files: merged.files,
                     cost: cost.clone(),
                     steps: self.steps,

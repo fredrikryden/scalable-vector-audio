@@ -6,6 +6,7 @@ use super::improve::improve;
 use super::{Cx, Reached, Stage, Stages, merged, scaled, started};
 use crate::cli_error::CliError;
 use crate::solve::prox::DEBIAS_STEPS;
+use crate::solve::prox::Progress;
 use crate::solve::with_price;
 use crate::structure::{applied, assign, merge, split};
 
@@ -45,6 +46,7 @@ impl<B: Backend> Stages<B> for Path {
         &mut self,
         last: Option<&Reached>,
         cx: &Cx<'_, B>,
+        report: &mut dyn FnMut(&str, &Progress),
     ) -> Result<Option<Stage>, CliError> {
         let unpriced = || with_price(&cx.problem.cost, 0.0);
         let files = last.map(Reached::files).unwrap_or_default();
@@ -95,19 +97,32 @@ impl<B: Backend> Stages<B> for Path {
                     let price = self.prices[k];
                     let cost = with_price(&cx.problem.cost, price)?;
                     let (varies, rounds) = (&cx.problem.vary, self.rounds);
-                    let split = improve(cx, files.clone(), &cost, draws, &|m, _, _| {
-                        Ok(split::proposals(m, varies, rounds))
-                    })
+                    let label = format!("price {price}, restructured");
+                    let split = improve(
+                        cx,
+                        &label,
+                        files.clone(),
+                        &cost,
+                        draws,
+                        &|m, _, _| Ok(split::proposals(m, varies, rounds)),
+                        report,
+                    )
                     .await?;
-                    let merged = improve(cx, split.files, &cost, draws, &|m, _, _| {
-                        Ok(merge::proposals(m, varies))
-                    })
+                    let merged = improve(
+                        cx,
+                        &label,
+                        split.files,
+                        &cost,
+                        draws,
+                        &|m, _, _| Ok(merge::proposals(m, varies)),
+                        report,
+                    )
                     .await?;
                     if split.kept.is_empty() && merged.kept.is_empty() {
                         continue;
                     }
                     return Ok(Some(Stage {
-                        label: format!("price {price}, restructured"),
+                        label,
                         files: merged.files,
                         cost,
                         steps: scaled(self.steps, DEBIAS_STEPS),

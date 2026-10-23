@@ -375,12 +375,14 @@ impl<B: Backend> Cx<'_, B> {
     }
 }
 
-/// The stages of one scheme, each from what the last one reached.
+/// The stages of one scheme, each from what the last one reached; `report` hears the trial
+/// solves that build one.
 trait Stages<B: Backend> {
     async fn next(
         &mut self,
         last: Option<&Reached>,
         cx: &Cx<'_, B>,
+        report: &mut dyn FnMut(&str, &Progress),
     ) -> Result<Option<Stage>, CliError>;
 }
 
@@ -414,7 +416,7 @@ async fn driven<B: Backend>(
 ) -> Result<Ran, CliError> {
     let mut reached: Vec<Reached> = Vec::new();
     let mut cancelled = false;
-    while let Some(stage) = stages.next(reached.last(), cx).await? {
+    while let Some(stage) = stages.next(reached.last(), cx, report).await? {
         if cx.abandon.abandoned().await {
             cancelled = true;
             break;

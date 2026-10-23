@@ -1,8 +1,8 @@
-// Concern: structure edits ranked by one evaluation each, the best solved, kept where it falls | Non-concern: proposing edits, the descent | IO: (Problem, edits, price, draws) -> files, kept
+// Concern: structure edits ranked by one evaluation, solved best first, the first that falls kept | Non-concern: proposing edits, the descent | IO: (Problem, edits, price, draws, report) -> files, kept
 
-//! A proposal is evaluated once and predicted `f(x) + g·(x⁺ - x) + λ·(b(x⁺) - b(x))`, `x⁺` the
-//! solver's first proximal step; the current files alike. Those predicted below them are solved
-//! best first, the first whose objective falls kept.
+//! Each proposal is predicted from one proximal step (`f + g·Δx + λ·Δb`), as are the current
+//! files. The best-ranked is always solved, the rest only while predicted below the current
+//! files; the first solved below them is kept.
 
 use sva_engine::Backend;
 
@@ -50,12 +50,13 @@ fn predicted(at: &Prepared) -> Result<Predicted, CliError> {
 
 pub async fn improve<B: Backend>(
     cx: &Cx<'_, B>,
+    stage: &str,
     files: Vec<(String, String)>,
     cost: &Cost,
     draws: usize,
     propose: &Propose<'_>,
+    report: &mut dyn FnMut(&str, &Progress),
 ) -> Result<Improved, CliError> {
-    let mut quiet = |_: &Progress| {};
     let (mut files, mut kept) = (files, Vec::new());
     'round: loop {
         if cx.abandon.abandoned().await {
@@ -75,14 +76,17 @@ pub async fn improve<B: Backend>(
             let edited = applied(&model, &cx.texts(&files), &cx.problem.vary, &p)?;
             let start = merged(&files, &edited);
             let at = predicted(&cx.prepared(&start, cost, draws).await?)?;
-            if at.predicted < current.predicted {
-                ranked.push((at.predicted, p.label, start));
-            }
+            ranked.push((at.predicted, p.label, start));
         }
         ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (_, label, start) in ranked {
+        for (rank, (predicted, label, start)) in ranked.into_iter().enumerate() {
+            if rank > 0 && predicted >= current.predicted {
+                break;
+            }
+            let trial = format!("{stage} trial {label}");
+            let mut heard = |p: &Progress| report(&trial, p);
             let solved = cx
-                .solved(&start, cost, cx.settings.steps, draws, &mut quiet)
+                .solved(&start, cost, cx.settings.steps, draws, &mut heard)
                 .await?;
             if solved.cancelled() {
                 break 'round;
