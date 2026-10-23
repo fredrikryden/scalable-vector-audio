@@ -3,7 +3,6 @@
 pub mod draws;
 pub mod eval;
 pub mod lines;
-pub mod model;
 pub mod played;
 pub mod price;
 pub mod run;
@@ -281,7 +280,7 @@ impl Run<'_> {
             let mut trials: Vec<(usize, usize)> = Vec::new();
             for a in &used {
                 for b in &used {
-                    if a != b && kin(s, *a, *b) {
+                    if a != b && s.model.kin(&s.nodes[*a], &s.nodes[*b]) {
                         trials.push((*a, *b));
                     }
                 }
@@ -324,16 +323,6 @@ impl Run<'_> {
             }
         }
     }
-}
-
-/// Two nodes whose lines may move between them: one body, one set of defaults.
-fn kin(s: &State, a: usize, b: usize) -> bool {
-    let (x, y) = (&s.model.nodes[&s.nodes[a]], &s.model.nodes[&s.nodes[b]]);
-    x.body == y.body
-        && x.defaults
-            .iter()
-            .map(|(n, _)| n)
-            .eq(y.defaults.iter().map(|(n, _)| n))
 }
 
 fn fused_distance(s: &State, line: usize, node: usize) -> f64 {
@@ -384,7 +373,10 @@ fn cluster(s: &mut State) {
         if s.nodes[n] == s.model.root {
             continue;
         }
-        match kinds.iter_mut().find(|k| kin(s, k[0], n)) {
+        match kinds
+            .iter_mut()
+            .find(|k| s.model.kin(&s.nodes[k[0]], &s.nodes[n]))
+        {
             Some(k) => k.push(n),
             None => kinds.push(vec![n]),
         }

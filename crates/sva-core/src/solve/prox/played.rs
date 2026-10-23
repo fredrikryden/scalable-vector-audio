@@ -9,9 +9,9 @@ use sva_formula::Tangents;
 
 use super::draws::{self, DRAWS, seed};
 use super::lines::{self, Filter, Line, Realisation};
-use super::model::constant;
 use super::state::{Slot, State};
 use crate::cli_error::CliError;
+use crate::model::constant;
 use sva_samples::measure::internal::Grid;
 
 /// The local index a root default's tangent seeds, past every line's own.

@@ -1,4 +1,4 @@
-// Concern: a composition's structure as a priced fit reads it: root, node bodies and defaults, score lines | Non-concern: what it sounds like (played.rs) | IO: (Graph, root) -> Model
+// Concern: a composition's structure as a priced fit reads it: root, node bodies and defaults, score lines, kin | Non-concern: its sound, its numbers' coordinates | IO: (Graph, root) -> Model
 
 use std::collections::BTreeMap;
 
@@ -161,6 +161,16 @@ impl Model {
             nodes,
             lines,
         })
+    }
+
+    /// Two nodes whose lines may move between them: one body, one set of defaults.
+    pub fn kin(&self, a: &str, b: &str) -> bool {
+        let (x, y) = (&self.nodes[a], &self.nodes[b]);
+        x.body == y.body
+            && x.defaults
+                .iter()
+                .map(|(n, _)| n)
+                .eq(y.defaults.iter().map(|(n, _)| n))
     }
 }
 

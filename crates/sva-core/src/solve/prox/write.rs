@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use sva_ast::{Arg, Expr};
 
-use super::model::constant;
+use crate::model::constant;
 
 use super::price::{reads, simplify};
 use super::state::{Slot, State};

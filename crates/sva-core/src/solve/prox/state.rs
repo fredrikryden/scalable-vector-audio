@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use super::model::Model;
 use crate::cli_error::CliError;
+use crate::model::Model;
 use crate::solve::Vary;
 
 #[derive(Clone, Debug)]

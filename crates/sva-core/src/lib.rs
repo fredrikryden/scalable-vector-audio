@@ -8,6 +8,7 @@ mod decode;
 pub mod encode;
 pub mod json;
 mod lint_code;
+pub mod model;
 mod outline;
 mod output;
 mod query;

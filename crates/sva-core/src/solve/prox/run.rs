@@ -7,11 +7,11 @@ use sva_samples::measure::internal::{self, Ear, Grid, Internal};
 
 use super::draws::DRAWS;
 use super::eval::{Fit, residual, weights};
-use super::model::Model;
 use super::played::Renders;
 use super::state::{State, Var};
 use super::{DEFAULT_STEPS, Point, Progress, chosen, path, write};
 use crate::cli_error::CliError;
+use crate::model::Model;
 use crate::query::{asked, call};
 use crate::solve::cost::{Node, Op};
 use crate::solve::{Problem, recorded};

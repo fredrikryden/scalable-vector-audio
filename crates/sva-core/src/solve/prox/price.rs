@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use sva_ast::{Arg, BinOp, Expr, Literal};
 
-use super::model::constant;
 use super::state::{Role, Slot, State};
+use crate::model::constant;
 
 fn num(n: f64) -> Expr {
     Expr::Lit(Literal::Num(n))
