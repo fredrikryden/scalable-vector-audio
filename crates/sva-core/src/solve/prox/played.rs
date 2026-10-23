@@ -454,14 +454,8 @@ pub fn lowered(
                     s.model.lines[i].number
                 ))
             })?;
-            let mut instants = Vec::new();
-            let mut frames = Vec::new();
-            for m in 0..g.frames {
-                if let Some(t) = lines::centre(*onset, split.l.v, split.r.v, g, m) {
-                    frames.push((m, instants.len()));
-                    instants.extend([t - lines::SPREAD_SECS, t, t + lines::SPREAD_SECS]);
-                }
-            }
+            let corners = sva_formula::corners(&form.body);
+            let (instants, frames) = lines::layout(*onset, split.l.v, split.r.v, &corners, g);
             let leaves = lines::read_leaves(&split.leaves, &instants).map_err(|why| {
                 refused(format!(
                     "score line {} (`{node}`): {why}",

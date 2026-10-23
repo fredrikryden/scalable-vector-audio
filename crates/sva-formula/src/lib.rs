@@ -59,6 +59,7 @@ pub use series::{
 pub use spectral_sum::atom::{Exp, Factors, Gauss, Indicator, Pole, Singular, SpectralAtom};
 pub use spectral_sum::build::{normalize, normalize_closed_form, normalize_read};
 pub use spectral_sum::image::crop_peeled;
+pub use spectral_sum::kink::corners;
 pub use spectral_sum::{Lane, SpectralSum};
 pub use through::{Kept, Opaque, Reads, Through};
 pub use ty::{Codomain, Held, MAX_WIDTH, Mismatch, Ty};

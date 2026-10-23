@@ -609,11 +609,18 @@ PRICED FIT:
   `numbers` (READINGS) counts, so at price 1 what prox lowers is the
   description length a stage's `length_bits` reports. The model side is the render's own: each score
   line lowered as a render lowers it, every number beside its tangent, split
-  into its partials (an amplitude times the cosine of a phase) and read at
-  each frame's middle, its short-time transform in closed form there (the
-  window cut at the line's crop and mirrored at the clip's ends, the master's
-  biquads as H(f)); a node's filtered noise is its rendered realisation under
-  H(f). The phases between lines and the noises' realisations are no part of
+  into its partials (an amplitude times the cosine of a phase), its
+  short-time transform in closed form per frame (the window cut at the line's
+  crop and mirrored at the clip's ends, the master's biquads as H(f)); a
+  node's filtered noise is its rendered realisation under its gain and H(f).
+  A phase is read at a frame's middle and 5 ms either side and taken
+  quadratic. An amplitude or noise gain is read per piece: the frame cut at
+  each corner of the line's form (its crop's edges and shoulders' ends, a
+  min or max of two lines crossing, a knot), each piece read at its middle
+  and half its half-width H either side and taken quadratic, the crop's
+  shoulders applied at each sample; where the amplitude a is smooth over a
+  piece the quadratic is within max|a'''|*H^3/8 of it, H at most 10 ms.
+  The phases between lines and the noises' realisations are no part of
   the model, so the loss is its expectation over them: the residual's bits
   averaged over K draws (DRAWS below), each line whose node reads `ph` offset by its own
   phase, 2 pi times splitmix64 of the line's key and the draw over 2^64, and
@@ -625,8 +632,8 @@ PRICED FIT:
   to a split's node or reordering the score keeps every other line's draws,
   save a line's whose rank a dropped or reordered line agreeing on both moves.
   Each partial is exact where its
-  amplitude and frequency hold over the 20 ms window; a form with no partial
-  in it refuses by name.
+  phase is quadratic over the 20 ms window and its amplitude quadratic over
+  each piece; a form with no partial in it refuses by name.
   The d' may read an interval: the model `@<model>([a, b])` and the reference
   over the same one, as `sample("<clip>")([a, b])`, `[a, inf)` to the
   reference's end. Both are then read from 0 to b, so each frame inside the

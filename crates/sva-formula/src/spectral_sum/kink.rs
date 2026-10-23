@@ -1,10 +1,10 @@
-// Concern: splits a form at the crossing of a min or max of two lines | Non-concern: lowering either half (build.rs) | IO: (&Body) -> the same value as two crops, or nothing
+// Concern: splits a form at a min or max of two lines crossing, and lists where slopes may jump | Non-concern: lowering either half (build.rs) | IO: (&Body) -> two crops or nothing; (&Body) -> instants
 
 use crate::affine::exact_affine_read;
 use crate::closed_form::{Body, Edge, Fold, Part, map_children};
 use crate::complex::Cx;
 use crate::num::Num;
-use crate::through::Reads;
+use crate::through::{Opaque, Reads};
 
 pub fn split<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<Body<N>> {
     let (kink, (at, below, above)) = first(f, reads)?;
@@ -271,6 +271,54 @@ pub(crate) fn in_time<N: Num>(f: &Body<N>) -> bool {
 }
 
 pub type Crossing<N = f64> = (N, Body<N>, Body<N>);
+
+/// Each instant at which `f`'s slope in `t` may jump: where a min or max of two lines crosses,
+/// a crop's edges and shoulders' ends, a knot of a table read at a line. Searched as `first`
+/// searches, refs unread; an instant listed where the slope holds splits nothing it needs.
+pub fn corners<N: Num>(f: &Body<N>) -> Vec<f64> {
+    let mut out = Vec::new();
+    corners_into(f, &mut out);
+    out
+}
+
+fn corners_into<N: Num>(f: &Body<N>, out: &mut Vec<f64>) {
+    if let Some((at, _, _)) = crossing(f, &Opaque) {
+        out.push(at.v());
+    }
+    match f {
+        Body::Crop {
+            l, r, rise, fall, ..
+        } => {
+            let at = |e: &Edge<N>| match e {
+                Edge::At(x) => Some(x.v()),
+                Edge::NegInf | Edge::PosInf => None,
+            };
+            let (l, r, rise, fall) = (at(l), at(r), rise.v(), fall.v());
+            out.extend(l.into_iter().chain(r));
+            if let Some(l) = l.filter(|_| rise > 0.0) {
+                out.push(l + rise);
+            }
+            if let Some(r) = r.filter(|_| fall > 0.0) {
+                out.push(r - fall);
+            }
+            if let (Some(l), Some(r), true) = (l, r, rise > 0.0 && fall > 0.0) {
+                out.push((l * fall + r * rise) / (rise + fall));
+            }
+        }
+        Body::Knots { at, table } => {
+            if let Some(Line::Sloped { slope, root }) = line(&at.body, &Opaque) {
+                out.extend(table.times().iter().map(|k| root.v() + k.v() / slope.v()));
+            }
+            return;
+        }
+        _ => {}
+    }
+    if in_time(f) {
+        for p in crate::closed_form::children(f) {
+            corners_into(&p.body, out);
+        }
+    }
+}
 
 /// The first min or max of two lines, searched through each ref as through its own form.
 pub(crate) fn first<N: Num>(f: &Body<N>, reads: &dyn Reads<N>) -> Option<(Body<N>, Crossing<N>)> {
