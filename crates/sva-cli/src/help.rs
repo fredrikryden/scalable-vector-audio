@@ -643,14 +643,16 @@ PRICED FIT:
   every zero held. Each runs until its objective (the residual's bits plus the
   price on each bit of the numbers; the debias's unpriced) stops falling: after
   k steps, once k is at least {flat_from} (twice Adam's first-moment memory,
-  1/(1 - beta1) steps), its least value over the last k/2 fell by less than its
-  standard error from the draws, a fall the draws cannot tell from none.
+  1/(1 - beta1) steps), its least value over the last k/2 fell by no more
+  than that fall's standard error, paired over the draws: every step reads
+  the same draws, so the error is the spread of each draw's own fall between
+  the two least states, a fall the draws cannot tell from none.
   `--steps` (default {steps}) caps the descent, the debias at a quarter of it;
   a stage that reaches its cap first warns `solve.steps_cap`.
   DRAWS: a stage is solved at K draws: a run's first stage at {fewest}, the
   fewest with a standard error, each later one at the K the last ended with.
-  A descent that ends `converged` stopped at its draws' standard error, so is
-  limited by their noise: the stage is solved again from its result at 2K,
+  A descent that ends `converged` stopped at its fall's standard error, so is
+  limited by the draws' noise: the stage is solved again from its result at 2K,
   the first 2K of the same draws, until K reaches `--draws` (default {draws}),
   a cost bound, an evaluation's work growing with K; a stage whose last
   descent converges at that cap warns `solve.draws_cap`. The ranking

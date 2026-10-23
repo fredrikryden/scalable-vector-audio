@@ -42,6 +42,8 @@ pub struct Residual {
 
 pub struct Evaluated {
     pub residual: Residual,
+    /// Each draw's residual bits.
+    pub drawn: Vec<f64>,
     pub grad: Option<Vec<f64>>,
 }
 
@@ -67,7 +69,12 @@ pub fn weights(fit: &Fit) -> Vec<f64> {
 
 /// The residual of each draw's reading against the reference.
 pub fn residual(fit: &Fit, w: &[f64], draws: &[Vec<f64>]) -> Residual {
-    let k = draws.len() as f64;
+    let (weighted, plain) = drawn(fit, w, draws);
+    summed(&weighted, plain, w)
+}
+
+/// Each draw's bits, and `d'^2` summed over the draws unweighted.
+fn drawn(fit: &Fit, w: &[f64], draws: &[Vec<f64>]) -> (Vec<f64>, f64) {
     let (mut weighted, mut plain) = (Vec::new(), 0.0);
     for elements in draws {
         let (mut a, mut b) = (0.0, 0.0);
@@ -79,23 +86,29 @@ pub fn residual(fit: &Fit, w: &[f64], draws: &[Vec<f64>]) -> Residual {
         weighted.push(BITS_PER_JND2 * a);
         plain += b;
     }
+    (weighted, plain)
+}
+
+fn summed(weighted: &[f64], plain: f64, w: &[f64]) -> Residual {
+    let k = weighted.len() as f64;
     let bits = weighted.iter().sum::<f64>() / k;
-    let var = match k > 1.0 {
-        true => {
-            weighted
-                .iter()
-                .map(|x| (x - bits) * (x - bits))
-                .sum::<f64>()
-                / (k - 1.0)
-        }
-        false => 0.0,
-    };
     Residual {
         bits,
-        error: (var / k).sqrt(),
+        error: standard_error(weighted),
         d_prime: (plain / k).sqrt(),
         per_cell: (bits / BITS_PER_JND2 / w.iter().sum::<f64>().max(f64::MIN_POSITIVE)).sqrt(),
     }
+}
+
+/// The standard error of the mean of `xs` from their spread; 0 for one.
+pub fn standard_error(xs: &[f64]) -> f64 {
+    let k = xs.len() as f64;
+    let mean = xs.iter().sum::<f64>() / k;
+    let var = match k > 1.0 {
+        true => xs.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / (k - 1.0),
+        false => 0.0,
+    };
+    (var / k).sqrt()
 }
 
 /// A line's bin at a phase offset `(cos, sin)`.
@@ -183,10 +196,12 @@ pub fn evaluate(
     });
     let w = weights(fit);
     let elements: Vec<Vec<f64>> = each.iter().map(|(_, f)| f.elements.clone()).collect();
-    let res = residual(fit, &w, &elements);
+    let (drawn, plain) = drawn(fit, &w, &elements);
+    let res = summed(&drawn, plain, &w);
     if !grad {
         return Ok(Evaluated {
             residual: res,
+            drawn,
             grad: None,
         });
     }
@@ -257,6 +272,7 @@ pub fn evaluate(
     }
     Ok(Evaluated {
         residual: res,
+        drawn,
         grad: Some(out),
     })
 }

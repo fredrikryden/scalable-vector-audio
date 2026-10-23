@@ -14,10 +14,12 @@ pub mod write;
 pub use measure::measure;
 pub use run::{Settings, Shape, Solution, checked, shape, solve};
 
+use std::rc::Rc;
+
 use sva_engine::Abandon;
 
 use crate::cli_error::CliError;
-use eval::{Evaluated, Fit, evaluate, scales};
+use eval::{Evaluated, Fit, evaluate, scales, standard_error};
 use state::State;
 use step::{Adam, Priced, step, zeros};
 
@@ -66,12 +68,27 @@ pub struct Progress<'a> {
     pub ended: Option<Ended>,
 }
 
-/// Stopped falling: the least objective over the later half of the `k` steps run fell less
-/// than its draws' standard error. Halves shorter than Adam's first-moment memory,
-/// `1/(1 - B1)` steps, are its warm-up and never read.
-fn flat(least: &[f64], error: f64) -> bool {
+struct Least {
+    objective: f64,
+    drawn: Rc<[f64]>,
+}
+
+/// Stopped falling: the least objective over the later half of the `k` steps fell by no more
+/// than that fall's standard error paired over the draws, as every step reads the same draws.
+/// Halves shorter than Adam's first-moment memory, `1/(1 - B1)` steps, are its warm-up.
+fn flat(least: &[Least]) -> bool {
     let k = least.len() - 1;
-    k >= 2 * step::memory() && least[k / 2] - least[k] < error
+    if k < 2 * step::memory() {
+        return false;
+    }
+    let (then, now) = (&least[k / 2], &least[k]);
+    let fell: Vec<f64> = then
+        .drawn
+        .iter()
+        .zip(now.drawn.iter())
+        .map(|(a, b)| a - b)
+        .collect();
+    then.objective - now.objective <= standard_error(&fell)
 }
 
 struct Descent<'a> {
@@ -103,7 +120,7 @@ impl Descent<'_> {
         if cap == 0 {
             return Ok(ran(0, Ended::Cap));
         }
-        let mut least: Vec<f64> = Vec::with_capacity(cap + 1);
+        let mut least: Vec<Least> = Vec::with_capacity(cap + 1);
         for k in 0..=cap {
             if self.abandon.abandoned().await {
                 return Ok(ran(k, Ended::Signal));
@@ -111,10 +128,20 @@ impl Descent<'_> {
             let e = evaluate(self.fit, s, k < cap, self.fit.threads)?;
             let (numbers, bits) = price::numbers(s);
             let objective = e.residual.bits + lambda * bits;
-            least.push(least.last().map_or(objective, |l| l.min(objective)));
+            let next = match least.last() {
+                Some(l) if l.objective <= objective => Least {
+                    objective: l.objective,
+                    drawn: l.drawn.clone(),
+                },
+                _ => Least {
+                    objective,
+                    drawn: e.drawn.as_slice().into(),
+                },
+            };
+            least.push(next);
             let ended = match k == cap {
                 true => Some(Ended::Cap),
-                false => flat(&least, e.residual.error).then_some(Ended::Converged),
+                false => flat(&least).then_some(Ended::Converged),
             };
             if k % 50 == 0 || ended.is_some() {
                 (self.report)(&Progress {
