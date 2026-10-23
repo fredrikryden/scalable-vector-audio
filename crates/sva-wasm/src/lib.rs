@@ -663,7 +663,7 @@ impl Composition {
         options: &Options,
         abandon: &dyn Abandon,
     ) -> Result<JsValue, JsValue> {
-        use sva_core::fit::{fitted, fitted_data};
+        use sva_core::fit::{capped, fitted, fitted_data};
         let settings = sva_core::solve::prox::Settings {
             steps: options
                 .steps
@@ -679,6 +679,7 @@ impl Composition {
             .await
             .map_err(|e| thrown(&e))?;
         let cost = &problem.cost.text;
+        let warnings = capped(&fitted, &settings, "`steps`");
         if fitted.ran.cancelled {
             let data = fitted_data(&fitted, &settings, cost, "");
             let message = "the priced solve was aborted; `refusal.data.stages` holds the stages it \
@@ -686,7 +687,7 @@ impl Composition {
                            them by prediction, and nothing was written";
             let error = JsErr::new(message);
             error.set_name("AbortError");
-            let envelope = sva_core::error_envelope_with("cancelled", message, &data, &[]);
+            let envelope = sva_core::error_envelope_with("cancelled", message, &data, &warnings);
             error.set_refusal(parse(&envelope)?);
             return Err(error.into());
         }
@@ -701,7 +702,7 @@ impl Composition {
             extra = format!(", \"written\": {paths}");
         }
         let data = fitted_data(&fitted, &settings, cost, &extra);
-        parse(&sva_core::success_envelope(&data, &[]))
+        parse(&sva_core::success_envelope(&data, &warnings))
     }
 
     /// `target` and `representations` as `sva-cli render` takes them. `options`: `rate`,

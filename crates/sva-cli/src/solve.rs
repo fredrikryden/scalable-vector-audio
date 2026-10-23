@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use sva_ast::variable;
 use sva_core::continuation::Scheme;
-use sva_core::fit::{fitted, fitted_data};
+use sva_core::fit::{capped, fitted, fitted_data};
 use sva_core::solve::prox::Settings;
 use sva_core::solve::{
     Point, Problem, Solved, Stopped, Vary, cost_of, findings, point_json, solve as solved,
@@ -155,6 +155,7 @@ fn priced_solve(
     ));
     persisted(tier, &mut warnings);
     let fitted = outcome?;
+    warnings.extend(capped(&fitted, settings, "`--steps`"));
     let data = |extra: &str| fitted_data(&fitted, settings, &problem.cost.text, extra);
     if fitted.ran.cancelled {
         let message = "the priced solve was stopped by a signal; `data.stages` holds the stages \

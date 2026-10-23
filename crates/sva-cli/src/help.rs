@@ -30,6 +30,7 @@ pub fn help_text() -> String {
         solve::DEFAULT_COST_TOL,
     );
     let (steps, rate) = (solve::prox::DEFAULT_STEPS, solve::prox::BITS_PER_JND2);
+    let flat_from = 2 * solve::prox::step::memory();
     let draws = solve::prox::draws::DRAWS;
     let rounds = sva_core::structure::assign::REASSIGN_ROUNDS;
     let (harmonics, lone) = (
@@ -636,14 +637,21 @@ PRICED FIT:
   numbered family (`h*` is `h1`, `h2`, ...), `<file>:` scoping it to the node
   or score at that path, and `/<step>` the number's resolution, about a JND of
   what it moves, which sets its bits, scales its step and its price's floor.
-  The solve: from the numbers the composition holds, `--steps` (default
-  {steps}) proximal Adam steps at the cost's price, each priced number's
-  threshold the price times its weight (its bits over its size at the start)
-  times its own step, then a quarter as many again debiasing, every zero held.
-  Its stage is then rendered once per draw, each line's `ph` and `seed` its
-  draw's, and read as `internal`. CONTINUATION runs it as stages instead. The
-  answer's `data`: `stages`, each with its `label`, the structure `edits` kept
-  before it, its `steps`, its `price`, its `numbers` and their `bits`, its
+  The solve: from the numbers the composition holds, proximal Adam steps at
+  the cost's price, each priced number's threshold the price times its weight
+  (its bits over its size at the start) times its own step, then debiasing,
+  every zero held. Each runs until its objective (the residual's bits plus the
+  price on each bit of the numbers; the debias's unpriced) stops falling: after
+  k steps, once k is at least {flat_from} (twice Adam's first-moment memory,
+  1/(1 - beta1) steps), its least value over the last k/2 fell by less than its
+  standard error from the draws, a fall the draws cannot tell from none.
+  `--steps` (default {steps}) caps the descent, the debias at a quarter of it;
+  a stage that reaches its cap first warns `solve.steps_cap`. Its stage is then
+  rendered once per draw, each line's `ph` and `seed` its draw's, and read as
+  `internal`. CONTINUATION runs it as stages instead. The answer's `data`:
+  `stages`, each with its `label`, the structure `edits` kept before it, its
+  `descents` (each phase's `steps` taken of its `cap`, and why it `ended`:
+  `converged`, `cap` or `signal`), its `price`, its `numbers` and their `bits`, its
   weighted `cells`, `measured` (off its renders) and `predicted` (what the
   descent lowered), each with its
   `residual_bits`, their `standard_error` from the draws' spread, `d_prime`
@@ -656,15 +664,17 @@ PRICED FIT:
   true, the one it stopped in, that one unrendered, `chosen` the least
   predicted length, and no file is written. `--write --confirm` writes the
   chosen stage in place: defaults in their node files, score lines without their
-  silent ones or the fields their node's default restates. Each step prints a JSON line
-  on stderr, its `stage` beside it. `sva-cli new <name> --from <clip>` writes a
-  starter to fit.
+  silent ones or the fields their node's default restates. Every 50th step and
+  the step a phase converges or reaches its cap at print a JSON line on
+  stderr, its `stage` beside it, that last's `ended` why, null on the others. `sva-cli new <name> --from
+  <clip>` writes a starter to fit.
 
 CONTINUATION:
   `--continuation <scheme>` runs a priced fit as stages, each a fresh solve
   from the files the last one reached, under the same `--vary`s, each measured;
   `chosen` is the stage of least `length_bits`, whatever its price. Without
-  it the cost is solved once, one stage. The schemes are
+  it the cost is solved once, one stage. Each stage's steps below are its cap,
+  its descent ending sooner where it stops falling (PRICED FIT). The schemes are
     path[:<p>,<p>...]   the price homotopy over the prices given, else the
                         cost's own (a starter's `next` gives 0.01 up to 1):
                         `start`, unpriced for 5/6 of `--steps`; `settle`,
@@ -865,7 +875,8 @@ DEFAULTS:
   --method <m>         `compass` (default) or `prox`, the priced fit.
   --continuation <s>   runs a priced fit as a scheme's stages: CONTINUATION.
   --rounds <n>         a continuation's k-medians rounds. Default {rounds}.
-  --steps <n>          each priced stage's descent. Default {steps}.
+  --steps <n>          caps each priced stage's descent, which ends sooner where
+                       its objective stops falling. Default {steps}.
   --write              a solve writes its fitted values to their `variables/`
                        files, with `--confirm`. Default off.
   --confirm            replaces a destination that already holds a file. Without

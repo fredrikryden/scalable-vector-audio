@@ -1,4 +1,4 @@
-// Concern: the descent at one price from a given start, its weights off that start, a debias holding every zero | Non-concern: one step, one evaluation, which price | IO: (Fit, State, price) -> State
+// Concern: the descent at one price from a start, weights off it, a debias holding every zero, each ended once flat | Non-concern: one step, an evaluation, which price | IO: (Fit, State, price) -> State
 
 pub mod draws;
 pub mod eval;
@@ -27,6 +27,31 @@ pub const DEFAULT_STEPS: usize = 600;
 pub const BITS_PER_JND2: f64 = 0.5 * std::f64::consts::LOG2_E;
 pub const DEBIAS_STEPS: f64 = 150.0 / 600.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ended {
+    Converged,
+    Cap,
+    Signal,
+}
+
+impl Ended {
+    pub fn name(self) -> &'static str {
+        match self {
+            Ended::Converged => "converged",
+            Ended::Cap => "cap",
+            Ended::Signal => "signal",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Descended {
+    pub phase: &'static str,
+    pub steps: usize,
+    pub cap: usize,
+    pub ended: Ended,
+}
+
 pub struct Progress<'a> {
     pub phase: &'a str,
     pub lambda: f64,
@@ -34,6 +59,15 @@ pub struct Progress<'a> {
     pub residual_bits: f64,
     pub numbers: usize,
     pub bits: f64,
+    pub ended: Option<Ended>,
+}
+
+/// Stopped falling: the least objective over the later half of the `k` steps run fell less
+/// than its draws' standard error. Halves shorter than Adam's first-moment memory,
+/// `1/(1 - B1)` steps, are its warm-up and never read.
+fn flat(least: &[f64], error: f64) -> bool {
+    let k = least.len() - 1;
+    k >= 2 * step::memory() && least[k / 2] - least[k] < error
 }
 
 struct Descent<'a> {
@@ -42,7 +76,6 @@ struct Descent<'a> {
     scales: Vec<f64>,
     abandon: &'a dyn Abandon,
     report: &'a mut dyn FnMut(&Progress),
-    cancelled: bool,
 }
 
 impl Descent<'_> {
@@ -51,16 +84,46 @@ impl Descent<'_> {
         s: &mut State,
         adam: &mut Adam,
         lambda: f64,
-        count: usize,
+        cap: usize,
         held: Option<&[bool]>,
-        phase: &str,
-    ) -> Result<(), CliError> {
-        for k in 0..count {
-            if self.cancelled || self.abandon.abandoned().await {
-                self.cancelled = true;
-                break;
+        phase: &'static str,
+    ) -> Result<Descended, CliError> {
+        let ran = |steps, ended| Descended {
+            phase,
+            steps,
+            cap,
+            ended,
+        };
+        if cap == 0 {
+            return Ok(ran(0, Ended::Cap));
+        }
+        let mut least: Vec<f64> = Vec::with_capacity(cap + 1);
+        for k in 0..=cap {
+            if self.abandon.abandoned().await {
+                return Ok(ran(k, Ended::Signal));
             }
-            let e = evaluate(self.fit, s, true, self.fit.threads)?;
+            let e = evaluate(self.fit, s, k < cap, self.fit.threads)?;
+            let (numbers, bits) = price::numbers(s);
+            let objective = e.residual.bits + lambda * bits;
+            least.push(least.last().map_or(objective, |l| l.min(objective)));
+            let ended = match k == cap {
+                true => Some(Ended::Cap),
+                false => flat(&least, e.residual.error).then_some(Ended::Converged),
+            };
+            if k % 50 == 0 || ended.is_some() {
+                (self.report)(&Progress {
+                    phase,
+                    lambda,
+                    step: k,
+                    residual_bits: e.residual.bits,
+                    numbers,
+                    bits,
+                    ended,
+                });
+            }
+            if let Some(ended) = ended {
+                return Ok(ran(k, ended));
+            }
             let grad = e.grad.expect("a gradient was asked");
             let priced = Priced {
                 lambda,
@@ -69,23 +132,11 @@ impl Descent<'_> {
                 held,
             };
             step(s, adam, &grad, &priced);
-            if k % 50 == 0 || k + 1 == count {
-                let (numbers, bits) = price::numbers(s);
-                (self.report)(&Progress {
-                    phase,
-                    lambda,
-                    step: k,
-                    residual_bits: e.residual.bits,
-                    numbers,
-                    bits,
-                });
-            }
         }
-        Ok(())
+        unreachable!("the step at the cap ends the descent")
     }
 }
 
-/// Whether a signal stopped it.
 pub async fn descended(
     fit: &Fit,
     s: &mut State,
@@ -93,7 +144,7 @@ pub async fn descended(
     steps: usize,
     abandon: &dyn Abandon,
     report: &mut dyn FnMut(&Progress),
-) -> Result<bool, CliError> {
+) -> Result<Vec<Descended>, CliError> {
     let mut adam = Adam::of(s);
     let scales = scales(fit, s)?;
     let weights = match lambda > 0.0 {
@@ -106,18 +157,21 @@ pub async fn descended(
         scales,
         abandon,
         report,
-        cancelled: false,
     };
-    run.descend(s, &mut adam, lambda, steps, None, "descend")
+    let descent = run
+        .descend(s, &mut adam, lambda, steps, None, "descend")
         .await?;
-    if lambda > 0.0 {
+    let mut ran = vec![descent];
+    if lambda > 0.0 && ran[0].ended != Ended::Signal {
         let held = zeros(s, &run.weights);
         let debias = match steps {
             0 => 0,
             _ => ((steps as f64 * DEBIAS_STEPS).round() as usize).max(1),
         };
-        run.descend(s, &mut adam, 0.0, debias, Some(&held), "debias")
-            .await?;
+        ran.push(
+            run.descend(s, &mut adam, 0.0, debias, Some(&held), "debias")
+                .await?,
+        );
     }
-    Ok(run.cancelled)
+    Ok(ran)
 }

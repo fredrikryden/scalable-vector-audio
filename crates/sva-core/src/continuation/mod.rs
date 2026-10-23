@@ -325,7 +325,7 @@ async fn driven<B: Backend>(
         let solution = cx
             .solved(&stage.files, &stage.cost, stage.steps, &mut heard)
             .await?;
-        cancelled = solution.cancelled || cx.abandon.abandoned().await;
+        cancelled = solution.cancelled() || cx.abandon.abandoned().await;
         let measured = match cancelled {
             true => None,
             false => Some(cx.measured(&stage, &solution).await?),

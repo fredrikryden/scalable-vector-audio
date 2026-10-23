@@ -41,7 +41,7 @@ pub async fn improve<B: Backend>(
             break;
         }
         let base = cx.solved(&files, cost, 0, &mut quiet).await?;
-        if base.cancelled {
+        if base.cancelled() {
             break;
         }
         let base = base.objective();
@@ -50,7 +50,7 @@ pub async fn improve<B: Backend>(
             let edited = applied(&model, &cx.texts(&files), &cx.problem.vary, p)?;
             let start = merged(&files, &edited);
             let solved = cx.solved(&start, cost, trial, &mut quiet).await?;
-            if solved.cancelled {
+            if solved.cancelled() {
                 return Ok(Improved { files, kept });
             }
             let o = solved.objective();

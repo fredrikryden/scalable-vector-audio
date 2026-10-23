@@ -5,9 +5,10 @@ use sva_engine::{Abandon, Backend, Tier};
 use crate::cli_error::CliError;
 use crate::continuation::{self, Cx, Ran, Reached, Scheme, Stage};
 use crate::json::{escape, list, num};
+use crate::output::{Diagnostic, Severity};
 use crate::solve::Problem;
 use crate::solve::prox::eval::Residual;
-use crate::solve::prox::{self, BITS_PER_JND2, Progress, Settings};
+use crate::solve::prox::{self, BITS_PER_JND2, Ended, Progress, Settings};
 
 pub struct Fitted {
     pub ran: Ran,
@@ -22,14 +23,16 @@ pub struct Fitted {
 fn progress_json(stage: &str, p: &Progress) -> String {
     format!(
         "{{\"stage\": \"{}\", \"phase\": \"{}\", \"price\": {}, \"step\": {}, \"residual_bits\": {}, \
-         \"numbers\": {}, \"bits\": {}}}",
+         \"numbers\": {}, \"bits\": {}, \"ended\": {}}}",
         escape(stage),
         escape(p.phase),
         num(p.lambda),
         p.step,
         num(p.residual_bits),
         p.numbers,
-        num(p.bits)
+        num(p.bits),
+        p.ended
+            .map_or("null".to_string(), |e| format!("\"{}\"", e.name()))
     )
 }
 
@@ -49,7 +52,7 @@ pub async fn fitted<B: Backend>(
             let label = format!("price {}", shape.price);
             let mut heard = |p: &Progress| report(&progress_json(&label, p));
             let solution = prox::solve(problem, settings, tier, &mut heard, abandon).await?;
-            let cancelled = solution.cancelled || abandon.abandoned().await;
+            let cancelled = solution.cancelled() || abandon.abandoned().await;
             let measured = match cancelled {
                 true => None,
                 false => Some(prox::measure(problem, &solution.files, tier, abandon).await?),
@@ -108,12 +111,18 @@ fn residual_json(r: &Residual) -> String {
 fn stage_json(r: &Reached) -> String {
     let s = &r.solution;
     format!(
-        "{{ \"label\": \"{}\", \"edits\": {}, \"steps\": {}, \"price\": {}, \"numbers\": {}, \
+        "{{ \"label\": \"{}\", \"edits\": {}, \"descents\": {}, \"price\": {}, \"numbers\": {}, \
          \"bits\": {}, \"residual_bits\": {}, \"length_bits\": {}, \"cells\": {}, \"objective\": {}, \
          \"measured\": {}, \"predicted\": {}, \"error_bits\": {}, \"stopped\": {} }}",
         escape(&r.stage.label),
         list(&r.stage.edits, |e| format!("\"{}\"", escape(e))),
-        r.stage.steps,
+        list(&s.descents, |d| format!(
+            "{{ \"phase\": \"{}\", \"steps\": {}, \"cap\": {}, \"ended\": \"{}\" }}",
+            d.phase,
+            d.steps,
+            d.cap,
+            d.ended.name()
+        )),
         num(s.price),
         s.numbers,
         num(s.bits),
@@ -127,8 +136,43 @@ fn stage_json(r: &Reached) -> String {
         residual_json(&s.predicted),
         r.measured
             .map_or("null".to_string(), |m| num(m.bits - s.predicted.bits)),
-        s.cancelled,
+        s.cancelled(),
     )
+}
+
+/// A warning naming `flag`, the front end's spelling of [`Settings::steps`], where a stage's
+/// descent or debias took its cap's steps with its objective still falling.
+pub fn capped(f: &Fitted, settings: &Settings, flag: &str) -> Vec<Diagnostic> {
+    let ended: Vec<String> = f
+        .ran
+        .stages
+        .iter()
+        .flat_map(|r| {
+            r.solution
+                .descents
+                .iter()
+                .filter(|d| d.ended == Ended::Cap && d.cap > 0)
+                .map(|d| format!("`{}` ({}, {} steps)", r.stage.label, d.phase, d.cap))
+        })
+        .collect();
+    if ended.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        Diagnostic::new(
+            "solve.steps_cap",
+            format!(
+                "{} took the cap's steps before the objective stopped falling, so may stop \
+                 short of where it would",
+                ended.join(", ")
+            ),
+        )
+        .with_severity(Severity::Warning)
+        .helped(format!(
+            "raise {flag} (now {}), the cap each stage's own scales with",
+            settings.steps
+        )),
+    ]
 }
 
 /// The answer's `data`, as both front ends print it.

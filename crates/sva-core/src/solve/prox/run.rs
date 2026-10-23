@@ -8,7 +8,7 @@ use sva_samples::measure::internal::{self, Ear, Grid, Internal};
 use super::eval::{Fit, Residual, evaluate};
 use super::played::Renders;
 use super::state::{State, Var, reaches};
-use super::{DEFAULT_STEPS, Progress, descended, price, write};
+use super::{DEFAULT_STEPS, Descended, Ended, Progress, descended, price, write};
 use crate::cli_error::CliError;
 use crate::model::Model;
 use crate::query::{asked, call};
@@ -19,7 +19,7 @@ use crate::{Job, execute_over, overlaid};
 /// `--method prox`'s own settings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
-    /// The priced descent's steps; the debias takes a quarter as many again.
+    /// The priced descent's cap on its steps; the debias's is a quarter as many.
     pub steps: usize,
 }
 
@@ -41,10 +41,15 @@ pub struct Solution {
     pub predicted: Residual,
     /// The reading's cells, weighted by the independent samples each carries.
     pub cells: f64,
-    pub cancelled: bool,
+    /// Each phase run: the descent, then the debias where priced and no signal ended it.
+    pub descents: Vec<Descended>,
 }
 
 impl Solution {
+    pub fn cancelled(&self) -> bool {
+        self.descents.iter().any(|d| d.ended == Ended::Signal)
+    }
+
     pub fn objective(&self) -> f64 {
         self.predicted.bits + self.price * self.bits
     }
@@ -264,8 +269,9 @@ pub(super) async fn prepared<B: Backend>(
     })
 }
 
-/// The problem's composition descended at its cost's price for `settings.steps`, from the
-/// numbers it holds; zero steps answer the start.
+/// The problem's composition descended at its cost's price from the numbers it holds, each
+/// phase until its objective stops falling or `settings.steps` caps it; zero steps answer the
+/// start.
 pub async fn solve<B: Backend>(
     problem: &Problem<'_>,
     settings: &Settings,
@@ -282,7 +288,7 @@ pub async fn solve<B: Backend>(
         ..
     } = prepared(problem, &source, tier, abandon).await?;
     let lambda = shape.price;
-    let cancelled = descended(&fit, &mut state, lambda, settings.steps, abandon, report).await?;
+    let descents = descended(&fit, &mut state, lambda, settings.steps, abandon, report).await?;
     let e = evaluate(&fit, &state, false, fit.threads)?;
     let (numbers, bits) = price::numbers(&state);
     let text = |p: &str| -> Option<String> { source.get(p).ok().flatten().map(|t| t.into_owned()) };
@@ -293,6 +299,6 @@ pub async fn solve<B: Backend>(
         bits,
         predicted: e.residual,
         cells: super::eval::weights(&fit).iter().sum(),
-        cancelled,
+        descents,
     })
 }

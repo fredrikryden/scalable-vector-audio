@@ -11,6 +11,11 @@ const B2: f64 = 0.999;
 /// given no unbounded step, and no unbounded threshold.
 const FLOOR: f64 = 0.1;
 
+/// The steps Adam's first moment remembers, `1/(1 - B1)`: its gradients' weights' sum.
+pub fn memory() -> usize {
+    (1.0 / (1.0 - B1)).round() as usize
+}
+
 #[derive(Clone)]
 pub struct Adam {
     m: Vec<f64>,
