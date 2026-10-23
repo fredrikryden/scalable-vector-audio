@@ -9,7 +9,8 @@ use crate::seed::{self, Limits, Readings, SAME_PITCH_CENTS};
 use crate::solve::Vary;
 
 /// The growths of a starter written at `from` to `to`: one per voice kind when harmonics
-/// rise, one per onset with lone partials left to add.
+/// rise, one per onset with lone partials left to add, each added line's `vel` its track's
+/// amplitude just after the onset, so it sounds as heard and the descent prices it from there.
 pub fn proposals(
     model: &Model,
     texts: &dyn Fn(&str) -> Option<String>,
@@ -80,8 +81,8 @@ pub fn proposals(
             .into_iter()
             .take(to.lone)
             .skip(from.lone)
-            .filter(|hz| held.iter().all(|f| cents(*hz, *f) >= SAME_PITCH_CENTS))
-            .map(|hz| seed::lone_line(&node, e, hz))
+            .filter(|(hz, _)| held.iter().all(|f| cents(*hz, *f) >= SAME_PITCH_CENTS))
+            .map(|(hz, level)| seed::lone_line(&node, e, hz, level))
             .collect();
         if rows.is_empty() {
             continue;

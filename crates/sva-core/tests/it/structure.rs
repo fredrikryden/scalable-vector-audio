@@ -295,7 +295,7 @@ fn partials(m: &Model) -> Vec<(f64, Option<f64>, Option<f64>)> {
 }
 
 #[test]
-fn growing_lone_partials_adds_silent_ones_at_each_onset_in_order() {
+fn growing_lone_partials_adds_sounding_ones_at_each_onset_in_order() {
     let r = plucks();
     for lone in [0, 1] {
         let from = Limits { harmonics: 4, lone };
@@ -312,7 +312,8 @@ fn growing_lone_partials_adds_silent_ones_at_each_onset_in_order() {
             let added: Vec<_> = after.iter().filter(|l| !before.contains(l)).collect();
             assert_eq!(added.len(), 2, "`{}` adds two partials", p.label);
             for (_, _, vel) in added {
-                assert_eq!(*vel, Some(0.0), "`{}` enters silent", p.label);
+                let vel = vel.expect("an added partial writes its `vel`");
+                assert!(vel > 0.0, "`{}` enters at its reading's level", p.label);
             }
         }
     }

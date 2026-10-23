@@ -744,9 +744,10 @@ CONTINUATION:
                         `grow h=<h> lone=<l>` a level, each limit doubled
                         (lone partials from none to one), held at the
                         ceiling: each voice kind's harmonics raised and each
-                        onset's next loudest partials added, off the
-                        recording the cost's reference samples (up to its
-                        interval's end, PRICED FIT), where the
+                        onset's next loudest partials added, each line's
+                        `vel` its track's amplitude just after the onset,
+                        off the recording the cost's reference samples (up
+                        to its interval's end, PRICED FIT), where the
                         objective falls as ranked below; then split and fold
                         as path's; then solved `--steps` long. It stops at
                         the ceiling, at a level that keeps no growth, or at
@@ -760,7 +761,10 @@ CONTINUATION:
   the current files' noise renders and holding only those it adds until it is
   predicted, so its peak memory is the current files' renders once plus, a
   thread, one edit's evaluation and new noises: it grows with `--threads`,
-  not with how many edits it ranks. The prediction
+  not with how many edits it ranks. An edit whose files, as written or as
+  `--write` would write them (silent lines and restated defaults dropped),
+  equal the current files' or an earlier edit's is not evaluated: it is the
+  same composition, and the first in proposal order stands for the rest. The prediction
   ranks and does not veto: a growth's new numbers start at the readings'
   levels and can need a whole descent to pay, which one step cannot show. So a
   round solves the best-ranked edit whatever its prediction, then each next

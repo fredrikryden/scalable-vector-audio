@@ -1,10 +1,11 @@
 // Concern: structure edits ranked by one evaluation each, in parallel, solved best first, the first that falls kept | Non-concern: proposing edits, the descent | IO: (Problem, edits) -> files, kept
 
 //! Each proposal is predicted from one proximal step (`f + g·Δx + λ·Δb`), as are the current
-//! files, `threads` proposals at a time over their noise renders, ties in proposal order. The
-//! best-ranked is always solved, the rest only while predicted below the current files; the
-//! first solved below them is kept.
+//! files, ties in proposal order; one whose files, raw or as `--write` writes them, repeat
+//! earlier ones is skipped. The best-ranked is solved, the rest while predicted below the
+//! current; the first solved below them is kept.
 
+use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -16,7 +17,7 @@ use crate::model::Model;
 use crate::solve::Cost;
 use crate::solve::prox::played::Renders;
 use crate::solve::prox::run::Prepared;
-use crate::solve::prox::{self, Progress, price};
+use crate::solve::prox::{self, Progress, price, write};
 use crate::structure::{Proposal, applied};
 
 pub struct Improved {
@@ -32,6 +33,15 @@ type Texts<'t> = dyn Fn(&str) -> Option<String> + 't;
 struct Predicted {
     objective: f64,
     predicted: f64,
+}
+
+/// `files` as `--write` writes them from `at`, prepared from them.
+fn as_written<B: Backend>(
+    cx: &Cx<'_, B>,
+    files: &[(String, String)],
+    at: &Prepared,
+) -> Result<Vec<(String, String)>, CliError> {
+    Ok(merged(files, &write::files(&at.state, &cx.texts(files))?))
 }
 
 fn predicted(at: &Prepared) -> Result<Predicted, CliError> {
@@ -75,18 +85,30 @@ pub async fn improve<B: Backend>(
         let here = cx.prepared(&files, cost, draws).await?;
         let threads = here.fit.threads;
         let current = predicted(&here)?;
+        let mut edited = BTreeSet::from([merged(&files, &[])]);
+        let mut written = BTreeSet::from([as_written(cx, &files, &here)?]);
         let mut ranked = Vec::new();
         let mut proposals = proposals.into_iter().peekable();
         while proposals.peek().is_some() {
             let mut starts = Vec::new();
             let mut jobs = Vec::new();
-            for p in proposals.by_ref().take(threads.get()) {
+            while jobs.len() < threads.get()
+                && let Some(p) = proposals.next()
+            {
                 if cx.abandon.abandoned().await {
                     break 'round;
                 }
-                let edited = applied(&model, &cx.texts(&files), &cx.problem.vary, &p)?;
-                let start = merged(&files, &edited);
+                let start = merged(
+                    &files,
+                    &applied(&model, &cx.texts(&files), &cx.problem.vary, &p)?,
+                );
+                if !edited.insert(start.clone()) {
+                    continue;
+                }
                 let mut job = cx.prepared(&start, cost, draws).await?;
+                if !written.insert(as_written(cx, &start, &job)?) {
+                    continue;
+                }
                 assert_eq!(
                     job.fit.grid(),
                     here.fit.grid(),
@@ -95,6 +117,9 @@ pub async fn improve<B: Backend>(
                 job.fit.renders = Arc::new(Renders::over(Arc::clone(&here.fit.renders)));
                 jobs.push(job);
                 starts.push((p.label, start));
+            }
+            if jobs.is_empty() {
+                continue;
             }
             let per_job =
                 NonZeroUsize::new(threads.get() / jobs.len()).expect("a worker per thread");

@@ -116,8 +116,8 @@ pub(crate) fn level_db(level: f64, vel: f64, tilt: f64, k: usize) -> f64 {
     (db.clamp(-40.0, 20.0) * 100.0).round() / 100.0
 }
 
-/// The frequencies of the tracks sounding just after onset `e`, loudest first.
-pub(crate) fn loud(r: &Readings, e: &score::Event) -> Vec<f64> {
+/// The frequency and amplitude of each track sounding just after onset `e`, loudest first.
+pub(crate) fn loud(r: &Readings, e: &score::Event) -> Vec<(f64, f64)> {
     let t = e.at_secs + LONE_AFTER_SECS;
     let mut loud: Vec<(f64, f64)> = r
         .tracks
@@ -131,15 +131,16 @@ pub(crate) fn loud(r: &Readings, e: &score::Event) -> Vec<f64> {
         .filter(|(a, _)| *a > 0.0)
         .collect();
     loud.sort_by(|a, b| b.0.total_cmp(&a.0));
-    loud.into_iter().map(|(_, hz)| hz).collect()
+    loud.into_iter().map(|(a, hz)| (hz, a)).collect()
 }
 
-/// A silent lone partial's score line at onset `e`, its node read as `node`.
-pub(crate) fn lone_line(node: &str, e: &score::Event, hz: f64) -> String {
+/// A lone partial's score line at onset `e` playing `hz` at `vel`, its node read as `node`.
+pub(crate) fn lone_line(node: &str, e: &score::Event, hz: f64, vel: f64) -> String {
     format!(
-        "{{\"at\": \"{}s\", \"node\": \"{node}\", \"f0\": \"{}hz\", \"vel\": 0, \"len\": \"{}s\"}}",
+        "{{\"at\": \"{}s\", \"node\": \"{node}\", \"f0\": \"{}hz\", \"vel\": {}, \"len\": \"{}s\"}}",
         s6(e.at_secs),
         s6(hz),
+        g(vel),
         s6(e.next_secs - e.at_secs)
     )
 }
@@ -391,9 +392,9 @@ pub fn starter(r: &Readings, clip: &str, limits: Limits) -> Seeded {
     for e in events {
         let loud = loud(r, e);
         lone_past += loud.len().saturating_sub(limits.lone);
-        for hz in loud.into_iter().take(limits.lone) {
+        for (hz, _) in loud.into_iter().take(limits.lone) {
             lone_lines += 1;
-            lines.push((e.at_secs, lone_line("@../instruments/partial", e, hz)));
+            lines.push((e.at_secs, lone_line("@../instruments/partial", e, hz, 0.0)));
         }
     }
     if lone_lines > 0 {
