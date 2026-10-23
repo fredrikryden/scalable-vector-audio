@@ -39,7 +39,8 @@ fn progress_json(stage: &str, p: &Progress) -> String {
 
 /// Without a scheme, one stage at the cost's own price; with one, its run; either through the
 /// draws' schedule up to `settings.draws` ([`continuation`]). The stage of least predicted
-/// length is chosen and it alone measured. `report` hears each progress line as JSON.
+/// length at that cap's draws is chosen and it alone measured. `report` hears each progress
+/// line as JSON.
 pub async fn fitted<B: Backend>(
     problem: &Problem<'_>,
     settings: &Settings,
@@ -73,7 +74,6 @@ pub async fn fitted<B: Backend>(
             let solution = cx
                 .scheduled(&[], &problem.cost, settings.steps, FEWEST, &mut heard)
                 .await?;
-            let cancelled = solution.cancelled() || abandon.abandoned().await;
             let stage = Stage {
                 label,
                 files: Vec::new(),
@@ -81,11 +81,8 @@ pub async fn fitted<B: Backend>(
                 steps: settings.steps,
                 edits: Vec::new(),
             };
-            let reached = Reached {
-                stage,
-                solution,
-                measured: None,
-            };
+            let reached = cx.reached(stage, solution).await?;
+            let cancelled = reached.at_cap.is_none() || abandon.abandoned().await;
             Ran::of(vec![reached], cancelled)
         }
         Some(scheme) => {
@@ -122,39 +119,47 @@ fn stage_json(r: &Reached) -> String {
     let s = &r.solution;
     format!(
         "{{ \"label\": \"{}\", \"edits\": {}, \"descents\": {}, \"price\": {}, \"numbers\": {}, \
-         \"bits\": {}, \"residual_bits\": {}, \"length_bits\": {}, \"cells\": {}, \"objective\": {}, \
-         \"measured\": {}, \"predicted\": {}, \"error_bits\": {}, \"stopped\": {} }}",
+         \"bits\": {}, \"draws\": {}, \"residual_bits\": {}, \"solved_length_bits\": {}, \
+         \"length_bits\": {}, \"cells\": {}, \"objective\": {}, \"measured\": {}, \"predicted\": {}, \
+         \"predicted_at_cap\": {}, \"error_bits\": {}, \"stopped\": {} }}",
         escape(&r.stage.label),
         list(&r.stage.edits, |e| format!("\"{}\"", escape(e))),
         list(&s.descents, |d| format!(
-            "{{ \"phase\": \"{}\", \"steps\": {}, \"cap\": {}, \"draws\": {}, \"ended\": \"{}\" }}",
+            "{{ \"phase\": \"{}\", \"steps\": {}, \"cap\": {}, \"draws\": {}, \"ended\": \"{}\", \
+             \"noise_limited\": {} }}",
             d.phase,
             d.steps,
             d.cap,
             d.draws,
-            d.ended.name()
+            d.ended.name(),
+            d.noise_limited
         )),
         num(s.price),
         s.numbers,
         num(s.bits),
+        s.draws(),
         num(s.predicted.bits),
-        num(r.length()),
+        num(r.solved_length()),
+        r.length().map_or("null".to_string(), num),
         num(s.cells),
         num(s.objective()),
         r.measured
             .as_ref()
             .map_or("null".to_string(), residual_json),
         residual_json(&s.predicted),
-        r.measured
-            .map_or("null".to_string(), |m| num(m.bits - s.predicted.bits)),
+        r.at_cap.as_ref().map_or("null".to_string(), residual_json),
+        match (r.measured, r.at_cap) {
+            (Some(m), Some(p)) => num(m.bits - p.bits),
+            _ => "null".to_string(),
+        },
         s.cancelled(),
     )
 }
 
 /// A warning naming `steps`, the front end's spelling of [`Settings::steps`], where a stage's
 /// descent or debias took its cap's steps with its objective still falling; and one naming
-/// `draws`, its spelling of [`Settings::draws`], where a stage's last descent stopped at the
-/// noise of the cap's draws.
+/// `draws`, its spelling of [`Settings::draws`], where a stage's last descent was limited by
+/// the noise of the cap's draws.
 pub fn capped(f: &Fitted, settings: &Settings, (steps, draws): (&str, &str)) -> Vec<Diagnostic> {
     let mut out = stepped(f, settings, steps);
     out.extend(drawn(f, settings, draws));
@@ -171,7 +176,7 @@ fn drawn(f: &Fitted, settings: &Settings, flag: &str) -> Vec<Diagnostic> {
                 .descents
                 .iter()
                 .rfind(|d| d.phase == "descend")
-                .is_some_and(|d| d.ended == Ended::Converged && d.draws == settings.draws)
+                .is_some_and(|d| d.noise_limited && d.draws == settings.draws)
         })
         .map(|r| format!("`{}`", r.stage.label))
         .collect();
@@ -182,8 +187,8 @@ fn drawn(f: &Fitted, settings: &Settings, flag: &str) -> Vec<Diagnostic> {
         Diagnostic::new(
             "solve.draws_cap",
             format!(
-                "{} stopped at the noise of the cap's {} draws, so may stop short of where more \
-                 would take it",
+                "{} gained no more over its last descent's later half than the cap's {} draws \
+                 resolve, so may stop short of where more would take it",
                 ended.join(", "),
                 settings.draws
             ),

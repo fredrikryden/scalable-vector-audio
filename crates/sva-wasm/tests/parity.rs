@@ -109,11 +109,10 @@ fn filtered_noise_renders_the_pinned_bits_on_four_threads() {
     holds(4);
 }
 
-/// A priced fit of a clip rendered here, seeded and solved as `new --from` and `solve
-/// --method prox --continuation path` do: `<FNV-1a of each stage's distance bits> <of the chosen files' bytes>`.
-/// Capped at 160 steps, its price stages end where their objective flattens, their draws
-/// doubled to the cap, and the rest at their cap, so both endings are pinned.
-const PRICED: &str = "62c23df50fbfed78 02096105c2d473ff";
+/// A clip fitted as `new --from` and `solve --method prox --continuation path` do: `<FNV-1a
+/// of each stage's distance bits, solved and at the cap's draws> <of the chosen files' bytes>`.
+/// At 160 steps, descents end flat and at their cap, noise-limited and not.
+const PRICED: &str = "cf2ebde9014669bb d6265451e6ecb104";
 
 fn priced(threads: usize) -> String {
     let clip_nodes: sva_ast::Composition = [(
@@ -222,11 +221,10 @@ fn priced(threads: usize) -> String {
         std::task::Poll::Ready(done) => done.expect("the priced solve answers"),
         std::task::Poll::Pending => unreachable!("a fit in memory alone never waits"),
     };
-    let distances = fnv(fitted
-        .ran
-        .stages
-        .iter()
-        .map(|r| r.solution.predicted.bits.to_bits()));
+    let distances = fnv(fitted.ran.stages.iter().flat_map(|r| {
+        let at_cap = r.at_cap.expect("each stage finished");
+        [r.solution.predicted.bits.to_bits(), at_cap.bits.to_bits()]
+    }));
     let files = fnv(fitted.files.iter().flat_map(|(p, t)| {
         p.bytes()
             .chain(t.bytes())

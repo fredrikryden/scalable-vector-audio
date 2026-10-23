@@ -1,8 +1,9 @@
-// Concern: runs a scheme: each stage solved from the last, its draws doubled while noise-limited, the least predicted chosen, measured | Non-concern: what a stage is | IO: (Problem, Scheme) -> Ran
+// Concern: runs a scheme: stages solved in turn, draws doubled while noise-limited, each predicted at the cap's draws, the least chosen | Non-concern: what a stage is | IO: (Problem, Scheme) -> Ran
 
-//! A run's first stage is solved at [`FEWEST`] draws, a later one at the last's. A descent ending
-//! `converged` is limited by its draws' noise, so its stage is solved again from its result at
-//! twice them, until `Settings::draws`.
+//! A run's first stage is solved at [`FEWEST`] draws, a later one at the last's, doubled while
+//! its descent is noise-limited, until `Settings::draws`, the cap. A prediction fitted to few
+//! draws is optimistic, so each finished stage is evaluated once at the cap's, no descent, and
+//! compared on that.
 
 mod grow;
 pub mod improve;
@@ -16,9 +17,9 @@ use sva_engine::{Abandon, Backend, Tier};
 use crate::cli_error::CliError;
 use crate::model::Model;
 use crate::seed::{LIMITS, Limits};
-use crate::solve::prox::eval::Residual;
+use crate::solve::prox::eval::{Residual, evaluate};
 use crate::solve::prox::run::Prepared;
-use crate::solve::prox::{self, Ended, Progress, Settings, Shape, Solution};
+use crate::solve::prox::{self, Progress, Settings, Shape, Solution};
 use crate::solve::{Cost, Problem, recorded};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -171,6 +172,8 @@ pub struct Stage {
 pub struct Reached {
     pub stage: Stage,
     pub solution: Solution,
+    /// Predicted at the cap's draws, where the stage finished.
+    pub at_cap: Option<Residual>,
     /// Off the stage's renders, the chosen stage's alone and only where the run was not stopped.
     pub measured: Option<Residual>,
 }
@@ -181,8 +184,13 @@ impl Reached {
         merged(&self.stage.files, &self.solution.files)
     }
 
-    /// The predicted residual's bits plus the numbers', the length a run chooses on.
-    pub fn length(&self) -> f64 {
+    /// At the cap's draws, the predicted residual's bits plus the numbers'.
+    pub fn length(&self) -> Option<f64> {
+        self.at_cap.map(|r| r.bits + self.solution.bits)
+    }
+
+    /// The same at the draws the stage was solved at.
+    pub fn solved_length(&self) -> f64 {
         self.solution.predicted.bits + self.solution.bits
     }
 }
@@ -201,10 +209,12 @@ pub struct Ran {
 }
 
 impl Ran {
-    /// Every stage is a candidate, chosen by its predicted length.
+    /// Every finished stage is a candidate, chosen by its length at the cap's draws.
     pub fn of(stages: Vec<Reached>, cancelled: bool) -> Ran {
-        let chosen =
-            (0..stages.len()).min_by(|a, b| stages[*a].length().total_cmp(&stages[*b].length()));
+        let chosen = (0..stages.len())
+            .filter_map(|i| Some((i, stages[i].length()?)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i);
         Ran {
             stages,
             chosen,
@@ -262,12 +272,12 @@ impl<B: Backend> Cx<'_, B> {
     ) -> Result<Solution, CliError> {
         let cap = self.settings.draws;
         let mut solution = self.solved(files, cost, steps, draws, report).await?;
-        let mut ended = solution.descents[0].ended;
-        while ended == Ended::Converged && !solution.cancelled() && solution.draws() < cap {
+        let mut limited = solution.descents[0].noise_limited;
+        while limited && !solution.cancelled() && solution.draws() < cap {
             let from = merged(files, &solution.files);
             let twice = (2 * solution.draws()).min(cap);
             let next = self.solved(&from, cost, steps, twice, report).await?;
-            ended = next.descents[0].ended;
+            limited = next.descents[0].noise_limited;
             let descents = [solution.descents, next.descents].concat();
             solution = Solution {
                 files: merged(&solution.files, &next.files),
@@ -290,6 +300,30 @@ impl<B: Backend> Cx<'_, B> {
         let base = recorded(&problem.cost, problem.source);
         let source = crate::overlaid(&base, &problem.sets)?;
         prox::run::prepared(&problem, &source, draws, self.tier, self.abandon).await
+    }
+
+    /// `solution` predicted at the cap's draws, where it finished.
+    pub(crate) async fn reached(
+        &self,
+        stage: Stage,
+        solution: Solution,
+    ) -> Result<Reached, CliError> {
+        let at_cap = match solution.cancelled() || self.abandon.abandoned().await {
+            true => None,
+            false => {
+                let files = merged(&stage.files, &solution.files);
+                let at = self
+                    .prepared(&files, &stage.cost, self.settings.draws)
+                    .await?;
+                Some(evaluate(&at.fit, &at.state, false, at.fit.threads)?.residual)
+            }
+        };
+        Ok(Reached {
+            stage,
+            solution,
+            at_cap,
+            measured: None,
+        })
     }
 
     async fn measured(&self, stage: &Stage, solution: &Solution) -> Result<Residual, CliError> {
@@ -383,12 +417,9 @@ async fn driven<B: Backend>(
         let solution = cx
             .scheduled(&stage.files, &stage.cost, stage.steps, draws, &mut heard)
             .await?;
-        cancelled = solution.cancelled() || cx.abandon.abandoned().await;
-        reached.push(Reached {
-            stage,
-            solution,
-            measured: None,
-        });
+        let r = cx.reached(stage, solution).await?;
+        cancelled = r.at_cap.is_none() || cx.abandon.abandoned().await;
+        reached.push(r);
         if cancelled {
             break;
         }

@@ -14,7 +14,7 @@ use crate::structure::{applied, assign, grow, merge, split};
 enum Next {
     Start,
     Settle,
-    /// A level after the first carries the length of the stage before it.
+    /// A level after the first carries the length, at the cap's draws, of the stage before it.
     Level(Option<f64>),
 }
 
@@ -122,7 +122,7 @@ impl<B: Backend> Stages<B> for Grow {
                 }))
             }
             Next::Level(before) => {
-                let length = last.map(Reached::length);
+                let length = last.and_then(Reached::length);
                 if let (Some(before), Some(length)) = (before, length)
                     && length >= before
                 {

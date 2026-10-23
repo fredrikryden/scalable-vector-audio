@@ -651,32 +651,42 @@ PRICED FIT:
   a stage that reaches its cap first warns `solve.steps_cap`.
   DRAWS: a stage is solved at K draws: a run's first stage at {fewest}, the
   fewest with a standard error, each later one at the K the last ended with.
-  A descent that ends `converged` stopped at its fall's standard error, so is
-  limited by the draws' noise: the stage is solved again from its result at 2K,
+  A descent of at least {flat_from} steps whose least objective over its later
+  half fell by no more than that least's residual's standard error over its K
+  draws, however it ended (`converged` or `cap`), is limited by the draws'
+  noise (`noise_limited`): the stage is solved again from its result at 2K,
   the first 2K of the same draws, until K reaches `--draws` (default {draws}),
   a cost bound, an evaluation's work growing with K; a stage whose last
-  descent converges at that cap warns `solve.draws_cap`. The ranking
+  descent is noise-limited at that cap warns `solve.draws_cap`. The ranking
   (CONTINUATION) evaluates and solves at the stage's current K. Without
   CONTINUATION the cost is one such stage; with it, it runs as stages.
-  Every stage is a candidate: `chosen` is the stage of least predicted
-  length, the predicted residual's bits plus the numbers', the objective the
-  descent and the ranking lower at price 1. The chosen stage alone is then
-  rendered once per draw of the cap's K, each line's `ph` and `seed` its
-  draw's, and read as `internal`. The answer's `data`:
+  A prediction fitted to few draws is optimistic, so stages are compared at
+  one K, the cap's: each finished stage's composition is evaluated once at
+  the cap's K, no descent, and its `length_bits` is that predicted residual's
+  bits plus the numbers'. Every finished stage is a candidate: `chosen` is the
+  one of least `length_bits`, the objective the descent and the ranking lower
+  at price 1. The chosen stage alone is then rendered once per draw of the
+  cap's K, each line's `ph` and `seed` its draw's, and read as `internal`.
+  The answer's `data`:
   `stages`, each with its `label`, the structure `edits` kept before it, its
   `descents` (each phase's `steps` taken of its `cap`, the K `draws` its loss
-  averaged, and why it `ended`: `converged`, `cap` or `signal`), its `price`,
-  its `numbers` and their `bits`, its weighted `cells`, `predicted` (what the
-  descent lowered) and, on the chosen stage alone, `measured` (off its
-  renders), each with its `residual_bits`, their `standard_error` from the draws' spread, `d_prime`
-  (unweighted, root mean square over the draws) and `per_cell` (the root mean
-  square d over the weighted cells, in JND), `error_bits` the measured less
-  the predicted (null where unmeasured), its `residual_bits` (the predicted)
-  and `length_bits`, the predicted residual's and the numbers' bits summed;
-  `chosen`, that stage; `draws`, the cap; `continuation`, the scheme or null;
-  and `files`, the chosen stage's text. A signal stops the solve: `stages`
-  holds the stages it finished and, `stopped` true, the one it stopped in, `chosen` the least
-  predicted length, nothing measured, and no file is written.
+  averaged, why it `ended`: `converged`, `cap` or `signal`, and whether it was
+  `noise_limited`), its `price`, its `numbers` and their `bits`, its weighted
+  `cells`, the K `draws` it was solved at, `predicted` (what the descent
+  lowered, at that K), `predicted_at_cap` (at the cap's K, null where
+  stopped) and, on the chosen stage alone, `measured` (off its renders), each
+  with its `residual_bits`, their `standard_error` from the draws' spread,
+  `d_prime` (unweighted, root mean square over the draws) and `per_cell` (the
+  root mean square d over the weighted cells, in JND), `error_bits` the
+  measured less the predicted at the cap's K (null where unmeasured), its
+  `residual_bits` (the predicted), `solved_length_bits` (the predicted
+  residual's and the numbers' bits at the K solved) and `length_bits` (the
+  same at the cap's K, null where stopped); `chosen`, that stage; `draws`,
+  the cap; `continuation`, the scheme or null; and `files`, the chosen stage's
+  text. A signal stops the solve: `stages` holds the stages it finished and,
+  `stopped` true, the one it stopped in, no candidate; `chosen` the least
+  `length_bits` of those finished, null where none; nothing measured, and no
+  file is written.
   `--write --confirm` writes the chosen stage in place: defaults in their node
   files, score lines without their silent ones or the fields their node's
   default restates. Every 50th step and
@@ -687,8 +697,8 @@ PRICED FIT:
 CONTINUATION:
   `--continuation <scheme>` runs a priced fit as stages, each a fresh solve
   from the files the last one reached, under the same `--vary`s; `chosen` is
-  the stage of least `length_bits`, the predicted, whatever its price, and it
-  alone is measured (PRICED FIT). Without
+  the stage of least `length_bits`, the predicted at the cap's K, whatever its
+  price or the K it was solved at, and it alone is measured (PRICED FIT). Without
   it the cost is solved as one stage. Each stage's steps below are its cap,
   its descent ending sooner where it stops falling (PRICED FIT). The schemes are
     path[:<p>,<p>...]   the price homotopy over the prices given, else the
@@ -716,7 +726,8 @@ CONTINUATION:
                         objective falls as ranked below; then split and fold
                         as path's; then solved `--steps` long. It stops at
                         the ceiling, at a level that keeps no growth, or at
-                        one no shorter than the last.
+                        one whose `length_bits`, at the cap's K, is no
+                        shorter than the last's.
   A split, fold or growth is ranked without a descent: applied to the current
   files and evaluated once, its objective plus the change one proximal step
   from it predicts off its gradient, the residual taken linear over that step
@@ -902,7 +913,8 @@ DEFAULTS:
   --steps <n>          caps each priced stage's descent, which ends sooner where
                        its objective stops falling. Default {steps}.
   --draws <n>          the most draws a priced stage's schedule doubles to, at
-                       least {fewest}; the chosen stage is measured at it.
+                       least {fewest}; every finished stage is predicted
+                       and the chosen one measured at it.
                        Default {draws}.
   --write              a solve writes its fitted values to their `variables/`
                        files, with `--confirm`. Default off.

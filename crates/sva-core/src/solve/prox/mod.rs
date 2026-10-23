@@ -55,6 +55,7 @@ pub struct Descended {
     pub cap: usize,
     pub draws: usize,
     pub ended: Ended,
+    pub noise_limited: bool,
 }
 
 pub struct Progress<'a> {
@@ -73,22 +74,30 @@ struct Least {
     drawn: Rc<[f64]>,
 }
 
-/// Stopped falling: the least objective over the later half of the `k` steps fell by no more
-/// than that fall's standard error paired over the draws, as every step reads the same draws.
-/// Halves shorter than Adam's first-moment memory, `1/(1 - B1)` steps, are its warm-up.
-fn flat(least: &[Least]) -> bool {
+/// The later half's first and last least, once halves pass Adam's memory, `1/(1 - B1)` steps.
+fn halves(least: &[Least]) -> Option<(&Least, &Least)> {
     let k = least.len() - 1;
-    if k < 2 * step::memory() {
-        return false;
-    }
-    let (then, now) = (&least[k / 2], &least[k]);
-    let fell: Vec<f64> = then
-        .drawn
-        .iter()
-        .zip(now.drawn.iter())
-        .map(|(a, b)| a - b)
-        .collect();
-    then.objective - now.objective <= standard_error(&fell)
+    (k >= 2 * step::memory()).then(|| (&least[k / 2], &least[k]))
+}
+
+/// Stopped falling: the later half's fall within its standard error paired over the draws.
+fn flat(least: &[Least]) -> bool {
+    halves(least).is_some_and(|(then, now)| {
+        let fell: Vec<f64> = then
+            .drawn
+            .iter()
+            .zip(now.drawn.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+        then.objective - now.objective <= standard_error(&fell)
+    })
+}
+
+/// Limited by the draws' noise, however it ended: the later half's fall within the standard
+/// error of its last least's residual over the draws.
+fn noise_limited(least: &[Least]) -> bool {
+    halves(least)
+        .is_some_and(|(then, now)| then.objective - now.objective <= standard_error(&now.drawn))
 }
 
 struct Descent<'a> {
@@ -110,20 +119,21 @@ impl Descent<'_> {
         phase: &'static str,
     ) -> Result<Descended, CliError> {
         let draws = self.fit.draws;
-        let ran = |steps, ended| Descended {
+        let ran = |steps, ended, noise_limited| Descended {
             phase,
             steps,
             cap,
             draws,
             ended,
+            noise_limited,
         };
         if cap == 0 {
-            return Ok(ran(0, Ended::Cap));
+            return Ok(ran(0, Ended::Cap, false));
         }
         let mut least: Vec<Least> = Vec::with_capacity(cap + 1);
         for k in 0..=cap {
             if self.abandon.abandoned().await {
-                return Ok(ran(k, Ended::Signal));
+                return Ok(ran(k, Ended::Signal, false));
             }
             let e = evaluate(self.fit, s, k < cap, self.fit.threads)?;
             let (numbers, bits) = price::numbers(s);
@@ -156,7 +166,7 @@ impl Descent<'_> {
                 });
             }
             if let Some(ended) = ended {
-                return Ok(ran(k, ended));
+                return Ok(ran(k, ended, noise_limited(&least)));
             }
             let grad = e.grad.expect("a gradient was asked");
             let priced = Priced {
