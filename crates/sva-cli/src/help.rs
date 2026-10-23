@@ -684,8 +684,8 @@ CONTINUATION:
                         after it `price <p>, restructured` where a split of one
                         node's lines with a new node of its kind, or a fold of
                         one node's lines into another of its kind, lowers the
-                        objective after a trial of 2/15 of `--steps`, solved
-                        for a quarter of `--steps`.
+                        objective as ranked below, solved for a quarter
+                        of `--steps`.
     grow[:<h>,<l>]      coarse to fine, at the cost's own price, up to <h>
                         harmonics a voice and <l> lone partials an onset
                         (default {harmonics} and {lone}), from the limits
@@ -697,10 +697,17 @@ CONTINUATION:
                         ceiling: each voice kind's harmonics raised and each
                         onset's next loudest partials added, off the
                         recording the cost's reference samples, where the
-                        objective falls after a trial; then split and fold
+                        objective falls as ranked below; then split and fold
                         as path's; then solved `--steps` long. It stops at
                         the ceiling, at a level that keeps no growth, or at
                         one no shorter than the last.
+  A split, fold or growth is ranked without a descent: applied to the current
+  files and evaluated once, its objective plus the change one proximal step
+  from it predicts off its gradient, the residual taken linear over that step
+  and the price exact; the current files are predicted the same way. Those
+  predicted below the current files are solved in that order, each capped at
+  `--steps`, and the first whose objective falls below the current files' is
+  kept, then the rest offered again from it; a round keeping none ends.
   `--rounds <n>` (default {rounds}) sets the k-medians rounds of each cluster
   and split, a cost bound on how long reassignment runs.
 

@@ -13,8 +13,9 @@ use crate::cli_error::CliError;
 use crate::model::Model;
 use crate::seed::{LIMITS, Limits};
 use crate::solve::prox::eval::Residual;
+use crate::solve::prox::run::Prepared;
 use crate::solve::prox::{self, Progress, Settings, Shape, Solution};
-use crate::solve::{Cost, Problem};
+use crate::solve::{Cost, Problem, recorded};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Scheme {
@@ -234,6 +235,19 @@ impl<B: Backend> Cx<'_, B> {
         let problem = self.over(&over, cost.clone());
         let settings = Settings { steps };
         prox::solve(&problem, &settings, self.tier, report, self.abandon).await
+    }
+
+    /// `files`' reference read and model's state, as a solve of them starts.
+    async fn prepared(
+        &self,
+        files: &[(String, String)],
+        cost: &Cost,
+    ) -> Result<Prepared, CliError> {
+        let over = Overlay::new(self.problem.source, files.iter().cloned().collect());
+        let problem = self.over(&over, cost.clone());
+        let base = recorded(&problem.cost, problem.source);
+        let source = crate::overlaid(&base, &problem.sets)?;
+        prox::run::prepared(&problem, &source, self.tier, self.abandon).await
     }
 
     async fn measured(&self, stage: &Stage, solution: &Solution) -> Result<Residual, CliError> {

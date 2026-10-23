@@ -207,7 +207,7 @@ impl<B: Backend> Reading<'_, B> {
 const FIT_RATE: u32 = 48_000;
 
 /// What a solve and a measure both read before either renders the model.
-pub(super) struct Prepared {
+pub(crate) struct Prepared {
     pub shape: Shape,
     pub fit: Fit,
     pub state: State,
@@ -215,7 +215,7 @@ pub(super) struct Prepared {
 }
 
 /// The problem's cost read, its reference rendered and read, and its model's state over `source`.
-pub(super) async fn prepared<B: Backend>(
+pub(crate) async fn prepared<B: Backend>(
     problem: &Problem<'_>,
     source: &dyn Source,
     tier: &Tier<B>,

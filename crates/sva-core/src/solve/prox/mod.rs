@@ -17,7 +17,7 @@ pub use run::{Settings, Shape, Solution, checked, shape, solve};
 use sva_engine::Abandon;
 
 use crate::cli_error::CliError;
-use eval::{Fit, evaluate, scales};
+use eval::{Evaluated, Fit, evaluate, scales};
 use state::State;
 use step::{Adam, Priced, step, zeros};
 
@@ -137,6 +137,32 @@ impl Descent<'_> {
     }
 }
 
+/// Each number's price weight and gradient scale, as a descent from `s` steps by.
+fn primed(fit: &Fit, s: &State, lambda: f64) -> Result<(Vec<f64>, Vec<f64>), CliError> {
+    let scales = scales(fit, s)?;
+    let weights = match lambda > 0.0 {
+        true => price::weights(s, &scales),
+        false => vec![0.0; s.x.len()],
+    };
+    Ok((weights, scales))
+}
+
+/// One evaluation at `s`, its gradient asked, and the state a descent's first step reaches.
+pub fn stepped(fit: &Fit, s: &State, lambda: f64) -> Result<(Evaluated, State), CliError> {
+    let e = evaluate(fit, s, true, fit.threads)?;
+    let (weights, scales) = primed(fit, s, lambda)?;
+    let priced = Priced {
+        lambda,
+        weights: &weights,
+        scales: &scales,
+        held: None,
+    };
+    let mut next = s.clone();
+    let grad = e.grad.as_deref().expect("a gradient was asked");
+    step(&mut next, &mut Adam::of(s), grad, &priced);
+    Ok((e, next))
+}
+
 pub async fn descended(
     fit: &Fit,
     s: &mut State,
@@ -146,11 +172,7 @@ pub async fn descended(
     report: &mut dyn FnMut(&Progress),
 ) -> Result<Vec<Descended>, CliError> {
     let mut adam = Adam::of(s);
-    let scales = scales(fit, s)?;
-    let weights = match lambda > 0.0 {
-        true => price::weights(s, &scales),
-        false => vec![0.0; s.x.len()],
-    };
+    let (weights, scales) = primed(fit, s, lambda)?;
     let mut run = Descent {
         fit,
         weights,
