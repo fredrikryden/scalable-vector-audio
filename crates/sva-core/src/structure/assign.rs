@@ -4,10 +4,10 @@ use super::{Edit, Proposal, alive, lines_of, played, push, varied};
 use crate::model::Model;
 use crate::solve::Vary;
 
-const REASSIGN_ROUNDS: usize = 6;
+pub const REASSIGN_ROUNDS: usize = 6;
 
 /// Every kind's lines reassigned among its nodes, from the grouping the composition gives.
-pub fn cluster(model: &Model, varies: &[Vary]) -> Proposal {
+pub fn cluster(model: &Model, varies: &[Vary], rounds: usize) -> Proposal {
     let mut kinds: Vec<Vec<String>> = Vec::new();
     for n in model.nodes.keys().filter(|n| **n != model.root) {
         match kinds.iter_mut().find(|k| model.kin(&k[0], n)) {
@@ -17,7 +17,7 @@ pub fn cluster(model: &Model, varies: &[Vary]) -> Proposal {
     }
     let (mut m, mut edits) = (model.clone(), Vec::new());
     for kind in kinds.iter().filter(|k| k.len() > 1) {
-        reassign(&mut m, varies, kind, &mut edits);
+        reassign(&mut m, varies, kind, rounds, &mut edits);
     }
     Proposal {
         label: "cluster".to_string(),
@@ -44,11 +44,17 @@ fn distance(m: &Model, varies: &[Vary], line: usize, node: &str) -> f64 {
 }
 
 /// `kind`'s lines each moved to its nearest node, then each node recentred, for every round.
-pub(super) fn reassign(m: &mut Model, varies: &[Vary], kind: &[String], edits: &mut Vec<Edit>) {
+pub(super) fn reassign(
+    m: &mut Model,
+    varies: &[Vary],
+    kind: &[String],
+    rounds: usize,
+    edits: &mut Vec<Edit>,
+) {
     let lines: Vec<usize> = (0..m.lines.len())
         .filter(|l| kind.contains(&m.lines[*l].node) && alive(m, varies, *l))
         .collect();
-    for _ in 0..REASSIGN_ROUNDS {
+    for _ in 0..rounds {
         let nearest: Vec<&String> = lines
             .iter()
             .map(|l| {

@@ -84,9 +84,9 @@ fn edited(c: &Composition, p: &Proposal) -> Composition {
 fn every_split_merge_and_cluster_plays_the_same_samples() {
     let (c, v) = (composition(), varies());
     let m = model(&c);
-    let mut proposals = split::proposals(&m, &v);
+    let mut proposals = split::proposals(&m, &v, assign::REASSIGN_ROUNDS);
     proposals.extend(merge::proposals(&m, &v));
-    proposals.push(assign::cluster(&m, &v));
+    proposals.push(assign::cluster(&m, &v, assign::REASSIGN_ROUNDS));
     assert_eq!(proposals.len(), 5, "two splits, two merges, a cluster");
     let before = samples(&c);
     for p in &proposals {
@@ -114,7 +114,7 @@ fn a_merge_leaves_its_node_used_by_no_line() {
 fn a_split_copies_its_node_as_a_kin_one_named_after_it() {
     let (c, v) = (composition(), varies());
     let m = model(&c);
-    let p = split::proposals(&m, &v)
+    let p = split::proposals(&m, &v, assign::REASSIGN_ROUNDS)
         .into_iter()
         .find(|p| {
             p.edits

@@ -6,7 +6,7 @@ use crate::model::Model;
 use crate::solve::Vary;
 
 /// One split per node but the root with two sounding lines or more.
-pub fn proposals(model: &Model, varies: &[Vary]) -> Vec<Proposal> {
+pub fn proposals(model: &Model, varies: &[Vary], rounds: usize) -> Vec<Proposal> {
     let sounding = |m: &Model, n: &str| -> Vec<usize> {
         lines_of(m, n).filter(|l| alive(m, varies, *l)).collect()
     };
@@ -32,7 +32,7 @@ pub fn proposals(model: &Model, varies: &[Vary]) -> Vec<Proposal> {
                     push(&mut m, &mut edits, e);
                 }
             }
-            reassign(&mut m, varies, &[a.clone(), b], &mut edits);
+            reassign(&mut m, varies, &[a.clone(), b], rounds, &mut edits);
             Proposal {
                 label: format!("split {a}"),
                 edits,

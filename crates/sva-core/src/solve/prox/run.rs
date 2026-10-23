@@ -1,46 +1,63 @@
-// Concern: one priced solve: the cost read as a d' plus a price on bits, the reference read once, the path, its choice's files | Non-concern: argv, writing | IO: (Problem, Tier) -> Fitted
+// Concern: one priced solve: the cost read as a d' plus a price on bits, the reference read, the descent, the reached files | Non-concern: argv, stages | IO: (Problem, Settings, Tier) -> Solution
 
 use sva_ast::Source;
 use sva_engine::{Abandon, Backend, Output, Session, Tier};
 
 use sva_samples::measure::internal::{self, Ear, Grid, Internal};
 
-use super::draws::DRAWS;
-use super::eval::{Fit, residual, weights};
+use super::eval::{Fit, Residual, evaluate};
 use super::played::Renders;
-use super::state::{State, Var};
-use super::{DEFAULT_STEPS, Point, Progress, chosen, path, write};
+use super::state::{State, Var, reaches};
+use super::{DEFAULT_STEPS, Progress, descended, price, write};
 use crate::cli_error::CliError;
 use crate::model::Model;
 use crate::query::{asked, call};
-use crate::solve::cost::{Node, Op};
-use crate::solve::{Problem, recorded};
+use crate::solve::cost::{Cost, Node, Op};
+use crate::solve::{Leaf, Problem, recorded};
 use crate::{Job, execute_over, overlaid};
 
 /// `--method prox`'s own settings.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Priced {
-    /// The prices per number the path visits; `None` takes the cost's own.
-    pub path: Option<Vec<f64>>,
+pub struct Settings {
+    /// The priced descent's steps; the debias takes a quarter as many again.
     pub steps: usize,
 }
 
-impl Default for Priced {
-    fn default() -> Priced {
-        Priced {
-            path: None,
+impl Default for Settings {
+    fn default() -> Settings {
+        Settings {
             steps: DEFAULT_STEPS,
         }
     }
 }
 
-pub struct Fitted {
+pub struct Solution {
+    pub price: f64,
+    /// Every file the reached composition changes over the problem's source.
+    pub files: Vec<(String, String)>,
+    pub numbers: usize,
+    pub bits: f64,
+    /// The residual the descent lowers: the reading of the render's own lowered lines.
+    pub predicted: Residual,
+    /// The reading's cells, weighted by the independent samples each carries.
+    pub cells: f64,
+    pub cancelled: bool,
+}
+
+impl Solution {
+    pub fn objective(&self) -> f64 {
+        self.predicted.bits + self.price * self.bits
+    }
+}
+
+/// A priced cost's parts: its model's root, the price on its numbers, both leaves' targets.
+pub struct Shape {
+    pub root: String,
+    pub price: f64,
     pub model: String,
     pub reference: String,
-    pub points: Vec<Point>,
-    pub chosen: Option<usize>,
-    pub files: Vec<(String, String)>,
-    pub cancelled: bool,
+    pub(super) model_leaf: usize,
+    pub(super) reference_leaf: usize,
 }
 
 const SHAPE: &str = "under `--method prox` a cost is `norm(repr.internal(@<model>) - \
@@ -51,9 +68,7 @@ fn shaped(what: String) -> CliError {
     CliError::usage("solve.prox_cost", format!("{what}; {SHAPE}"))
 }
 
-/// The internal pair's leaves and the price on the model's written numbers, off the cost's terms.
-fn read(problem: &Problem) -> Result<(usize, usize, String, f64), CliError> {
-    let cost = &problem.cost;
+pub fn shape(cost: &Cost) -> Result<Shape, CliError> {
     let mut pair = None;
     let mut price = None;
     for term in &cost.terms {
@@ -103,20 +118,53 @@ fn read(problem: &Problem) -> Result<(usize, usize, String, f64), CliError> {
         .strip_prefix('@')
         .filter(|p| sva_ast::whole_ref_path(p))
         .ok_or_else(|| shaped(format!("`{sized}` is no bare `@<node>`")))?;
-    Ok((a, b, root.to_string(), lambda))
+    Ok(Shape {
+        root: root.to_string(),
+        price: lambda,
+        model: cost.leaves[a].target.clone(),
+        reference: cost.leaves[b].target.clone(),
+        model_leaf: a,
+        reference_leaf: b,
+    })
 }
 
-struct Reading<'a, B: Backend> {
-    problem: &'a Problem<'a>,
-    tier: &'a Tier<B>,
-    abandon: &'a dyn Abandon,
+/// Every check a priced fit needs before anything renders: the cost's shape, the rate, each
+/// `--vary`'s step and what it reaches in the composition as given.
+pub fn checked(problem: &Problem) -> Result<Shape, CliError> {
+    let shape = shape(&problem.cost)?;
+    if let Some(rate) = problem.rate.filter(|r| *r != FIT_RATE) {
+        return Err(CliError::usage(
+            "solve.prox_rate",
+            format!(
+                "`--rate {rate}`: a priced fit renders at {FIT_RATE} Hz; drop `--rate`, and a \
+                 recording at another rate is resampled to it"
+            ),
+        ));
+    }
+    let vars = problem
+        .vary
+        .iter()
+        .map(Var::of)
+        .collect::<Result<Vec<_>, _>>()?;
+    let base = recorded(&problem.cost, problem.source);
+    let source = overlaid(&base, &problem.sets)?;
+    let graph =
+        sva_ast::load_reaching(&source, &[shape.root.as_str()]).map_err(CliError::Refusals)?;
+    reaches(&Model::of(&graph, &shape.root)?, &vars)?;
+    Ok(shape)
+}
+
+pub(super) struct Reading<'a, B: Backend> {
+    pub problem: &'a Problem<'a>,
+    pub tier: &'a Tier<B>,
+    pub abandon: &'a dyn Abandon,
     /// The leaf whose reading every render here is taken as.
-    leaf: &'a crate::solve::Leaf,
+    pub leaf: &'a Leaf,
 }
 
 impl<B: Backend> Reading<'_, B> {
     /// `target` rendered over `source` and read as `internal`, and its channels averaged.
-    async fn read(
+    pub async fn read(
         &self,
         source: &dyn Source,
         target: &str,
@@ -153,41 +201,38 @@ impl<B: Backend> Reading<'_, B> {
 /// The rate a priced fit reads its reference and renders its model at.
 const FIT_RATE: u32 = 48_000;
 
-pub async fn fitted<B: Backend>(
+/// What a solve and a measure both read before either renders the model.
+pub(super) struct Prepared {
+    pub shape: Shape,
+    pub fit: Fit,
+    pub state: State,
+    pub frames: usize,
+}
+
+/// The problem's cost read, its reference rendered and read, and its model's state over `source`.
+pub(super) async fn prepared<B: Backend>(
     problem: &Problem<'_>,
-    priced: &Priced,
+    source: &dyn Source,
     tier: &Tier<B>,
-    report: &mut dyn FnMut(&Progress),
     abandon: &dyn Abandon,
-) -> Result<Fitted, CliError> {
-    let (model_leaf, reference_leaf, root, lambda) = read(problem)?;
-    if let Some(rate) = problem.rate.filter(|r| *r != FIT_RATE) {
-        return Err(CliError::usage(
-            "solve.prox_rate",
-            format!(
-                "`--rate {rate}`: a priced fit renders at {FIT_RATE} Hz; drop `--rate`, and a \
-                 recording at another rate is resampled to it"
-            ),
-        ));
-    }
+) -> Result<Prepared, CliError> {
+    let shape = shape(&problem.cost)?;
     let vars = problem
         .vary
         .iter()
         .map(Var::of)
         .collect::<Result<Vec<_>, _>>()?;
-    let base = recorded(&problem.cost, problem.source);
-    let source = overlaid(&base, &problem.sets)?;
-    let leaf = &problem.cost.leaves[reference_leaf];
     let reading = Reading {
         problem,
         tier,
         abandon,
-        leaf: &problem.cost.leaves[model_leaf],
+        leaf: &problem.cost.leaves[shape.model_leaf],
     };
-    let (clip, mono) = reading.read(&source, &leaf.target).await?;
-    let frames = mono.len();
-    let graph = sva_ast::load_reaching(&source, &[root.as_str()]).map_err(CliError::Refusals)?;
-    let model = Model::of(&graph, &root)?;
+    let reference = &problem.cost.leaves[shape.reference_leaf].target;
+    let (clip, mono) = reading.read(source, reference).await?;
+    let root = shape.root.as_str();
+    let graph = sva_ast::load_reaching(source, &[root]).map_err(CliError::Refusals)?;
+    let model = Model::of(&graph, root)?;
     let state = State::of(&model, &vars)?;
     let threads = problem.threads.unwrap_or_else(sva_engine::default_threads);
     let mut texts = std::collections::BTreeMap::new();
@@ -211,33 +256,43 @@ pub async fn fitted<B: Backend>(
         texts,
         renders: Renders::default(),
     };
-    let lambdas = priced.path.clone().unwrap_or_else(|| vec![lambda]);
-    let steps = priced.steps;
-    let (mut points, cancelled) = path(&fit, state, &lambdas, steps, abandon, report).await?;
+    Ok(Prepared {
+        shape,
+        fit,
+        state,
+        frames: mono.len(),
+    })
+}
+
+/// The problem's composition descended at its cost's price for `settings.steps`, from the
+/// numbers it holds; zero steps answer the start.
+pub async fn solve<B: Backend>(
+    problem: &Problem<'_>,
+    settings: &Settings,
+    tier: &Tier<B>,
+    report: &mut dyn FnMut(&Progress),
+    abandon: &dyn Abandon,
+) -> Result<Solution, CliError> {
+    let base = recorded(&problem.cost, problem.source);
+    let source = overlaid(&base, &problem.sets)?;
+    let Prepared {
+        shape,
+        fit,
+        mut state,
+        ..
+    } = prepared(problem, &source, tier, abandon).await?;
+    let lambda = shape.price;
+    let cancelled = descended(&fit, &mut state, lambda, settings.steps, abandon, report).await?;
+    let e = evaluate(&fit, &state, false, fit.threads)?;
+    let (numbers, bits) = price::numbers(&state);
     let text = |p: &str| -> Option<String> { source.get(p).ok().flatten().map(|t| t.into_owned()) };
-    let model = format!("@{root}([0, {frames}sp])");
-    // A signal stops every render too, so a cancelled path is chosen on its predictions.
-    for point in points.iter_mut().take_while(|_| !cancelled) {
-        let mut draws = Vec::with_capacity(DRAWS);
-        for k in 0..DRAWS {
-            let files = write::drawn(&point.state, &text, k)?;
-            let over = sva_ast::Overlay::new(&source, files.into_iter().collect());
-            let (rendered, _) = reading.read(&over, &model).await?;
-            draws.push(rendered.elements);
-        }
-        point.measured = Some(residual(&fit, &weights(&fit), &draws));
-    }
-    let chosen = chosen(&points);
-    let files = match chosen {
-        Some(c) => write::files(&points[c].state, &text)?,
-        None => Vec::new(),
-    };
-    Ok(Fitted {
-        model: problem.cost.leaves[model_leaf].target.clone(),
-        reference: leaf.target.clone(),
-        points,
-        chosen,
-        files,
+    Ok(Solution {
+        price: lambda,
+        files: write::files(&state, &text)?,
+        numbers,
+        bits,
+        predicted: e.residual,
+        cells: super::eval::weights(&fit).iter().sum(),
         cancelled,
     })
 }

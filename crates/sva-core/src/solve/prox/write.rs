@@ -242,22 +242,12 @@ fn written(
 ) -> Result<Vec<(String, String)>, CliError> {
     let mut out = Vec::new();
     for (n, path) in s.nodes.iter().enumerate() {
-        match s.copied.get(path) {
-            Some(source) if super::price::used(s, n) => {
-                let t = text(source)
-                    .ok_or_else(|| CliError::NotFound(format!("no node `{source}`")))?;
-                out.push((path.clone(), node_text(s, n, &t)));
-            }
-            Some(_) => {}
-            None => {
-                let Some(t) = text(path) else {
-                    continue;
-                };
-                let new = node_text(s, n, &t);
-                if new != t {
-                    out.push((path.clone(), new));
-                }
-            }
+        let Some(t) = text(path) else {
+            continue;
+        };
+        let new = node_text(s, n, &t);
+        if new != t {
+            out.push((path.clone(), new));
         }
     }
     let Some(score) = &s.model.score else {

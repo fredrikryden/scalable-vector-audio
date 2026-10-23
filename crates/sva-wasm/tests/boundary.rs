@@ -2740,8 +2740,9 @@ fn every_reading_a_render_answers_is_listed() {
     }
 }
 
-/// `seed` hands a page the starter `new --from` writes; `solve` with `method: "prox"` answers
-/// one point a price and, asked to `write`, puts the chosen point's files in the composition.
+/// `seed` hands a page the starter `new --from` writes; `solve` with `method: "prox"` and a
+/// `path` continuation answers a stage a phase and, asked to `write`, puts the chosen stage's
+/// files in the composition; a continuation naming no scheme refuses.
 #[wasm_bindgen_test]
 fn a_seeded_starter_solves_on_the_priced_path() {
     let rate = 48_000u32;
@@ -2795,17 +2796,33 @@ fn a_seeded_starter_solves_on_the_priced_path() {
     js_sys::Reflect::set(&reference, &"channels".into(), &channels)
         .unwrap_or_else(|_| unreachable!("an object takes a key"));
     let varies = js_sys::Array::from(&field(&field(&seeded, "varies"), "items"));
-    let asked = js_sys::Object::new();
-    for (key, value) in [
-        ("method", JsValue::from("prox")),
-        ("path", js_sys::Array::of1(&JsValue::from(0.012)).into()),
-        ("steps", JsValue::from(2)),
-        ("write", JsValue::TRUE),
-    ] {
-        js_sys::Reflect::set(&asked, &key.into(), &value)
-            .unwrap_or_else(|_| unreachable!("an object takes a key"));
-    }
-    let answered = now(comp.solve(cost, varies, asked.into())).unwrap_or_else(|e| {
+    let asked = |scheme: &str, write: bool| {
+        let continuation = js_sys::Object::new();
+        for (key, value) in [
+            ("scheme", JsValue::from(scheme)),
+            ("prices", js_sys::Array::of1(&JsValue::from(0.012)).into()),
+        ] {
+            js_sys::Reflect::set(&continuation, &key.into(), &value)
+                .unwrap_or_else(|_| unreachable!("an object takes a key"));
+        }
+        let asked = js_sys::Object::new();
+        for (key, value) in [
+            ("method", JsValue::from("prox")),
+            ("continuation", continuation.into()),
+            ("steps", JsValue::from(2)),
+            ("write", JsValue::from(write)),
+        ] {
+            js_sys::Reflect::set(&asked, &key.into(), &value)
+                .unwrap_or_else(|_| unreachable!("an object takes a key"));
+        }
+        JsValue::from(asked)
+    };
+    let refused = now(comp.solve(cost.clone(), varies.clone(), asked("spiral", false)))
+        .err()
+        .unwrap_or_else(|| unreachable!("`spiral` names no scheme"));
+    let refusal = as_text(&field(&refused, "refusal"));
+    assert!(refusal.contains("solve.bad_continuation"), "{refusal}");
+    let answered = now(comp.solve(cost, varies, asked("path", true))).unwrap_or_else(|e| {
         unreachable!(
             "the priced solve answers: {}",
             as_text(&field(&e, "refusal"))
@@ -2813,7 +2830,12 @@ fn a_seeded_starter_solves_on_the_priced_path() {
     });
     let data = field(&answered, "data");
     assert_eq!(field(&data, "method").as_string().as_deref(), Some("prox"));
-    assert_eq!(items(&data, "path").length(), 1, "one point a price");
+    let labels: Vec<String> = items(&data, "stages")
+        .iter()
+        .filter_map(|s| field(&s, "label").as_string())
+        .filter(|l| !l.ends_with(", restructured"))
+        .collect();
+    assert_eq!(labels, ["start", "settle", "price 0.012"]);
     assert!(field(&data, "chosen").is_object());
     assert!(
         items(&data, "written").length() > 0,

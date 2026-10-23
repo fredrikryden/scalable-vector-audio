@@ -159,8 +159,7 @@ fn text(s: &State, source: &dyn Fn(&str) -> Option<String>) -> Result<Text, CliE
         if *path != s.model.root && !(0..s.model.lines.len()).any(|l| s.line_node(l) == n) {
             continue;
         }
-        let from = s.copied.get(path).unwrap_or(path);
-        let t = source(from).ok_or_else(|| CliError::NotFound(format!("no node `{from}`")))?;
+        let t = source(path).ok_or_else(|| CliError::NotFound(format!("no node `{path}`")))?;
         let body = &s.model.nodes[path].body;
         let mut held = None;
         let cut_body = match *path == s.model.root {

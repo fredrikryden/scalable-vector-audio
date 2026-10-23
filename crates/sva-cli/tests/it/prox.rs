@@ -1,4 +1,4 @@
-// Concern: freezes `new --from` and `solve --method prox`: the starter, the answer's fields, the write, each refusal code | Non-concern: which model the path finds | IO: (argv, a clip) -> envelope
+// Concern: freezes `new --from` and `solve --method prox`: the starter, the answer's stages, the write, each refusal code | Non-concern: which model a stage finds | IO: (argv, a clip) -> envelope
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -57,14 +57,33 @@ fn clip(name: &str) -> (PathBuf, PathBuf) {
     (root, wav)
 }
 
-/// `new --from` answers the starter's files and a `solve` it may run as written; that solve
-/// answers one point a price with its axes, the chosen one, and writes it only when confirmed.
+/// The answer's stages, each stage's label.
+fn labels(data: &Value) -> Vec<String> {
+    data["stages"]["items"]
+        .as_array()
+        .expect("stages")
+        .iter()
+        .map(|s| s["label"].as_str().expect("a label").to_string())
+        .collect()
+}
+
+/// `new --from` answers the starter's files, here two harmonics a voice to keep each render
+/// short, and a `solve` it may run as written. Through `path`
+/// that solve answers a stage a phase and chooses the least length; without a continuation it
+/// answers one stage at the cost's own price, and writes it only when confirmed.
 #[test]
-fn a_priced_solve_answers_its_path_and_writes_its_choice() {
+fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
     let (root, wav) = clip("prox-path");
     let made = json(&sva(
         &root,
-        &argv(&["new", "fit", "--from", &wav.display().to_string()]),
+        &argv(&[
+            "new",
+            "fit",
+            "--from",
+            &wav.display().to_string(),
+            "--harmonics",
+            "2",
+        ]),
     ));
     assert_eq!(made["status"], "success", "{made}");
     let files: Vec<&str> = made["data"]["files"]["items"]
@@ -96,37 +115,66 @@ fn a_priced_solve_answers_its_path_and_writes_its_choice() {
         })
         .filter(|w| w != "--write" && w != "--confirm")
         .collect();
-    let at = words.iter().position(|w| w == "--path").expect("a path");
-    words[at + 1] = "0.012".to_string();
+    let at = words
+        .iter()
+        .position(|w| w == "--continuation")
+        .expect("a continuation");
+    assert!(words[at + 1].starts_with("path:"), "{next}");
+    let mut alone = argv(&["solve", "@fits/clip", "--steps", "3", "--cache", "none"]);
+    alone.extend(words[..at].iter().chain(&words[at + 2..]).cloned());
+    words[at + 1] = "path:0.012,0.1".to_string();
     let mut solve = argv(&["solve", "@fits/clip", "--steps", "3", "--cache", "none"]);
     solve.extend(words);
     let answered = json(&sva(&dir, &solve));
     assert_eq!(answered["status"], "success", "{answered}");
     let data = &answered["data"];
     assert_eq!(data["method"], "prox");
-    let path = data["path"]["items"].as_array().expect("a path");
-    assert_eq!(path.len(), 1, "one point a price");
-    for key in ["price", "numbers", "bits", "measured", "predicted"] {
+    assert_eq!(data["continuation"]["scheme"], "path", "{data}");
+    let phases: Vec<String> = labels(data)
+        .into_iter()
+        .filter(|l| !l.ends_with(", restructured"))
+        .collect();
+    assert_eq!(phases, ["start", "settle", "price 0.012", "price 0.1"]);
+    let stages = data["stages"]["items"].as_array().expect("stages");
+    for key in ["label", "price", "numbers", "bits", "measured", "predicted"] {
         assert!(
-            !path[0][key].is_null(),
-            "a point answers `{key}`: {}",
-            path[0]
+            !stages[0][key].is_null(),
+            "a stage answers `{key}`: {}",
+            stages[0]
         );
     }
-    assert!(data["chosen"].is_object(), "{data}");
+    let least = stages
+        .iter()
+        .map(|s| s["length_bits"].as_f64().expect("a length"))
+        .fold(f64::INFINITY, f64::min);
+    assert_eq!(
+        data["chosen"]["length_bits"].as_f64(),
+        Some(least),
+        "the chosen stage is the least length: {data}"
+    );
     let master = std::fs::read_to_string(dir.join("master")).expect("master");
 
-    solve.push("--write".to_string());
-    let refused = sva(&dir, &solve);
+    alone.push("--write".to_string());
+    let refused = sva(&dir, &alone);
     assert_eq!(refused.status.code(), Some(4), "a write needs `--confirm`");
-    assert!(json(&refused)["data"]["would_write"].is_object());
-    solve.push("--confirm".to_string());
-    let written = json(&sva(&dir, &solve));
+    let data = &json(&refused)["data"];
+    assert!(data["would_write"].is_object(), "{data}");
+    assert!(data["continuation"].is_null(), "{data}");
+    let stages = data["stages"]["items"].as_array().expect("stages");
+    assert_eq!(stages.len(), 1, "no continuation solves once: {data}");
+    let cost = data["cost_expression"].as_str().expect("the cost");
+    assert!(cost.ends_with("+ repr.numbers(@master)"), "{cost}");
+    assert_eq!(
+        stages[0]["price"], 1.0,
+        "at the cost's own price, 1: {cost}"
+    );
+    alone.push("--confirm".to_string());
+    let written = json(&sva(&dir, &alone));
     assert_eq!(written["status"], "success", "{written}");
     assert_ne!(
         std::fs::read_to_string(dir.join("master")).expect("master"),
         master,
-        "the chosen point's numbers are written in place"
+        "the chosen stage's numbers are written in place"
     );
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -178,7 +226,7 @@ fn a_priced_solve_refuses_each_mistake_under_its_code() {
     let dir = root.join("song");
     let heard = format!("norm(repr.internal(@tone) - repr.internal(sample(\"{reference}\")))");
     let priced = format!("{heard} + 0.012*repr.numbers(@tone)");
-    let cases: [(Vec<String>, &str); 6] = [
+    let cases: [(Vec<String>, &str); 7] = [
         (
             argv(&[
                 "solve",
@@ -193,8 +241,28 @@ fn a_priced_solve_refuses_each_mistake_under_its_code() {
             "solve.prox_rate",
         ),
         (
-            argv(&["solve", &heard, "--vary", "gain=0..1/0.1", "--path", "0.1"]),
+            argv(&[
+                "solve",
+                &heard,
+                "--vary",
+                "gain=0..1/0.1",
+                "--continuation",
+                "path:0.1",
+            ]),
             "cli.prox_flag",
+        ),
+        (
+            argv(&[
+                "solve",
+                &priced,
+                "--method",
+                "prox",
+                "--vary",
+                "gain=0..1/0.1",
+                "--continuation",
+                "spiral",
+            ]),
+            "solve.bad_continuation",
         ),
         (
             argv(&[

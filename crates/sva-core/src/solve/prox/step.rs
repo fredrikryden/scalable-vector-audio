@@ -54,17 +54,6 @@ impl Adam {
     }
 }
 
-impl Adam {
-    /// Each new coordinate's moments and group copied from the one it copies.
-    pub fn extend(&mut self, pairs: &[(usize, usize)]) {
-        for (_, from) in pairs {
-            self.m.push(self.m[*from]);
-            self.v.push(self.v[*from]);
-            self.group.push(self.group[*from]);
-        }
-    }
-}
-
 pub struct Priced<'a> {
     pub lambda: f64,
     pub weights: &'a [f64],

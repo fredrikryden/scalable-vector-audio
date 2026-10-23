@@ -5,14 +5,16 @@ use std::path::PathBuf;
 use super::reading::{count, hertz};
 use super::{CacheAt, Command, value};
 use sva_core::CliError;
-use sva_core::solve::prox::run::Priced;
+use sva_core::continuation::Scheme;
+use sva_core::solve::prox::Settings;
 use sva_core::solve::{DEFAULT_COST_TOL, DEFAULT_MAX_RENDERS, DEFAULT_STEP_TOL, Stops, Vary, vary};
 
-/// How a solve searches: compass steps over rendered readings, or the priced proximal path.
+/// How a solve searches: compass steps over rendered readings, or the priced proximal fit, alone
+/// or through a continuation's stages.
 #[derive(Debug, PartialEq)]
 pub enum Method {
     Compass,
-    Prox(Priced),
+    Prox(Settings, Option<Scheme>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -58,7 +60,8 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
     let (mut vary_all, mut sets) = (Vec::new(), Vec::new());
     let (mut rate, mut threads, mut cache) = (None, None, CacheAt::Platform);
     let (mut write, mut confirm) = (false, false);
-    let (mut prox, mut priced, mut prox_flag) = (false, Priced::default(), None);
+    let (mut prox, mut settings, mut prox_flag) = (false, Settings::default(), None);
+    let (mut continuation, mut rounds) = (None, None);
     let mut compass_flag = None;
     while let Some(flag) = it.next() {
         match flag.as_str() {
@@ -72,18 +75,16 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
                     ));
                 }
             },
-            "--path" => {
-                let raw = value(&mut it, "--path")?;
-                let says = "prices per number above 0, comma separated, as `0.003,0.01,0.1`";
-                let path = raw
-                    .split(',')
-                    .map(|x| number(x.trim(), "--path", |v| v > 0.0, says))
-                    .collect::<Result<Vec<_>, _>>()?;
-                priced.path = Some(path);
-                prox_flag = Some("--path");
+            "--continuation" => {
+                continuation = Some(value(&mut it, "--continuation")?);
+                prox_flag = Some("--continuation");
+            }
+            "--rounds" => {
+                rounds = Some(count(&value(&mut it, "--rounds")?, "--rounds", "rounds")?.get());
+                prox_flag = Some("--rounds");
             }
             "--steps" => {
-                priced.steps = count(&value(&mut it, "--steps")?, "--steps", "steps")?.get();
+                settings.steps = count(&value(&mut it, "--steps")?, "--steps", "steps")?.get();
                 prox_flag = Some("--steps");
             }
             "--vary" => vary_all.push(vary(&value(&mut it, "--vary")?)?),
@@ -140,17 +141,27 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
         return Err(CliError::usage(
             "cli.compass_flag",
             format!(
-                "`{flag}` stops the compass search, which `--method prox` does not run; its path \
-                 is set by `--path` and `--steps`"
+                "`{flag}` stops the compass search, which `--method prox` does not run; it is \
+                 set by `--steps` and `--continuation`"
             ),
         ));
     }
     if let (false, Some(flag)) = (prox, prox_flag) {
         return Err(CliError::usage(
             "cli.prox_flag",
-            format!("`{flag}` sets the priced path, which only `--method prox` takes"),
+            format!("`{flag}` sets the priced fit, which only `--method prox` takes"),
         ));
     }
+    if let (None, Some(_)) = (&continuation, rounds) {
+        return Err(CliError::usage(
+            "cli.prox_flag",
+            "`--rounds` sets the k-medians rounds of a continuation's clusters and splits, which \
+             only `--continuation` runs",
+        ));
+    }
+    let scheme = continuation
+        .map(|text| Scheme::parse(&text, rounds))
+        .transpose()?;
     if confirm && !write {
         return Err(CliError::usage(
             "cli.confirm_without_write",
@@ -168,7 +179,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
         write,
         confirm,
         method: match prox {
-            true => Method::Prox(priced),
+            true => Method::Prox(settings, scheme),
             false => Method::Compass,
         },
     })))

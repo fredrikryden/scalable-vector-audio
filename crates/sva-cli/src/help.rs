@@ -31,6 +31,7 @@ pub fn help_text() -> String {
     );
     let (steps, rate) = (solve::prox::DEFAULT_STEPS, solve::prox::BITS_PER_JND2);
     let draws = solve::prox::draws::DRAWS;
+    let rounds = sva_core::structure::assign::REASSIGN_ROUNDS;
     let (harmonics, lone) = (
         sva_core::seed::LIMITS.harmonics,
         sva_core::seed::LIMITS.lone,
@@ -381,7 +382,8 @@ SOLVE:
                 [--max-renders <n>] [--step-tol <x>] [--cost-tol <x>]
                 [--set <name>=<text>]... [--rate <hz>] [--threads <n>]
                 [--cache <path|none>] [--write [--confirm]]
-                [--method prox [--path <p>,<p>...] [--steps <n>]]
+                [--method prox [--steps <n>]
+                  [--continuation path[:<p>,<p>...] [--rounds <n>]]]
 
   Fits variables under `variables/` so the targets a cost reads match a
   reference, and prints the values it found. It edits no file unless `--write
@@ -602,7 +604,7 @@ PRICED FIT:
   element's d squared times {rate:.4} times the independent samples per frame
   its channel carries (`internal`'s MODEL); plus `<price>` bits on each bit
   `numbers` (READINGS) counts, so at price 1 what prox lowers is the
-  description length a point's `length_bits` reports. The model side is the render's own: each score
+  description length a stage's `length_bits` reports. The model side is the render's own: each score
   line lowered as a render lowers it, every number beside its tangent, split
   into its partials (an amplitude times the cosine of a phase) and read at
   each frame's middle, its short-time transform in closed form there (the
@@ -633,30 +635,48 @@ PRICED FIT:
   numbered family (`h*` is `h1`, `h2`, ...), `<file>:` scoping it to the node
   or score at that path, and `/<step>` the number's resolution, about a JND of
   what it moves, which sets its bits, scales its step and its price's floor.
-  The path: an unpriced descent, its lines spread over the nodes of one kind
-  (one body, one set of defaults) and clustered, then for each price of
-  `--path` (default the cost's own; a starter's is a homotopy from 0.01 up to
-  1, each price warm from the last) {steps} proximal Adam steps, each priced
-  number's threshold the price times its weight times its own step, the folds
-  of one node's lines into another of its kind and the splits of one node's
-  lines with a new node of its kind each kept only where the cost falls, and a
-  debias holding every zero. `--steps` scales every phase. Each point is
-  then rendered once per draw, each line's `ph` and `seed` its draw's,
-  and read as `internal`. The answer's `data`: `path`, one point a price with
-  its `numbers` and their `bits`, its weighted `cells`, `measured` (off its
-  renders) and `predicted` (what the descent lowered), each with its
+  The solve: from the numbers the composition holds, `--steps` (default
+  {steps}) proximal Adam steps at the cost's price, each priced number's
+  threshold the price times its weight (its bits over its size at the start)
+  times its own step, then a quarter as many again debiasing, every zero held.
+  Its stage is then rendered once per draw, each line's `ph` and `seed` its
+  draw's, and read as `internal`. CONTINUATION runs it as stages instead. The
+  answer's `data`: `stages`, each with its `label`, the structure `edits` kept
+  before it, its `steps`, its `price`, its `numbers` and their `bits`, its
+  weighted `cells`, `measured` (off its renders) and `predicted` (what the
+  descent lowered), each with its
   `residual_bits`, their `standard_error` from the draws' spread, `d_prime`
   (unweighted, root mean square over the draws) and `per_cell` (the root mean
   square d over the weighted cells, in JND), `error_bits` the measured less
   the predicted, its `residual_bits` (the measured) and `length_bits`, the
-  residual's and the numbers' bits summed; `chosen`, the point of least length; and
-  `files`, the chosen point's text. A signal stops the solve: `path` holds
-  the points it finished and, `stopped` true, the state it stopped at (price 0
-  if no price had begun), none rendered, `chosen` the least predicted length,
-  and no file is written. `--write --confirm` writes the
-  chosen point in place: defaults in their node files, score lines without their
+  residual's and the numbers' bits summed; `chosen`, the stage of least length;
+  `continuation`, the scheme or null; and `files`, the chosen stage's text. A
+  signal stops the solve: `stages` holds the stages it finished and, `stopped`
+  true, the one it stopped in, that one unrendered, `chosen` the least
+  predicted length, and no file is written. `--write --confirm` writes the
+  chosen stage in place: defaults in their node files, score lines without their
   silent ones or the fields their node's default restates. Each step prints a JSON line
-  on stderr. `sva-cli new <name> --from <clip>` writes a starter to fit.
+  on stderr, its `stage` beside it. `sva-cli new <name> --from <clip>` writes a
+  starter to fit.
+
+CONTINUATION:
+  `--continuation <scheme>` runs a priced fit as stages, each a fresh solve
+  from the files the last one reached, under the same `--vary`s, each measured;
+  `chosen` is the stage of least `length_bits`, whatever its price. Without
+  it the cost is solved once, one stage. The one scheme is
+    path[:<p>,<p>...]   the price homotopy over the prices given, else the
+                        cost's own (a starter's `next` gives 0.01 up to 1):
+                        `start`, unpriced for 5/6 of `--steps`; `settle`,
+                        its lines spread over the nodes of one kind (one body,
+                        one set of defaults) and clustered, unpriced for 1/3;
+                        then `price <p>` for each price, `--steps` long, and
+                        after it `price <p>, restructured` where a split of one
+                        node's lines with a new node of its kind, or a fold of
+                        one node's lines into another of its kind, lowers the
+                        objective after a trial of 2/15 of `--steps`, solved
+                        for a quarter of `--steps`.
+  `--rounds <n>` (default {rounds}) sets the k-medians rounds of each cluster
+  and split, a cost bound on how long reassignment runs.
 
 NEW:
   sva-cli new <name> [--from <recording> [--harmonics <n>] [--lone <n>]]
@@ -826,8 +846,9 @@ DEFAULTS:
                        solve's search stops. Default {step_tol}.
   --cost-tol <x>       the cost at or under which a solve stops. Default {cost_tol}.
   --method <m>         `compass` (default) or `prox`, the priced fit.
-  --path <p>,...       the prices per number a priced fit visits, in turn.
-  --steps <n>          a priced fit's steps per price. Default {steps}.
+  --continuation <s>   runs a priced fit as a scheme's stages: CONTINUATION.
+  --rounds <n>         a continuation's k-medians rounds. Default {rounds}.
+  --steps <n>          each priced stage's descent. Default {steps}.
   --write              a solve writes its fitted values to their `variables/`
                        files, with `--confirm`. Default off.
   --confirm            replaces a destination that already holds a file. Without

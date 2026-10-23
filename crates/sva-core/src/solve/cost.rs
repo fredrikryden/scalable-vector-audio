@@ -960,6 +960,62 @@ impl Building {
     }
 }
 
+/// `cost` with its one `repr.numbers` term priced at `price`, every other term as written.
+pub fn with_price(cost: &Cost, price: f64) -> Result<Cost, CliError> {
+    let numbers = |n: &Node| match n {
+        Node::Leaf(x) if cost.leaves[*x].asked.name == "numbers" => Some(*x),
+        _ => None,
+    };
+    let priced: Vec<(usize, usize)> = cost
+        .terms
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| {
+            let leaf = match &t.node {
+                Node::Bin(Op::Mul, a, b) => match (&**a, &**b) {
+                    (Node::Num(_), x) | (x, Node::Num(_)) => numbers(x),
+                    _ => None,
+                },
+                other => numbers(other),
+            };
+            leaf.map(|x| (i, x))
+        })
+        .collect();
+    let [(at, leaf)] = priced.as_slice() else {
+        return Err(refused(
+            "solve.prox_cost",
+            format!(
+                "`{}` prices `repr.numbers` in {} terms; a priced cost holds one, \
+                 `<price>*repr.numbers(@<model>)`",
+                cost.text,
+                priced.len()
+            ),
+        ));
+    };
+    let mut out = cost.clone();
+    out.terms[*at] = Term {
+        text: format!("{price}*{}", cost.leaves[*leaf].written),
+        sign: 1.0,
+        node: Node::Bin(
+            Op::Mul,
+            Box::new(Node::Num(price)),
+            Box::new(Node::Leaf(*leaf)),
+        ),
+    };
+    let mut text = String::new();
+    for (i, t) in out.terms.iter().enumerate() {
+        match (i, t.sign < 0.0) {
+            (0, false) => {}
+            (0, true) => text.push_str("- "),
+            (_, false) => text.push_str(" + "),
+            (_, true) => text.push_str(" - "),
+        }
+        text.push_str(&t.text);
+    }
+    out.text = text;
+    Ok(out)
+}
+
 /// Each top-level `+` or `-` operand, with its sign, as the text grammar splits them.
 fn split(node: Node, out: &mut Vec<(f64, Node)>) {
     match node {

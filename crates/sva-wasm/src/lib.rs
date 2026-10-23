@@ -174,7 +174,7 @@ struct Options {
     cost_tol: Option<f64>,
     progress: Option<js_sys::Function>,
     prox: bool,
-    path: Option<Vec<f64>>,
+    continuation: Option<sva_core::continuation::Scheme>,
     steps: Option<usize>,
     write: bool,
 }
@@ -257,27 +257,12 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                     _ => {
                         return Err(refuse(
                             "`method` is neither \"compass\" nor \"prox\"".into(),
-                            "pass \"prox\" for the priced path, or leave it out",
+                            "pass \"prox\" for the priced fit, or leave it out",
                         ));
                     }
                 }
             }
-            "path" => {
-                let path: Option<Vec<f64>> = js_sys::Array::is_array(&value)
-                    .then(|| {
-                        js_sys::Array::from(&value)
-                            .iter()
-                            .map(|v| v.as_f64().filter(|x| x.is_finite() && *x > 0.0))
-                            .collect()
-                    })
-                    .flatten();
-                held.path = Some(path.ok_or_else(|| {
-                    refuse(
-                        "`path` is no list of prices above 0".into(),
-                        "pass the prices per number, as [0.003, 0.01, 0.1]",
-                    )
-                })?);
-            }
+            "continuation" => held.continuation = Some(continuation(&value)?),
             "steps" => held.steps = Some(whole(&key, &value)?),
             "write" => {
                 held.write = value.as_bool().ok_or_else(|| {
@@ -364,6 +349,44 @@ fn texts(key: &str, value: &JsValue) -> Result<Vec<(String, String)>, JsValue> {
             Ok((path, text))
         })
         .collect()
+}
+
+/// `{ scheme: "path", prices: [0.01, 0.1], rounds: 6 }`, `prices` and `rounds` optional.
+fn continuation(value: &JsValue) -> Result<sva_core::continuation::Scheme, JsValue> {
+    let help = "pass { scheme: \"path\" }, with `prices` above 0 and `rounds` if wanted";
+    let object = value
+        .dyn_ref::<js_sys::Object>()
+        .filter(|_| !js_sys::Array::is_array(value))
+        .ok_or_else(|| refuse("`continuation` is not an object".into(), help))?;
+    let (mut scheme, mut prices, mut rounds) = (None, None, None);
+    for entry in js_sys::Object::entries(object).iter() {
+        let pair = js_sys::Array::from(&entry);
+        let key = pair.get(0).as_string().unwrap_or_default();
+        let value = pair.get(1);
+        match key.as_str() {
+            "scheme" => scheme = Some(text("scheme", &value)?),
+            "prices" if value.is_null() || value.is_undefined() => {}
+            "prices" => {
+                let list = value
+                    .dyn_ref::<js_sys::Array>()
+                    .ok_or_else(|| refuse("`prices` is not an array".into(), help))?;
+                prices = Some(
+                    list.iter()
+                        .map(|p| p.as_f64().unwrap_or(f64::NAN))
+                        .collect(),
+                );
+            }
+            "rounds" => rounds = Some(whole("rounds", &value)?),
+            _ => {
+                return Err(refuse(
+                    format!("`continuation` holds `{key}`"),
+                    "its keys are scheme, prices and rounds",
+                ));
+            }
+        }
+    }
+    let scheme = scheme.ok_or_else(|| refuse("`continuation` names no `scheme`".into(), help))?;
+    sva_core::continuation::Scheme::of(&scheme, prices, rounds).map_err(|e| thrown(&e))
 }
 
 fn whole<N: TryFrom<u64>>(key: &str, value: &JsValue) -> Result<N, JsValue> {
@@ -553,7 +576,8 @@ impl Composition {
 
     /// `sva-cli solve`'s envelope. `cost` is a `SolveCost` tree, every reference a value:
     /// `{ norm: { sub: [{ repr: "bands", target: "@lead([0, 5s])" }, { value: data }] } }`.
-    /// `vary`: `SolveVary`s. `options` as the CLI's flags, `signal` and `progress(line)`.
+    /// `vary`: `SolveVary`s. `options` as the CLI's flags, `signal` and `progress(line)`;
+    /// `continuation: { scheme: "path", prices: [0.01, 0.1] }` as `--continuation path:0.01,0.1`.
     pub async fn solve(
         &self,
         #[wasm_bindgen(unchecked_param_type = "SolveCost")] cost: JsValue,
@@ -570,7 +594,7 @@ impl Composition {
             "signal",
             "progress",
             "method",
-            "path",
+            "continuation",
             "steps",
             "write",
         ];
@@ -634,27 +658,26 @@ impl Composition {
         options: &Options,
         abandon: &dyn Abandon,
     ) -> Result<JsValue, JsValue> {
-        use sva_core::solve::prox::{Progress, fitted_data, progress_json, run};
-        let priced = run::Priced {
-            path: options.path.clone(),
+        use sva_core::fit::{fitted, fitted_data};
+        let settings = sva_core::solve::prox::Settings {
             steps: options
                 .steps
                 .unwrap_or(sva_core::solve::prox::DEFAULT_STEPS),
         };
-        let mut heard = |p: &Progress| {
+        let mut heard = |line: &str| {
             if let Some(progress) = &options.progress {
-                let line = progress_json(p);
-                let _ = progress.call1(&JsValue::NULL, &parse(&line).unwrap_or(line.into()));
+                let _ = progress.call1(&JsValue::NULL, &parse(line).unwrap_or(line.into()));
             }
         };
-        let fitted = run::fitted(problem, &priced, &*self.tier, &mut heard, abandon)
+        let scheme = options.continuation.as_ref();
+        let fitted = fitted(problem, &settings, scheme, &*self.tier, &mut heard, abandon)
             .await
             .map_err(|e| thrown(&e))?;
         let cost = &problem.cost.text;
-        if fitted.cancelled {
-            let data = fitted_data(&fitted, &priced, cost, "");
-            let message = "the priced solve was aborted; `refusal.data.path` holds the points it \
-                           finished and the one it stopped at, `refusal.data.chosen` the best of \
+        if fitted.ran.cancelled {
+            let data = fitted_data(&fitted, &settings, cost, "");
+            let message = "the priced solve was aborted; `refusal.data.stages` holds the stages it \
+                           finished and the one it stopped in, `refusal.data.chosen` the best of \
                            them by prediction, and nothing was written";
             let error = JsErr::new(message);
             error.set_name("AbortError");
@@ -672,7 +695,7 @@ impl Composition {
             });
             extra = format!(", \"written\": {paths}");
         }
-        let data = fitted_data(&fitted, &priced, cost, &extra);
+        let data = fitted_data(&fitted, &settings, cost, &extra);
         parse(&sva_core::success_envelope(&data, &[]))
     }
 

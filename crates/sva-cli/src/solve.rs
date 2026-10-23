@@ -6,6 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use sva_ast::variable;
+use sva_core::continuation::Scheme;
+use sva_core::fit::{fitted, fitted_data};
+use sva_core::solve::prox::Settings;
 use sva_core::solve::{
     Point, Problem, Solved, Stopped, Vary, cost_of, findings, point_json, solve as solved,
     solved_data,
@@ -45,8 +48,9 @@ pub fn solve(args: &SolveArgs) -> Result<(String, u8), CliError> {
         threads: args.threads,
         stops: args.stops,
     };
-    if let Method::Prox(priced) = &args.method {
-        return priced_solve(args, priced, &dir, &problem, tier, stop, warnings);
+    if let Method::Prox(settings, scheme) = &args.method {
+        let method = (settings, scheme.as_ref());
+        return priced_solve(args, method, &dir, &problem, tier, stop, warnings);
     }
     let mut heard_point = |point: &Point| {
         // A reader that closed stderr loses the progress, never the answer.
@@ -131,49 +135,47 @@ fn changed(dir: &std::path::Path, solved: &Solved, vary: &[Vary]) -> Result<Vec<
 
 fn priced_solve(
     args: &SolveArgs,
-    priced: &sva_core::solve::prox::run::Priced,
+    (settings, scheme): (&Settings, Option<&Scheme>),
     dir: &std::path::Path,
     problem: &Problem,
     tier: &sva_engine::Tier<crate::directory::Directory>,
     stop: Arc<AtomicBool>,
     mut warnings: Vec<sva_core::Diagnostic>,
 ) -> Result<(String, u8), CliError> {
-    use sva_core::solve::prox::run::fitted;
-    use sva_core::solve::prox::{Progress, fitted_data, progress_json};
-    let mut heard = |p: &Progress| {
-        let _ = writeln!(std::io::stderr(), "{}", progress_json(p));
+    let mut heard = |line: &str| {
+        let _ = writeln!(std::io::stderr(), "{line}");
     };
-    let outcome = wait(fitted(problem, priced, tier, &mut heard, &Flagged(stop)));
+    let outcome = wait(fitted(
+        problem,
+        settings,
+        scheme,
+        tier,
+        &mut heard,
+        &Flagged(stop),
+    ));
     persisted(tier, &mut warnings);
     let fitted = outcome?;
-    let paths = |files: &[(String, String)]| {
-        sva_core::json::list(files, |(p, _)| format!("\"{}\"", sva_core::json::escape(p)))
-    };
-    if fitted.cancelled {
-        let data = fitted_data(&fitted, priced, &problem.cost.text, "");
-        let message = "the priced solve was stopped by a signal; `data.path` holds the points it \
-                       finished and the one it stopped at, `data.chosen` the best of them by \
+    let data = |extra: &str| fitted_data(&fitted, settings, &problem.cost.text, extra);
+    if fitted.ran.cancelled {
+        let message = "the priced solve was stopped by a signal; `data.stages` holds the stages \
+                       it finished and the one it stopped in, `data.chosen` the best of them by \
                        prediction, and no file was written";
-        let json = error_envelope_with("cancelled", message, &data, &warnings);
+        let json = error_envelope_with("cancelled", message, &data(""), &warnings);
         return Ok((json, CANCELLED));
     }
     if !args.write {
-        let data = fitted_data(&fitted, priced, &problem.cost.text, "");
-        return Ok((success_envelope(&data, &warnings), 0));
+        return Ok((success_envelope(&data(""), &warnings), 0));
     }
-    let listed = paths(&fitted.files);
+    let listed = sva_core::json::list(&fitted.files, |(p, _)| {
+        format!("\"{}\"", sva_core::json::escape(p))
+    });
     if !fitted.files.is_empty() && !args.confirm {
-        let data = fitted_data(
-            &fitted,
-            priced,
-            &problem.cost.text,
-            &format!(", \"would_write\": {listed}"),
-        );
         let message = format!(
-            "`--write` would rewrite {} file(s) with the chosen point, and replacing a file needs \
+            "`--write` would rewrite {} file(s) with the chosen stage, and replacing a file needs \
              `--confirm`; nothing was written",
             fitted.files.len()
         );
+        let data = data(&format!(", \"would_write\": {listed}"));
         let json = error_envelope_with("conflict", &message, &data, &warnings);
         return Ok((json, 4));
     }
@@ -181,11 +183,6 @@ fn priced_solve(
         std::fs::write(dir.join(path), text)
             .map_err(|e| CliError::Io(format!("could not write `{path}`: {e}")))?;
     }
-    let data = fitted_data(
-        &fitted,
-        priced,
-        &problem.cost.text,
-        &format!(", \"written\": {listed}"),
-    );
+    let data = data(&format!(", \"written\": {listed}"));
     Ok((success_envelope(&data, &warnings), 0))
 }

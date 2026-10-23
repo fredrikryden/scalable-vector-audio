@@ -202,17 +202,17 @@ fn seeded(from: &Path, limits: sva_core::seed::Limits) -> Result<Tree, CliError>
         .map(|v| format!("--vary '{v}'"))
         .collect();
     let solve = format!(
-        "sva-cli solve @{} --method prox --path {} {} --write --confirm",
+        "sva-cli solve @{} --method prox --continuation path:{} {} --write --confirm",
         sva_core::seed::COST,
-        sva_core::solve::prox::DEFAULT_PATH
+        sva_core::continuation::path::DEFAULT_PRICES
             .iter()
             .map(|p| p.to_string())
             .collect::<Vec<_>>()
             .join(","),
         varies.join(" ")
     );
-    let why = "shrinks the starter to the point of least description length its path holds, \
-               the price per number along `--path`, and writes it in place";
+    let why = "shrinks the starter to the stage of least description length its price path \
+               holds, each price per number a stage, and writes it in place";
     Ok(Tree {
         files,
         next: vec![(solve, why.to_string())],

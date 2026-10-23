@@ -70,6 +70,32 @@ impl Var {
     }
 }
 
+/// Refuses a `--vary` that names no node default and no score field `model` plays.
+pub fn reaches(model: &Model, vars: &[Var]) -> Result<(), CliError> {
+    let score = model.score.clone().unwrap_or_default();
+    let reached = |v: &Var| {
+        model
+            .nodes
+            .iter()
+            .any(|(p, n)| n.defaults.iter().any(|(d, _)| v.matches(p, d)))
+            || model
+                .lines
+                .iter()
+                .any(|l| l.fields.iter().any(|(f, _)| v.matches(&score, f)))
+    };
+    match vars.iter().find(|v| !reached(v)) {
+        Some(v) => Err(CliError::usage(
+            "solve.reaches_nothing",
+            format!(
+                "`--vary {}` names no node default and no score field of the composition \
+                 `@{}` plays",
+                v.vary.name, model.root
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Role {
     Centre {
@@ -106,8 +132,6 @@ pub struct State {
     pub dev: BTreeMap<(usize, String), usize>,
     pub own: BTreeMap<(usize, String), usize>,
     pub root: Vec<Option<usize>>,
-    /// Each node a split made, and the node whose text it copies.
-    pub copied: BTreeMap<String, String>,
 }
 
 impl State {
@@ -126,7 +150,6 @@ impl State {
             dev: BTreeMap::new(),
             own: BTreeMap::new(),
             root: vec![None; model.lines.len()],
-            copied: BTreeMap::new(),
         };
         for (n, path) in nodes.iter().enumerate() {
             for (name, value) in &model.nodes[path].defaults {
@@ -143,26 +166,6 @@ impl State {
                     s.centre.insert((n, name.clone()), s.x.len() - 1);
                 }
             }
-        }
-        let reached = |v: &Var| {
-            model
-                .nodes
-                .iter()
-                .any(|(p, n)| n.defaults.iter().any(|(d, _)| v.matches(p, d)))
-                || model
-                    .lines
-                    .iter()
-                    .any(|l| l.fields.iter().any(|(f, _)| v.matches(&score, f)))
-        };
-        if let Some(v) = vars.iter().find(|v| !reached(v)) {
-            return Err(CliError::usage(
-                "solve.reaches_nothing",
-                format!(
-                    "`--vary {}` names no node default and no score field of the composition \
-                     `@{}` plays",
-                    v.vary.name, model.root
-                ),
-            ));
         }
         for (i, line) in model.lines.iter().enumerate() {
             let node = nodes
@@ -340,102 +343,6 @@ impl State {
                         .expect("a coordinate")
                         .clamp(var.lo, var.hi),
                 )
-            }
-        }
-    }
-
-    /// A new node of `node`'s kind at its centres, and each new coordinate beside the one it
-    /// copies.
-    pub fn copy_node(&mut self, node: usize) -> (usize, Vec<(usize, usize)>) {
-        let path = self.nodes[node].clone();
-        let source = self.copied.get(&path).cloned().unwrap_or(path.clone());
-        let fresh = (2..)
-            .map(|k| format!("{source}-{k}"))
-            .find(|p| !self.model.nodes.contains_key(p))
-            .expect("a free path");
-        let def = self.model.nodes[&path].clone();
-        self.model.nodes.insert(fresh.clone(), def);
-        self.nodes.push(fresh.clone());
-        self.copied.insert(fresh, source);
-        let n = self.nodes.len() - 1;
-        let centres: Vec<(String, usize)> = self
-            .centre
-            .iter()
-            .filter(|((m, _), _)| *m == node)
-            .map(|((_, name), c)| (name.clone(), *c))
-            .collect();
-        let mut pairs = Vec::new();
-        for (name, c) in centres {
-            self.push(
-                self.x[c],
-                self.var_of[c],
-                Role::Centre {
-                    node: n,
-                    name: name.clone(),
-                },
-            );
-            self.centre.insert((n, name), self.x.len() - 1);
-            pairs.push((self.x.len() - 1, c));
-        }
-        (n, pairs)
-    }
-
-    /// Moves a line to another node of its kind, keeping every value it plays.
-    pub fn move_line(&mut self, line: usize, to: usize) {
-        let from = self.line_node(line);
-        if from == to {
-            return;
-        }
-        let names: Vec<String> = self.model.nodes[&self.nodes[from]]
-            .defaults
-            .iter()
-            .map(|(n, _)| n.clone())
-            .collect();
-        for name in names {
-            if let (Some(cf), Some(ct), Some(d)) = (
-                self.centre.get(&(from, name.clone())),
-                self.centre.get(&(to, name.clone())),
-                self.dev.get(&(line, name.clone())),
-            ) {
-                self.x[*d] += self.x[*cf] - self.x[*ct];
-            }
-        }
-        self.model.lines[line].node = self.nodes[to].clone();
-    }
-
-    /// Each centre at the median of its alive lines' values, deviations re-expressed.
-    pub fn recentre(&mut self, node: usize) {
-        let lines: Vec<usize> = (0..self.model.lines.len())
-            .filter(|l| self.line_node(*l) == node && self.alive(*l))
-            .collect();
-        if lines.is_empty() {
-            return;
-        }
-        let keys: Vec<(String, usize)> = self
-            .centre
-            .iter()
-            .filter(|((n, _), _)| *n == node)
-            .map(|((_, name), c)| (name.clone(), *c))
-            .collect();
-        for (name, c) in keys {
-            let mut th: Vec<f64> = lines
-                .iter()
-                .map(|l| self.x[c] + self.x[self.dev[&(*l, name.clone())]])
-                .collect();
-            th.sort_by(f64::total_cmp);
-            let m = th.len();
-            let median = match m % 2 {
-                1 => th[m / 2],
-                _ => 0.5 * (th[m / 2 - 1] + th[m / 2]),
-            };
-            let shift = median - self.x[c];
-            self.x[c] = median;
-            for l in 0..self.model.lines.len() {
-                if self.line_node(l) == node
-                    && let Some(d) = self.dev.get(&(l, name.clone()))
-                {
-                    self.x[*d] -= shift;
-                }
             }
         }
     }

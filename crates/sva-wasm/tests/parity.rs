@@ -110,8 +110,8 @@ fn filtered_noise_renders_the_pinned_bits_on_four_threads() {
 }
 
 /// A priced fit of a clip rendered here, seeded and solved as `new --from` and `solve
-/// --method prox` do: `<FNV-1a of each point's distance bits> <of the chosen files' bytes>`.
-const PRICED: &str = "239d310a5c0c44a9 fa3070607ad3f85c";
+/// --method prox --continuation path` do: `<FNV-1a of each stage's distance bits> <of the chosen files' bytes>`.
+const PRICED: &str = "3bf0df8a44b3f8b1 5ce8f2b2020447d2";
 
 fn priced(threads: usize) -> String {
     let clip_nodes: sva_ast::Composition = [(
@@ -189,14 +189,19 @@ fn priced(threads: usize) -> String {
             cost_tol: 0.0,
         },
     };
-    let priced = sva_core::solve::prox::run::Priced {
-        path: Some(vec![0.004, 0.04]),
-        steps: 12,
-    };
+    let settings = sva_core::solve::prox::Settings { steps: 12 };
+    let scheme =
+        sva_core::continuation::Scheme::of("path", Some(vec![0.004, 0.04]), None).expect("a path");
     let tier = Tier::default();
-    let mut quiet = |_: &sva_core::solve::prox::Progress| {};
-    let fit =
-        sva_core::solve::prox::run::fitted(&problem, &priced, &tier, &mut quiet, &sva_core::Never);
+    let mut quiet = |_: &str| {};
+    let fit = sva_core::fit::fitted(
+        &problem,
+        &settings,
+        Some(&scheme),
+        &tier,
+        &mut quiet,
+        &sva_core::Never,
+    );
     let mut fit = std::pin::pin!(fit);
     let waker = std::task::Waker::noop();
     let fitted = match fit
@@ -206,7 +211,11 @@ fn priced(threads: usize) -> String {
         std::task::Poll::Ready(done) => done.expect("the priced solve answers"),
         std::task::Poll::Pending => unreachable!("a fit in memory alone never waits"),
     };
-    let distances = fnv(fitted.points.iter().map(|p| p.predicted.bits.to_bits()));
+    let distances = fnv(fitted
+        .ran
+        .stages
+        .iter()
+        .map(|r| r.solution.predicted.bits.to_bits()));
     let files = fnv(fitted.files.iter().flat_map(|(p, t)| {
         p.bytes()
             .chain(t.bytes())

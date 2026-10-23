@@ -9,7 +9,7 @@ mod vary;
 
 pub use cost::{
     Cost, From, Held, LOAD_JSON, Leaf, Load, OPERATORS, Op, REDUCERS, REPR, SUBTRACTS, Target,
-    Tree, built, cost, takes,
+    Tree, built, cost, takes, with_price,
 };
 pub use load::{NoFiles, Texts};
 pub use residual::{FLOOR_DB, MISSED_NOTE_CENTS, MISSED_ONSET_SECS, RULES};
