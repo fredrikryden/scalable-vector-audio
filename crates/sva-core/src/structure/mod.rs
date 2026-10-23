@@ -1,6 +1,7 @@
-// Concern: one edit and the files it rewrites over a composition, every value a moved line plays kept exact | Non-concern: proposing edits (assign, split, merge) | IO: (Proposal, texts) -> files
+// Concern: one edit and the files it rewrites over a composition, every value a moved line plays kept exact | Non-concern: proposing edits (assign, split, merge, grow) | IO: (Proposal, texts) -> files
 
 pub mod assign;
+pub mod grow;
 pub mod merge;
 pub mod split;
 
@@ -21,6 +22,15 @@ pub enum Edit {
         node: String,
         defaults: Vec<(String, f64)>,
     },
+    /// A node's file written as `text`, and lines' fields set; the edited model keeps the
+    /// node's defaults as they were.
+    Rewrite {
+        node: String,
+        text: String,
+        fields: Vec<(usize, Vec<(String, f64)>)>,
+    },
+    /// Score rows added as written after score row `after`, counted from 1, or first at 0.
+    Add { after: usize, rows: Vec<String> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -55,6 +65,18 @@ impl Edit {
                     restated(m, l, &k);
                 }
             }
+            Edit::Rewrite { fields, .. } => {
+                for (l, set) in fields {
+                    let held = &mut m.lines[*l].fields;
+                    for (name, v) in set {
+                        match held.iter_mut().find(|(f, _)| f == name) {
+                            Some(f) => f.1 = *v,
+                            None => held.push((name.clone(), *v)),
+                        }
+                    }
+                }
+            }
+            Edit::Add { .. } => {}
         }
     }
 }
@@ -204,7 +226,11 @@ fn score_text(
             let fields = &m.lines[line].fields;
             fields.iter().find(|(f, _)| f == name).map(|(_, v)| *v)
         };
-        for (name, _) in &now.nodes[node].defaults {
+        let names: BTreeSet<&String> = [was, now]
+            .iter()
+            .flat_map(|m| m.lines[line].fields.iter().map(|(n, _)| n))
+            .collect();
+        for name in names {
             let set = field(now, name);
             if set == field(was, name) {
                 continue;
@@ -238,6 +264,7 @@ pub fn applied(
     let mut m = model.clone();
     let mut from: BTreeMap<String, String> = BTreeMap::new();
     let mut moved = BTreeSet::new();
+    let (mut rewritten, mut added) = (BTreeMap::new(), Vec::new());
     for e in &p.edits {
         match e {
             Edit::Copy { from: f, path } => {
@@ -249,6 +276,11 @@ pub fn applied(
                 moved.extend(lines_of(&m, node));
             }
             Edit::Move { lines, .. } => moved.extend(lines.iter().copied()),
+            Edit::Rewrite { node, text, fields } => {
+                rewritten.insert(node.clone(), text.clone());
+                moved.extend(fields.iter().map(|(l, _)| *l));
+            }
+            Edit::Add { after, rows } => added.push((*after, rows)),
         }
         e.apply(&mut m);
     }
@@ -261,10 +293,27 @@ pub fn applied(
             out.push((path.clone(), node_text(&text, path, was, now, varies)));
         }
     }
-    if let (false, Some(score)) = (moved.is_empty(), &m.score) {
+    out.extend(rewritten);
+    if let (false, Some(score)) = (moved.is_empty() && added.is_empty(), &m.score) {
         let file = format!("{score}.jsonl");
         let text = texts(&file).ok_or_else(|| CliError::NotFound(format!("no score `{file}`")))?;
-        out.push((file, score_text(model, &m, &moved, &text, varies)?));
+        let mut written = String::new();
+        let rows = score_text(model, &m, &moved, &text, varies)?;
+        for (i, row) in std::iter::once("").chain(rows.lines()).enumerate() {
+            if i > 0 {
+                written.push_str(row);
+                written.push('\n');
+            }
+            for row in added
+                .iter()
+                .filter(|(after, _)| *after == i)
+                .flat_map(|a| a.1)
+            {
+                written.push_str(row);
+                written.push('\n');
+            }
+        }
+        out.push((file, written));
     }
     Ok(out)
 }

@@ -15,7 +15,7 @@ pub const LIMITS: Limits = Limits {
     lone: 8,
 };
 const LONE_AFTER_SECS: f64 = 0.04;
-const SAME_PITCH_CENTS: f64 = 50.0;
+pub(crate) const SAME_PITCH_CENTS: f64 = 50.0;
 const LEVEL_AT_SECS: [f64; 3] = [0.03, 0.06, 0.1];
 const HARMONIC_NEAR: f64 = 0.03;
 const ABSENT_DB: f64 = -20.0;
@@ -63,12 +63,13 @@ pub struct Seeded {
     pub cost: String,
 }
 
-struct Voice {
-    tone: &'static str,
-    at: f64,
-    f0: f64,
+pub(crate) struct Voice {
+    pub(crate) tone: &'static str,
+    pub(crate) at: f64,
+    pub(crate) f0: f64,
     len: f64,
-    levels: Vec<f64>,
+    /// Each harmonic's amplitude from the first.
+    pub(crate) levels: Vec<f64>,
 }
 
 fn curve_at(c: &Curve, t: f64, outside: Option<f64>) -> f64 {
@@ -95,10 +96,59 @@ fn g(x: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// `x` rounded to a millionth, as a starter writes its times and frequencies.
+pub(crate) fn s6(x: f64) -> String {
+    format!("{}", (x * 1e6).round() / 1e6)
+}
+
+pub(crate) const PARTIAL: &str = "instruments/partial";
+
+pub(crate) fn voice(tone: &str) -> String {
+    format!("instruments/voice-{tone}")
+}
+
+/// Harmonic `k`'s `h` heard at `level` under a line's `vel` and its node's `tilt`.
+pub(crate) fn level_db(level: f64, vel: f64, tilt: f64, k: usize) -> f64 {
+    let db = match level > 0.0 && vel > 0.0 {
+        true => 20.0 * libm::log10(level / vel) + 20.0 * tilt * libm::log10(k as f64),
+        false => ABSENT_DB,
+    };
+    (db.clamp(-40.0, 20.0) * 100.0).round() / 100.0
+}
+
+/// The frequencies of the tracks sounding just after onset `e`, loudest first.
+pub(crate) fn loud(r: &Readings, e: &score::Event) -> Vec<f64> {
+    let t = e.at_secs + LONE_AFTER_SECS;
+    let mut loud: Vec<(f64, f64)> = r
+        .tracks
+        .iter()
+        .map(|tr| {
+            (
+                curve_at(&tr.amplitude, t, Some(0.0)),
+                curve_at(&tr.frequency, t, None),
+            )
+        })
+        .filter(|(a, _)| *a > 0.0)
+        .collect();
+    loud.sort_by(|a, b| b.0.total_cmp(&a.0));
+    loud.into_iter().map(|(_, hz)| hz).collect()
+}
+
+/// A silent lone partial's score line at onset `e`, its node read as `node`.
+pub(crate) fn lone_line(node: &str, e: &score::Event, hz: f64) -> String {
+    format!(
+        "{{\"at\": \"{}s\", \"node\": \"{node}\", \"f0\": \"{}hz\", \"vel\": 0, \"len\": \"{}s\"}}",
+        s6(e.at_secs),
+        s6(hz),
+        s6(e.next_secs - e.at_secs)
+    )
+}
+
 const ENVELOPE: &str = "vel*min(1, t/att)*(sus + (1 - sus)*exp(0 - t/dec))";
 const BENT: &str = "(t + bnd*bt*(1 - exp(0 - t/bt)))";
 
-fn harmonic(harmonics: usize) -> String {
+/// A voice node summing `harmonics` harmonics, every default at its start.
+pub fn harmonic(harmonics: usize) -> String {
     let mut knots: Vec<String> = (1..=harmonics)
         .map(|k| format!("{k}s, pow(10, h{k}/20)"))
         .collect();
@@ -133,7 +183,7 @@ fn harmonic(harmonics: usize) -> String {
         )
 }
 
-fn lone() -> String {
+pub(crate) fn lone() -> String {
     format!(
         "att = 0.01s\ndec = 0.4s\nsus = 0.5\nrel = 0.05s\nbnd = 0\nbt = 0.03s\nph = 0\n\
          crop({ENVELOPE}*sin(2*pi*f0*{BENT} + ph), 0s, len, fall=min(rel, len))\n"
@@ -204,9 +254,9 @@ fn sigmoid(x: f64) -> f64 {
 
 /// What a starter is written from, read off a clip once and written at any limits.
 pub struct Readings {
-    voices: Vec<Voice>,
+    pub(crate) voices: Vec<Voice>,
     tracks: Vec<partials::Track>,
-    events: Vec<score::Event>,
+    pub(crate) events: Vec<score::Event>,
     ear: internal::Internal,
     dur: f64,
 }
@@ -295,10 +345,10 @@ pub fn read(channels: &[Vec<f32>], rate: f64) -> Readings {
 pub fn starter(r: &Readings, clip: &str, limits: Limits) -> Seeded {
     let Readings {
         voices,
-        tracks,
         events,
         ear,
         dur,
+        ..
     } = r;
     let harmonics_past: usize = voices
         .iter()
@@ -311,17 +361,13 @@ pub fn starter(r: &Readings, clip: &str, limits: Limits) -> Seeded {
         })
         .sum();
     let mut lines: Vec<(f64, String)> = Vec::new();
-    let s6 = |x: f64| format!("{}", (x * 1e6).round() / 1e6);
     let mut files = Vec::new();
     let mut tones: Vec<&str> = voices.iter().map(|v| v.tone).collect();
     tones.dedup();
     tones.sort_unstable();
     tones.dedup();
     for tone in &tones {
-        files.push((
-            format!("instruments/voice-{tone}"),
-            harmonic(limits.harmonics),
-        ));
+        files.push((voice(tone), harmonic(limits.harmonics)));
     }
     for v in voices {
         let mut levels = v.levels.clone();
@@ -335,50 +381,23 @@ pub fn starter(r: &Readings, clip: &str, limits: Limits) -> Seeded {
             format!("\"len\": \"{}s\"", s6(v.len)),
         ];
         for (k, level) in levels.iter().enumerate() {
-            let db = match *level > 0.0 && top > 0.0 {
-                true => 20.0 * libm::log10(level / top) + 20.0 * libm::log10((k + 1) as f64),
-                false => ABSENT_DB,
-            };
-            fields.push(format!(
-                "\"h{}\": {}",
-                k + 1,
-                g((db.clamp(-40.0, 20.0) * 100.0).round() / 100.0)
-            ));
+            let db = level_db(*level, top, 1.0, k + 1);
+            fields.push(format!("\"h{}\": {}", k + 1, g(db)));
         }
         lines.push((v.at, format!("{{{}}}", fields.join(", "))));
     }
     let mut lone_lines = 0;
     let mut lone_past = 0;
     for e in events {
-        let t = e.at_secs + LONE_AFTER_SECS;
-        let mut loud: Vec<(f64, f64)> = tracks
-            .iter()
-            .map(|tr| {
-                (
-                    curve_at(&tr.amplitude, t, Some(0.0)),
-                    curve_at(&tr.frequency, t, None),
-                )
-            })
-            .filter(|(a, _)| *a > 0.0)
-            .collect();
-        loud.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let loud = loud(r, e);
         lone_past += loud.len().saturating_sub(limits.lone);
-        for (_, hz) in loud.into_iter().take(limits.lone) {
+        for hz in loud.into_iter().take(limits.lone) {
             lone_lines += 1;
-            lines.push((
-                e.at_secs,
-                format!(
-                    "{{\"at\": \"{}s\", \"node\": \"@../instruments/partial\", \"f0\": \"{}hz\", \
-                     \"vel\": 0, \"len\": \"{}s\"}}",
-                    s6(e.at_secs),
-                    s6(hz),
-                    s6(e.next_secs - e.at_secs)
-                ),
-            ));
+            lines.push((e.at_secs, lone_line("@../instruments/partial", e, hz)));
         }
     }
     if lone_lines > 0 {
-        files.push(("instruments/partial".to_string(), lone()));
+        files.push((PARTIAL.to_string(), lone()));
     }
     let mut spans: Vec<(&str, f64, f64)> = events
         .iter()
