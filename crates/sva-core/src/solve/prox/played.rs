@@ -7,7 +7,7 @@ use sva_ast::{Arg, Expr, Literal};
 use sva_engine::Varied;
 use sva_formula::Tangents;
 
-use super::draws::{DRAWS, seed};
+use super::draws::{self, DRAWS, seed};
 use super::lines::{self, Filter, Line, Realisation};
 use super::model::constant;
 use super::state::{Slot, State};
@@ -418,6 +418,7 @@ pub fn lowered(
         },
         false => Vec::new(),
     };
+    let keys = draws::keys(s);
     let tasks: Vec<usize> = (0..s.model.lines.len()).collect();
     let lines = sva_engine::each(threads, tasks, |i| {
         let (path, onset) = &at[i];
@@ -449,7 +450,7 @@ pub fn lowered(
         };
         let noise_samples = match noise {
             Some(n) if super::write::line_reads(s, i, "seed") => (0..DRAWS)
-                .map(|k| rendered(renders, &n.source, Some(seed(i, k)), *onset, g))
+                .map(|k| rendered(renders, &n.source, Some(seed(keys[i], k)), *onset, g))
                 .collect::<Result<Vec<_>, _>>()?,
             Some(n) => vec![rendered(renders, &n.source, None, *onset, g)?],
             None => Vec::new(),

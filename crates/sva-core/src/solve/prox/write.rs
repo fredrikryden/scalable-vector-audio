@@ -140,6 +140,7 @@ fn field(name: &str, text: String) -> String {
 }
 
 fn score_text(s: &State, text: &str, draw: Option<usize>) -> Result<String, CliError> {
+    let keys = super::draws::keys(s);
     let mut out = String::new();
     for (i, row) in text.lines().enumerate() {
         let lines: Vec<usize> = (0..s.model.lines.len())
@@ -189,12 +190,15 @@ fn score_text(s: &State, text: &str, draw: Option<usize>) -> Result<String, CliE
             }
             match (name.as_str(), draw) {
                 ("ph", Some(k)) => {
-                    let ph = s.value(slot) + super::draws::phase(line, k);
+                    let ph = s.value(slot) + super::draws::phase(keys[line], k);
                     parts.push(field(&name, format!("{ph}")));
                     continue;
                 }
                 ("seed", Some(k)) => {
-                    parts.push(field(&name, format!("{}", super::draws::seed(line, k))));
+                    parts.push(field(
+                        &name,
+                        format!("{}", super::draws::seed(keys[line], k)),
+                    ));
                     continue;
                 }
                 _ => {}

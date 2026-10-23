@@ -7,7 +7,7 @@ use std::sync::Arc;
 use sva_formula::C64;
 use sva_samples::measure::internal::{Ear, Grid, Internal};
 
-use super::draws::{DRAWS, phase};
+use super::draws::{self, DRAWS, phase};
 use super::lines::{Adjoint, Bins};
 use super::played::{self, Lowered, ROOT_SEED, Renders};
 use super::state::{Slot, State};
@@ -124,11 +124,11 @@ fn power(g: &Grid, reads: &[Vec<Bins>], offsets: &[(f64, f64)], k: usize) -> Vec
 }
 
 /// Each line's offset in draw `k`: none where its node reads no `ph`.
-fn offsets(phased: &[bool], k: usize) -> Vec<(f64, f64)> {
+fn offsets(phased: &[bool], keys: &[u64], k: usize) -> Vec<(f64, f64)> {
     (0..phased.len())
         .map(|l| match phased[l] {
             true => {
-                let (sn, c) = libm::sincos(phase(l, k));
+                let (sn, c) = libm::sincos(phase(keys[l], k));
                 (c, sn)
             }
             false => (1.0, 0.0),
@@ -173,8 +173,9 @@ pub fn evaluate(
     let phased: Vec<bool> = (0..s.model.lines.len())
         .map(|l| write::line_reads(s, l, "ph"))
         .collect();
+    let keys = draws::keys(s);
     let each = sva_engine::each(threads, (0..draws).collect(), |k| {
-        let o = offsets(&phased, k);
+        let o = offsets(&phased, &keys, k);
         let f = fit.ear.forward(&power(&g, &reads, &o, k));
         (o, f)
     });

@@ -611,10 +611,15 @@ PRICED FIT:
   H(f). The phases between lines and the noises' realisations are no part of
   the model, so the loss is its expectation over them: the residual's bits
   averaged over {draws} draws, each line whose node reads `ph` offset by its own
-  phase, 2 pi times splitmix64 of (line << 32 | draw) over 2^64, and each whose
-  node reads `seed` given its own seed off the same key on a second stream,
-  the same draws every solve, the lines summed coherently as the render sums
-  them. Each partial is exact where its
+  phase, 2 pi times splitmix64 of the line's key and the draw over 2^64, and
+  each whose node reads `seed` given its own seed off the same key on a second
+  stream, the same draws every solve, the lines summed coherently as the
+  render sums them. A line's key is its onset, the fields it binds that no
+  `--vary` names and its node reads, and its rank in written order among the
+  lines that agree on both: writing a fit, dropping a silent line, moving one
+  to a split's node or reordering the score keeps every other line's draws,
+  save a line's whose rank a dropped or reordered line agreeing on both moves.
+  Each partial is exact where its
   amplitude and frequency hold over the 20 ms window; a form with no partial
   in it refuses by name.
   Each number written costs its `--vary`'s bits, log2((hi-lo)/step), or of
