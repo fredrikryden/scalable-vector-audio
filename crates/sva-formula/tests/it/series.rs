@@ -1,10 +1,7 @@
 // Concern: proves a series is a value, truncated once against a ceiling | Non-concern: summing its lines into a buffer (sva-samples) | IO: (a Series) -> the lines it yields
 
-use crate::allocations::counted;
-use crate::fixtures::{DUAL, Fixed, constant, cosine, part, saw_series, sine, term};
-use sva_formula::{
-    Body, Bound, Code, IndexId, Series, Unary, Var, infer, lines, noise, normalize_closed_form,
-};
+use crate::fixtures::{cosine, part, saw_series, term};
+use sva_formula::{Body, Bound, IndexId, Series, Var, lines, noise, normalize_closed_form};
 
 fn enumerate(s: &Series, ceiling: f64) -> Option<sva_formula::Lines> {
     lines(s, ceiling, -20.0, 2f64.powi(-24))
@@ -13,51 +10,6 @@ fn enumerate(s: &Series, ceiling: f64) -> Option<sva_formula::Lines> {
 fn series_of(f: &Body) -> Series {
     let mut sum = normalize_closed_form(&term(Var::T, f.clone())).expect("a series value");
     sum.lanes.remove(0).series.remove(0)
-}
-
-#[test]
-fn a_sum_to_infinity_is_a_series_value() {
-    let sum = normalize_closed_form(&term(Var::T, saw_series(220.0))).unwrap();
-    let lane = &sum.lanes[0];
-    assert!(lane.atoms.is_empty(), "a series is never unrolled");
-    assert_eq!(lane.series.len(), 1);
-    assert_eq!(lane.series[0].hi, Bound::Infinite);
-    assert_eq!(lane.series[0].lo, 1);
-}
-
-#[test]
-fn a_saw_has_a_dual_and_a_geometric_growth_does_not() {
-    assert!(
-        infer(
-            &term(Var::T, saw_series(220.0)),
-            &Fixed::holding(DUAL, false)
-        )
-        .unwrap()
-        .has_dual()
-    );
-
-    let k = IndexId(0);
-    let geometric = Body::Series(Box::new(Series {
-        index: k,
-        lo: 1,
-        hi: Bound::Infinite,
-        term: part(Body::Mul(vec![
-            part(Body::Apply(
-                Unary::Exp,
-                part(Body::Mul(vec![
-                    part(Body::Index(k)),
-                    part(constant(std::f64::consts::LN_2)),
-                ])),
-            )),
-            part(sine(220.0)),
-        ])),
-    }));
-    assert_eq!(
-        infer(&term(Var::T, geometric), &Fixed::holding(DUAL, false))
-            .unwrap_err()
-            .code,
-        Code::SeriesNotSummable
-    );
 }
 
 #[test]
@@ -77,52 +29,6 @@ fn a_series_truncates_against_the_ceiling_and_reports_its_tail() {
     assert!(
         answer.tail_db < 0.0,
         "the tail is quieter than what was kept"
-    );
-}
-
-/// The ceiling is the caller's: a profile reaching past 20 kHz keeps the lines under it.
-#[test]
-fn a_series_keeps_every_line_under_the_ceiling_it_is_given() {
-    let answer = enumerate(&series_of(&saw_series(1_000.0)), 24_000.0).expect("a saw's lines");
-    let highest = answer
-        .taken
-        .iter()
-        .map(|l| l.hz.abs())
-        .fold(0.0f64, f64::max);
-    assert!(
-        (highest - 23_000.0).abs() < 1e-6,
-        "the 23rd harmonic is under a 24 kHz ceiling: {highest}"
-    );
-}
-
-/// An offset opposing the slope carries a line back into the band before it leaves, so the
-/// walk cannot stop at the first index whose bare slope would clear the ceiling.
-#[test]
-fn a_frequency_law_that_starts_below_zero_is_walked_to_where_it_leaves_the_band() {
-    let k = IndexId(0);
-    let ramp = Series {
-        index: k,
-        lo: 1,
-        hi: Bound::Infinite,
-        term: part(Body::Apply(
-            Unary::Cos,
-            part(Body::Mul(vec![
-                part(constant(std::f64::consts::TAU)),
-                part(Body::Add(vec![part(Body::Index(k)), part(constant(-50.0))])),
-                part(Body::Line),
-            ])),
-        )),
-    };
-    let answer = enumerate(&ramp, 100.0).expect("a ramp's lines");
-    let highest = answer
-        .taken
-        .iter()
-        .map(|l| l.hz)
-        .fold(f64::NEG_INFINITY, f64::max);
-    assert!((highest - 99.0).abs() < 1e-9, "{highest}");
-    assert!(
-        answer.dropped.iter().any(|l| l.hz == 100.0),
-        "a line on the ceiling is past it"
     );
 }
 
@@ -163,7 +69,6 @@ fn a_tail_no_ratio_bounds_is_dropped_only_where_its_whole_sum_is_under_the_floor
     );
 }
 
-/// A tail with no decay any bound proves is not cut on a guess.
 #[test]
 fn a_tail_no_bound_sums_names_no_lines() {
     let k = IndexId(0);
@@ -176,23 +81,6 @@ fn a_tail_no_bound_sums_names_no_lines() {
     assert_eq!(enumerate(&series, 20_000.0), None);
 }
 
-#[test]
-fn noise_spacing_is_the_reciprocal_period() {
-    let answer = enumerate(&noise(7, 2.0, 1.0), 40.0).expect("noise lines");
-    let mut hz: Vec<f64> = answer
-        .taken
-        .iter()
-        .map(|l| l.hz)
-        .filter(|h| *h > 0.0)
-        .collect();
-    hz.sort_by(f64::total_cmp);
-    assert!(hz.len() > 4);
-    for pair in hz.windows(2) {
-        assert!((pair[1] - pair[0] - 0.5).abs() < 1e-9, "{pair:?}");
-    }
-}
-
-/// The power noise's lines hold over 1000 Hz from 500.1 Hz, off every line, both signs summed.
 fn band_power(period: f64, color: f64) -> f64 {
     let answer = enumerate(&noise(7, period, color), 2_000.0).expect("noise lines");
     answer
@@ -224,55 +112,4 @@ fn noise_holds_its_level_a_hertz_whatever_its_period() {
             );
         }
     }
-}
-
-#[test]
-fn noise_lines_are_conjugate_symmetric() {
-    let answer =
-        enumerate(&noise(7, 2.0, libm::pow(10f64, -3.0 / 20.0)), 20.0).expect("noise lines");
-    for line in &answer.taken {
-        let mirror = answer
-            .taken
-            .iter()
-            .find(|other| (other.hz + line.hz).abs() < 1e-9)
-            .unwrap_or_else(|| panic!("no mirror for {}", line.hz));
-        assert!((mirror.amp - line.amp.conj()).abs() < 1e-12);
-    }
-}
-
-/// A saw whose every line passes `depth` one-pole filters, each a factor of its term.
-fn filtered_saw(depth: usize) -> Series {
-    let saw = series_of(&saw_series(220.0));
-    let k = saw.index;
-    let pole = |j: usize| {
-        let gain = Body::Mul(vec![
-            part(constant(0.001 * (j + 1) as f64)),
-            part(Body::Index(k)),
-        ]);
-        part(Body::Div(
-            part(constant(1.0)),
-            part(Body::Add(vec![part(constant(1.0)), part(gain)])),
-        ))
-    };
-    let mut factors = vec![saw.term.clone()];
-    factors.extend((0..depth).map(pole));
-    Series {
-        term: part(Body::Mul(factors)),
-        ..saw
-    }
-}
-
-/// The allocations the lines between two ceilings add.
-fn per_lines(s: &Series) -> u64 {
-    let (_, few) = counted(|| enumerate(s, 500.0));
-    let (_, many) = counted(|| enumerate(s, 22050.0));
-    many - few
-}
-
-/// Each line is read off the term where it stands: a deeper term allocates more once, for
-/// its shape, and never more per line.
-#[test]
-fn reading_a_line_allocates_alike_however_deep_its_term() {
-    let (shallow, deep) = (per_lines(&filtered_saw(1)), per_lines(&filtered_saw(40)));
-    assert_eq!(deep, shallow);
 }

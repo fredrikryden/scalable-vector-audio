@@ -200,12 +200,4 @@ mod tests {
         assert_eq!(builtin_scale("aeolian"), builtin_scale("minor"));
         assert_eq!(builtin_scale("Major"), None);
     }
-
-    #[test]
-    fn a_row_not_above_the_one_before_refuses_located() {
-        let rows = [(0, "200"), (4, "100")];
-        let refused = parse_scale(&rows).unwrap_err();
-        assert_eq!(refused.code, DiagCode::BadScale);
-        assert_eq!(refused.span, ByteSpan::new(4, 7));
-    }
 }

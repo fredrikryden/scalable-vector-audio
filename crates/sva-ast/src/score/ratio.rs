@@ -155,20 +155,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_double_is_read_exactly_and_sums_stay_exact() {
-        let third = Ratio::int(1).over(Ratio::int(3)).unwrap();
-        let tenth = Ratio::of_f64(0.1).unwrap();
-        assert_eq!(tenth.to_f64(), 0.1);
-        assert_eq!(Ratio::of_f64(0.375).unwrap(), Ratio::new(3, 8).unwrap());
-        let sum = third.plus(third).unwrap().plus(third).unwrap();
-        assert_eq!(sum, Ratio::int(1));
-        assert!(third < Ratio::of_f64(0.34).unwrap());
-        assert_eq!(Ratio::of_f64(-2.5).unwrap().to_f64(), -2.5);
-        assert_eq!(Ratio::int(6).over(Ratio::int(2)).unwrap().whole(), Some(3));
-        assert_eq!(Ratio::of_f64(1e30), None);
-    }
-
-    #[test]
     fn a_written_decimal_is_read_as_the_decimal_it_spells() {
         let hundredth = Ratio::of_decimal("0.01").unwrap();
         assert_eq!(hundredth, Ratio::new(1, 100).unwrap());

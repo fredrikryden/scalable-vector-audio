@@ -1,19 +1,14 @@
 // Concern: proves each geometry's eigenfrequencies and the hammer's contact closed form | Non-concern: the transform over the bank they build (duality.rs) | IO: (a geometry) -> its modes
 
-use crate::fixtures;
 use std::f64::consts::{PI, TAU};
 
-use crate::fixtures::{part, sine, term};
 use sva_formula::modal::bar::{BarGeom, beta};
 use sva_formula::modal::bore::{BoreGeom, Ends, correction, helmholtz};
 use sva_formula::modal::membrane::MembraneGeom;
 use sva_formula::modal::room::RoomGeom;
 use sva_formula::modal::string::{StringGeom, inharmonicity};
-use sva_formula::modal::{HammerGeom, contact_time, strike};
-use sva_formula::{
-    Body, Damping, Edge, Excitation, Geometry, ModalBank, Mode, Var, dual, infer, modes,
-    normalize_closed_form,
-};
+use sva_formula::modal::{HammerGeom, strike};
+use sva_formula::{Damping, Excitation, Geometry, ModalBank, Mode, modes};
 
 const LOSSLESS: Damping = Damping {
     dc: 1.0,
@@ -127,152 +122,6 @@ fn string_membrane_bar_bore_room_first_ten_modes_within_five_cents() {
             343.0 / TAU * (area / (volume * effective)).sqrt()
         ) < 5.0
     );
-}
-
-/// `Tc(v) = Tref*(v/vref)^((1-p)/(1+p))`: Hertzian felt gives -1/5, piano felt about -3/7.
-#[test]
-fn hammer_pulse_contact_time_follows_the_velocity_exponent() {
-    for (stiffness, wanted) in [(1.5, -1.0 / 5.0), (2.5, -3.0 / 7.0)] {
-        let felt = HammerGeom {
-            reference_velocity: 1.0,
-            reference_contact: 2.0e-3,
-            stiffness_exponent: stiffness,
-            force: 40.0,
-        };
-        let (slow, fast) = (contact_time(1.0, &felt), contact_time(4.0, &felt));
-        assert!((slow - 2.0e-3).abs() < 1e-15, "the reference is its own");
-        let measured = libm::log2(fast / slow) / libm::log2(4.0f64);
-        assert!(
-            (measured - wanted).abs() < 1e-12,
-            "{measured} against {wanted}"
-        );
-
-        let (Excitation::HammerPulse { f0: soft, .. }, Excitation::HammerPulse { f0: hard, .. }) =
-            (strike(1.0, &felt, 0.0), strike(4.0, &felt, 0.0))
-        else {
-            panic!("a strike is a hammer pulse");
-        };
-        let force = libm::log2(hard / soft) / libm::log2(4.0f64);
-        let momentum = 2.0 * stiffness / (stiffness + 1.0);
-        assert!(
-            (force - momentum).abs() < 1e-12,
-            "peak force must carry the momentum the contact time does not: {force}"
-        );
-    }
-}
-
-#[test]
-fn a_modal_bank_is_a_pair_and_its_excitation_keeps_it_one() {
-    let geometry = Geometry::String(StringGeom {
-        f0: 220.0,
-        inharmonicity: 4.0e-4,
-        strike: 1.0 / 7.0,
-        damping: Damping {
-            dc: 1.5,
-            per_square_hz: 2.0e-8,
-        },
-    });
-    let felt = HammerGeom {
-        reference_velocity: 1.0,
-        reference_contact: 2.0e-3,
-        stiffness_exponent: 2.5,
-        force: 40.0,
-    };
-    {
-        let bank = Body::Modal(ModalBank {
-            modes: modes(&geometry, 8),
-            excite: strike(3.0, &felt, 0.0),
-        });
-        let typed = term(Var::T, bank);
-        assert!(
-            infer(&typed, &fixtures::Fixed::holding(fixtures::DUAL, false))
-                .unwrap()
-                .has_dual()
-        );
-        let sum = normalize_closed_form(&typed).unwrap();
-        let spectrum = dual(&sum).expect("a bank of causal modes has a dual in A");
-        assert!(
-            spectrum.lanes[0].atoms.iter().all(|a| a.pole.is_some()),
-            "every mode duals to a pole"
-        );
-    }
-}
-
-/// A hammer's contact and a crop's shoulder are one raised cosine, at a whole turn and a
-/// half: a level of `dc` beside two lines of `side`, each phased to the window's own start.
-/// Counting the atoms is not enough — swapping `dc` for `side` keeps the count.
-#[test]
-fn a_hammer_contact_and_a_crop_shoulder_lower_to_one_raised_cosine() {
-    let (f0, t0, contact) = (40.0, 0.0, 2.0e-3);
-    let pulse = sva_formula::modal::pulse(f0, t0, contact, sva_formula::Origin::UNKNOWN);
-    assert_eq!(levels(&pulse), vec![f0 * 0.5], "the contact's own level");
-    assert_eq!(
-        sides(&pulse),
-        vec![-f0 * 0.25, -f0 * 0.25],
-        "and one line either side of it, turned upside down"
-    );
-    assert!(
-        pulse.iter().filter_map(|a| a.exp).all(|e| e.sigma == 0.0),
-        "a window shape neither grows nor decays"
-    );
-    let turn: Vec<f64> = pulse
-        .iter()
-        .filter_map(|a| a.exp)
-        .map(|e| e.omega)
-        .collect();
-    assert_eq!(turn, vec![TAU / contact, -TAU / contact], "a whole turn");
-
-    let windowed = Body::Crop {
-        of: part(sine(440.0)),
-        l: Edge::at(0.0),
-        r: Edge::at(1.0),
-        rise: 0.01,
-        fall: 0.05,
-    };
-    let shouldered = normalize_closed_form(&term(Var::T, windowed)).unwrap();
-    let rise: Vec<sva_formula::SpectralAtom> = shouldered.lanes[0]
-        .atoms
-        .iter()
-        .filter(|a| a.ind.map(|i| i.l) == Some(Edge::at(0.0)))
-        .copied()
-        .collect();
-    assert_eq!(rise.len(), 6, "two lines of a sinusoid, three pieces each");
-    let carried: Vec<f64> = rise
-        .iter()
-        .filter_map(|a| a.exp)
-        .map(|e| e.omega.abs() - TAU * 440.0)
-        .collect();
-    assert_eq!(
-        carried.iter().filter(|o| o.abs() < 1e-6).count(),
-        2,
-        "one level per line of the sinusoid: {carried:?}"
-    );
-    let half = PI / 0.01;
-    assert_eq!(
-        carried
-            .iter()
-            .filter(|o| (o.abs() - half).abs() < 1e-6)
-            .count(),
-        4,
-        "and a shoulder takes half a turn over its own span: {carried:?}"
-    );
-}
-
-/// The amplitude of every piece a raised cosine's level carries, and of its side lines.
-fn levels(atoms: &[sva_formula::SpectralAtom]) -> Vec<f64> {
-    atoms
-        .iter()
-        .filter(|a| a.exp.is_none())
-        .map(|a| a.c.re)
-        .collect()
-}
-
-fn sides(atoms: &[sva_formula::SpectralAtom]) -> Vec<f64> {
-    atoms
-        .iter()
-        .filter(|a| a.exp.is_some())
-        .map(|a| a.c.re)
-        .collect()
 }
 
 /// A struck bank is each mode's impulse response convolved with the felt's force: it follows

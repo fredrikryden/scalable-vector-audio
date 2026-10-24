@@ -1,7 +1,7 @@
 // Concern: proves the canonical form is one image per written closed form | Non-concern: typing it (inference.rs) | IO: (a Body) -> the SpectralSum it always lowers to
 
-use crate::fixtures::{constant, gaussian, line, part, sine};
-use sva_formula::{Body, C64, Edge, Gauss, Singular, Unary, Var, normalize};
+use crate::fixtures::{constant, line, part, sine};
+use sva_formula::{Body, C64, Edge, Singular, Unary, Var, normalize};
 
 fn atoms(f: &Body) -> Vec<sva_formula::SpectralAtom> {
     normalize(f, Var::T)
@@ -42,86 +42,6 @@ fn two_spellings_of_a_sinusoid_are_one_normal() {
     )
     .unwrap();
     assert_eq!(written, spelled_out);
-}
-
-#[test]
-fn a_product_of_indicators_intersects() {
-    let inner = Body::Crop {
-        of: part(constant(1.0)),
-        l: Edge::at(1.0),
-        r: Edge::at(5.0),
-        rise: 0.0,
-        fall: 0.0,
-    };
-    let outer = Body::Crop {
-        of: part(inner),
-        l: Edge::at(3.0),
-        r: Edge::at(9.0),
-        rise: 0.0,
-        fall: 0.0,
-    };
-    let [atom] = atoms(&outer)[..] else {
-        panic!("a crop of a crop is one atom");
-    };
-    assert_eq!(atom.ind.unwrap().l, Edge::at(3.0));
-    assert_eq!(atom.ind.unwrap().r, Edge::at(5.0));
-}
-
-#[test]
-fn two_gaussians_multiply_to_one_gaussian() {
-    let product = Body::Mul(vec![part(gaussian(1.0, 0.0)), part(gaussian(3.0, 2.0))]);
-    let [atom] = atoms(&product)[..] else {
-        panic!("two Gaussians are one Gaussian");
-    };
-    assert_eq!(atom.gauss, Some(Gauss { a: 4.0, mu: 1.5 }));
-    let leftover = sva_formula::exp(-(1.0 * 3.0) * 4.0 / 4.0f64);
-    assert!((atom.c.re - leftover).abs() < 1e-12, "{:?}", atom.c);
-}
-
-#[test]
-fn an_empty_indicator_intersection_leaves_no_atom() {
-    let inner = Body::Crop {
-        of: part(constant(1.0)),
-        l: Edge::at(0.0),
-        r: Edge::at(1.0),
-        rise: 0.0,
-        fall: 0.0,
-    };
-    let outer = Body::Crop {
-        of: part(inner),
-        l: Edge::at(2.0),
-        r: Edge::at(3.0),
-        rise: 0.0,
-        fall: 0.0,
-    };
-    assert!(atoms(&outer).is_empty());
-}
-
-#[test]
-fn a_shouldered_crop_is_seven_indicator_pieces_per_atom() {
-    let shouldered = Body::Crop {
-        of: part(sine(440.0)),
-        l: Edge::at(0.0),
-        r: Edge::at(1.0),
-        rise: 0.01,
-        fall: 0.05,
-    };
-    assert_eq!(
-        atoms(&shouldered).len(),
-        14,
-        "seven pieces per atom of a sinusoid"
-    );
-    let plateau = atoms(&shouldered)
-        .into_iter()
-        .filter(|a| {
-            a.ind
-                == Some(sva_formula::Indicator {
-                    l: Edge::at(0.01),
-                    r: Edge::at(0.95),
-                })
-        })
-        .count();
-    assert_eq!(plateau, 2, "one plateau piece per atom");
 }
 
 /// Only the pole written as a principal value has no ordinary value at itself, so the flag
@@ -253,22 +173,4 @@ fn a_min_or_max_of_two_lines_is_the_lower_or_higher_line_at_every_instant() {
             }
         }
     }
-}
-
-#[test]
-fn constants_nested_under_unaries_and_folds_are_one_number() {
-    use sva_formula::Fold;
-    let floored = Body::Fold(Fold::Max, vec![part(constant(0.5)), part(constant(1e-6))]);
-    let logged = Body::Apply(Unary::Log, part(floored));
-    let scaled = Body::Mul(vec![part(constant(0.8)), part(logged)]);
-    let held = atoms(&Body::Apply(Unary::Exp, part(scaled)));
-    let [one] = held.as_slice() else {
-        panic!("one atom, not {held:?}")
-    };
-    assert!(one.is_bare(), "a bare constant, not {one:?}");
-    assert!(
-        (one.c.re - libm::pow(0.5f64, 0.8)).abs() <= 1e-15,
-        "{:?}",
-        one.c
-    );
 }

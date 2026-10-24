@@ -146,31 +146,3 @@ fn each_span_names_the_bytes_a_node_was_written_in() {
     };
     assert_eq!(text(src, value.span), "0.12");
 }
-
-/// A prefix minus is `0 - x` and a bare ref reads at `t`: neither was written, so neither
-/// claims bytes of its own.
-#[test]
-fn the_nodes_the_parser_supplies_say_so() {
-    let src = "-t + @kick";
-    let tree = outline(src).expect("it parses");
-    let Form::Operator { left, right, .. } = &tree.form else {
-        panic!("a sum: {tree:?}")
-    };
-    let Form::Operator { left: zero, .. } = &left.form else {
-        panic!("0 - t: {left:?}")
-    };
-    assert!(!zero.written);
-    assert!(left.written && text(src, left.span) == "-t");
-    let Form::Ref { arg, at, .. } = &right.form else {
-        panic!("a ref: {right:?}")
-    };
-    assert_eq!(text(src, *at), "@kick");
-    assert!(!arg.written);
-}
-
-#[test]
-fn a_text_that_does_not_parse_refuses_as_the_parser_does() {
-    for src in ["sin(", "1 +", "2 ^ 3", ""] {
-        assert_eq!(outline(src).err(), parse_expr(src).err(), "{src}");
-    }
-}

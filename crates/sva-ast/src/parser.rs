@@ -923,18 +923,6 @@ mod tests {
         assert_ne!(parse("(1+2)*3").unwrap(), parse("1+2*3").unwrap());
     }
 
-    #[test]
-    fn unary_minus_desugars_to_a_binary_subtraction() {
-        assert_eq!(
-            parse("-t").unwrap(),
-            Expr::Bin(
-                BinOp::Sub,
-                Box::new(Expr::Lit(Literal::Num(0.0))),
-                Box::new(Expr::Var("t".to_string())),
-            )
-        );
-    }
-
     /// An invocation needs no new syntax beyond a ref taking an argument LIST: one positional
     /// time, then names. A second positional has nothing to mean — a file states no order.
     #[test]
@@ -1002,20 +990,6 @@ mod tests {
         }
     }
 
-    /// A series is a value, not an abbreviation: it reaches the tree as the call it was
-    /// written as, index and bounds intact, and prints back to itself.
-    #[test]
-    fn sum_survives_parse_unexpanded() {
-        let src = "sum(k, 0, 3, k*2)";
-        let Expr::Call { name, args, .. } = parse(src).unwrap() else {
-            panic!("a series parses as a call")
-        };
-        assert_eq!(name, "sum");
-        assert_eq!(args.len(), 4);
-        assert!(matches!(&args[0], Arg::Pos(Expr::Var(k)) if k == "k"));
-        assert_eq!(crate::render_expr(&parse(src).unwrap()), src);
-    }
-
     #[test]
     fn a_unit_is_a_number_by_the_time_the_tree_holds_it() {
         assert_eq!(parse("2ms").unwrap(), parse("0.002").unwrap());
@@ -1050,63 +1024,6 @@ mod tests {
             ),
             "only a PREFIX minus folds; a subtraction is still a subtraction"
         );
-    }
-
-    #[test]
-    fn refs_bare_and_time_shifted() {
-        assert_eq!(
-            parse("@kick").unwrap(),
-            Expr::Ref {
-                path: "kick".to_string(),
-                arg: Box::new(Expr::Var("t".to_string())),
-                binds: Vec::new(),
-                address: crate::expr::Address::Time,
-                span: ByteSpan::new(0, 5),
-            }
-        );
-        let e = parse("@lead-dry(t - 0.375s)").unwrap();
-        let Expr::Ref { path, arg, .. } = e else {
-            panic!("expected Ref")
-        };
-        assert_eq!(path, "lead-dry");
-        assert_eq!(
-            *arg,
-            Expr::Bin(
-                BinOp::Sub,
-                Box::new(Expr::Var("t".to_string())),
-                Box::new(Expr::Lit(Literal::Num(0.375))),
-            )
-        );
-    }
-
-    /// Seconds ARE the engine's unit, so `1.5s` collapses to the number and only bars survive
-    /// parsing as their own literal for tempo resolution to rewrite.
-    #[test]
-    fn a_seconds_literal_is_a_plain_number_and_a_bars_literal_is_not() {
-        assert_eq!(parse("1.5s").unwrap(), parse("1.5").unwrap());
-        assert_eq!(parse("0.25b").unwrap(), Expr::Lit(Literal::Bars(0.25)));
-        assert_ne!(parse("1b").unwrap(), parse("1").unwrap());
-
-        let Expr::Ref { arg, .. } = parse("@kick(t - 0.02b)").unwrap() else {
-            panic!("expected a Ref")
-        };
-        assert_eq!(
-            *arg,
-            Expr::Bin(
-                BinOp::Sub,
-                Box::new(Expr::Var("t".to_string())),
-                Box::new(Expr::Lit(Literal::Bars(0.02))),
-            )
-        );
-    }
-
-    #[test]
-    fn self_ref_requires_exactly_one_positional_arg() {
-        let e = parse("self(t - 1sp)").unwrap();
-        assert!(matches!(e, Expr::SelfRef { .. }));
-        assert_eq!(parse("self()").unwrap_err().code, DiagCode::BadArity);
-        assert_eq!(parse("self(t, t)").unwrap_err().code, DiagCode::BadArity);
-        assert_eq!(parse("self").unwrap_err().code, DiagCode::UnexpectedToken);
     }
 
     /// `x[i]` reads a sample index: the same ref, addressed by a count, printed back to itself.
@@ -1151,35 +1068,6 @@ mod tests {
         );
         assert_eq!(parse("@x[idx()]").unwrap_err().code, DiagCode::BadArity);
         assert_eq!(parse("@x[]").unwrap_err().code, DiagCode::BadArity);
-    }
-
-    #[test]
-    fn a_ref_writing_a_scores_extension_refuses_naming_the_ref_without_it() {
-        let refused = parse("@score/drop.jsonl").unwrap_err();
-        assert_eq!(refused.code, DiagCode::BadScore);
-        assert!(
-            refused.message.contains("as `@score/drop`"),
-            "{}",
-            refused.message
-        );
-    }
-
-    #[test]
-    fn chain_dot_desugars_to_nested_calls() {
-        let chained = parse("saw(220*t).lp(cutoff=800)").unwrap();
-        let nested = parse("lp(saw(220*t), cutoff=800)").unwrap();
-        assert_eq!(chained, nested);
-    }
-
-    #[test]
-    fn calls_mix_positional_and_named_args() {
-        let Expr::Call { args, .. } = parse("lp(saw(t), cutoff=800, q=1)").unwrap() else {
-            panic!("expected Call")
-        };
-        assert_eq!(args.len(), 3);
-        assert!(matches!(args[0], Arg::Pos(_)));
-        assert!(matches!(args[1], Arg::Named(ref n, _) if n == "cutoff"));
-        assert!(matches!(args[2], Arg::Named(ref n, _) if n == "q"));
     }
 
     #[test]

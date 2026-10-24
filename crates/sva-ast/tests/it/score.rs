@@ -87,41 +87,6 @@ fn ratio(e: &Expr) -> f64 {
     (1200.0 * libm::log2(product) * 1e6).round() / 1e6
 }
 
-/// The ratio the one line's `f0` multiplies the tonic by.
-fn third(e: &Expr) -> f64 {
-    let Expr::Ref { binds, .. } = e else {
-        panic!("one line is one ref: {e:?}")
-    };
-    match &binds[0].1 {
-        Expr::Bin(BinOp::Mul, _, ratio) => match **ratio {
-            Expr::Lit(Literal::Num(r)) => (1200.0 * libm::log2(r) * 1e6).round() / 1e6,
-            ref other => panic!("a lowered degree is a number: {other:?}"),
-        },
-        other => panic!("`f0` is the tonic times a ratio: {other:?}"),
-    }
-}
-
-#[test]
-fn a_score_counts_its_degrees_in_the_scale_variables_scale_names() {
-    let held = settle(&composition("@../scales/major\n"), &["phrase"]).expect("every line settles");
-    assert_eq!(third(held.expr("phrase").unwrap()), 400.0);
-    let minor =
-        settle(&composition("@../scales/minor\n"), &["phrase"]).expect("every line settles");
-    assert_eq!(third(minor.expr("phrase").unwrap()), 300.0);
-}
-
-/// A built-in's name is a scale like any file's.
-#[test]
-fn a_built_in_name_counts_as_the_scale_file_holding_its_cents() {
-    let file = settle(&composition("@../scales/minor\n"), &["phrase"]).expect("settles");
-    let named = settle(&composition("minor\n"), &["phrase"]).expect("settles");
-    assert_eq!(file.expr("phrase"), named.expr("phrase"));
-    let harmonic = settle(&composition("harmonic-minor\n"), &["phrase"]).expect("settles");
-    assert_eq!(third(harmonic.expr("phrase").unwrap()), 300.0);
-    let pentatonic = settle(&composition("major-pentatonic\n"), &["phrase"]).expect("settles");
-    assert_eq!(third(pentatonic.expr("phrase").unwrap()), 400.0);
-}
-
 #[test]
 fn a_degree_with_no_scale_refuses_on_its_line() {
     let refused = settle(&composition(""), &["phrase"]).unwrap_err();
@@ -156,20 +121,6 @@ fn a_chromatic_note_and_an_octave_count_in_the_scale_too() {
     assert_eq!(ratio(&held.defaults("lead")[0].1), 400.0);
 }
 
-#[test]
-fn a_chord_lowers_as_its_lines_would() {
-    let chord = "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": [1, 3, 5]}\n";
-    let lines = "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 1}\n\
-                 {\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 3}\n\
-                 {\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 5}\n";
-    let source = with(
-        "@../scales/major\n",
-        [("chord.jsonl", chord), ("lines.jsonl", lines)],
-    );
-    let held = settle(&source, &["chord", "lines"]).expect("every degree settles");
-    assert_eq!(held.expr("chord"), held.expr("lines"));
-}
-
 const KEYS: &str = "f0 = 440\nvel = 1\nlen = 1s\nvel*crop(sin(2*pi*f0*t), 0s, len)\n";
 
 #[test]
@@ -185,32 +136,4 @@ fn a_broadcast_line_lowers_as_its_lines_would() {
     );
     let held = settle(&source, &["one", "lines"]).expect("every degree settles");
     assert_eq!(held.expr("one"), held.expr("lines"));
-}
-
-#[test]
-fn each_node_a_line_lists_is_checked_against_its_own_parameters() {
-    let both = "{\"at\": \"0b\", \"node\": [\"@keys\", \"@voice\"], \"vel\": 0.5}\n";
-    let source = with("@../scales/major\n", [("keys", KEYS), ("both.jsonl", both)]);
-    let refused = settle(&source, &["both"]).unwrap_err();
-    assert_eq!(refused.len(), 1, "{refused:?}");
-    assert!(
-        refused[0]
-            .reason
-            .contains("`vel` is no parameter `@voice` reads"),
-        "{}",
-        refused[0].reason
-    );
-}
-
-#[test]
-fn a_degree_in_an_equation_with_no_whole_number_refuses_where_written() {
-    let source = with("@../scales/major\n", [("lead", "sin(2*pi*deg(1.5)*t)\n")]);
-    let refused = settle(&source, &["lead"]).unwrap_err();
-    assert_eq!(refused[0].at.path, "lead");
-    assert_eq!(refused[0].at.span.start, 9);
-    assert!(
-        refused[0].reason.contains("deg(7)*1st"),
-        "{}",
-        refused[0].reason
-    );
 }

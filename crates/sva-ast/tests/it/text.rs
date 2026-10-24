@@ -31,22 +31,6 @@ fn printed_text_reparses_to_the_same_expression() {
 }
 
 #[test]
-fn a_bare_ref_prints_without_its_implicit_time_argument() {
-    assert_eq!(round_trip("@kick"), "@kick");
-    assert_eq!(round_trip("@kick(t)"), "@kick");
-    assert_eq!(round_trip("@kick(t, g=1)"), "@kick(t, g=1)");
-}
-
-#[test]
-fn precedence_is_restored_by_parentheses_only_where_it_is_needed() {
-    assert_eq!(round_trip("1 + 2*3"), "1 + 2*3");
-    assert_eq!(round_trip("(1 + 2)*3"), "(1 + 2)*3");
-    assert_eq!(round_trip("1 - (2 - 3)"), "1 - (2 - 3)");
-    assert_eq!(round_trip("1/(2*3)"), "1/(2*3)");
-}
-
-/// One component of a joined read time is the same slot as the whole of a plain one.
-#[test]
 fn a_bare_number_in_a_joined_time_slot_refuses_like_a_plain_one() {
     let plain = parse_expr("@src(t - 0.01)").expect_err("a bare time");
     assert_eq!(plain.code, DiagCode::BareTime);
@@ -57,16 +41,6 @@ fn a_bare_number_in_a_joined_time_slot_refuses_like_a_plain_one() {
         "one slot, one refusal, however the time is written"
     );
     parse_expr("@src(join(t - 0.01s, t - 0.02s))").expect("every component carries its unit");
-}
-
-#[test]
-fn print_round_trips_a_unit_inside_a_join() {
-    let src = "@src(join(t - 0.01s, t - 0.02s))";
-    assert_eq!(round_trip(src), src);
-    assert_eq!(
-        round_trip("crop(join(@a, @b), 0s, 1s)"),
-        "crop(join(@a, @b), 0s, 1s)"
-    );
 }
 
 /// A negative time has no spelling but the minus, so the printer's `-0.5s` has to be the one

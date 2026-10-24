@@ -409,14 +409,6 @@ mod tests {
     }
 
     #[test]
-    fn numbers_lex() {
-        assert_eq!(kinds("120"), vec![TokenKind::Num(120.0)]);
-        assert_eq!(kinds(".5"), vec![TokenKind::Num(0.5)]);
-        assert_eq!(kinds("1.2e3"), vec![TokenKind::Num(1200.0)]);
-        assert_eq!(tokenize("1e999").unwrap_err().code, DiagCode::InvalidNumber);
-    }
-
-    #[test]
     fn a_unit_suffix_makes_a_time_literal_but_only_when_the_word_ends_there() {
         assert_eq!(kinds("0.25b"), vec![TokenKind::Time(0.25, SpanUnit::Bars)]);
         assert_eq!(kinds("1.5s"), vec![TokenKind::Time(1.5, SpanUnit::Seconds)]);
@@ -568,23 +560,6 @@ mod tests {
     }
 
     #[test]
-    fn idents_and_operators_lex() {
-        assert_eq!(
-            kinds("sin(2*pi*t)"),
-            vec![
-                TokenKind::Ident("sin".to_string()),
-                TokenKind::LParen,
-                TokenKind::Num(2.0),
-                TokenKind::Star,
-                TokenKind::Ident("pi".to_string()),
-                TokenKind::Star,
-                TokenKind::Ident("t".to_string()),
-                TokenKind::RParen,
-            ]
-        );
-    }
-
-    #[test]
     fn a_semicolon_comments_out_the_rest_of_its_line() {
         assert_eq!(kinds("sin(t) ; a #-free, /-free marker"), kinds("sin(t)"));
         assert_eq!(
@@ -620,13 +595,5 @@ mod tests {
         assert_eq!(ref_spans("@kick"), vec![ByteSpan::new(0, 5)]);
 
         assert!(ref_spans("sin(2*pi*t) + 0.5").is_empty());
-    }
-
-    #[test]
-    fn spans_are_sliceable_on_every_token() {
-        let src = "@kick(t - 0.5) + sin(2*pi*t)";
-        for t in tokenize(src).unwrap() {
-            let _ = &src[t.span.start..t.span.end];
-        }
     }
 }

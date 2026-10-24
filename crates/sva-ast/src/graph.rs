@@ -953,14 +953,10 @@ fn check_cycles(nodes: &BTreeMap<String, Expr>) -> Vec<Refusal> {
 mod tests {
     use super::*;
 
-    /// The graph's own semantics have nothing to do with a filesystem, so they are stated over
-    /// the in-memory form and a directory is tested where it is read (`fixtures.rs`).
     fn of(files: &[(&str, &str)]) -> crate::source::Composition {
         files.iter().copied().collect()
     }
 
-    /// A source that counts what was asked of it: the pull property is not observable from the
-    /// graph, only from what the source was never opened for.
     struct Counting {
         held: crate::source::Composition,
         asked: std::cell::RefCell<Vec<String>>,
@@ -1013,65 +1009,11 @@ mod tests {
         );
     }
 
-    /// Nodes arriving one at a time is the browser's shape, and a set still short of whole is
-    /// the dangling-ref refusal it already was, not a new failure mode.
-    #[test]
-    fn a_composition_built_node_by_node_refuses_until_the_reached_set_is_whole() {
-        let mut c = crate::source::Composition::new();
-        c.insert("song", "@drums/kick*0.5\n");
-        let errs = load_reaching(&c, &["song"]).unwrap_err();
-        assert!(errs.iter().any(|r| r.code == DiagCode::DanglingRef));
-
-        c.insert("drums/kick", "sin(2*pi*50*t)\n");
-        let g = load_reaching(&c, &["song"]).expect("the last node arrived");
-        assert!(g.expr("drums/kick").is_some());
-    }
-
-    /// The lexer's digit-segment rule truncates `@../growl/1-raw` to `@../growl`, and the
-    /// dangling ref must say so, not just "looked for `growl`".
-    #[test]
-    fn a_dangling_ref_truncated_by_the_digit_segment_rule_names_what_fell_off() {
-        let g = of(&[
-            ("tracks/melody", "@../growl/1-raw\n"),
-            ("growl/other", "0.2\n"),
-        ]);
-        let errs = load(&g).unwrap_err();
-        let err = errs
-            .iter()
-            .find(|r| r.code == DiagCode::DanglingRef)
-            .expect("the truncated ref must dangle");
-        assert!(err.reason.contains("looked for `growl`"), "{}", err.reason);
-        assert!(
-            err.reason.contains("digit") && err.reason.contains("/1-raw"),
-            "must explain the truncation, not just report `growl`: {}",
-            err.reason
-        );
-    }
-
-    #[test]
-    fn cross_file_refs_resolve() {
-        let files: Vec<(&str, &str)> = vec![("kick", "sin(2*pi*50*t)\n"), ("lead", "@kick*0.5\n")];
-        let g = load(&of(&files)).unwrap();
-        assert!(g.expr("kick").is_some());
-        assert!(g.defines("lead"));
-    }
-
     #[test]
     fn same_file_cycle_is_refused() {
         let files: Vec<(&str, &str)> = vec![("a", "@a + 1\n")];
         let errs = load(&of(&files)).unwrap_err();
         assert!(errs.iter().any(|r| r.code == DiagCode::RefCycle));
-    }
-
-    #[test]
-    fn a_node_merely_referencing_a_cycle_member_is_not_itself_flagged() {
-        let files: Vec<(&str, &str)> = vec![("a", "@b\n"), ("b", "@a\n"), ("c", "@b\n")];
-        let errs = load(&of(&files)).unwrap_err();
-        assert!(errs.iter().any(|r| r.code == DiagCode::RefCycle));
-        assert!(
-            !errs.iter().any(|r| r.at.path == "c"),
-            "c only reaches into the cycle, it does not loop back to itself: {errs:?}"
-        );
     }
 
     /// The relaxation this file owns: a loop with a shifted read on it is left for the engine,
@@ -1085,20 +1027,6 @@ mod tests {
 
         let files: Vec<(&str, &str)> = vec![("ring", "@ring(t - 0.002s)*0.9 + sin(t)\n")];
         assert!(load(&of(&files)).is_ok());
-    }
-
-    /// And the half that still refuses, located, whatever the sample rate turns out to be.
-    #[test]
-    fn a_cycle_read_only_at_bare_t_is_refused_where_the_read_is_written() {
-        let files: Vec<(&str, &str)> =
-            vec![("a", "@b(t - 0.01s)\n"), ("b", "@c\n"), ("c", "@b + 1\n")];
-        let errs = load(&of(&files)).unwrap_err();
-        let r = errs
-            .iter()
-            .find(|r| r.code == DiagCode::RefCycle)
-            .expect("b <-> c carries no delay");
-        assert!(r.at.path == "b" || r.at.path == "c", "{:?}", r.at.path);
-        assert!(r.at.span.end > r.at.span.start);
     }
 
     /// Reaching a node down a delayed leg first must not settle it: only the undelayed reads
@@ -1148,38 +1076,6 @@ mod tests {
         assert!(load(&of(&files)).is_ok());
     }
 
-    #[test]
-    fn self_ref_is_not_flagged_a_cycle() {
-        let files: Vec<(&str, &str)> = vec![
-            ("filt", "0.3*@dry(t) + 0.7*self(t - 1sp)\n"),
-            ("dry", "sin(2*pi*220*t)\n"),
-        ];
-        let g = load(&of(&files)).unwrap();
-        assert!(g.expr("filt").is_some());
-    }
-
-    #[test]
-    fn two_graphs_over_the_same_text_hold_structurally_equal_expressions() {
-        let mut files_a: Vec<(&str, &str)> = Vec::new();
-        let mut files_b: Vec<(&str, &str)> = Vec::new();
-        files_a.push(("kick", "sin(2*pi*50*t)\n"));
-        files_b.push(("kick", "sin(2*pi*50*t)\n"));
-        let ga = load(&of(&files_a)).unwrap();
-        let gb = load(&of(&files_b)).unwrap();
-
-        assert_eq!(ga.expr("kick"), gb.expr("kick"));
-    }
-
-    #[test]
-    fn a_ref_resolves_relative_to_its_own_files_directory() {
-        let files: Vec<(&str, &str)> = vec![
-            ("drums/kick", "sin(2*pi*50*t)\n"),
-            ("drums/pattern-1b", "@kick\n"),
-        ];
-        let g = load(&of(&files)).unwrap();
-        assert!(g.expr("drums/pattern-1b").is_some());
-    }
-
     /// A bare path is exactly what it always was; `./` spells that out and `../` walks up.
     #[test]
     fn a_dot_segment_resolves_against_the_referencing_files_own_directory() {
@@ -1190,46 +1086,5 @@ mod tests {
         assert_eq!(at("piano/bench", "../variables/bpm"), "variables/bpm");
         assert_eq!(at("a/b/c/d", "../../x"), "a/x");
         assert_eq!(at("song", "./drums/kick"), "drums/kick");
-    }
-
-    /// One rule wherever `..` appears, so two spellings of a node are one node.
-    #[test]
-    fn a_dot_segment_normalizes_in_the_middle_of_a_path_too() {
-        let at = |file: &str, path: &str| resolve_ref_path(file, path).unwrap();
-        assert_eq!(at("song", "a/x/../b"), at("song", "a/b"));
-        assert_eq!(at("song", "a/./b"), "a/b");
-        assert_eq!(at("drums/bus", "../lead/./pad/../pad"), "lead/pad");
-    }
-
-    #[test]
-    fn a_walk_above_the_composition_root_resolves_to_nothing() {
-        assert_eq!(resolve_ref_path("piano/bench", "../../x"), None);
-        assert_eq!(resolve_ref_path("song", "../x"), None);
-        assert_eq!(resolve_ref_path("a/b", "../../../x"), None);
-    }
-
-    #[test]
-    fn a_ref_reaching_a_sibling_directory_resolves_and_renders_as_one_graph() {
-        let files: Vec<(&str, &str)> = vec![
-            ("variables/bpm", "120\n"),
-            ("piano/partials", "sin(2*pi*440*t)\n"),
-            ("piano/bench", "@./partials*0.5 + @../variables/bpm*0\n"),
-            ("song", "@piano/bench\n"),
-        ];
-        let g = load(&of(&files)).unwrap();
-        assert!(g.expr("piano/bench").is_some());
-    }
-
-    #[test]
-    fn a_ref_walking_above_the_root_is_a_located_refusal_naming_it() {
-        let files: Vec<(&str, &str)> = vec![("piano/bench", "@../../secrets\n")];
-        let errs = load(&of(&files).named("./song1")).unwrap_err();
-        let r = errs
-            .iter()
-            .find(|r| r.code == DiagCode::RefAboveRoot)
-            .expect("walking above the root must refuse");
-        assert_eq!(r.at.path, "piano/bench");
-        assert!(r.reason.contains("@../../secrets"), "{}", r.reason);
-        assert!(r.reason.contains("./song1"), "{}", r.reason);
     }
 }

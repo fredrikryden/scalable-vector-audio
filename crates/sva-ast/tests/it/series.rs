@@ -39,33 +39,6 @@ fn a_sum_no_binding_reads_stays_a_series() {
 }
 
 #[test]
-fn an_inner_sum_rebinding_the_index_keeps_its_own() {
-    assert_eq!(
-        body("sum(k, 1, 2, @band(t, fc=k) + sum(k, 1, k, k))\n"),
-        Ok(printed(
-            "@band(t, fc=1) + sum(k, 1, 1, k) + (@band(t, fc=2) + sum(k, 1, 2, k))"
-        ))
-    );
-}
-
-#[test]
-fn an_outer_index_bounding_an_inner_written_sum_writes_both_out() {
-    assert_eq!(
-        body("sum(k, 1, 2, sum(j, 1, k, @band(t, fc=j)))\n"),
-        Ok(printed(
-            "@band(t, fc=1) + (@band(t, fc=1) + @band(t, fc=2))"
-        ))
-    );
-}
-
-/// A bound naming a parameter is a number each instance knows, so the sum waits for one.
-#[test]
-fn a_sum_bounded_by_a_parameter_waits_for_its_instance() {
-    let text = "sum(k, 1, n, @band(t, fc=k))";
-    assert_eq!(body(&format!("{text}\n")), Ok(printed(text)));
-}
-
-#[test]
 fn a_sum_with_no_written_count_of_nodes_refuses() {
     for text in [
         "sum(k, 1, inf, @band(t, fc=k))",

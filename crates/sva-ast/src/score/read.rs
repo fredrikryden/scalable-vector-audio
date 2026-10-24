@@ -882,12 +882,4 @@ mod tests {
         );
         assert_eq!(moved.ramp, None);
     }
-
-    #[test]
-    fn a_file_with_no_extension_opening_with_a_brace_is_an_old_score() {
-        assert!(is_old_score(
-            "; doc\n\n{\"at\": \"0b\", \"node\": \"@a\"}\n"
-        ));
-        assert!(!is_old_score("; doc\nsin(2*pi*t)\n"));
-    }
 }

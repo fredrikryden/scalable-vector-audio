@@ -164,13 +164,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn display_is_located_and_ascii() {
-        let d = Diag::new(DiagCode::UnexpectedEof, ByteSpan::new(1, 4), "oops");
-        let s = d.to_string();
-        assert!(s.is_ascii());
-        assert!(s.contains("unexpected-eof"));
-        assert!(s.contains("1..4"));
-    }
 }

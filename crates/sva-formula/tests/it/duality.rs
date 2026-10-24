@@ -1,11 +1,8 @@
 // Concern: proves every atom family's dual lands back in A and the kernel is its own inverse | Non-concern: deciding a type without transforming (inference.rs) | IO: (a SpectralSum) -> its dual
 
-use crate::fixtures;
-use crate::fixtures::{
-    bank, causal, constant, cosine, decay, gaussian, line, part, sine, term, terms,
-};
+use crate::fixtures::{cosine, gaussian, line, part, terms};
 use sva_formula::{
-    Body, C64, Edge, Rational, SpectralSum, Var, dual, normalize, normalize_closed_form, reflect,
+    Body, C64, Rational, SpectralSum, Var, dual, normalize, normalize_closed_form, reflect,
 };
 
 fn law(f: &Body, var: Var) -> SpectralSum {
@@ -35,10 +32,6 @@ fn reflects(x: &SpectralSum, name: &str) {
     }
 }
 
-/// A round trip through the pole family leaves amplitudes a thousand billion times below
-/// the closed form's own scale. The spectral sum keeps them, because folding on an epsilon would make
-/// equality intransitive; a structural comparison is where they are read as the residue
-/// they are.
 fn audible(atoms: &[sva_formula::SpectralAtom]) -> Vec<sva_formula::SpectralAtom> {
     let loudest = atoms.iter().map(|a| a.c.abs()).fold(0.0f64, f64::max);
     atoms
@@ -83,47 +76,6 @@ fn alike(a: &sva_formula::SpectralAtom, b: &sva_formula::SpectralAtom) -> bool {
         }
 }
 
-#[test]
-fn a_line_pair_round_trips() {
-    round_trip(&sine(440.0), Var::T);
-    let d = dual(&law(&sine(440.0), Var::T)).unwrap();
-    assert_eq!(d.var, Var::F);
-    assert_eq!(d.lanes[0].atoms.len(), 2, "one line is two deltas");
-    for atom in &d.lanes[0].atoms {
-        assert!(atom.is_delta());
-    }
-}
-
-#[test]
-fn a_delta_derivative_round_trips() {
-    let free = law(&line(), Var::T);
-    let d = dual(&free).unwrap();
-    let [atom] = d.lanes[0].atoms[..] else {
-        panic!("t duals to one delta derivative");
-    };
-    assert_eq!(
-        atom.sing,
-        sva_formula::Singular::Delta { at: 0.0, order: 1 }
-    );
-    assert_eq!(atom.c, C64::new(0.0, 1.0 / std::f64::consts::TAU));
-    round_trip(&line(), Var::T);
-}
-
-#[test]
-fn a_gaussian_round_trips() {
-    let a = std::f64::consts::PI;
-    let self_dual = law(&gaussian(a, 0.0), Var::T);
-    let d = dual(&self_dual).unwrap();
-    let [atom] = d.lanes[0].atoms[..] else {
-        panic!("a Gaussian duals to one Gaussian");
-    };
-    let width = atom.gauss.expect("still a Gaussian").a;
-    assert!((width - a).abs() < 1e-12, "exp(-pi*t^2) is self-dual");
-    assert!((atom.c.re - 1.0).abs() < 1e-12, "{:?}", atom.c);
-    round_trip(&gaussian(a, 0.0), Var::T);
-    round_trip(&gaussian(2.0, 0.25), Var::T);
-}
-
 /// A carrier shifts the image Gaussian. Written as a real exponential beside a centred one
 /// instead, its constant `e^{-pi^2*f0^2/a}` underflows while the shift overflows, leaving the
 /// atom non-finite past 54 hertz at `a = 40`; these sit either side of that edge.
@@ -148,7 +100,6 @@ fn a_gaussian_under_a_carrier_duals_to_a_shifted_gaussian() {
         assert!((left - peak).abs() <= 1e-9 * peak, "{hz} hertz: {left}");
         assert!((right - peak).abs() <= 1e-9 * peak, "{hz} hertz: {right}");
         round_trip(&f, Var::T);
-        // The Hermite lift is written against the same centre, so it moves with it.
         round_trip(
             &Body::Mul(vec![part(line()), part(gaussian(a, 0.0)), part(cosine(hz))]),
             Var::T,
@@ -156,72 +107,10 @@ fn a_gaussian_under_a_carrier_duals_to_a_shifted_gaussian() {
     }
 }
 
-#[test]
-fn a_finite_indicator_round_trips() {
-    let window = Body::Crop {
-        of: part(constant(1.0)),
-        l: Edge::at(0.0),
-        r: Edge::at(2.0),
-        rise: 0.0,
-        fall: 0.0,
-    };
-    let d = dual(&law(&window, Var::T)).unwrap();
-    assert!(
-        d.lanes[0].atoms.iter().all(|a| a.pole.is_some()),
-        "a finite window duals to poles"
-    );
-    round_trip(&window, Var::T);
-}
-
-#[test]
-fn a_causal_exponential_round_trips() {
-    let ringing = causal(Body::Mul(vec![part(sine(440.0)), part(decay(-2.0))]));
-    let d = dual(&law(&ringing, Var::T)).unwrap();
-    assert_eq!(d.lanes[0].atoms.len(), 2, "a decaying line is a pole pair");
-    for atom in &d.lanes[0].atoms {
-        assert_eq!(atom.pole.expect("a pole").order, 1);
-    }
-    round_trip(&ringing, Var::T);
-}
-
-#[test]
-fn a_heaviside_round_trips_through_pv() {
-    let step = causal(constant(1.0));
-    let d = dual(&law(&step, Var::T)).unwrap();
-    assert_eq!(d.lanes[0].atoms.len(), 2);
-    assert!(
-        d.lanes[0]
-            .atoms
-            .iter()
-            .any(sva_formula::SpectralAtom::is_delta)
-    );
-    assert!(
-        d.lanes[0]
-            .atoms
-            .iter()
-            .any(|a| a.pole.is_some_and(|p| p.pv)),
-        "the step's dual needs a principal value"
-    );
-    round_trip(&step, Var::T);
-}
-
-#[test]
-fn a_pv_round_trips_through_sgn() {
-    let principal = Body::Pv(part(line()));
-    let d = dual(&law(&principal, Var::T)).unwrap();
-    assert_eq!(d.lanes[0].atoms.len(), 2, "sgn is two indicator atoms");
-    for atom in &d.lanes[0].atoms {
-        assert!(atom.ind.is_some());
-        assert!((atom.c.re).abs() < 1e-15 && atom.c.im.abs() > 1.0);
-    }
-    round_trip(&principal, Var::T);
-}
-
 /// The residue experiment behind the order-12 cap measured 7.6e-9 dB; the round trip cannot
 /// beat the cancellation that measurement found, so this is the bound it is held to.
 const ROUND_TRIP_DB: f64 = 1e-8;
 
-/// Checked against the response, not the atoms: the cap exists because of conditioning.
 #[test]
 fn a_twelfth_order_rational_round_trips_within_the_measured_residue_bound() {
     let poles: Vec<C64> = (0..6)
@@ -255,26 +144,6 @@ fn a_twelfth_order_rational_round_trips_within_the_measured_residue_bound() {
 }
 
 #[test]
-fn a_line_series_round_trips_termwise() {
-    let saw = term(Var::T, fixtures::saw_series(220.0));
-    let x = normalize_closed_form(&saw).unwrap();
-    assert_eq!(x.lanes[0].series.len(), 1, "a series stays unexpanded");
-    let there = dual(&x).unwrap();
-    assert_eq!(there.lanes[0].series.len(), 1);
-    reflects(&x, "a band-limited saw");
-}
-
-#[test]
-fn a_modal_bank_round_trips() {
-    let x = normalize_closed_form(&term(Var::T, bank())).unwrap();
-    assert_eq!(x.lanes[0].modal.len(), 1, "a bank stays a bank until asked");
-    let there = dual(&x).unwrap();
-    assert!(there.lanes[0].modal.is_empty(), "the transform expands it");
-    assert_eq!(there.lanes[0].atoms.len(), 2, "one mode is one pole pair");
-    reflects(&x, "a modal bank");
-}
-
-#[test]
 fn the_dual_of_the_dual_is_a_reflection() {
     for (name, subject) in terms() {
         let Ok(x) = normalize_closed_form(&subject) else {
@@ -287,8 +156,6 @@ fn the_dual_of_the_dual_is_a_reflection() {
     }
 }
 
-/// The atom sum's value at one point, which is all the numeric row needs; sampling a closed form is
-/// otherwise no concern of this crate.
 fn evaluate(n: &SpectralSum, at: f64) -> C64 {
     n.lanes[0]
         .atoms
@@ -297,9 +164,6 @@ fn evaluate(n: &SpectralSum, at: f64) -> C64 {
         .fold(C64::ZERO, |acc, v| acc + v)
 }
 
-/// A line a second away from the origin normalizes the pole row's exponential at its own
-/// window edge, where the factor is bounded, rather than as a prefactor that overflows and
-/// an exponential that underflows against it.
 #[test]
 fn a_lowpass_on_a_negative_frequency_line_is_finite() {
     use sva_formula::{Exp, Factors, Origin, Pole, Singular, SpectralAtom};

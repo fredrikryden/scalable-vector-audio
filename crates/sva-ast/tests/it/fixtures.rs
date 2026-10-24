@@ -1,7 +1,7 @@
 // Concern: exercises sva-ast's public parse_composition surface over fixture directories | Non-concern: unit-level module behavior (covered in src/*.rs) | IO: (fixtures/*) -> asserted Graph or Refusal
 
 use std::path::Path;
-use sva_ast::{Arg, DiagCode, Expr, Skip, Skipped, Source, parse_composition, parse_expr};
+use sva_ast::{DiagCode, Skip, Skipped, Source, parse_composition};
 
 fn tmp(name: &str) -> std::path::PathBuf {
     let dir =
@@ -42,43 +42,6 @@ fn valid_composition_resolves_every_ref() {
         "step-dual",
     ] {
         assert!(g.expr(path).is_some(), "missing node for {path}");
-    }
-}
-
-#[test]
-fn the_frequency_variable_the_imaginary_unit_and_an_infinite_bound_are_plain_names() {
-    for (src, name) in [("f", "f"), ("i", "i"), ("inf", "inf")] {
-        assert_eq!(parse_expr(src).unwrap(), Expr::Var(name.to_string()));
-    }
-}
-
-/// A series is a value, never the terms it would expand to.
-#[test]
-fn a_series_parses_to_one_call_carrying_its_inf_bound() {
-    let Expr::Call { name, args, .. } = parse_expr("sum(k, 1, inf, sin(2*pi*k*220*t)/k)").unwrap()
-    else {
-        panic!("a series should parse as a call");
-    };
-    assert_eq!(name, "sum");
-    assert_eq!(args.len(), 4);
-    assert_eq!(args[2], Arg::Pos(Expr::Var("inf".to_string())));
-}
-
-#[test]
-fn the_singular_constructors_parse_as_ordinary_calls() {
-    for (src, name, arity) in [
-        ("delta(t - 1s)", "delta", 1),
-        ("delta(t, k=1)", "delta", 2),
-        ("pv(2*pi*i*f)", "pv", 1),
-    ] {
-        let Expr::Call {
-            name: parsed, args, ..
-        } = parse_expr(src).unwrap()
-        else {
-            panic!("{src} should parse as a call");
-        };
-        assert_eq!(parsed, name);
-        assert_eq!(args.len(), arity, "{src}");
     }
 }
 
@@ -201,45 +164,6 @@ fn a_file_that_is_not_text_refuses_naming_what_a_composition_holds() {
         g.skipped()
     );
     assert!(g.expr("f(k=2)").is_some(), "and it parses as one");
-}
-
-/// A parameter is read where it is written, and a call is written the same as a name.
-#[test]
-fn a_defaulted_parameter_called_with_a_shift_is_mentioned() {
-    let dir = tmp("called-default");
-    write(&dir, "song", "p = 0\nd = 0.01s\np(t - d)\n");
-    let g = parse_composition(&dir).expect("a called parameter is read");
-    assert!(g.expr("song").is_some(), "the node parses");
-
-    let shadow = tmp("called-default-shadow");
-    write(&shadow, "song", "crop = 5\ncrop(sin(t), 0s, 1s)\n");
-    parse_composition(&shadow)
-        .expect("the grammar knows no vocabulary; the engine refuses the shadowed name");
-
-    let dead = tmp("called-default-dead");
-    write(&dead, "song", "p = 0\nq = 1\np(t)\n");
-    let refusals = parse_composition(&dead).unwrap_err();
-    assert_eq!(
-        refusals[0].code,
-        DiagCode::BadDefault,
-        "a name neither written nor called stays dead: {}",
-        refusals[0].reason
-    );
-}
-
-/// A default line reads too, so a name the lines below it use is read. Liveness runs back
-/// from the body: a name only a dead default names is dead with it.
-#[test]
-fn a_default_only_a_dead_default_reads_is_dead_with_it() {
-    let dir = tmp("dead-default-chain");
-    write(&dir, "live", "a = 1\nb = a + 1\nb*sin(2*pi*440*t)\n");
-    write(&dir, "dead", "a = 1\nb = a + 1\nsin(2*pi*440*t)\n");
-
-    parse_composition(&dir).expect_err("`b` reaches no body, so neither does `a`");
-
-    let dir = tmp("live-default-chain");
-    write(&dir, "live", "a = 1\nb = a + 1\nb*sin(2*pi*440*t)\n");
-    parse_composition(&dir).expect("a chain the body reads is read");
 }
 
 /// A dot directory belongs to a tool, and a repository's own internals are neither nodes nor

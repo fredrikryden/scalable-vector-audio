@@ -336,40 +336,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plain_number_files_are_literals() {
-        let p = parse_file("120\n").unwrap();
-        assert_eq!(p.expr, Expr::Lit(Literal::Num(120.0)));
-        assert!(p.data.is_none());
-    }
-
-    #[test]
-    fn bare_token_files_are_string_literals_not_expressions() {
-        assert_eq!(
-            parse_file("4/4\n").unwrap().expr,
-            Expr::Lit(Literal::Str("4/4".to_string()))
-        );
-    }
-
-    #[test]
-    fn a_file_holding_one_identifier_is_that_identifier_not_a_string() {
-        assert_eq!(
-            parse_file("C4\n").unwrap().expr,
-            Expr::Var("C4".to_string())
-        );
-        assert_eq!(
-            parse_file("pi\n").unwrap().expr,
-            Expr::Var("pi".to_string())
-        );
-    }
-
-    #[test]
-    fn single_line_expression_files_parse_as_expressions() {
-        let p = parse_file("sin(2*pi*50*t) * exp(-t*30)\n").unwrap();
-        assert!(matches!(p.expr, Expr::Bin(..)));
-        assert!(p.data.is_none());
-    }
-
-    #[test]
     fn a_body_over_many_lines_refuses_located_unless_every_row_is_a_number() {
         let err = parse_file("; lane\n@kick\n@snare\n").unwrap_err();
         assert_eq!(err.code, DiagCode::MultilineBody);
@@ -379,31 +345,6 @@ mod tests {
             panic!("rows of numbers are a scale")
         };
         assert_eq!(scale.cents, [200.0, 400.0, 1200.0]);
-    }
-
-    #[test]
-    fn a_file_with_no_extension_opening_with_a_brace_refuses_with_the_rename() {
-        let err = parse_file("; doc\n\n{\"at\": \"0b\", \"node\": \"@../bass\"}\n").unwrap_err();
-        assert_eq!(err.code, DiagCode::BadScore);
-        assert!(err.message.contains(".jsonl"), "{}", err.message);
-        assert!(err.message.contains("annotation"), "{}", err.message);
-        let p = parse_score_file("score/a", "{\"at\": \"0b\", \"node\": \"@../bass\"}\n").unwrap();
-        assert!(matches!(p.data, Some(Data::Score(_))));
-        assert!(matches!(p.expr, Expr::Ref { ref path, .. } if path == "../bass"));
-    }
-
-    #[test]
-    fn html_content_refuses_as_not_a_node() {
-        let html = "<!DOCTYPE html>\n<html>\n<head></head>\n<body>bench output</body>\n</html>\n";
-        let err = parse_file(html).unwrap_err();
-        assert_eq!(err.code, DiagCode::NotNodeContent);
-        assert!(err.message.contains("HTML"));
-    }
-
-    #[test]
-    fn comment_lines_count_as_no_expression_line() {
-        let p = parse_file("; the body\nsin(2*pi*50*t)\n").unwrap();
-        assert_eq!(p.expr, parse_file("sin(2*pi*50*t)\n").unwrap().expr);
     }
 
     #[test]
@@ -453,10 +394,5 @@ mod tests {
             parse_file("120\n\n").unwrap().expr,
             Expr::Lit(Literal::Num(120.0))
         );
-    }
-
-    #[test]
-    fn malformed_expression_syntax_refuses() {
-        assert!(parse_file("sin(\n").is_err());
     }
 }

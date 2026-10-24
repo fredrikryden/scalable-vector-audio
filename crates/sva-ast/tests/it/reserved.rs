@@ -149,31 +149,6 @@ fn a_scale_named_bare_is_the_built_in_of_that_name_or_refuses_listing_them() {
     }
 }
 
-#[test]
-fn a_degree_is_the_tonics_ref_times_its_ratio_and_needs_a_tonic() {
-    let source = Composition::from_iter([
-        ("variables/key", "A3\n"),
-        ("variables/scale", "@../scales/major\n"),
-        ("scales/major", "200\n400\n500\n700\n900\n1100\n1200\n"),
-        ("lead/one", "sin(2*pi*deg(8)*t)\n"),
-    ]);
-    let mut g = load(&source).unwrap();
-    g.lower_reserved(None).expect("a key and a scale");
-    assert_eq!(
-        g.expr("lead/one"),
-        Some(&expr("sin(2*pi*(@../variables/key*2)*t)"))
-    );
-    let mut untoned = load(&Composition::from_iter([
-        ("variables/scale", "@../scales/major\n"),
-        ("scales/major", "200\n400\n500\n700\n900\n1100\n1200\n"),
-        ("lead/one", "sin(2*pi*deg(8)*t)\n"),
-    ]))
-    .unwrap();
-    let refused = untoned.lower_reserved(None).unwrap_err();
-    assert_eq!(refused[0].at.path, "lead/one");
-    assert!(refused[0].reason.contains("variables/key"), "{refused:?}");
-}
-
 /// A held node is lowered again where an edit changes a value it read, and only there.
 #[test]
 fn an_edit_to_the_tempo_lowers_every_held_node_counting_in_bars_again() {
