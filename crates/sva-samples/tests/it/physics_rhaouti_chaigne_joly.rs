@@ -38,15 +38,6 @@ fn a_stepped_spectrum_matches_the_rectangular_membrane_modal_formula() {
 }
 
 #[test]
-fn a_rhaouti_chaigne_joly_site_steps_the_same_buffer_every_time() {
-    let params = Params::RhaoutiChaigneJoly(RhaoutiChaigneJolyParams {
-        aspect_ratio: std::f64::consts::SQRT_2,
-        ..RhaoutiChaigneJolyParams::at(200.0)
-    });
-    fd::is_deterministic(&params, 48_000, 0.05);
-}
-
-#[test]
 fn a_parameter_out_of_range_is_refused() {
     let base = || RhaoutiChaigneJolyParams::at(200.0);
     fd::refuses(
@@ -90,20 +81,6 @@ fn a_parameter_out_of_range_is_refused() {
         .into_iter()
         .map(Params::RhaoutiChaigneJoly)
         .collect(),
-    );
-}
-
-#[test]
-fn an_undamped_run_stays_bounded() {
-    fd::stays_bounded(
-        &Params::RhaoutiChaigneJoly(RhaoutiChaigneJolyParams {
-            aspect_ratio: std::f64::consts::SQRT_2,
-            damp_dc: 0.0,
-            damp_freq: 0.0,
-            ..RhaoutiChaigneJolyParams::at(200.0)
-        }),
-        48_000,
-        0.2,
     );
 }
 

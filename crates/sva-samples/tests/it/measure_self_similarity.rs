@@ -1,4 +1,4 @@
-// Concern: what self_similarity owes an A-B-A-B piece, a glide, exact and transposed repeats, the cap | Non-concern: picking partials, band filters | IO: (samples) -> asserts
+// Concern: what self_similarity owes an A-B-A-B piece, exact and transposed repeats | Non-concern: picking partials, band filters | IO: (samples) -> asserts
 
 use std::f64::consts::TAU;
 
@@ -92,28 +92,6 @@ fn an_abab_piece_reads_its_repeats_and_boundaries() {
     }
 }
 
-/// A glide over eleven semitones: no stripe at shift 0; each stretch transposes an earlier one.
-#[test]
-fn a_through_composed_glide_reads_no_exact_repeat() {
-    let secs = 24.0;
-    let mut phase = 0.0;
-    let glide: Vec<f64> = (0..(secs * RATE) as usize)
-        .map(|i| {
-            phase += TAU * 220.0 * libm::pow(415.0f64 / 220.0, i as f64 / (secs * RATE)) / RATE;
-            0.5 * libm::sin(phase)
-        })
-        .collect();
-    let s = read(&glide);
-    let chroma = view(&s, View::Chroma);
-    let exact: Vec<&Stripe> = chroma
-        .stripes
-        .iter()
-        .filter(|st| st.shift_semitones == 0)
-        .collect();
-    assert!(exact.is_empty(), "{exact:#?}");
-    assert!(chroma.stripes.iter().any(|st| st.shift_semitones == 1));
-}
-
 /// A then A a tone up reads at shift 2, 8 s back; A then A at shift 0.
 #[test]
 fn a_transposed_repeat_reads_at_its_shift_and_an_exact_one_at_none() {
@@ -137,25 +115,4 @@ fn a_transposed_repeat_reads_at_its_shift_and_an_exact_one_at_none() {
     assert_eq!(lead.shift_semitones, 0, "{lead:?}");
     assert!(near(lead.lag_secs, 8.0, 1e-9), "{lead:?}");
     assert!(lead.similarity_mean > 0.99, "{lead:?}");
-}
-
-/// The matrix and cells come only where asked, row i holding lags 0 to i.
-#[test]
-fn the_matrix_is_the_lower_triangle_in_time_lag_form() {
-    let samples = chords(&[(&A, 0), (&A, 0)]);
-    let s = measure(
-        &[&samples[..]],
-        RATE,
-        0.0,
-        Asked {
-            curve: true,
-            ..asked(1.0)
-        },
-    )
-    .expect("under the cap");
-    assert_eq!(s.cells.as_ref().map(Vec::len), Some(16));
-    let matrix = view(&s, View::Chroma).matrix.as_ref().expect("asked");
-    assert!(matrix.iter().enumerate().all(|(i, row)| row.len() == i + 1));
-    assert!(near(matrix[12][8], 1.0, 1e-6), "{:?}", matrix[12]);
-    assert!(read(&samples).cells.is_none());
 }

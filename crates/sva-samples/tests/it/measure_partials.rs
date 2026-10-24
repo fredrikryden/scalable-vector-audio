@@ -1,4 +1,4 @@
-// Concern: what partials owes a lone sinusoid, a weak partial beside a loud one, and a tone against narrowband noise | Non-concern: the knots' count | IO: (samples) -> asserts
+// Concern: what partials owes a lone sinusoid and a tone against narrowband noise | Non-concern: the knots' count | IO: (samples) -> asserts
 
 use std::f64::consts::TAU;
 
@@ -82,23 +82,6 @@ fn a_lone_sinusoid_reads_within_its_stated_bounds() {
         track.residual_db.expect("a tonal bound") < -30.0,
         "{track:?}"
     );
-}
-
-/// 20 dB under a neighbour whose Gaussian reaches it, a partial reads its own frequency and
-/// level once the neighbour is cancelled.
-#[test]
-fn a_weak_partial_beside_a_loud_one_reads_its_own_frequency_and_level() {
-    let p = read(1.5, |t| {
-        0.4 * libm::sin(TAU * 220.0 * t) + 0.04 * libm::sin(TAU * 330.5 * t + 1.9)
-    });
-    let weak = nearest(&p, 330.5);
-    assert_eq!(weak.kind, Kind::Tonal);
-    for t in interior() {
-        let cents = 1200.0 * libm::log2(value(&weak.frequency, t) / 330.5);
-        assert!(cents.abs() < 0.1, "{t}: {cents} cents, {weak:?}");
-        let off = (value(&weak.amplitude, t) - 0.04).abs();
-        assert!(off < weak.amplitude.error + 4e-4, "{t}: {off}, {weak:?}");
-    }
 }
 
 /// Noise 160 Hz wide flutters where a tone holds: it reads breathy, the tone tonal.

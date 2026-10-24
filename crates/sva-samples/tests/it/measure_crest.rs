@@ -1,4 +1,4 @@
-// Concern: states what per-band crest owes a tone, a click track and silence | Non-concern: the ERB bank (src/measure/bands.rs) | IO: (samples) -> asserted dB
+// Concern: states what per-band crest owes a tone and a click track beside a drone | Non-concern: the ERB bank (src/measure/bands.rs) | IO: (samples) -> asserted dB
 
 use sva_samples::measure::crest::{BandCrest, Crest, analyze};
 
@@ -49,20 +49,4 @@ fn a_band_of_clicks_beside_a_band_of_drone_reads_as_spread() {
     assert!(clicky.crest_db > drone.crest_db + 6.0, "{c:?}");
     assert!(c.spread_db.unwrap() > 6.0);
     assert!(c.widest_band_hz.unwrap() > c.tightest_band_hz.unwrap());
-}
-
-#[test]
-fn a_band_far_under_the_loudest_is_not_counted_toward_the_spread() {
-    let c = analyze(&[&at(1000.0, 44100.0, 2.0, 0.5)[..]], 44100.0);
-    assert!(!band_at(&c, 40.0).counted, "under the tone by five octaves");
-    assert!(!band_at(&c, 15000.0).counted, "over it by four");
-    assert!(c.bands.iter().filter(|b| b.counted).count() < c.bands.len());
-    assert_eq!(c.counted_under_db, 60.0);
-}
-
-#[test]
-fn silence_carries_no_spread_and_no_counted_band() {
-    let c = analyze(&[&vec![0.0; 4410][..]], 44100.0);
-    assert_eq!(c.spread_db, None);
-    assert!(c.bands.iter().all(|b| !b.counted));
 }

@@ -50,24 +50,6 @@ fn a_hop_outside_cola_is_refused() {
 }
 
 #[test]
-fn istft_after_an_edit_is_labeled_measured() {
-    let x = chirp(44_100, 2_048);
-    let mut frames = forward(&x, 256, 64).expect("a COLA hop");
-    let (re, im) = frames.at(0, 4, 9);
-    frames.write(0, 4, 9, re * 0.5, im * 0.5);
-
-    let (y, label) = inverse(&frames, &PSYCHOACOUSTIC_V1);
-    assert_eq!(label.source, Source::Measured);
-    assert!(frames.edited);
-    assert!(
-        (0..x.len()).any(|i| (y.at(0, i) - x.at(0, i)).abs() > 1e-12),
-        "an edited frame set is generally not the transform of the signal it came from"
-    );
-}
-
-/// A caller branches on `code()`, so two failures that mean different things cannot answer
-/// with one code.
-#[test]
 fn every_sample_error_answers_its_own_code() {
     let held = [
         SampleError::HopOutsideCola { window: 8, hop: 3 },

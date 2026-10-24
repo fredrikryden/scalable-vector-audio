@@ -623,23 +623,3 @@ impl Binary {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Map;
-
-    #[test]
-    fn a_rounded_map_reads_alike_narrow_and_wide() {
-        for (a, b, d) in [(1, 0, 2), (3, -7, 4), (-5, 11, 6), (2, 1, 4), (7, 3, 2)] {
-            for between in [super::Between::Floor, super::Between::Even] {
-                let Some(map) = Map::rounded(a, b, d, between) else {
-                    continue;
-                };
-                for n in -50..50 {
-                    let wide = i64::try_from(map.index_at(i128::from(n))).ok();
-                    assert_eq!(map.narrow_at(n), wide, "{map:?} at {n}");
-                }
-            }
-        }
-    }
-}

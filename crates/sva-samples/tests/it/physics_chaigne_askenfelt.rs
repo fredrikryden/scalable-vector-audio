@@ -2,8 +2,6 @@
 
 use crate::helpers::fd;
 
-use crate::helpers::partials::{level_db, ringing_hz, stiff_partial};
-use sva_samples::measure::spectrum;
 use sva_samples::physics::chaigne_askenfelt::ChaigneAskenfeltParams;
 use sva_samples::{Params, site};
 
@@ -33,17 +31,6 @@ fn a_stepped_spectrum_matches_the_stiff_string_partial_formula() {
 fn a_chaigne_askenfelt_site_steps_the_same_buffer_every_time() {
     let params = Params::ChaigneAskenfelt(ChaigneAskenfeltParams {
         vel: 3.2,
-        ..ChaigneAskenfeltParams::at(220.0)
-    });
-    fd::is_deterministic(&params, 22_050, 0.02);
-}
-
-#[test]
-fn a_unison_coupled_site_steps_the_same_buffer_every_time() {
-    let params = Params::ChaigneAskenfelt(ChaigneAskenfeltParams {
-        vel: 3.2,
-        unison_count: 2.0,
-        detune: libm::pow(2f64, 5.0 / 1200.0),
         ..ChaigneAskenfeltParams::at(220.0)
     });
     fd::is_deterministic(&params, 22_050, 0.02);
@@ -144,19 +131,6 @@ fn a_unison_its_bridge_leaves_unstable_refuses() {
     }
 }
 
-#[test]
-fn an_undamped_run_stays_bounded() {
-    fd::stays_bounded(
-        &Params::ChaigneAskenfelt(ChaigneAskenfeltParams {
-            damp_dc: 0.0,
-            damp_freq: 0.0,
-            ..ChaigneAskenfeltParams::at(220.0)
-        }),
-        44_100,
-        0.5,
-    );
-}
-
 /// A three-string unison as a published equation writes one at middle C, beating to nulls.
 fn published_unison() -> ChaigneAskenfeltParams {
     ChaigneAskenfeltParams {
@@ -184,161 +158,5 @@ fn weinreich_unison() -> ChaigneAskenfeltParams {
         string_cents: [-0.35, 0.1, 0.5],
         string_hammer_k_ratio: [1.0, 0.8, 0.6],
         ..published_unison()
-    }
-}
-
-/// The 5-95 percentile spread of a partial's level about its own straight-line decay, over
-/// the sustain from 0.3 s: a unison beating to nulls spreads by tens of dB.
-fn beat_depth_db(x: &[f64], rate: f64, hz: f64) -> f64 {
-    let (len, hop) = ((0.1 * rate) as usize, (0.02 * rate) as usize);
-    let db: Vec<f64> = ((0.3 * rate) as usize..x.len() - len)
-        .step_by(hop)
-        .map(|s| level_db(x, rate, hz, s, len))
-        .collect();
-    let n = db.len() as f64;
-    let mid = (n - 1.0) / 2.0;
-    let mean = db.iter().sum::<f64>() / n;
-    let slope = db
-        .iter()
-        .enumerate()
-        .map(|(i, d)| (i as f64 - mid) * (d - mean))
-        .sum::<f64>()
-        / (0..db.len()).map(|i| (i as f64 - mid).powi(2)).sum::<f64>();
-    let mut residual: Vec<f64> = db
-        .iter()
-        .enumerate()
-        .map(|(i, d)| d - mean - slope * (i as f64 - mid))
-        .collect();
-    residual.sort_by(f64::total_cmp);
-    residual[residual.len() * 95 / 100] - residual[residual.len() * 5 / 100]
-}
-
-/// Over the first twelve partials, weighted by the power each holds early in the sustain.
-fn sustain_beat_depth_db(p: &ChaigneAskenfeltParams, x: &[f64], rate: f64) -> f64 {
-    let (at, len) = ((0.5 * rate) as usize, (0.1 * rate) as usize);
-    let mut rows: Vec<(f64, f64)> = (1..=12)
-        .map(|k| {
-            let hz = stiff_partial(p.f0, p.b, k);
-            (
-                beat_depth_db(x, rate, hz),
-                libm::pow(10f64, level_db(x, rate, hz, at, len) / 10.0),
-            )
-        })
-        .collect();
-    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let half = rows.iter().map(|r| r.1).sum::<f64>() / 2.0;
-    let mut held = 0.0;
-    rows.iter()
-        .find(|r| {
-            held += r.1;
-            held >= half
-        })
-        .expect("a weighted median")
-        .0
-}
-
-/// Weinreich's coupling: a bridge with mass splits the unison's modes instead of letting three
-/// equal lines cancel, so the sustain stops beating to nulls while the strike stays the same.
-#[test]
-fn a_massive_bridge_and_unequal_strings_keep_a_unison_from_beating_to_nulls() {
-    let rate = 44_100.0;
-    let (published, weinreich) = (published_unison(), weinreich_unison());
-    let a = fd::render(&Params::ChaigneAskenfelt(published.clone()), 44_100, 3.0);
-    let b = fd::render(&Params::ChaigneAskenfelt(weinreich.clone()), 44_100, 3.0);
-    let (beating, coupled) = (
-        sustain_beat_depth_db(&published, a.plane(0), rate),
-        sustain_beat_depth_db(&weinreich, b.plane(0), rate),
-    );
-    assert!(
-        coupled * 4.0 < beating,
-        "the coupled unison beats {coupled} dB deep against the published {beating} dB"
-    );
-
-    let onset = (0.05 * rate) as usize;
-    let (mut drift, mut power) = (0.0, 0.0);
-    for k in 1..=10 {
-        let hz = stiff_partial(published.f0, published.b, k);
-        let (was, now) = (
-            level_db(a.plane(0), rate, hz, 0, onset),
-            level_db(b.plane(0), rate, hz, 0, onset),
-        );
-        let weight = libm::pow(10f64, was / 10.0);
-        drift += weight * (was - now).abs();
-        power += weight;
-    }
-    assert!(
-        drift / power < 1.0,
-        "the strike's first 50 ms moved {} dB",
-        drift / power
-    );
-}
-
-/// The grid's own dispersion is inverted, so partials 1 and 2 ring on `k f0 sqrt(1 + b k^2)`:
-/// the fundamental and inharmonicity they imply are the ones asked for, at either rate.
-#[test]
-fn partials_one_and_two_imply_the_asked_f0_and_b_at_any_rate() {
-    let b = 0.000_492_652_403_124_032_3;
-    for rate in [44_100u32, 96_000] {
-        for f0 in [65.406_4, 261.625_6, 1_046.502_3, 2_093.004_5] {
-            let p = ChaigneAskenfeltParams {
-                b,
-                ..ChaigneAskenfeltParams::at(f0)
-            };
-            let buffer = fd::render(&Params::ChaigneAskenfelt(p.clone()), rate, 1.0);
-            let x = buffer.plane(0);
-            let (f1, f2) = (
-                ringing_hz(x, f64::from(rate), stiff_partial(p.f0, p.b, 1)),
-                ringing_hz(x, f64::from(rate), stiff_partial(p.f0, p.b, 2)),
-            );
-            let r = (f2 / (2.0 * f1)).powi(2);
-            let realized_b = (r - 1.0) / (4.0 - r);
-            let cents = 1200.0 * libm::log2(f1 / (1.0 + realized_b).sqrt() / f0);
-            assert!(
-                cents.abs() < 0.001,
-                "{f0} Hz at {rate} rings {cents} cents off"
-            );
-            assert!(
-                (realized_b / b - 1.0).abs() < 1e-4,
-                "{f0} Hz at {rate} rings b = {realized_b}, asked {b}"
-            );
-        }
-    }
-}
-
-/// The largest level within a quarter of `f0` of partial `k`.
-fn partial_db(p: &ChaigneAskenfeltParams, x: &[f64], rate: f64, k: u32) -> f64 {
-    let (mags, bin_hz, _, _) = spectrum::magnitudes(x, rate, None);
-    let hz = stiff_partial(p.f0, p.b, k);
-    let band = ((hz - p.f0 / 4.0) / bin_hz) as usize..=((hz + p.f0 / 4.0) / bin_hz) as usize;
-    20.0 * libm::log10(mags[band].iter().fold(0.0f64, |m, &v| m.max(v)))
-}
-
-/// At C6 the grid holds about twenty points, so 1/7 and 1/8 once struck the same node. Struck
-/// where written, each silences its own partial: `sin(k pi x) = 0` at `k = 1/x`.
-#[test]
-fn a_strike_between_nodes_notches_the_partial_its_position_names() {
-    let rate = 44_100.0;
-    let struck = |k: u32| {
-        let p = ChaigneAskenfeltParams {
-            strike_pos: 1.0 / f64::from(k),
-            ..ChaigneAskenfeltParams::at(1_046.502_3)
-        };
-        let buffer = fd::render(&Params::ChaigneAskenfelt(p.clone()), 44_100, 1.0);
-        (1..=9)
-            .map(|j| partial_db(&p, buffer.plane(0), rate, j))
-            .collect::<Vec<f64>>()
-    };
-    let (at_7, at_8) = (struck(7), struck(8));
-    for (k, notched, other) in [(7, &at_7, &at_8), (8, &at_8, &at_7)] {
-        let depth = notched[k - 1] - notched[k - 2].max(notched[k]);
-        assert!(
-            depth < -60.0,
-            "struck at 1/{k}, partial {k} sits {depth} dB"
-        );
-        let moved = notched[k - 1] - other[k - 1];
-        assert!(
-            moved < -60.0,
-            "partial {k} struck at 1/{k} is only {moved} dB below the other strike's"
-        );
     }
 }

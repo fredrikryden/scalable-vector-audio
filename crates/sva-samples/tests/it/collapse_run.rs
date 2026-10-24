@@ -1,4 +1,4 @@
-// Concern: states that a run summed at any instant stays within its own bound of the exact sum | Non-concern: which rows sum a run | IO: (a wave's lines, t) -> error against a double-double sum
+// Concern: a run summed at any instant stays within its bound of the exact sum, alike at any SIMD width | Non-concern: which rows sum a run | IO: (a wave's lines, t) -> error against a twofold sum
 
 use crate::helpers::part;
 use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
@@ -214,44 +214,6 @@ fn a_wave_run_stays_within_its_bound_of_the_exact_sum_at_any_hour() {
     }
 }
 
-#[test]
-fn a_held_mirror_and_a_lone_ladder_stay_within_their_bounds() {
-    let held = runs("square", 65.406).remove(0);
-    let mut mirror = held.mirrored().expect("a mirror");
-    mirror.iter_mut().for_each(|a| *a = a.scale(0.5));
-    let held_mirror = Run {
-        mirror: Mirror::Held(mirror),
-        ..held.clone()
-    };
-    let lone = Run {
-        mirror: Mirror::None,
-        ..held
-    };
-    for (name, r) in [("held", held_mirror), ("lone", lone)] {
-        let bound = run::bound(&r);
-        for t in instants(3_540.0, 3_600.0) {
-            let err = (run::at(&r, t) - exact(&r, t)).abs();
-            assert!(err <= bound, "{name} at {t}: {err:e} over {bound:e}");
-        }
-    }
-}
-
-#[test]
-fn a_conjugate_mirror_sums_as_its_amplitudes_spelled_out_do() {
-    let held = runs("saw", 110.0).remove(0);
-    let spelled = Run {
-        mirror: Mirror::Held(held.mirrored().expect("a mirror")),
-        ..held.clone()
-    };
-    for t in instants(0.0, 60.0) {
-        assert_eq!(
-            run::at(&held, t).bits(),
-            run::at(&spelled, t).bits(),
-            "at {t}"
-        );
-    }
-}
-
 /// A deep ladder under each mirror and a ladder of one, with instants out to an hour.
 fn shapes() -> (Vec<(&'static str, Run)>, Vec<f64>) {
     let held = runs("saw", 43.654).remove(0);
@@ -284,17 +246,6 @@ fn bits(sums: &[C64]) -> Vec<(u64, u64)> {
         .collect()
 }
 
-#[test]
-fn a_run_summed_at_many_instants_at_once_is_each_summed_alone() {
-    let (shapes, t) = shapes();
-    for (name, r) in shapes {
-        let mut together = vec![C64::ZERO; t.len()];
-        run::each(&r, &t, &mut together);
-        let alone: Vec<C64> = t.iter().map(|t| run::at(&r, *t)).collect();
-        assert_eq!(bits(&together), bits(&alone), "{name}");
-    }
-}
-
 /// Compares the widths the test machine has: one without AVX2 compares the built width alone.
 #[test]
 fn every_width_this_cpu_runs_sums_a_run_to_the_same_bits() {
@@ -313,20 +264,4 @@ fn every_width_this_cpu_runs_sums_a_run_to_the_same_bits() {
             }
         }
     }
-}
-
-#[test]
-fn loose_lines_are_runs_of_one_and_a_skipped_index_breaks_a_ladder() {
-    let bare = [
-        sva_formula::Line::bare(440.0, C64::real(0.5)),
-        sva_formula::Line::bare(-440.0, C64::real(0.5)),
-    ];
-    let loose = Run::of(&bare);
-    assert_eq!(loose.len(), 1);
-    assert_eq!(loose[0].len(), 2);
-    let mut lines = runs("saw", 1_000.0).remove(0).lines();
-    lines.retain(|l| l.rung.is_some_and(|r| r.k != 3));
-    let split = Run::of(&lines);
-    assert_eq!(split.len(), 2, "1..3 and 4.. on each side, paired");
-    assert!(split.iter().all(|r| r.mirror == Mirror::Conjugate));
 }

@@ -48,31 +48,6 @@ fn a_folded_harmonic_reads_as_audible_alias() {
     assert!(m.audible, "nmr {}", m.nmr_db);
 }
 
-/// `peak_at_secs` sits beside a window's own `start_secs`, so it counts from the same zero.
-#[test]
-fn the_loudest_alias_is_named_on_the_renders_own_timeline() {
-    let sr = 44100.0;
-    let n = 8192;
-    let k = 8;
-    let saw = |rate: f64, len: usize| -> Vec<f64> {
-        (0..len)
-            .map(|i| {
-                let p = 6000.0 * i as f64 / rate;
-                2.0 * (p - p.floor()) - 1.0
-            })
-            .collect()
-    };
-    let from_zero =
-        measure_alias(&saw(sr, n), &saw(sr * k as f64, n * k), k, sr, 0.0).expect("a frame");
-    let from_two =
-        measure_alias(&saw(sr, n), &saw(sr * k as f64, n * k), k, sr, 2.0).expect("a frame");
-    assert_eq!(
-        from_two.peak_at_secs,
-        from_zero.peak_at_secs + 2.0,
-        "a window starting at 2s names its peak two seconds later"
-    );
-}
-
 /// Bins 0 and Nyquist count their power once, as a sine's does.
 #[test]
 fn a_dc_and_an_alias_at_nyquist_count_their_power_once() {

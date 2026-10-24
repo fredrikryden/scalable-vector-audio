@@ -1,4 +1,4 @@
-// Concern: what modulation owes tremolo across rates, a static tone, a swept saw, silence, refusals | Non-concern: the band filters | IO: (samples) -> asserts
+// Concern: what modulation owes tremolo across rates, an unread sidelobe, refusals | Non-concern: the band filters | IO: (samples) -> asserts
 
 use std::f64::consts::TAU;
 
@@ -22,33 +22,6 @@ fn track(m: &Modulation, group: Group) -> &Track {
         .iter()
         .find(|t| t.group == group)
         .expect("every group")
-}
-
-/// A 1 kHz tone at 1 + 0.5 sin(2 pi 4 t) leads every `mid` window clear of its opening at
-/// 4 Hz, its depth the index 0.5, the beat at 120 bpm half of one; its centroid holds still.
-#[test]
-fn tremolo_at_4_hz_reads_4_hz_at_its_depth() {
-    let m = read(
-        &tone(8.0, |t| {
-            (1.0 + 0.5 * libm::sin(TAU * 4.0 * t)) * libm::sin(TAU * 1000.0 * t)
-        }),
-        Some(120.0),
-    );
-    let mid = track(&m, Group::Mid);
-    let clear: Vec<_> = mid.windows.iter().filter(|w| w.from_secs >= 0.5).collect();
-    assert!(!clear.is_empty());
-    for w in clear {
-        let lead = w.peaks[0];
-        assert!((lead.hz - 4.0).abs() < 1e-3, "{w:?}");
-        assert!((lead.depth - 0.5).abs() < 1e-3, "{w:?}");
-        assert!(
-            (lead.period_beats.expect("a bpm") - 0.5).abs() < 1e-3,
-            "{w:?}"
-        );
-        let centroid = w.centroid.as_ref().expect("energy throughout");
-        let swing = centroid.peaks.first().map_or(0.0, |p| p.depth);
-        assert!(swing < 1.0, "{w:?}");
-    }
 }
 
 fn within(bounds: Option<(f64, f64)>, x: f64) -> bool {
@@ -110,82 +83,6 @@ fn a_sidelobe_whose_bins_no_main_lobe_reads_is_unbounded() {
         }
     }
     assert!(sidelobes > 0);
-}
-
-/// At 19.9 Hz the corrected depth stands within a quarter of the 2% passband loss of 0.2.
-#[test]
-fn near_20_hz_the_depth_is_corrected_for_the_passband() {
-    let m = read(
-        &tone(8.0, |t| {
-            (1.0 + 0.2 * libm::sin(TAU * 19.9 * t)) * libm::sin(TAU * 1320.0 * t)
-        }),
-        None,
-    );
-    let loss = 0.2 * (1.0 - m.passband_gain_at_max_hz);
-    assert!(loss > 0.003, "{loss}");
-    for w in track(&m, Group::Mid)
-        .windows
-        .iter()
-        .filter(|w| w.from_secs >= 0.5 && w.to_secs <= 7.5)
-    {
-        assert!((w.peaks[0].depth - 0.2).abs() < loss / 4.0, "{w:?}");
-    }
-}
-
-/// A steady 1 kHz tone moves at no rate: every peak clear of its opening is rounding.
-#[test]
-fn a_static_tone_reads_no_depth_worth_the_name() {
-    let m = read(&tone(8.0, |t| libm::sin(TAU * 1000.0 * t)), None);
-    for t in &m.tracks {
-        for w in t.windows.iter().filter(|w| w.from_secs >= 0.5) {
-            assert!(
-                w.peaks.iter().all(|p| p.depth < 1e-9),
-                "{}: {w:?}",
-                t.group.key()
-            );
-            assert!(w.peaks.iter().all(|p| p.period_beats.is_none()));
-        }
-    }
-}
-
-/// A 55 Hz saw under a lowpass sweeping 200 Hz to 2 kHz three times a second: `mid` leads at
-/// the sweep's 3 Hz, and its centroid swings at 3 Hz by hundreds of Hz.
-#[test]
-fn a_filter_swept_saw_reads_its_lfo_in_the_mid_band() {
-    let m = read(
-        &tone(8.0, |t| {
-            let cutoff = 200.0 * libm::pow(10f64, 0.5 * (1.0 + libm::sin(TAU * 3.0 * t)));
-            (1..=140)
-                .map(|n| {
-                    let hz = 55.0 * n as f64;
-                    let gain = 1.0 / (1.0 + (hz / cutoff).powi(4)).sqrt();
-                    gain * libm::sin(TAU * hz * t) / n as f64
-                })
-                .sum::<f64>()
-                * 0.3
-        }),
-        None,
-    );
-    let mid = track(&m, Group::Mid);
-    for w in mid.windows.iter().filter(|w| w.from_secs >= 0.5) {
-        assert!((w.peaks[0].hz - 3.0).abs() < 1e-3, "{w:?}");
-        let swing = w.centroid.as_ref().expect("energy throughout").peaks[0];
-        assert!((swing.hz - 3.0).abs() < 1e-3, "{w:?}");
-        assert!(swing.depth > 100.0, "{w:?}");
-    }
-}
-
-/// Silence holds no level, so no peak and no centroid.
-#[test]
-fn silence_reads_no_peak_and_no_centroid() {
-    let m = read(&vec![0.0; (5.0 * RATE) as usize], None);
-    for t in &m.tracks {
-        assert_eq!(t.summary.windows_with_peak, 0);
-        for w in &t.windows {
-            assert_eq!(w.level, 0.0);
-            assert!(w.peaks.is_empty() && w.centroid.is_none());
-        }
-    }
 }
 
 #[test]

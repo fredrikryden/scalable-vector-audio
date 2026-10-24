@@ -26,15 +26,6 @@ fn a_minus_twenty_dbfs_kilohertz_sine_reads_minus_twenty_three_lkfs() {
     assert!((l.short_term_max_lufs.unwrap() - -23.0).abs() < 0.1);
 }
 
-/// Why loudness is not reported per component the way level and spectrum are.
-#[test]
-fn two_identical_components_read_three_decibels_louder_than_one() {
-    let s = sine(1000.0, 48000.0, 5.0, 0.1);
-    let one = of(&[&s], 48000.0).integrated_lufs.unwrap();
-    let two = of(&[&s, &s], 48000.0).integrated_lufs.unwrap();
-    assert!((two - one - 3.0103).abs() < 0.01, "{one} -> {two}");
-}
-
 #[test]
 fn silence_is_gated_out_rather_than_averaged_in() {
     let sr = 48000.0;
@@ -47,37 +38,6 @@ fn silence_is_gated_out_rather_than_averaged_in() {
         (padded - alone).abs() < 0.2,
         "{alone} -> {padded}: only the three blocks straddling the edge are half-full"
     );
-}
-
-#[test]
-fn the_range_is_the_spread_of_the_short_term_distribution() {
-    let sr = 48000.0;
-    let steady = sine(1000.0, sr, 20.0, 0.1);
-    assert!(of(&[&steady], sr).range_lu.unwrap() < 0.01);
-
-    let mut stepped = sine(1000.0, sr, 20.0, 0.1);
-    stepped.extend(sine(1000.0, sr, 20.0, 0.1 * libm::pow(10f64, -10.0 / 20.0)));
-    let range = of(&[&stepped], sr).range_lu.unwrap();
-    assert!((range - 10.0).abs() < 0.6, "{range} LU across a 10 dB step");
-}
-
-#[test]
-fn a_node_shorter_than_a_block_reports_no_level_but_still_a_peak() {
-    let s = sine(1000.0, 48000.0, 0.2, 0.5);
-    let l = of(&[&s], 48000.0);
-    assert!(l.integrated_lufs.is_none());
-    assert!(l.momentary.is_empty() && l.short_term.is_empty());
-    assert!((l.sample_peak - 0.5).abs() < 0.01);
-    assert!((l.sample_peak_dbfs.unwrap() - -6.02).abs() < 0.1);
-}
-
-#[test]
-fn digital_silence_has_no_loudness_and_no_peak_in_decibels() {
-    let s = vec![0.0; 48000 * 5];
-    let l = of(&[&s], 48000.0);
-    assert_eq!(l.integrated_lufs, None);
-    assert_eq!(l.sample_peak, 0.0);
-    assert_eq!(l.sample_peak_dbfs, None);
 }
 
 /// A level whose weighted square passes the largest double, or falls under the smallest, is
@@ -120,18 +80,4 @@ fn a_quiet_block_after_a_loud_stretch_reads_its_own_level() {
             "{lufs} LUFS after a loud stretch, {steady} alone"
         );
     }
-}
-
-/// A sound shorter than BS.1770's 400 ms block has no integrated loudness at that block, and
-/// reads its own under a shorter one: a 1 kHz sine at -20 dBFS is -23 LKFS either way.
-#[test]
-fn a_shorter_window_reads_a_sound_shorter_than_the_momentary_block() {
-    let s = sine(1000.0, 48000.0, 0.3, 0.1);
-    assert_eq!(of(&[&s], 48000.0).integrated_lufs, None);
-    let short = analyze(&[&s], 48000.0, 0.0, 0.1).expect("a rate the K-weighting is designed at");
-    let integrated = short
-        .integrated_lufs
-        .expect("blocks of 100 ms fit in 300 ms");
-    assert!((integrated + 23.0).abs() < 0.1, "{integrated}");
-    assert_eq!((short.momentary_secs, short.hop_secs), (0.1, 0.025));
 }

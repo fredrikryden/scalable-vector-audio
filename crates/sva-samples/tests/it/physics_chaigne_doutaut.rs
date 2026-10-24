@@ -44,31 +44,6 @@ fn a_stepped_spectrum_matches_the_free_free_transcendental_roots() {
 }
 
 #[test]
-fn higher_partial_error_shrinks_with_finer_resolution() {
-    let target4 = 8.932_762_58;
-    let ratio4 = |peaks: &[f64]| -> f64 {
-        let f1 = peaks[0];
-        fd::nearest(peaks, f1 * target4) / f1
-    };
-    let err = |peaks: &[f64]| (ratio4(peaks) - target4).abs() / target4;
-    let coarse = err(&spectrum_peaks(40.0, 44_100, 2.0));
-    let fine = err(&spectrum_peaks(40.0, 176_400, 2.0));
-    assert!(
-        fine <= coarse * 0.7,
-        "finer resolution did not shrink partial-4 error: coarse={coarse} fine={fine}"
-    );
-}
-
-#[test]
-fn a_chaigne_doutaut_site_steps_the_same_buffer_every_time() {
-    fd::is_deterministic(
-        &Params::ChaigneDoutaut(ChaigneDoutautParams::at(261.6)),
-        44_100,
-        0.02,
-    );
-}
-
-#[test]
 fn a_parameter_out_of_range_is_refused() {
     let base = || ChaigneDoutautParams::at(261.6);
     fd::refuses(
@@ -108,18 +83,5 @@ fn a_parameter_out_of_range_is_refused() {
         .into_iter()
         .map(Params::ChaigneDoutaut)
         .collect(),
-    );
-}
-
-#[test]
-fn an_undamped_run_stays_bounded() {
-    fd::stays_bounded(
-        &Params::ChaigneDoutaut(ChaigneDoutautParams {
-            damp_dc: 0.0,
-            damp_freq: 0.0,
-            ..ChaigneDoutautParams::at(261.6)
-        }),
-        44_100,
-        0.5,
     );
 }

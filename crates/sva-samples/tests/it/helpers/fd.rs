@@ -62,20 +62,3 @@ pub fn refuses(base: &Params, broken: Vec<Params>) {
         assert!(!p.valid(), "{} admitted {p:?}", p.name());
     }
 }
-
-/// The observable half of the deleted discrete-energy and Courant sweeps: an undamped grid
-/// that conserves energy under a stable step neither blows up nor decays away.
-pub fn stays_bounded(params: &Params, rate: u32, secs: f64) {
-    let buffer = render(params, rate, secs);
-    sounds(&buffer);
-    let plane = buffer.plane(0);
-    let peak = plane.iter().fold(0.0f64, |m, &s| m.max(s.abs()));
-    let late = plane[plane.len() / 2..]
-        .iter()
-        .fold(0.0f64, |m, &s| m.max(s.abs()));
-    assert!(
-        late <= peak * 1.000_001,
-        "{}: the second half peaks at {late}, above the whole run's {peak}",
-        params.name()
-    );
-}

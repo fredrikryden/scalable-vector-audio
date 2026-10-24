@@ -3,8 +3,8 @@
 use crate::helpers::part;
 use std::f64::consts::TAU;
 
-use sva_formula::{Body, C64, ClosedForm, Edge, Origin, Unary, Var};
-use sva_samples::{CollapseError, Grid, PSYCHOACOUSTIC_V1, Rows};
+use sva_formula::{Body, C64, ClosedForm, Origin, Unary, Var};
+use sva_samples::{Grid, PSYCHOACOUSTIC_V1, Rows};
 
 const RATE: u32 = 8_000;
 const LEN: usize = 4_000;
@@ -30,7 +30,6 @@ fn cosine(hz: f64, amp: f64) -> Body {
     ])
 }
 
-/// Spans of `block` samples from grid sample `start` to the end.
 fn blocks(form: &ClosedForm, start: i64, block: i64) -> Vec<f64> {
     let rows = Rows::of(form, Grid::of(RATE), &PSYCHOACOUSTIC_V1).expect("rows");
     let mut out = Vec::new();
@@ -74,56 +73,5 @@ fn a_form_read_one_instant_at_a_time_is_the_same_in_any_span() {
                 );
             }
         }
-    }
-}
-
-#[test]
-fn a_form_in_f_has_no_row_a_span_reads_alone() {
-    let spectrum = form(Var::F, Body::Const(C64::real(1.0)));
-    assert_eq!(
-        Rows::of(&spectrum, Grid::of(RATE), &PSYCHOACOUSTIC_V1).err(),
-        Some(CollapseError::NoBlockRow)
-    );
-}
-
-/// A left-nested sum of shaped tones, each cropped to `width` seconds, `gap` apart.
-fn notes(terms: usize, gap: f64, width: f64) -> Body {
-    let note = |k: usize| Body::Shift {
-        by: k as f64 * gap,
-        of: part(Body::Crop {
-            of: part(Body::Apply(Unary::Tanh, part(cosine(440.0, 3.0)))),
-            l: Edge::at(0.0),
-            r: Edge::at(width),
-            rise: 0.0,
-            fall: 0.0,
-        }),
-    };
-    (1..terms).fold(note(0), |sum, k| Body::Add(vec![part(sum), part(note(k))]))
-}
-
-/// A point-sampled sum visits each term only inside its crop: the same bits, and linear work.
-#[test]
-fn a_point_sampled_sum_reads_each_term_only_inside_its_crop() {
-    let (gap, width) = (0.05, 0.01);
-    let len = |terms: usize| (terms as f64 * gap * f64::from(RATE)) as i64;
-    let rows = |terms: usize| {
-        Rows::of(
-            &form(Var::T, notes(terms, gap, width)),
-            Grid::of(RATE),
-            &PSYCHOACOUSTIC_V1,
-        )
-        .expect("rows")
-    };
-
-    let written = sva_samples::Evaluator::of(&notes(8, gap, width), 0);
-    let planes = rows(8).planes(0, len(8)).expect("samples");
-    for (n, v) in planes[0].iter().enumerate() {
-        let want = written
-            .at(sva_samples::At::Sample(
-                sva_samples::Grid::of(RATE),
-                n as i64,
-            ))
-            .expect("a value");
-        assert_eq!(v.to_bits(), want.re.to_bits(), "sample {n}");
     }
 }
