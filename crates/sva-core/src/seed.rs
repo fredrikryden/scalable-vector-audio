@@ -3,6 +3,10 @@
 use sva_samples::measure::partials::{self, Asked, Curve, Kind as TrackKind};
 use sva_samples::measure::{internal, score};
 
+use crate::model::Model;
+use crate::solve::prox::state::reached;
+use crate::solve::vary;
+
 /// How large a starter is written: harmonics per voice, lone partials per onset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
@@ -31,9 +35,9 @@ const PARTIALS: Asked = Asked {
 
 pub const COST: &str = "fits/clip";
 
-/// Every number the priced fit varies: its bounds and its resolution, about a JND of what
-/// it moves.
-pub const VARIES: [&str; 19] = [
+/// Every number a priced fit of a starter may vary: its bounds and its resolution, about a
+/// JND of what it moves. A starter lists those its composition reads.
+const VARIES: [&str; 19] = [
     "att=0.0005s..0.3s/1.2214,log",
     "dec=0.005s..30s/1.1618,log",
     "sus=0.0025..1/1.35,log",
@@ -473,10 +477,27 @@ pub fn starter(r: &Readings, clip: &str, limits: Limits) -> Seeded {
             limits.lone
         ));
     }
+    let varies = read_by(&files);
     Seeded {
         files,
         dropped,
-        varies: VARIES.iter().map(|v| v.to_string()).collect(),
+        varies,
         cost,
     }
+}
+
+/// The `VARIES` the starter's `@master` reads, as `solve` checks a `--vary` reaches it.
+fn read_by(files: &[(String, String)]) -> Vec<String> {
+    let composition: sva_ast::Composition = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let graph =
+        sva_ast::load_reaching(&composition, &["master"]).expect("a starter's master loads");
+    let model = Model::of(&graph, "master").expect("a starter is a priced fit's model");
+    VARIES
+        .iter()
+        .filter(|v| reached(&model, &vary(v).expect("a starter's vary parses")))
+        .map(|v| v.to_string())
+        .collect()
 }

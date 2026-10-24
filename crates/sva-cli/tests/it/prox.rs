@@ -23,15 +23,18 @@ fn argv(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| w.to_string()).collect()
 }
 
-/// A short two-note clip rendered by sva-cli itself, and the directory beside it.
-fn clip(name: &str) -> (PathBuf, PathBuf) {
+const TONE: &str = "0.1*exp(0 - 6*t)*(sin(2*pi*220*t) + 0.5*sin(2*pi*440*t))";
+
+/// A short clip of `body` rendered by sva-cli itself, and the directory beside it.
+fn clip(name: &str, body: &str) -> (PathBuf, PathBuf) {
     let root = scratch(name);
     let made = root.join("made");
     put(
         &made,
         "tone",
-        "; Models: a plucked tone | Neglects: all | IO: (t) -> amplitude | Tags: fixture\n\
-         0.1*exp(0 - 6*t)*(sin(2*pi*220*t) + 0.5*sin(2*pi*440*t))\n",
+        &format!(
+            "; Models: a fixture clip | Neglects: all | IO: (t) -> amplitude | Tags: fixture\n{body}\n"
+        ),
     );
     let wav = root.join("clip.wav");
     let out = sva(
@@ -88,7 +91,7 @@ fn labels(data: &Value) -> Vec<String> {
 /// without a continuation it answers one stage at the cost's price and writes it when confirmed.
 #[test]
 fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
-    let (root, wav) = clip("prox-path");
+    let (root, wav) = clip("prox-path", TONE);
     let made = json(&sva(
         &root,
         &argv(&[
@@ -242,7 +245,7 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
 /// least predicted length and writes it under `--confirm`.
 #[test]
 fn a_coarse_starter_grows_and_writes_its_choice() {
-    let (root, wav) = clip("prox-grow");
+    let (root, wav) = clip("prox-grow", TONE);
     let made = json(&sva(
         &root,
         &argv(&[
@@ -285,6 +288,44 @@ fn a_coarse_starter_grows_and_writes_its_choice() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A clip with no pitch seeds no voice node, and its `next` varies only what the starter
+/// reads: none of them is refused as reaching nothing.
+#[test]
+fn an_unpitched_starter_varies_only_what_it_reads() {
+    let (root, wav) = clip(
+        "prox-unpitched",
+        "sample(0.1*noise(7, period=8s))*exp(0 - 30*t)",
+    );
+    let made = json(&sva(
+        &root,
+        &argv(&["new", "fit", "--from", &wav.display().to_string()]),
+    ));
+    assert_eq!(made["status"], "success", "{made}");
+    let next = made["data"]["next"]["items"][0]["command"]
+        .as_str()
+        .expect("a next command");
+    assert!(
+        !next.contains("--vary 'tilt="),
+        "no voice node reads `tilt`: {next}"
+    );
+    let mut solve = argv(&["solve", "@fits/clip", "--steps", "1", "--cache", "none"]);
+    solve.extend(
+        flags(next)
+            .into_iter()
+            .filter(|w| w != "--write" && w != "--confirm"),
+    );
+    let answered = json(&sva(&root.join("fit"), &solve));
+    let codes: Vec<&Value> = answered["data"]["diagnostics"]["items"]
+        .as_array()
+        .map(|d| d.iter().map(|x| &x["code"]).collect())
+        .unwrap_or_default();
+    assert!(
+        !codes.iter().any(|c| *c == "solve.reaches_nothing"),
+        "{answered}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A signal during a trial that builds a later stage stops the run there: exit 130, and the
 /// last of `stages` is that trial under its progress lines' label, `stopped` with the descents
 /// it ran, no length at the cap's draws and not chosen.
@@ -293,7 +334,7 @@ fn a_coarse_starter_grows_and_writes_its_choice() {
 fn a_signal_in_a_stage_lists_it_stopped() {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
-    let (root, wav) = clip("prox-signal");
+    let (root, wav) = clip("prox-signal", TONE);
     let made = json(&sva(
         &root,
         &argv(&[
@@ -394,7 +435,7 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 /// lists none; with `--write` or a continuation it refuses instead.
 #[test]
 fn zero_steps_measure_the_composition_as_written() {
-    let (root, wav) = clip("prox-zero");
+    let (root, wav) = clip("prox-zero", TONE);
     let made = json(&sva(
         &root,
         &argv(&[
@@ -487,7 +528,7 @@ fn zero_steps_measure_the_composition_as_written() {
 /// Each misuse of the priced method refuses under its own code.
 #[test]
 fn a_priced_solve_refuses_each_mistake_under_its_code() {
-    let (root, wav) = clip("prox-refusals");
+    let (root, wav) = clip("prox-refusals", TONE);
     let reference = wav.display().to_string();
     put(
         &root,

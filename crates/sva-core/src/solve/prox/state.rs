@@ -70,20 +70,22 @@ impl Var {
     }
 }
 
+/// Whether `v` names a node default or a score field `model` plays.
+pub fn reached(model: &Model, v: &Vary) -> bool {
+    let score = model.score.clone().unwrap_or_default();
+    model
+        .nodes
+        .iter()
+        .any(|(p, n)| n.defaults.iter().any(|(d, _)| v.names(p, d)))
+        || model
+            .lines
+            .iter()
+            .any(|l| l.fields.iter().any(|(f, _)| v.names(&score, f)))
+}
+
 /// Refuses a `--vary` that names no node default and no score field `model` plays.
 pub fn reaches(model: &Model, vars: &[Var]) -> Result<(), CliError> {
-    let score = model.score.clone().unwrap_or_default();
-    let reached = |v: &Var| {
-        model
-            .nodes
-            .iter()
-            .any(|(p, n)| n.defaults.iter().any(|(d, _)| v.matches(p, d)))
-            || model
-                .lines
-                .iter()
-                .any(|l| l.fields.iter().any(|(f, _)| v.matches(&score, f)))
-    };
-    match vars.iter().find(|v| !reached(v)) {
+    match vars.iter().find(|v| !reached(model, &v.vary)) {
         Some(v) => Err(CliError::usage(
             "solve.reaches_nothing",
             format!(
