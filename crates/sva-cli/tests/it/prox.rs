@@ -326,6 +326,76 @@ fn an_unpitched_starter_varies_only_what_it_reads() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A starter whose every score line is silent writes a score of no events: it solves at no
+/// steps and at some, and the score it writes renders silence.
+#[test]
+fn an_all_silent_fit_writes_a_score_that_renders_silence() {
+    let (root, wav) = clip(
+        "prox-silent",
+        "sample(0.1*noise(7, period=8s))*exp(0 - 30*t)",
+    );
+    let made = json(&sva(
+        &root,
+        &argv(&["new", "fit", "--from", &wav.display().to_string()]),
+    ));
+    assert_eq!(made["status"], "success", "{made}");
+    let dir = root.join("fit");
+    let score = dir.join("score/clip.jsonl");
+    let starter = std::fs::read_to_string(&score).expect("the starter's score");
+    assert!(
+        starter.lines().all(|l| l.contains("\"vel\": 0,")),
+        "every line is silent: {starter}"
+    );
+    let next = made["data"]["next"]["items"][0]["command"]
+        .as_str()
+        .expect("a next command");
+    let varies: Vec<String> = flags(next)
+        .chunks(2)
+        .filter(|f| f[0] == "--vary")
+        .flatten()
+        .cloned()
+        .collect();
+    for extra in [
+        &["--steps", "0"][..],
+        &["--steps", "2", "--write", "--confirm"][..],
+    ] {
+        let mut words = argv(&["solve", "@fits/clip", "--method", "prox", "--cache", "none"]);
+        words.extend(argv(extra));
+        words.extend(varies.iter().cloned());
+        let answered = json(&sva(&dir, &words));
+        assert_eq!(answered["status"], "success", "{extra:?}: {answered}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(&score).expect("the written score"),
+        "",
+        "no line sounds, so none is written"
+    );
+    let out = root.join("silent.wav");
+    let rendered = json(&sva(
+        &dir,
+        &argv(&[
+            "render",
+            "@score/clip([0, 0.3s])",
+            "--cache",
+            "none",
+            "--representation",
+            &format!("samples={}", out.display()),
+        ]),
+    ));
+    assert_eq!(rendered["status"], "success", "{rendered}");
+    let bytes = std::fs::read(&out).expect("the rendered wav");
+    let data = bytes
+        .windows(4)
+        .position(|w| w == b"data")
+        .expect("a data chunk")
+        + 8;
+    assert!(
+        bytes.len() > data && bytes[data..].iter().all(|b| *b == 0),
+        "an empty score renders silence"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A signal during a trial that builds a later stage stops the run there: exit 130, and the
 /// last of `stages` is that trial under its progress lines' label, `stopped` with the descents
 /// it ran, no length at the cap's draws and not chosen.

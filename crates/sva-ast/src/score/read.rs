@@ -86,10 +86,7 @@ impl<'a> Pending<'a> {
 
 pub fn parse_score(text: &str) -> Result<Score, Diag> {
     let refuse = |at: usize, message: String| located(text, at, &message);
-    let mut rows: Vec<&str> = text.split('\n').collect();
-    if rows.len() > 1 && rows.last() == Some(&"") {
-        rows.pop();
-    }
+    let rows: Vec<&str> = text.split_terminator('\n').collect();
     let mut annotation = None;
     let mut pending: Vec<Pending> = Vec::new();
     let mut start = 0usize;
