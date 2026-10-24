@@ -177,6 +177,7 @@ struct Options {
     continuation: Option<sva_core::continuation::Scheme>,
     steps: Option<usize>,
     draws: Option<usize>,
+    heartbeat: Option<f64>,
     write: bool,
     recordings: Vec<Arc<sva_ast::Recording>>,
 }
@@ -268,6 +269,15 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
             "recordings" => held.recordings = cost::recordings_of(&value)?,
             "steps" => held.steps = Some(whole(&key, &value)?),
             "draws" => held.draws = Some(whole(&key, &value)?),
+            "heartbeat" => {
+                let secs = value.as_f64().filter(|v| v.is_finite() && *v >= 0.0);
+                held.heartbeat = Some(secs.ok_or_else(|| {
+                    refuse(
+                        "`heartbeat` is no number of seconds at or above 0".into(),
+                        "pass the most seconds between activity lines, 0 for one every unit",
+                    )
+                })?)
+            }
             "write" => {
                 held.write = value.as_bool().ok_or_else(|| {
                     refuse("`write` is not a boolean".into(), "pass true or false")
@@ -471,8 +481,11 @@ impl sva_ast::Source for Live {
 
 #[wasm_bindgen(typescript_custom_section)]
 const SOLVE_PROGRESS: &str = r#"
-/** A priced solve's `progress` line: a step, or a stage as it finishes. */
-export type SolveProgress = SolveStep | SolveStageFinished;
+/**
+ * A priced solve's `progress` line: a step, an activity, a stage as it finishes, or the activity
+ * a refusal stopped, heard before the solve throws.
+ */
+export type SolveProgress = SolveStep | SolveActivity | SolveStageFinished | SolveFailed;
 /**
  * Every 50th step and the step a phase converges or reaches its cap at, `ended` why it did,
  * null otherwise. A trial's `stage` is `<stage> trial <edit>`.
@@ -488,20 +501,68 @@ export interface SolveStep {
     bits: number;
     ended: "converged" | "cap" | "signal" | null;
 }
+/** What a priced solve is doing; `sva-cli --help`'s PRICED FIT, ACTIVITY, says each. */
+export type SolveAction =
+    | "seeding"
+    | "reading_reference"
+    | "rendering_noise"
+    | "descending"
+    | "debiasing"
+    | "ranking_proposals"
+    | "trying_proposal"
+    | "evaluating_at_cap"
+    | "measuring";
 /**
- * A stage as `data.stages` will list it, heard as it finishes: `files` the `{ path, text }`s
- * `write` would insert for it, `least` true where its `length_bits` is below every earlier
- * stage's, so the last such is `data.chosen`. Writing them loads the stage's composition once
- * and renders nothing, cheap next to its solve.
+ * Heard as an activity starts, as the one it ran inside resumes, and between its units once
+ * `heartbeat` seconds (default 1) have passed since the last line; 0 hears one between every
+ * unit. `edit` is the structure edit a trial tries. `count` is the activity's own, `of` at most
+ * that many steps or trials. `part` is the stage's place in the scheme, `of` at most that many.
+ * `work.comparisons`: cell comparisons since the solve began, a counted cell of the reference's
+ * `internal` reading against the same cell of one draw's reading of the model, an evaluation
+ * making cells times its draws and measuring the same off its renders; `per_second` its rate
+ * over the last window at least `heartbeat` long, null before one.
+ */
+export interface SolveActivity {
+    action: SolveAction;
+    stage: string | null;
+    edit: string | null;
+    count: { done: number; of: number; unit: "render" | "step" | "proposal" | "trial" | "draw" } | null;
+    part: { at: number; of: number } | null;
+    work: { comparisons: number; per_second: number | null };
+    seconds: number;
+}
+/** A residual as `data.stages` lists it. */
+export interface SolveResidual {
+    residual_bits: number;
+    standard_error: number;
+    d_prime: number;
+    per_cell: number;
+}
+/**
+ * A stage as `data.stages` will list it, heard as it finishes, with its terms: `length_bits` is
+ * `predicted_at_cap.residual_bits` plus `bits`, null where stopped; `residual_bits` the residual
+ * at the draws it was solved at. `files` the `{ path, text }`s `write` would insert for it,
+ * `least` true where its `length_bits` is below every earlier stage's, so the last such is
+ * `data.chosen`. Writing them loads the stage's composition once and renders nothing, cheap
+ * next to its solve.
  */
 export interface SolveStageFinished {
     stage: string;
     finished: true;
     stopped: boolean;
     length_bits: number | null;
+    residual_bits: number;
+    bits: number;
+    numbers: number;
+    predicted_at_cap: SolveResidual | null;
     least: boolean;
     files: { items: { path: string; text: string }[] };
 }
+/**
+ * The activity a refusal stopped, `action` null where it came before any; `code` the thrown
+ * refusal's.
+ */
+export type SolveFailed = { failed: true; code: string } & (SolveActivity | { action: null });
 "#;
 
 #[wasm_bindgen]
@@ -641,6 +702,7 @@ impl Composition {
             "continuation",
             "steps",
             "draws",
+            "heartbeat",
             "write",
             "recordings",
         ];
@@ -716,18 +778,26 @@ impl Composition {
             draws: options
                 .draws
                 .unwrap_or(sva_core::solve::prox::DEFAULT_DRAWS),
+            heartbeat: options
+                .heartbeat
+                .unwrap_or(sva_core::solve::prox::heard::DEFAULT_HEARTBEAT_SECS),
         };
         if options.write {
             writable(&settings, ("`write`", "`steps`")).map_err(|e| thrown(&e))?;
         }
-        let mut heard = |heard: &sva_core::continuation::Heard| {
+        let heard = |heard: &sva_core::fit::Heard| {
             if let Some(progress) = &options.progress {
                 let line = heard_json(heard, true);
                 let _ = progress.call1(&JsValue::NULL, &parse(&line).unwrap_or(line.into()));
             }
         };
+        let clock = || js_sys::Date::now() / 1000.0;
         let scheme = options.continuation.as_ref();
-        let fitted = fitted(problem, &settings, scheme, &*self.tier, &mut heard, abandon)
+        let told = (
+            &heard as &dyn Fn(&sva_core::fit::Heard),
+            &clock as &dyn Fn() -> f64,
+        );
+        let fitted = fitted(problem, &settings, scheme, &*self.tier, told, abandon)
             .await
             .map_err(|e| thrown(&e))?;
         let cost = &problem.cost.text;

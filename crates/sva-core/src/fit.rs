@@ -3,11 +3,13 @@
 use sva_engine::{Abandon, Backend, Tier};
 
 use crate::cli_error::CliError;
-use crate::continuation::{self, Cx, FEWEST, Heard, Ran, Reached, Scheme, Stage};
+use crate::continuation::{self, Cx, FEWEST, Ran, Reached, Scheme, Stage};
 use crate::json::{escape, list, num};
 use crate::output::{Diagnostic, Severity};
 use crate::solve::Problem;
 use crate::solve::prox::eval::Residual;
+use crate::solve::prox::heard::Hearing;
+pub use crate::solve::prox::heard::{Action, Clock, Doing, Heard, Report};
 use crate::solve::prox::{self, BITS_PER_JND2, Ended, Progress, Settings};
 
 pub struct Fitted {
@@ -19,21 +21,37 @@ pub struct Fitted {
     pub scheme: Option<Scheme>,
 }
 
-/// One progress line: a step, its stage's label beside it; or a stage listed, its files' texts
-/// where `texts`, their paths alone otherwise.
+/// One progress line: a step, its stage's label beside it; an activity; a stage listed, its
+/// files' texts where `texts`, their paths alone otherwise; or the activity a refusal stopped.
 pub fn heard_json(heard: &Heard, texts: bool) -> String {
     match heard {
         Heard::Step(stage, p) => progress_json(stage, p),
+        Heard::Doing(d) => format!("{{{}}}", doing_json(d)),
+        Heard::Failed { doing, code } => format!(
+            "{{\"failed\": true, \"code\": \"{code}\", {}}}",
+            match doing {
+                Some(d) => doing_json(d),
+                None => "\"action\": null".to_string(),
+            }
+        ),
         Heard::Listed {
-            reached,
+            label,
+            solution,
+            at_cap,
+            length,
             files,
             least,
         } => format!(
             "{{\"stage\": \"{}\", \"finished\": true, \"stopped\": {}, \"length_bits\": {}, \
+             \"residual_bits\": {}, \"bits\": {}, \"numbers\": {}, \"predicted_at_cap\": {}, \
              \"least\": {least}, \"files\": {}}}",
-            escape(&reached.stage.label),
-            reached.solution.cancelled(),
-            reached.length().map_or("null".to_string(), num),
+            escape(label),
+            solution.cancelled(),
+            length.map_or("null".to_string(), num),
+            num(solution.predicted.bits),
+            num(solution.bits),
+            solution.numbers,
+            at_cap.map_or("null".to_string(), residual_json),
             list(files, |(p, t)| match texts {
                 true => format!(
                     "{{ \"path\": \"{}\", \"text\": \"{}\" }}",
@@ -44,6 +62,30 @@ pub fn heard_json(heard: &Heard, texts: bool) -> String {
             }),
         ),
     }
+}
+
+fn doing_json(d: &Doing) -> String {
+    let text = |t: &Option<String>| match t {
+        Some(t) => format!("\"{}\"", escape(t)),
+        None => "null".to_string(),
+    };
+    format!(
+        "\"action\": \"{}\", \"stage\": {}, \"edit\": {}, \"count\": {}, \"part\": {}, \
+         \"work\": {{ \"comparisons\": {}, \"per_second\": {} }}, \"seconds\": {}",
+        d.action.name(),
+        text(&d.stage),
+        text(&d.edit),
+        d.count.map_or("null".to_string(), |(done, of)| format!(
+            "{{ \"done\": {done}, \"of\": {of}, \"unit\": \"{}\" }}",
+            d.action.unit()
+        )),
+        d.part.map_or("null".to_string(), |(at, of)| format!(
+            "{{ \"at\": {at}, \"of\": {of} }}"
+        )),
+        d.comparisons,
+        d.per_second.map_or("null".to_string(), num),
+        num(d.seconds)
+    )
 }
 
 fn progress_json(stage: &str, p: &Progress) -> String {
@@ -80,14 +122,30 @@ pub fn writable(settings: &Settings, (write, steps): (&str, &str)) -> Result<(),
 
 /// Without a scheme, one stage at the cost's own price; with one, its run; either through the
 /// draws' schedule up to `settings.draws` ([`continuation`]). The stage of least predicted
-/// length at that cap's draws is chosen and it alone measured. `report` hears each step and each
-/// stage as `data.stages` will list it ([`heard_json`]).
+/// length at that cap's draws is chosen and it alone measured. `report` hears each line
+/// [`heard_json`] writes, activities `settings.heartbeat` apart.
 pub async fn fitted<B: Backend>(
     problem: &Problem<'_>,
     settings: &Settings,
     scheme: Option<&Scheme>,
     tier: &Tier<B>,
-    report: &mut dyn FnMut(&Heard),
+    (report, clock): (Report<'_>, Clock<'_>),
+    abandon: &dyn Abandon,
+) -> Result<Fitted, CliError> {
+    let hearing = Hearing::new(report, clock, settings.heartbeat);
+    let out = heard(problem, settings, scheme, tier, &hearing, abandon).await;
+    if let Err(e) = &out {
+        hearing.failed(e);
+    }
+    out
+}
+
+async fn heard<B: Backend>(
+    problem: &Problem<'_>,
+    settings: &Settings,
+    scheme: Option<&Scheme>,
+    tier: &Tier<B>,
+    hearing: &Hearing<'_>,
     abandon: &dyn Abandon,
 ) -> Result<Fitted, CliError> {
     let shape = prox::checked(problem)?;
@@ -113,14 +171,15 @@ pub async fn fitted<B: Backend>(
         shape: &shape,
         settings,
         tier,
+        hearing,
         abandon,
     };
     let ran = match scheme {
         None => {
             let label = format!("price {}", shape.price);
-            let mut heard = |p: &Progress| report(&Heard::Step(&label, p));
+            hearing.staged(&label, (1, 1));
             let solution = cx
-                .scheduled(&[], &problem.cost, settings.steps, FEWEST, &mut heard)
+                .scheduled(&[], &problem.cost, settings.steps, FEWEST)
                 .await?;
             let stage = Stage {
                 label,
@@ -130,15 +189,12 @@ pub async fn fitted<B: Backend>(
                 edits: Vec::new(),
             };
             let reached = cx.reached(stage, solution).await?;
-            report(&Heard::Listed {
-                reached: &reached,
-                files: &reached.solution.files,
-                least: continuation::below(&reached, &mut None),
-            });
+            let least = continuation::below(&reached, &mut None);
+            reached.listed(&reached.solution.files, least, hearing);
             let cancelled = reached.at_cap.is_none() || abandon.abandoned().await;
             Ran::of(vec![reached], cancelled)
         }
-        Some(scheme) => continuation::run(scheme, &cx, report).await?,
+        Some(scheme) => continuation::run(scheme, &cx).await?,
     };
     let ran = ran.measured(&cx).await?;
     let files = match (scheme, ran.chosen) {

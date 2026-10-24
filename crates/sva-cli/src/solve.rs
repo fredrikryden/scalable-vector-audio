@@ -145,15 +145,17 @@ fn priced_solve(
     if args.write {
         writable(settings, ("`--write`", "`--steps`"))?;
     }
-    let mut heard = |heard: &sva_core::continuation::Heard| {
+    let heard = |heard: &sva_core::fit::Heard| {
         let _ = writeln!(std::io::stderr(), "{}", heard_json(heard, false));
     };
+    let began = std::time::Instant::now();
+    let clock = || began.elapsed().as_secs_f64();
     let outcome = wait(fitted(
         problem,
         settings,
         scheme,
         tier,
-        &mut heard,
+        (&heard, &clock),
         &Flagged(stop),
     ));
     persisted(tier, &mut warnings);

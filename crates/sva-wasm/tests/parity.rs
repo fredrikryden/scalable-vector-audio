@@ -203,13 +203,13 @@ fn priced(threads: usize) -> String {
     )
     .expect("a path");
     let tier = Tier::default();
-    let mut quiet = |_: &sva_core::continuation::Heard| {};
+    let quiet = |_: &sva_core::fit::Heard| {};
     let fit = sva_core::fit::fitted(
         &problem,
         &settings,
         Some(&scheme),
         &tier,
-        &mut quiet,
+        (&quiet, &|| 0.0),
         &sva_core::Never,
     );
     let mut fit = std::pin::pin!(fit);

@@ -2,6 +2,7 @@
 
 pub mod draws;
 pub mod eval;
+pub mod heard;
 pub mod lines;
 pub mod measure;
 pub mod played;
@@ -20,6 +21,7 @@ use sva_engine::Abandon;
 
 use crate::cli_error::CliError;
 use eval::{Evaluated, Fit, evaluate, scales, standard_error};
+use heard::{Act, Action, Hearing};
 use state::State;
 use step::{Adam, Priced, step, zeros};
 
@@ -107,17 +109,35 @@ struct Best {
     bits: f64,
 }
 
-struct Descent<'a> {
+struct Descent<'a, 'h> {
     fit: &'a Fit,
     weights: Vec<f64>,
     scales: Vec<f64>,
     abandon: &'a dyn Abandon,
-    report: &'a mut dyn FnMut(&Progress),
+    hearing: &'a Hearing<'h>,
 }
 
-impl Descent<'_> {
+impl Descent<'_, '_> {
     /// Leaves `s` at its least evaluated objective, start included: Adam may climb.
     async fn descend(
+        &mut self,
+        s: &mut State,
+        adam: &mut Adam,
+        lambda: f64,
+        cap: usize,
+        held: Option<&[bool]>,
+        phase: &'static str,
+    ) -> Result<Descended, CliError> {
+        let action = match held {
+            None => Action::Descending,
+            Some(_) => Action::Debiasing,
+        };
+        let hearing = self.hearing;
+        let run = self.steps(s, adam, lambda, cap, held, phase);
+        hearing.during(Act::new(action).of(cap), run).await
+    }
+
+    async fn steps(
         &mut self,
         s: &mut State,
         adam: &mut Adam,
@@ -147,6 +167,7 @@ impl Descent<'_> {
                 }
                 return Ok(ran(k, Ended::Signal, false));
             }
+            self.hearing.tick(k);
             let e = evaluate(self.fit, s, k < cap, self.fit.threads)?;
             let (numbers, bits) = price::numbers(s);
             let objective = e.residual.bits + lambda * bits;
@@ -178,7 +199,7 @@ impl Descent<'_> {
                     (Some(_), Some(b)) => (b.residual_bits, b.numbers, b.bits),
                     _ => (e.residual.bits, numbers, bits),
                 };
-                (self.report)(&Progress {
+                self.hearing.step(&Progress {
                     phase,
                     lambda,
                     step: k,
@@ -238,7 +259,7 @@ pub async fn descended(
     lambda: f64,
     steps: usize,
     abandon: &dyn Abandon,
-    report: &mut dyn FnMut(&Progress),
+    hearing: &Hearing<'_>,
 ) -> Result<Vec<Descended>, CliError> {
     let mut adam = Adam::of(s);
     let (weights, scales) = primed(fit, s, lambda)?;
@@ -247,7 +268,7 @@ pub async fn descended(
         weights,
         scales,
         abandon,
-        report,
+        hearing,
     };
     let descent = run
         .descend(s, &mut adam, lambda, steps, None, "descend")

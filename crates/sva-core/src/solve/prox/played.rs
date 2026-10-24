@@ -8,6 +8,7 @@ use sva_engine::Varied;
 use sva_formula::Tangents;
 
 use super::draws::{self, seed};
+use super::heard::{Act, Action, Hearing};
 use super::lines::{self, Filter, Line, Realisation};
 use super::state::{Slot, State};
 use crate::cli_error::CliError;
@@ -259,6 +260,14 @@ impl Renders {
     }
 }
 
+fn keyed(source: &Expr, seed: Option<u64>, at: f64) -> (String, u64) {
+    let text = match seed {
+        Some(n) => format!("seed = {n}\n{}", sva_ast::render_expr(source)),
+        None => sva_ast::render_expr(source),
+    };
+    (text, at.to_bits())
+}
+
 fn rendered(
     renders: &Renders,
     source: &Expr,
@@ -266,14 +275,11 @@ fn rendered(
     at: f64,
     g: &Grid,
 ) -> Result<Arc<Realisation>, CliError> {
-    let text = match seed {
-        Some(n) => format!("seed = {n}\n{}", sva_ast::render_expr(source)),
-        None => sva_ast::render_expr(source),
-    };
-    let key = (text.clone(), at.to_bits());
+    let key = keyed(source, seed, at);
     if let Some(x) = renders.get(&key) {
         return Ok(x);
     }
+    let text = &key.0;
     let mut c = sva_ast::Composition::new();
     c.insert("noise-source".to_string(), format!("{text}\n"));
     let placed = match at == 0.0 {
@@ -379,15 +385,14 @@ fn placed(inst: &sva_engine::instantiate::Instances, score: &str) -> Vec<(String
     out
 }
 
-/// Every line of the state's composition lowered with tangents and read at its frames.
-pub fn lowered(
+/// The state's composition as played, instantiated, and each score line's instance and onset.
+type Played = (Text, sva_engine::instantiate::Instances, Vec<(String, f64)>);
+
+fn played(
     s: &State,
     source: &dyn Fn(&str) -> Option<String>,
     g: &Grid,
-    renders: &Renders,
-    draws: usize,
-    threads: std::num::NonZeroUsize,
-) -> Result<Lowered, CliError> {
+) -> Result<Played, CliError> {
     let text = text(s, source)?;
     let mut c = sva_ast::Composition::new();
     for (p, t) in &text.files {
@@ -410,6 +415,75 @@ pub fn lowered(
             s.model.lines.len()
         )));
     }
+    Ok((text, inst, at))
+}
+
+/// Each noise a line reads: its source, its draw's seed where its node reads `seed`, its onset.
+fn noises<'t>(
+    s: &State,
+    text: &'t Text,
+    at: &[(String, f64)],
+    keys: &[u64],
+    (i, draws): (usize, usize),
+) -> Vec<(&'t Expr, Option<u64>, f64)> {
+    let Some(n) = text.noise.get(&s.model.lines[i].node) else {
+        return Vec::new();
+    };
+    let onset = at[i].1;
+    match super::write::line_reads(s, i, "seed") {
+        true => (0..draws)
+            .map(|k| (&n.source, Some(seed(keys[i], k)), onset))
+            .collect(),
+        false => vec![(&n.source, None, onset)],
+    }
+}
+
+/// Every noise `lowered` reads that `renders` lacks rendered, a thread's worth at a time.
+pub fn noised(
+    s: &State,
+    source: &dyn Fn(&str) -> Option<String>,
+    g: &Grid,
+    renders: &Renders,
+    draws: usize,
+    threads: std::num::NonZeroUsize,
+    hearing: &Hearing,
+) -> Result<(), CliError> {
+    let (text, _, at) = played(s, source, g)?;
+    let (keys, mut seen) = (draws::keys(s), std::collections::BTreeSet::new());
+    let missing: Vec<(&Expr, Option<u64>, f64)> = (0..s.model.lines.len())
+        .flat_map(|i| noises(s, &text, &at, &keys, (i, draws)))
+        .filter(|(n, seed, onset)| {
+            let key = keyed(n, *seed, *onset);
+            renders.get(&key).is_none() && seen.insert(key)
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let act = Act::new(Action::RenderingNoise).of(missing.len());
+    hearing.within(act, || {
+        for (k, batch) in missing.chunks(threads.get()).enumerate() {
+            let each = sva_engine::each(threads, batch.to_vec(), |(n, seed, onset)| {
+                rendered(renders, n, seed, onset, g)
+            });
+            each.into_iter().collect::<Result<Vec<_>, _>>()?;
+            hearing.tick((k * threads.get() + batch.len()).min(missing.len()));
+        }
+        Ok(())
+    })
+}
+
+/// Every line of the state's composition lowered with tangents and read at its frames.
+pub fn lowered(
+    s: &State,
+    source: &dyn Fn(&str) -> Option<String>,
+    g: &Grid,
+    renders: &Renders,
+    draws: usize,
+    threads: std::num::NonZeroUsize,
+) -> Result<Lowered, CliError> {
+    let (text, inst, at) = played(s, source, g)?;
+    let root = &s.model.root;
     let root_slots = s.root_slots();
     let root_names = |name: &str| -> Option<(f64, Option<u32>)> {
         let i = root_slots.iter().position(|(n, _)| n == name)?;
@@ -420,7 +494,7 @@ pub fn lowered(
         ))
     };
     let master = match s.model.score.is_some() {
-        true => match filters(&s.model.nodes[&root].body) {
+        true => match filters(&s.model.nodes[root].body) {
             Some((chain_written, _)) => chain(&chain_written, &root_names, g.sr)?,
             None => Vec::new(),
         },
@@ -456,13 +530,10 @@ pub fn lowered(
             Some(n) => chain(&n.filters, &names, g.sr)?,
             None => Vec::new(),
         };
-        let noise_samples = match noise {
-            Some(n) if super::write::line_reads(s, i, "seed") => (0..draws)
-                .map(|k| rendered(renders, &n.source, Some(seed(keys[i], k)), *onset, g))
-                .collect::<Result<Vec<_>, _>>()?,
-            Some(n) => vec![rendered(renders, &n.source, None, *onset, g)?],
-            None => Vec::new(),
-        };
+        let noise_samples = noises(s, &text, &at, &keys, (i, draws))
+            .into_iter()
+            .map(|(n, seed, onset)| rendered(renders, n, seed, onset, g))
+            .collect::<Result<Vec<_>, _>>()?;
         let (read, tangents) = Tangents::default().active(|| -> Result<_, CliError> {
             let form = sva_engine::tangents(&inst, path, &varied).map_err(CliError::Engine)?;
             let split = lines::split(&form.body, noise.is_some()).map_err(|why| {

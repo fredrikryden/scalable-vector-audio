@@ -18,8 +18,9 @@ use crate::cli_error::CliError;
 use crate::model::Model;
 use crate::seed::{LIMITS, Limits};
 use crate::solve::prox::eval::{Residual, evaluate};
+use crate::solve::prox::heard::{Act, Action, Heard, Hearing};
 use crate::solve::prox::run::Prepared;
-use crate::solve::prox::{self, Progress, Settings, Shape, Solution};
+use crate::solve::prox::{self, Settings, Shape, Solution};
 use crate::solve::{Cost, Problem, recorded};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -263,6 +264,7 @@ pub struct Cx<'a, B: Backend> {
     pub shape: &'a Shape,
     pub settings: &'a Settings,
     pub tier: &'a Tier<B>,
+    pub hearing: &'a Hearing<'a>,
     pub abandon: &'a dyn Abandon,
 }
 
@@ -273,12 +275,15 @@ impl<B: Backend> Cx<'_, B> {
         cost: &Cost,
         steps: usize,
         draws: usize,
-        report: &mut dyn FnMut(&Progress),
     ) -> Result<Solution, CliError> {
         let over = Overlay::new(self.problem.source, files.iter().cloned().collect());
         let problem = self.over(&over, cost.clone());
-        let settings = Settings { steps, draws };
-        prox::solve(&problem, &settings, self.tier, report, self.abandon).await
+        let settings = Settings {
+            steps,
+            draws,
+            ..*self.settings
+        };
+        prox::solve(&problem, &settings, self.tier, self.hearing, self.abandon).await
     }
 
     pub(crate) async fn scheduled(
@@ -287,15 +292,14 @@ impl<B: Backend> Cx<'_, B> {
         cost: &Cost,
         steps: usize,
         draws: usize,
-        report: &mut dyn FnMut(&Progress),
     ) -> Result<Solution, CliError> {
         let cap = self.settings.draws;
-        let mut solution = self.solved(files, cost, steps, draws, report).await?;
+        let mut solution = self.solved(files, cost, steps, draws).await?;
         let mut limited = solution.descents[0].noise_limited;
         while limited && !solution.cancelled() && solution.draws() < cap {
             let from = merged(files, &solution.files);
             let twice = (2 * solution.draws()).min(cap);
-            let next = self.solved(&from, cost, steps, twice, report).await?;
+            let next = self.solved(&from, cost, steps, twice).await?;
             limited = next.descents[0].noise_limited;
             let descents = [solution.descents, next.descents].concat();
             solution = Solution {
@@ -318,7 +322,15 @@ impl<B: Backend> Cx<'_, B> {
         let problem = self.over(&over, cost.clone());
         let base = recorded(&problem.cost, problem.source);
         let source = crate::overlaid(&base, &problem.sets)?;
-        prox::run::prepared(&problem, &source, draws, self.tier, self.abandon).await
+        prox::run::prepared(
+            &problem,
+            &source,
+            draws,
+            self.tier,
+            self.hearing,
+            self.abandon,
+        )
+        .await
     }
 
     /// `solution` predicted at the cap's draws, where it finished.
@@ -331,10 +343,15 @@ impl<B: Backend> Cx<'_, B> {
             true => None,
             false => {
                 let files = merged(&stage.files, &solution.files);
-                let at = self
-                    .prepared(&files, &stage.cost, self.settings.draws)
-                    .await?;
-                Some(evaluate(&at.fit, &at.state, false, at.fit.threads)?.residual)
+                let evaluated = async {
+                    let at = self
+                        .prepared(&files, &stage.cost, self.settings.draws)
+                        .await?;
+                    at.fit.noised(&at.state, self.hearing)?;
+                    Ok(evaluate(&at.fit, &at.state, false, at.fit.threads)?.residual)
+                };
+                let act = Act::new(Action::EvaluatingAtCap);
+                Some(self.hearing.during(act, evaluated).await?)
             }
         };
         Ok(Reached {
@@ -349,7 +366,16 @@ impl<B: Backend> Cx<'_, B> {
         let over = Overlay::new(self.problem.source, stage.files.iter().cloned().collect());
         let problem = self.over(&over, stage.cost.clone());
         let draws = self.settings.draws;
-        prox::measure(&problem, &solution.files, draws, self.tier, self.abandon).await
+        let (tier, hearing) = (self.tier, self.hearing);
+        prox::measure(
+            &problem,
+            &solution.files,
+            draws,
+            tier,
+            hearing,
+            self.abandon,
+        )
+        .await
     }
 
     fn over<'s>(&'s self, source: &'s dyn Source, cost: Cost) -> Problem<'s> {
@@ -394,14 +420,12 @@ impl<B: Backend> Cx<'_, B> {
     }
 }
 
-/// The stages of one scheme, each from what the last one reached; `report` hears the trial
-/// solves that build one.
+/// The stages of one scheme, each from what the last one reached, staged in `cx.hearing`.
 trait Stages<B: Backend> {
     async fn next(
         &mut self,
         last: Option<&Reached>,
         cx: &Cx<'_, B>,
-        report: &mut dyn FnMut(&str, &Progress),
     ) -> Result<Option<Built>, CliError>;
 }
 
@@ -409,62 +433,52 @@ fn scaled(steps: usize, fraction: f64) -> usize {
     ((steps as f64 * fraction).round() as usize).max(1)
 }
 
-pub enum Heard<'a> {
-    Step(&'a str, &'a Progress<'a>),
-    /// A stage as listed, the files `--write` writes for it, `least` below every earlier one.
-    Listed {
-        reached: &'a Reached,
-        files: &'a [(String, String)],
-        least: bool,
-    },
+impl Reached {
+    /// The line that lists it.
+    pub fn listed(&self, files: &[(String, String)], least: bool, hearing: &Hearing) {
+        hearing.heard(&Heard::Listed {
+            label: &self.stage.label,
+            solution: &self.solution,
+            at_cap: self.at_cap.as_ref(),
+            length: self.length(),
+            files,
+            least,
+        });
+    }
 }
 
-/// `report` hears each step and each stage as it is listed. The answer is unmeasured:
-/// [`Ran::measured`].
-pub async fn run<B: Backend>(
-    scheme: &Scheme,
-    cx: &Cx<'_, B>,
-    report: &mut dyn FnMut(&Heard),
-) -> Result<Ran, CliError> {
+/// `cx.hearing` hears each step, each activity and each stage as it is listed. The answer is
+/// unmeasured: [`Ran::measured`].
+pub async fn run<B: Backend>(scheme: &Scheme, cx: &Cx<'_, B>) -> Result<Ran, CliError> {
     match scheme {
         Scheme::Path { prices, rounds } => {
             let prices = prices.clone().unwrap_or_else(|| vec![cx.shape.price]);
             let mut stages = path::Path::new(prices, *rounds, cx.settings.steps);
-            driven(&mut stages, cx, report).await
+            driven(&mut stages, cx).await
         }
         Scheme::Grow { ceiling, rounds } => {
             let mut stages = grow::Grow::new(cx, *ceiling, *rounds)?;
-            driven(&mut stages, cx, report).await
+            driven(&mut stages, cx).await
         }
     }
 }
 
-async fn driven<B: Backend>(
-    stages: &mut impl Stages<B>,
-    cx: &Cx<'_, B>,
-    report: &mut dyn FnMut(&Heard),
-) -> Result<Ran, CliError> {
+async fn driven<B: Backend>(stages: &mut impl Stages<B>, cx: &Cx<'_, B>) -> Result<Ran, CliError> {
     let mut reached: Vec<Reached> = Vec::new();
     let mut least: Option<f64> = None;
-    let mut listed = |r: &Reached, report: &mut dyn FnMut(&Heard)| -> Result<(), CliError> {
-        let files = written(cx, r)?;
-        report(&Heard::Listed {
-            reached: r,
-            files: &files,
-            least: below(r, &mut least),
-        });
+    let mut listed = |r: &Reached| -> Result<(), CliError> {
+        r.listed(&written(cx, r)?, below(r, &mut least), cx.hearing);
         Ok(())
     };
     let mut cancelled = false;
     loop {
-        let mut step = |s: &str, p: &Progress| report(&Heard::Step(s, p));
-        let Some(built) = stages.next(reached.last(), cx, &mut step).await? else {
+        let Some(built) = stages.next(reached.last(), cx).await? else {
             break;
         };
         let stage = match built {
             Built::Stage(stage) => stage,
             Built::Stopped(r) => {
-                listed(&r, report)?;
+                listed(&r)?;
                 reached.push(r);
                 cancelled = true;
                 break;
@@ -474,15 +488,13 @@ async fn driven<B: Backend>(
             cancelled = true;
             break;
         }
-        let label = stage.label.clone();
-        let mut heard = |p: &Progress| report(&Heard::Step(&label, p));
         let draws = started(reached.last());
         let solution = cx
-            .scheduled(&stage.files, &stage.cost, stage.steps, draws, &mut heard)
+            .scheduled(&stage.files, &stage.cost, stage.steps, draws)
             .await?;
         let r = cx.reached(stage, solution).await?;
         cancelled = r.at_cap.is_none() || cx.abandon.abandoned().await;
-        listed(&r, report)?;
+        listed(&r)?;
         reached.push(r);
         if cancelled {
             break;

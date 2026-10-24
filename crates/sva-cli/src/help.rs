@@ -32,6 +32,7 @@ pub fn help_text() -> String {
     let (steps, rate) = (solve::prox::DEFAULT_STEPS, solve::prox::BITS_PER_JND2);
     let flat_from = 2 * solve::prox::step::memory();
     let (fewest, draws) = (sva_core::continuation::FEWEST, solve::prox::DEFAULT_DRAWS);
+    let heartbeat = solve::prox::heard::DEFAULT_HEARTBEAT_SECS;
     let rounds = sva_core::structure::assign::REASSIGN_ROUNDS;
     let (harmonics, lone) = (
         sva_core::seed::LIMITS.harmonics,
@@ -384,7 +385,7 @@ SOLVE:
                 [--max-renders <n>] [--step-tol <x>] [--cost-tol <x>]
                 [--set <name>=<text>]... [--rate <hz>] [--threads <n>]
                 [--cache <path|none>] [--write [--confirm]]
-                [--method prox [--steps <n>] [--draws <n>]
+                [--method prox [--steps <n>] [--draws <n>] [--heartbeat <s>]
                   [--continuation (path[:<p>,<p>...] | grow[:<h>,<l>])
                     [--rounds <n>]]]
 
@@ -724,12 +725,40 @@ PRICED FIT:
   numbers and bits the state the phase answers; the others' `ended` null and
   their values their own step's. Each stage `stages` lists prints one more
   as it is listed: `{{"stage", "finished": true, "stopped", "length_bits",
-  "least", "files"}}`, `least` true where its `length_bits` is below every
-  earlier stage's (the last such is `chosen`) and `files` the paths
-  `--write` would write for it; sva-wasm's `progress` hears their texts too.
-  Writing them loads the stage's composition once and renders nothing,
-  cheap next to its solve. `sva-cli new <name> --from <clip>` writes a
-  starter to fit.
+  "residual_bits", "bits", "numbers", "predicted_at_cap", "least",
+  "files"}}`, the terms as `stages` will list them, `least` true where its
+  `length_bits` is below every earlier stage's (the last such is `chosen`)
+  and `files` the paths `--write` would write for it; sva-wasm's `progress`
+  hears their texts too. Writing them loads the stage's composition once
+  and renders nothing, cheap next to its solve.
+  ACTIVITY: a line `{{"action", "stage", "edit", "count", "part", "work",
+  "seconds"}}` as each activity starts, as the one it ran inside resumes,
+  and between its units (a step, a proposal, a render, a draw) once
+  `--heartbeat` seconds (default {heartbeat}) have passed since the last
+  line; 0 prints one between every unit. A unit longer than that delays the
+  next line. `action` is what the solve is doing: `seeding` (reading the
+  clip a `grow` level's growths come from), `reading_reference`
+  (rendering and reading the reference as a solve starts),
+  `rendering_noise` (each noisy line's noise per draw, once a solve),
+  `descending`, `debiasing`, `ranking_proposals` (a round's structure
+  edits, one evaluation each), `trying_proposal` (a ranked edit solved),
+  `evaluating_at_cap` or `measuring`. `stage` is the stage it is under,
+  `edit` the edit a trial tries, null otherwise; `count` its own `{{"done",
+  "of", "unit"}}` where it counts: `render`s, `step`s of at most the cap,
+  `proposal`s, `trial`s of at most those ranked, `draw`s; null otherwise.
+  `part` is `{{"at", "of"}}`, the stage's place in the scheme and at most
+  how many (`path`: 2 and 2 a price; `grow`: 2 and one a level up to the
+  ceiling; 1 of 1 without a continuation). `work` is `{{"comparisons",
+  "per_second"}}`: cell comparisons since the solve began, one a counted
+  cell of the reference's `internal` reading (a set's Bark band at a frame
+  inside the interval) compared against the same cell of one draw's
+  reading of the model; an evaluation, gradient or none, makes cells times
+  its K draws, measuring the same off its renders; `per_second` that count's
+  rate over the last window at least `--heartbeat` long, null before one.
+  `seconds` since the solve began. A refusal prints `{{"failed": true,
+  "code", "action", ...}}` first, the activity it stopped, `action` null
+  where it came before any.
+  `sva-cli new <name> --from <clip>` writes a starter to fit.
 
 CONTINUATION:
   `--continuation <scheme>` runs a priced fit as stages, each a fresh solve
@@ -970,6 +999,9 @@ DEFAULTS:
                        least {fewest}; every finished stage is predicted
                        and the chosen one measured at it.
                        Default {draws}.
+  --heartbeat <s>      the most seconds between a priced solve's activity lines
+                       while one runs, 0 for one between every unit: PRICED FIT.
+                       Default {heartbeat}.
   --write              a solve writes its fitted values to their `variables/`
                        files, with `--confirm`. Default off.
   --confirm            replaces a destination that already holds a file. Without

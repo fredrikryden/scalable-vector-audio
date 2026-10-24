@@ -6,8 +6,9 @@ use sva_engine::{Abandon, Backend, Output, Session, Tier};
 use sva_samples::measure::internal::{self, Ear, Grid, Internal};
 
 use super::eval::{Fit, Residual, evaluate};
+use super::heard::{Act, Action, DEFAULT_HEARTBEAT_SECS, Hearing};
 use super::state::{State, Var, reaches};
-use super::{DEFAULT_DRAWS, DEFAULT_STEPS, Descended, Ended, Progress, descended, price, write};
+use super::{DEFAULT_DRAWS, DEFAULT_STEPS, Descended, Ended, descended, price, write};
 use crate::cli_error::CliError;
 use crate::model::Model;
 use crate::query::{Asked, asked, call};
@@ -23,6 +24,8 @@ pub struct Settings {
     pub steps: usize,
     /// The draws each loss averages, a prefix of each line's; a fit's cap on its solves' own.
     pub draws: usize,
+    /// The most seconds between activity lines.
+    pub heartbeat: f64,
 }
 
 impl Default for Settings {
@@ -30,6 +33,7 @@ impl Default for Settings {
         Settings {
             steps: DEFAULT_STEPS,
             draws: DEFAULT_DRAWS,
+            heartbeat: DEFAULT_HEARTBEAT_SECS,
         }
     }
 }
@@ -307,6 +311,7 @@ pub(crate) async fn prepared<B: Backend>(
     source: &dyn Source,
     draws: usize,
     tier: &Tier<B>,
+    hearing: &Hearing<'_>,
     abandon: &dyn Abandon,
 ) -> Result<Prepared, CliError> {
     let shape = shape(&problem.cost)?;
@@ -360,6 +365,7 @@ pub(crate) async fn prepared<B: Backend>(
         draws,
         texts,
         renders: std::sync::Arc::default(),
+        work: std::sync::Arc::clone(&hearing.work),
     };
     Ok(Prepared {
         shape,
@@ -376,7 +382,7 @@ pub async fn solve<B: Backend>(
     problem: &Problem<'_>,
     settings: &Settings,
     tier: &Tier<B>,
-    report: &mut dyn FnMut(&Progress),
+    hearing: &Hearing<'_>,
     abandon: &dyn Abandon,
 ) -> Result<Solution, CliError> {
     let base = recorded(&problem.cost, problem.source);
@@ -386,9 +392,15 @@ pub async fn solve<B: Backend>(
         fit,
         mut state,
         ..
-    } = prepared(problem, &source, settings.draws, tier, abandon).await?;
+    } = hearing
+        .during(
+            Act::new(Action::ReadingReference),
+            prepared(problem, &source, settings.draws, tier, hearing, abandon),
+        )
+        .await?;
+    fit.noised(&state, hearing)?;
     let lambda = shape.price;
-    let descents = descended(&fit, &mut state, lambda, settings.steps, abandon, report).await?;
+    let descents = descended(&fit, &mut state, lambda, settings.steps, abandon, hearing).await?;
     let e = evaluate(&fit, &state, false, fit.threads)?;
     let (numbers, bits) = price::numbers(&state);
     let text = |p: &str| -> Option<String> { source.get(p).ok().flatten().map(|t| t.into_owned()) };

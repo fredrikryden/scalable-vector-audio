@@ -3,12 +3,14 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use sva_formula::C64;
 use sva_samples::measure::internal::iso::THIRDS;
 use sva_samples::measure::internal::{BARKS, Ear, Grid, Internal};
 
 use super::draws::{self, phase};
+use super::heard::Hearing;
 use super::lines::{Adjoint, Bins};
 use super::played::{self, Lowered, ROOT_SEED, Renders};
 use super::state::{Slot, State};
@@ -28,6 +30,7 @@ pub struct Fit {
     /// The text of every file the composition's model reads, by path.
     pub texts: BTreeMap<String, String>,
     pub renders: Arc<Renders>,
+    pub work: Arc<AtomicU64>,
 }
 
 /// A residual over the phase draws.
@@ -63,6 +66,21 @@ impl Fit {
         let text = |p: &str| self.texts.get(p).cloned();
         played::lowered(s, &text, &self.ear.grid, &self.renders, self.draws, threads)
     }
+
+    /// Renders here what an evaluation, parallel, would.
+    pub fn noised(&self, s: &State, hearing: &Hearing) -> Result<(), CliError> {
+        let text = |p: &str| self.texts.get(p).cloned();
+        let g = &self.ear.grid;
+        played::noised(
+            s,
+            &text,
+            g,
+            &self.renders,
+            self.draws,
+            self.threads,
+            hearing,
+        )
+    }
 }
 
 /// Each element's weight: its set's independent samples per frame.
@@ -85,7 +103,7 @@ pub fn residual(fit: &Fit, w: &[f64], draws: &[Vec<f64>]) -> Residual {
 
 /// Each draw's bits, and `d'^2` summed over the draws unweighted.
 fn drawn(fit: &Fit, w: &[f64], draws: &[Vec<f64>]) -> (Vec<f64>, f64) {
-    let (mut weighted, mut plain) = (Vec::new(), 0.0);
+    let (mut weighted, mut plain, mut compared) = (Vec::new(), 0.0, 0);
     for elements in draws {
         let (mut a, mut b) = (0.0, 0.0);
         for (e, ((x, y), w)) in elements
@@ -95,6 +113,7 @@ fn drawn(fit: &Fit, w: &[f64], draws: &[Vec<f64>]) -> (Vec<f64>, f64) {
             .enumerate()
         {
             if fit.counts(e) {
+                compared += 1;
                 let d = x - y;
                 a += w * d * d;
                 b += d * d;
@@ -103,6 +122,7 @@ fn drawn(fit: &Fit, w: &[f64], draws: &[Vec<f64>]) -> (Vec<f64>, f64) {
         weighted.push(BITS_PER_JND2 * a);
         plain += b;
     }
+    fit.work.fetch_add(compared, Ordering::Relaxed);
     (weighted, plain)
 }
 

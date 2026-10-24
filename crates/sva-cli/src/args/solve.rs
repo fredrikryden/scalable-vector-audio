@@ -100,6 +100,12 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
                 settings.draws = count(&value(&mut it, "--draws")?, "--draws", "draws")?.get();
                 prox_flag = Some("--draws");
             }
+            "--heartbeat" => {
+                let raw = value(&mut it, "--heartbeat")?;
+                let says = "seconds at or above 0";
+                settings.heartbeat = number(&raw, "--heartbeat", |v| v >= 0.0, says)?;
+                prox_flag = Some("--heartbeat");
+            }
             "--vary" => vary_all.push(vary(&value(&mut it, "--vary")?)?),
             "--set" => sets.push(sva_core::set(&value(&mut it, "--set")?)?),
             "--max-renders" => {
@@ -155,7 +161,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
             "cli.compass_flag",
             format!(
                 "`{flag}` stops the compass search, which `--method prox` does not run; it is \
-                 set by `--steps`, `--draws` and `--continuation`"
+                 set by `--steps`, `--draws`, `--heartbeat` and `--continuation`"
             ),
         ));
     }

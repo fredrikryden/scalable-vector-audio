@@ -143,6 +143,9 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
         let Ok(p) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if p.get("action").is_some() {
+            continue;
+        }
         if p["finished"] == true {
             let files = p["files"]["items"].as_array().expect("files");
             assert!(
@@ -242,7 +245,8 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
 
 /// A starter whose limits drop what the clip holds names `--continuation grow` next; run as
 /// written, it answers the composition as given solved, then each level it grew, chooses the
-/// least predicted length and writes it under `--confirm`.
+/// least predicted length and writes it under `--confirm`. Stderr names every activity, its
+/// comparisons never falling, and each finished stage's terms.
 #[test]
 fn a_coarse_starter_grows_and_writes_its_choice() {
     let (root, wav) = clip("prox-grow", TONE);
@@ -265,11 +269,60 @@ fn a_coarse_starter_grows_and_writes_its_choice() {
         .expect("a next command");
     assert!(next.contains(" --continuation grow "), "{next}");
     let dir = root.join("fit");
-    let mut solve = argv(&["solve", "@fits/clip", "--steps", "3", "--cache", "none"]);
+    let mut solve = argv(&[
+        "solve",
+        "@fits/clip",
+        "--steps",
+        "3",
+        "--cache",
+        "none",
+        "--heartbeat",
+        "0",
+    ]);
     solve.extend(flags(next));
     let master = std::fs::read_to_string(dir.join("master")).expect("master");
-    let answered = json(&sva(&dir, &solve));
+    let out = sva(&dir, &solve);
+    let answered = json(&out);
     assert_eq!(answered["status"], "success", "{answered}");
+    let lines: Vec<Value> = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let names = [
+        "seeding",
+        "reading_reference",
+        "rendering_noise",
+        "descending",
+        "debiasing",
+        "ranking_proposals",
+        "trying_proposal",
+        "evaluating_at_cap",
+        "measuring",
+    ];
+    let mut done = 0;
+    let mut heard = std::collections::BTreeSet::new();
+    for line in lines.iter().filter(|l| l.get("action").is_some()) {
+        let action = line["action"].as_str().unwrap_or_default();
+        assert!(names.contains(&action), "an action by name: {line}");
+        heard.insert(action);
+        let work = line["work"]["comparisons"].as_u64().expect("a count");
+        assert!(work >= done, "the work never falls, from {done}: {line}");
+        done = work;
+    }
+    for want in names.iter().filter(|n| **n != "rendering_noise") {
+        assert!(heard.contains(want), "`{want}` is heard: {heard:?}");
+    }
+    assert!(done > 0, "the solve compared cells");
+    let finished: Vec<&Value> = lines.iter().filter(|l| l["finished"] == true).collect();
+    assert_eq!(finished.len(), labels(&answered["data"]).len());
+    for line in finished {
+        for key in ["residual_bits", "bits", "numbers", "predicted_at_cap"] {
+            assert!(
+                !line[key].is_null(),
+                "a finished stage hears `{key}`: {line}"
+            );
+        }
+    }
     let data = &answered["data"];
     assert_eq!(data["continuation"]["scheme"], "grow", "{data}");
     let labels = labels(data);
@@ -451,6 +504,9 @@ fn a_signal_in_a_stage_lists_it_stopped() {
         let Ok(p) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        if p.get("action").is_some() {
+            continue;
+        }
         let stage = p["stage"].as_str().expect("a stage").to_string();
         if stage.contains(" trial ") {
             break stage;

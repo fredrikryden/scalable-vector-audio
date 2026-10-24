@@ -1601,8 +1601,8 @@ fn seeded_fit(
 
 /// A starter seeded at `{ harmonics: 1, lone: 1 }` solves through `grow` up to two harmonics:
 /// the composition as given solved, then each level grown, the chosen stage written. `progress`
-/// hears each listed stage as it finishes, its files rendering over the starter, the last least
-/// one's the answer's `files`.
+/// hears each listed stage as it finishes with its terms, its files rendering over the starter,
+/// the last least one's the answer's `files`; activities are timed off wasm's clock.
 #[wasm_bindgen_test]
 fn a_coarse_starter_grows_through_its_levels() {
     let (rate, channels) = sine_clip();
@@ -1621,6 +1621,7 @@ fn a_coarse_starter_grows_through_its_levels() {
         ("method", JsValue::from("prox")),
         ("continuation", continuation.into()),
         ("steps", JsValue::from(3)),
+        ("heartbeat", JsValue::from(0)),
         ("write", JsValue::from(true)),
         ("recordings", recordings),
         ("progress", push.bind0(&heard).into()),
@@ -1665,7 +1666,20 @@ fn a_coarse_starter_grows_through_its_levels() {
         .filter_map(|l| field(l, "stage").as_string())
         .collect();
     assert_eq!(heard_labels, labels, "a finished line per listed stage");
+    assert!(
+        heard
+            .iter()
+            .any(|l| field(&l, "action").as_string().as_deref() == Some("descending")),
+        "activities are heard"
+    );
     for line in &finished {
+        for key in ["residual_bits", "bits", "numbers"] {
+            assert!(
+                field(line, key).as_f64().is_some(),
+                "{key}: {}",
+                as_text(line)
+            );
+        }
         let (mut fresh, ..) = seeded_fit(rate, &channels, &seeded);
         for file in items(line, "files").iter() {
             fresh.insert(

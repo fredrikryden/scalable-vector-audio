@@ -8,7 +8,7 @@ use super::path::START_STEPS;
 use super::{Built, Cx, Reached, Stage, Stages, merged, scaled, started};
 use crate::cli_error::CliError;
 use crate::seed::{self, Limits, Readings};
-use crate::solve::prox::Progress;
+use crate::solve::prox::heard::{Act, Action};
 use crate::solve::prox::run::FIT_RATE;
 use crate::solve::{recorded, with_price};
 use crate::structure::{applied, assign, grow, merge, split};
@@ -24,6 +24,8 @@ pub(super) struct Grow {
     readings: Readings,
     ceiling: Limits,
     at: Limits,
+    /// The levels built, and the most from the composition's limits to the ceiling.
+    levels: (usize, usize),
     rounds: usize,
     steps: usize,
     next: Next,
@@ -35,10 +37,20 @@ impl Grow {
         ceiling: Limits,
         rounds: usize,
     ) -> Result<Grow, CliError> {
+        let readings = cx
+            .hearing
+            .within(Act::new(Action::Seeding), || readings(cx))?;
+        let at = grow::written(&cx.model(&[])?);
+        let mut levels = 0;
+        let mut to = at;
+        while finer(to, ceiling) != to {
+            (to, levels) = (finer(to, ceiling), levels + 1);
+        }
         Ok(Grow {
-            readings: readings(cx)?,
+            readings,
             ceiling,
-            at: grow::written(&cx.model(&[])?),
+            at,
+            levels: (0, levels),
             rounds,
             steps: cx.settings.steps,
             next: Next::Start,
@@ -97,12 +109,18 @@ fn finer(at: Limits, ceiling: Limits) -> Limits {
     }
 }
 
+impl Grow {
+    /// The most stages it builds: a level that does not shorten the length ends the run.
+    fn parts(&self) -> usize {
+        2 + self.levels.1
+    }
+}
+
 impl<B: Backend> Stages<B> for Grow {
     async fn next(
         &mut self,
         last: Option<&Reached>,
         cx: &Cx<'_, B>,
-        report: &mut dyn FnMut(&str, &Progress),
     ) -> Result<Option<Built>, CliError> {
         let files = last.map(Reached::files).unwrap_or_default();
         let cost = &cx.problem.cost;
@@ -111,6 +129,7 @@ impl<B: Backend> Stages<B> for Grow {
         match self.next {
             Next::Start => {
                 self.next = Next::Settle;
+                cx.hearing.staged("start", (1, self.parts()));
                 Ok(Some(Built::Stage(Stage {
                     label: "start".to_string(),
                     files,
@@ -121,6 +140,7 @@ impl<B: Backend> Stages<B> for Grow {
             }
             Next::Settle => {
                 self.next = Next::Level(None);
+                cx.hearing.staged("settle", (2, self.parts()));
                 let model = cx.model(&files)?;
                 let cluster = assign::cluster(&model, varies, self.rounds);
                 let edited = applied(&model, &cx.texts(&files), varies, &cluster)?;
@@ -150,21 +170,15 @@ impl<B: Backend> Stages<B> for Grow {
                 }
                 let (readings, rounds) = (&self.readings, self.rounds);
                 let label = format!("grow h={} lone={}", to.harmonics, to.lone);
-                let grown = improve(
-                    cx,
-                    &label,
-                    files,
-                    cost,
-                    draws,
-                    &|m, texts, kept| {
-                        let offered = grow::proposals(m, texts, varies, readings, from, to)?;
-                        Ok(offered
-                            .into_iter()
-                            .filter(|p| !kept.contains(&p.label))
-                            .collect())
-                    },
-                    report,
-                )
+                let part = (3 + self.levels.0, self.parts());
+                cx.hearing.staged(&label, part);
+                let grown = improve(cx, &label, files, cost, draws, &|m, texts, kept| {
+                    let offered = grow::proposals(m, texts, varies, readings, from, to)?;
+                    Ok(offered
+                        .into_iter()
+                        .filter(|p| !kept.contains(&p.label))
+                        .collect())
+                })
                 .await?;
                 if let Some(r) = grown.stopped {
                     return Ok(Some(Built::Stopped(r)));
@@ -172,34 +186,23 @@ impl<B: Backend> Stages<B> for Grow {
                 if grown.kept.is_empty() {
                     return Ok(None);
                 }
-                let split = improve(
-                    cx,
-                    &label,
-                    grown.files,
-                    cost,
-                    draws,
-                    &|m, _, _| Ok(split::proposals(m, varies, rounds)),
-                    report,
-                )
+                let split = improve(cx, &label, grown.files, cost, draws, &|m, _, _| {
+                    Ok(split::proposals(m, varies, rounds))
+                })
                 .await?;
                 if let Some(r) = split.stopped {
                     return Ok(Some(Built::Stopped(r.after(&grown.kept))));
                 }
-                let merged = improve(
-                    cx,
-                    &label,
-                    split.files,
-                    cost,
-                    draws,
-                    &|m, _, _| Ok(merge::proposals(m, varies)),
-                    report,
-                )
+                let merged = improve(cx, &label, split.files, cost, draws, &|m, _, _| {
+                    Ok(merge::proposals(m, varies))
+                })
                 .await?;
                 let kept = [grown.kept, split.kept].concat();
                 if let Some(r) = merged.stopped {
                     return Ok(Some(Built::Stopped(r.after(&kept))));
                 }
                 self.at = to;
+                self.levels.0 += 1;
                 Ok(Some(Built::Stage(Stage {
                     label,
                     files: merged.files,

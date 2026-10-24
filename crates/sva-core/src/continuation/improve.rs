@@ -15,9 +15,10 @@ use super::{Cx, Reached, Stage, merged};
 use crate::cli_error::CliError;
 use crate::model::Model;
 use crate::solve::Cost;
+use crate::solve::prox::heard::{Act, Action};
 use crate::solve::prox::played::Renders;
 use crate::solve::prox::run::Prepared;
-use crate::solve::prox::{self, Progress, price, write};
+use crate::solve::prox::{self, price, write};
 use crate::structure::{Proposal, applied};
 
 pub struct Improved {
@@ -66,6 +67,72 @@ fn predicted(at: &Prepared) -> Result<Predicted, CliError> {
     })
 }
 
+type Ranked = Vec<(f64, String, Vec<(String, String)>)>;
+
+/// The current files' prediction and each proposal's, none where a signal stopped the round;
+/// a proposal's composition prepared, its noise rendered, then a thread's worth predicted at once.
+async fn ranked<B: Backend>(
+    cx: &Cx<'_, B>,
+    files: &[(String, String)],
+    model: &Model,
+    proposals: Vec<Proposal>,
+    cost: &Cost,
+    draws: usize,
+) -> Result<Option<(Predicted, Ranked)>, CliError> {
+    let here = cx.prepared(files, cost, draws).await?;
+    here.fit.noised(&here.state, cx.hearing)?;
+    let threads = here.fit.threads;
+    let current = predicted(&here)?;
+    let mut edited = BTreeSet::from([merged(files, &[])]);
+    let mut written = BTreeSet::from([as_written(cx, files, &here)?]);
+    let mut ranked = Vec::new();
+    let mut proposals = proposals.into_iter().enumerate().peekable();
+    while proposals.peek().is_some() {
+        let mut starts = Vec::new();
+        let mut jobs = Vec::new();
+        while jobs.len() < threads.get()
+            && let Some((i, p)) = proposals.next()
+        {
+            cx.hearing.tick(i);
+            if cx.abandon.abandoned().await {
+                return Ok(None);
+            }
+            let start = merged(
+                files,
+                &applied(model, &cx.texts(files), &cx.problem.vary, &p)?,
+            );
+            if !edited.insert(start.clone()) {
+                continue;
+            }
+            let mut job = cx.prepared(&start, cost, draws).await?;
+            if !written.insert(as_written(cx, &start, &job)?) {
+                continue;
+            }
+            assert_eq!(
+                job.fit.grid(),
+                here.fit.grid(),
+                "a round reads one reference"
+            );
+            job.fit.renders = Arc::new(Renders::over(Arc::clone(&here.fit.renders)));
+            job.fit.noised(&job.state, cx.hearing)?;
+            jobs.push(job);
+            starts.push((p.label, start));
+        }
+        if jobs.is_empty() {
+            continue;
+        }
+        let per_job = NonZeroUsize::new(threads.get() / jobs.len()).expect("a worker per thread");
+        let predictions = sva_engine::each(threads, jobs, |mut at| {
+            at.fit.threads = per_job;
+            predicted(&at).map(|p| p.predicted)
+        });
+        for (p, (label, start)) in predictions.into_iter().zip(starts) {
+            ranked.push((p?, label, start));
+        }
+    }
+    Ok(Some((current, ranked)))
+}
+
 pub async fn improve<B: Backend>(
     cx: &Cx<'_, B>,
     stage: &str,
@@ -73,7 +140,6 @@ pub async fn improve<B: Backend>(
     cost: &Cost,
     draws: usize,
     propose: &Propose<'_>,
-    report: &mut dyn FnMut(&str, &Progress),
 ) -> Result<Improved, CliError> {
     let (mut files, mut kept) = (files, Vec::new());
     'round: loop {
@@ -85,65 +151,27 @@ pub async fn improve<B: Backend>(
         if proposals.is_empty() {
             break;
         }
-        let here = cx.prepared(&files, cost, draws).await?;
-        let threads = here.fit.threads;
-        let current = predicted(&here)?;
-        let mut edited = BTreeSet::from([merged(&files, &[])]);
-        let mut written = BTreeSet::from([as_written(cx, &files, &here)?]);
-        let mut ranked = Vec::new();
-        let mut proposals = proposals.into_iter().peekable();
-        while proposals.peek().is_some() {
-            let mut starts = Vec::new();
-            let mut jobs = Vec::new();
-            while jobs.len() < threads.get()
-                && let Some(p) = proposals.next()
-            {
-                if cx.abandon.abandoned().await {
-                    break 'round;
-                }
-                let start = merged(
-                    &files,
-                    &applied(&model, &cx.texts(&files), &cx.problem.vary, &p)?,
-                );
-                if !edited.insert(start.clone()) {
-                    continue;
-                }
-                let mut job = cx.prepared(&start, cost, draws).await?;
-                if !written.insert(as_written(cx, &start, &job)?) {
-                    continue;
-                }
-                assert_eq!(
-                    job.fit.grid(),
-                    here.fit.grid(),
-                    "a round reads one reference"
-                );
-                job.fit.renders = Arc::new(Renders::over(Arc::clone(&here.fit.renders)));
-                jobs.push(job);
-                starts.push((p.label, start));
-            }
-            if jobs.is_empty() {
-                continue;
-            }
-            let per_job =
-                NonZeroUsize::new(threads.get() / jobs.len()).expect("a worker per thread");
-            let predictions = sva_engine::each(threads, jobs, |mut at| {
-                at.fit.threads = per_job;
-                predicted(&at).map(|p| p.predicted)
-            });
-            for (p, (label, start)) in predictions.into_iter().zip(starts) {
-                ranked.push((p?, label, start));
-            }
-        }
+        let act = Act::new(Action::RankingProposals).of(proposals.len());
+        let Some((current, mut ranked)) = cx
+            .hearing
+            .during(act, ranked(cx, &files, &model, proposals, cost, draws))
+            .await?
+        else {
+            break 'round;
+        };
         ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let tried = ranked.len();
         for (rank, (predicted, label, start)) in ranked.into_iter().enumerate() {
             if rank > 0 && predicted >= current.predicted {
                 break;
             }
             let trial = format!("{stage} trial {label}");
-            let mut heard = |p: &Progress| report(&trial, p);
-            let solved = cx
-                .solved(&start, cost, cx.settings.steps, draws, &mut heard)
-                .await?;
+            let act = Act::new(Action::TryingProposal)
+                .of(tried)
+                .from(rank)
+                .edit(&label, trial.clone());
+            let solving = cx.solved(&start, cost, cx.settings.steps, draws);
+            let solved = cx.hearing.during(act, solving).await?;
             if solved.cancelled() {
                 let stage = Stage {
                     label: trial,

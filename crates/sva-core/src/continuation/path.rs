@@ -6,7 +6,6 @@ use super::improve::improve;
 use super::{Built, Cx, Reached, Stage, Stages, merged, scaled, started};
 use crate::cli_error::CliError;
 use crate::solve::prox::DEBIAS_STEPS;
-use crate::solve::prox::Progress;
 use crate::solve::with_price;
 use crate::structure::{applied, assign, merge, split};
 
@@ -41,12 +40,18 @@ impl Path {
     }
 }
 
+impl Path {
+    /// The most stages it builds: a price's restructured one is left out where no edit is kept.
+    fn parts(&self) -> usize {
+        2 + 2 * self.prices.len()
+    }
+}
+
 impl<B: Backend> Stages<B> for Path {
     async fn next(
         &mut self,
         last: Option<&Reached>,
         cx: &Cx<'_, B>,
-        report: &mut dyn FnMut(&str, &Progress),
     ) -> Result<Option<Built>, CliError> {
         let unpriced = || with_price(&cx.problem.cost, 0.0);
         let files = last.map(Reached::files).unwrap_or_default();
@@ -55,6 +60,7 @@ impl<B: Backend> Stages<B> for Path {
             match self.next {
                 Next::Start => {
                     self.next = Next::Settle;
+                    cx.hearing.staged("start", (1, self.parts()));
                     return Ok(Some(Built::Stage(Stage {
                         label: "start".to_string(),
                         files,
@@ -65,6 +71,7 @@ impl<B: Backend> Stages<B> for Path {
                 }
                 Next::Settle => {
                     self.next = Next::Price(0);
+                    cx.hearing.staged("settle", (2, self.parts()));
                     let model = cx.model(&files)?;
                     let cluster = assign::cluster(&model, &cx.problem.vary, self.rounds);
                     let edited = applied(&model, &cx.texts(&files), &cx.problem.vary, &cluster)?;
@@ -84,8 +91,10 @@ impl<B: Backend> Stages<B> for Path {
                 Next::Price(k) => {
                     self.next = Next::Restructure(k);
                     let price = self.prices[k];
+                    let label = format!("price {price}");
+                    cx.hearing.staged(&label, (3 + 2 * k, self.parts()));
                     return Ok(Some(Built::Stage(Stage {
-                        label: format!("price {price}"),
+                        label,
                         files,
                         cost: with_price(&cx.problem.cost, price)?,
                         steps: self.steps,
@@ -98,28 +107,17 @@ impl<B: Backend> Stages<B> for Path {
                     let cost = with_price(&cx.problem.cost, price)?;
                     let (varies, rounds) = (&cx.problem.vary, self.rounds);
                     let label = format!("price {price}, restructured");
-                    let split = improve(
-                        cx,
-                        &label,
-                        files.clone(),
-                        &cost,
-                        draws,
-                        &|m, _, _| Ok(split::proposals(m, varies, rounds)),
-                        report,
-                    )
+                    cx.hearing.staged(&label, (4 + 2 * k, self.parts()));
+                    let split = improve(cx, &label, files.clone(), &cost, draws, &|m, _, _| {
+                        Ok(split::proposals(m, varies, rounds))
+                    })
                     .await?;
                     if let Some(r) = split.stopped {
                         return Ok(Some(Built::Stopped(r)));
                     }
-                    let merged = improve(
-                        cx,
-                        &label,
-                        split.files,
-                        &cost,
-                        draws,
-                        &|m, _, _| Ok(merge::proposals(m, varies)),
-                        report,
-                    )
+                    let merged = improve(cx, &label, split.files, &cost, draws, &|m, _, _| {
+                        Ok(merge::proposals(m, varies))
+                    })
                     .await?;
                     if let Some(r) = merged.stopped {
                         return Ok(Some(Built::Stopped(r.after(&split.kept))));
