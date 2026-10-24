@@ -392,7 +392,7 @@ checksum = "5b3dc8af474f516a851ff4bd12db780f948b9250ad37211e4eec0bccea54e01b"
 
 [[package]]
 name = "sva-ast"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "libm",
  "serde",
@@ -401,7 +401,7 @@ dependencies = [
 
 [[package]]
 name = "sva-cli"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "hound",
  "libm",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "sva-core"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "libm",
  "serde_json",
@@ -428,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "sva-engine"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "libm",
  "rayon",
@@ -439,14 +439,14 @@ dependencies = [
 
 [[package]]
 name = "sva-formula"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "libm",
 ]
 
 [[package]]
 name = "sva-samples"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "libm",
  "sva-formula",
@@ -454,7 +454,7 @@ dependencies = [
 
 [[package]]
 name = "sva-wasm"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "js-sys",
  "serde_json",
