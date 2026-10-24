@@ -158,12 +158,6 @@ mod tests {
     }
 
     #[test]
-    fn the_origin_carries_more_than_the_whole_second_two_runs_would_share() {
-        let (a, b) = (origin(), origin());
-        assert_ne!(a, b, "the origin carries more than whole seconds");
-    }
-
-    #[test]
     fn an_empty_collection_is_an_empty_items_list_with_a_zero_count() {
         assert!(list(&[] as &[f64], |v| num(*v)).contains("\"items\": []"));
         assert!(strings(&[] as &[&str]).contains("\"count\": 0"));

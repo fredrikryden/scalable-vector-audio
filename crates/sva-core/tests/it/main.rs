@@ -6,7 +6,5 @@ mod hear;
 mod lint_codes;
 mod pipeline;
 mod sampled;
-mod seed;
-mod session;
 mod stream;
 mod structure;

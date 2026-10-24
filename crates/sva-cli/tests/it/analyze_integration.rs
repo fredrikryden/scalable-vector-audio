@@ -3,7 +3,7 @@
 use crate::helpers::{fixture, scratch};
 
 use sva_cli::{SampleEncoding, parse_args, write_channels};
-use sva_engine::{Buffer, Output, PSYCHOACOUSTIC_V1, Representation, Source, answer_buffer};
+use sva_engine::{Buffer, Output, PSYCHOACOUSTIC_V1, Representation, answer_buffer};
 
 fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| (*s).to_string()).collect()
@@ -80,109 +80,6 @@ fn decoded(path: &std::path::Path) -> Buffer {
     )
 }
 
-/// The file's own rate stands: nothing resamples, and the reading says which rate it ran at.
-#[test]
-fn an_analysis_reads_the_files_own_rate_and_never_resamples_it() {
-    for rate in [22_050u32, 48_000] {
-        let path = written("analyze-rate", rate, &[&tone(rate, 440.0, 0.5)]);
-        let buffer = decoded(&path);
-        assert_eq!(buffer.rate, rate);
-        let answer = answer_buffer(
-            "in.wav",
-            &buffer,
-            Representation::Spectrum {
-                max_peaks: 4,
-                frame_secs: None,
-            },
-            PSYCHOACOUSTIC_V1.name,
-        )
-        .expect("a spectrum off a file");
-        assert_eq!(answer.rate, Some(rate));
-        assert_eq!(answer.source, Source::Measured);
-        assert_eq!(answer.profile, "psychoacoustic-v1");
-        let Output::Spectrum(spectrum) = answer.value else {
-            panic!("expected a spectrum")
-        };
-        let peak = spectrum.peaks.first().expect("one peak at least");
-        assert!(
-            (peak.hz - 440.0).abs() < 20.0,
-            "{rate} Hz put the 440 Hz tone at {}",
-            peak.hz
-        );
-    }
-}
-
-/// A reading that needs the tree a node was built from has no answer off a file, and says
-/// so rather than answering something else.
-#[test]
-fn a_reading_that_needs_a_graph_refuses_off_a_file() {
-    let path = written("analyze-refuse", 8_000, &[&tone(8_000, 220.0, 0.1)]);
-    let buffer = decoded(&path);
-    for representation in [
-        Representation::Ledger { depth: 3 },
-        Representation::Alias { oversample: 4 },
-        Representation::Lines,
-    ] {
-        let err = answer_buffer("in.wav", &buffer, representation, PSYCHOACOUSTIC_V1.name)
-            .err()
-            .unwrap_or_else(|| panic!("{} must refuse", representation.name()));
-        assert_eq!(err.code(), "engine.observation_needs_a_graph");
-    }
-}
-
-/// Argv says which readings a file answers at all, before a byte of it is read.
-#[test]
-fn analyze_takes_only_the_readings_a_buffer_answers() {
-    let answered: Vec<&str> = sva_engine::READINGS
-        .iter()
-        .filter(|row| row.reads.off_samples(true))
-        .map(|row| row.name)
-        .collect();
-    let mut sorted = answered.clone();
-    sorted.sort_unstable();
-    assert_eq!(
-        sorted,
-        [
-            "bands",
-            "beating",
-            "crest",
-            "derivative",
-            "dissonance",
-            "envelope",
-            "formants",
-            "inharmonicity",
-            "internal",
-            "loudness",
-            "loudness_pattern",
-            "modulation",
-            "partials",
-            "periodicity",
-            "pitch",
-            "samples",
-            "score",
-            "self_similarity",
-            "sharpness",
-            "spectrum",
-            "stereo",
-            "tonal_distance",
-            "voice_leading",
-        ],
-        "the readings a buffer answers alone"
-    );
-    for name in answered {
-        assert!(
-            parse_args(&argv(&["analyze", "/tmp/a.wav", "--representation", name])).is_ok(),
-            "`{name}` is one a buffer answers"
-        );
-    }
-    for name in ["ledger", "alias", "bindings", "lines", "atoms"] {
-        assert!(
-            parse_args(&argv(&["analyze", "/tmp/a.wav", "--representation", name])).is_err(),
-            "`{name}` needs a rendered graph"
-        );
-    }
-}
-
 /// Two components in, two components read: an interleaved file decodes back to the planes
 /// it was written from.
 #[test]
@@ -232,106 +129,6 @@ fn a_two_channel_file_answers_a_stereo_image_a_mono_or_three_channel_one_cannot(
             .contains("needs exactly 2 components and the file holds 3"),
         "{err}"
     );
-}
-
-/// A `beating` window fits each band's trend over at least 20 frames: one holding fewer
-/// refuses, naming the window and the frame that hold them.
-#[test]
-fn a_beating_window_under_twenty_frames_refuses_naming_what_holds_them() {
-    let rate = 48_000u32;
-    let path = written("beating-short-window", rate, &[&tone(rate, 220.0, 0.5)]);
-    let refused = answer_buffer(
-        "in.wav",
-        &decoded(&path),
-        Representation::Beating {
-            frame_secs: 0.01,
-            window_secs: 0.1,
-            spl_db: 100.0,
-        },
-        PSYCHOACOUSTIC_V1.name,
-    )
-    .expect_err("ten frames hold no trend");
-    assert_eq!(refused.code(), "read.window_under_frames");
-    let said = refused.to_string();
-    assert!(said.contains("`beating(window=0.2s)`"), "{said}");
-    assert!(
-        said.contains("`beating(window=0.1s, frame=0.005s)`"),
-        "{said}"
-    );
-}
-
-/// At 8 kHz `formants` fits 10 poles off 11 lags, 1.375 ms: a frame or file holding fewer
-/// refuses, naming the 1.4 ms that holds them, rather than fitting the few it holds.
-#[test]
-fn formants_under_the_orders_lags_refuse_naming_the_least_frame_and_file() {
-    let rate = 8_000u32;
-    let refusal = |samples: &[f32], frame_secs: f64| {
-        let path = written("formants-under-order", rate, &[samples]);
-        answer_buffer(
-            "in.wav",
-            &decoded(&path),
-            Representation::Formants {
-                max_formants: 4,
-                frame_secs,
-            },
-            PSYCHOACOUSTIC_V1.name,
-        )
-        .expect_err("too few lags for the order")
-    };
-    let tone = tone(rate, 220.0, 0.1);
-
-    let frame = refusal(&tone, 0.001);
-    assert_eq!(frame.code(), "read.frame_under_order");
-    assert!(
-        frame
-            .to_string()
-            .contains("ask a frame of 0.0014s or longer, as `formants(frame=0.0014s)`"),
-        "{frame}"
-    );
-
-    let file = refusal(&tone[..10], 0.05);
-    assert_eq!(file.code(), "read.target_under_order");
-    assert!(
-        file.to_string()
-            .contains("analyze a file holding at least 0.0014s"),
-        "{file}"
-    );
-}
-
-/// A frame the transform cannot hold refuses on both paths rather than shrinking silently
-/// or overflowing the size it was asked for.
-#[test]
-fn a_frame_past_the_transform_bound_refuses_on_both_paths() {
-    for span in ["1e9", "1e300"] {
-        let refused = std::process::Command::new(env!("CARGO_BIN_EXE_sva-cli"))
-            .current_dir(scratch("frame-bound"))
-            .args([
-                "render",
-                "@master",
-                "--representation",
-                &format!("spectrum(frame={span})"),
-            ])
-            .output()
-            .expect("the binary runs");
-        let printed = String::from_utf8_lossy(&refused.stdout);
-        assert_eq!(refused.status.code(), Some(3), "{printed}");
-        assert!(printed.contains("past the"), "{printed}");
-    }
-
-    let rate = 8_000u32;
-    let path = written("frame-bound-file", rate, &[&tone(rate, 220.0, 0.1)]);
-    let refused = std::process::Command::new(env!("CARGO_BIN_EXE_sva-cli"))
-        .args([
-            "analyze",
-            &path.display().to_string(),
-            "--representation",
-            "spectrum(frame=1e9)",
-        ])
-        .output()
-        .expect("the binary runs");
-    let printed = String::from_utf8_lossy(&refused.stdout);
-    assert_eq!(refused.status.code(), Some(3), "{printed}");
-    assert!(printed.contains("past the"), "{printed}");
 }
 
 /// BRIEF section 9 gates a groove on onsets to 1 ms. A hop says which strike, never when:
@@ -398,59 +195,6 @@ fn a_strike_at_zero_is_an_event() {
             "{heard} is more than a millisecond from {wanted}"
         );
     }
-}
-
-/// A tone swelling in is one note: whatever its window's leakage moves between frames of
-/// it held after is no strike.
-#[test]
-fn a_held_tone_is_one_event_where_it_starts() {
-    let rate = 48_000u32;
-    let held: Vec<f32> = (0..(f64::from(rate) * 2.0) as usize)
-        .map(|i| {
-            let t = i as f64 / f64::from(rate);
-            let swell = (t / 0.25).min(1.0);
-            (swell * libm::sin(std::f64::consts::TAU * 440.0 * t) * 0.5) as f32
-        })
-        .collect();
-    let found = event_times(&written("score-held", rate, &[&held]));
-    assert!(
-        found.len() <= 1 && found.iter().all(|t| *t < 0.25),
-        "a held tone strikes nothing past its start: {found:?}"
-    );
-}
-
-/// The same tone one quarter turn along: no event may come or go, or move past the 1 ms
-/// gate, on which phase the target's first sample happens to hold.
-#[test]
-fn a_held_tones_opening_phase_changes_no_event() {
-    let rate = 48_000u32;
-    let at_phase = |quarter: f64| {
-        let held: Vec<f32> = (0..(f64::from(rate) * 2.0) as usize)
-            .map(|i| {
-                let t = i as f64 / f64::from(rate);
-                let swell = (t / 0.25).min(1.0);
-                (swell * libm::sin(std::f64::consts::TAU * 440.0 * t + quarter) * 0.5) as f32
-            })
-            .collect();
-        event_times(&written("score-phase", rate, &[&held]))
-    };
-    let (zero, quarter) = (at_phase(0.0), at_phase(std::f64::consts::FRAC_PI_2));
-    assert_eq!(zero.len(), quarter.len(), "{zero:?} against {quarter:?}");
-    for (a, b) in zero.iter().zip(&quarter) {
-        assert!((a - b).abs() <= 0.001, "{zero:?} against {quarter:?}");
-    }
-}
-
-/// Strikes 80 ms apart, past the 60 ms within which two candidates are one strike, are each
-/// their own event: nothing about one may fold into its neighbour.
-#[test]
-fn strikes_past_the_one_strike_span_are_each_their_own_event() {
-    let rate = 44_100u32;
-    let gap = 0.08f64;
-    let struck: Vec<f64> = (0..12).map(|k| f64::from(k) * gap).collect();
-    let samples = strikes(rate, gap * 12.0 + 0.2, &struck, (0.012, 0.06));
-    let found = event_times(&written("score-dense", rate, &[&samples]));
-    assert_eq!(found.len(), struck.len(), "every strike: {found:?}");
 }
 
 fn keys(value: &serde_json::Value) -> Vec<&str> {

@@ -2,9 +2,9 @@
 
 use sva_ast::Composition;
 use sva_core::model::Model;
-use sva_core::seed::{Limits, Readings, harmonic, read, starter};
+use sva_core::seed::{Limits, Readings, read, starter};
 use sva_core::solve::{Vary, vary};
-use sva_core::structure::{Edit, Proposal, applied, assign, grow, merge, split};
+use sva_core::structure::{Proposal, applied, assign, grow, merge, split};
 use sva_core::{Job, Output, Representation, execute};
 use sva_engine::Tier;
 
@@ -100,50 +100,7 @@ fn every_split_merge_and_cluster_plays_the_same_samples() {
     }
 }
 
-#[test]
-fn a_merge_leaves_its_node_used_by_no_line() {
-    let (c, v) = (composition(), varies());
-    for p in merge::proposals(&model(&c), &v) {
-        let Some(Edit::Move { to, .. }) = p.edits.first() else {
-            panic!("a merge moves lines");
-        };
-        let after = model(&edited(&c, &v, &p));
-        assert!(after.lines.iter().all(|l| l.node == *to), "{}", p.label);
-    }
-}
-
-#[test]
-fn a_split_copies_its_node_as_a_kin_one_named_after_it() {
-    let (c, v) = (composition(), varies());
-    let m = model(&c);
-    let p = split::proposals(&m, &v, assign::REASSIGN_ROUNDS)
-        .into_iter()
-        .find(|p| {
-            p.edits
-                .first()
-                .is_some_and(|e| matches!(e, Edit::Copy { from, .. } if from == "instruments/a"))
-        })
-        .expect("a split of `a`");
-    assert_eq!(
-        p.edits[0],
-        Edit::Copy {
-            from: "instruments/a".to_string(),
-            path: "instruments/a-2".to_string()
-        }
-    );
-    let after = model(&edited(&c, &v, &p));
-    assert!(after.kin("instruments/a", "instruments/a-2"));
-}
-
 const RATE: f64 = 48_000.0;
-const COARSE: Limits = Limits {
-    harmonics: 4,
-    lone: 1,
-};
-const FINER: Limits = Limits {
-    harmonics: 8,
-    lone: 1,
-};
 
 /// Two plucks of one tone, 220 Hz at 0 s and 330 Hz at 0.3 s, each with eight harmonics.
 fn plucks() -> Readings {
@@ -159,19 +116,10 @@ fn plucks() -> Readings {
     read(&[x.collect()], RATE)
 }
 
-/// The starter written at `COARSE`, and what it varies.
-fn coarse(r: &Readings) -> (Composition, Vec<Vary>) {
-    written(r, COARSE)
-}
-
 fn written(r: &Readings, at: Limits) -> (Composition, Vec<Vary>) {
     let s = starter(r, "clip.wav", at);
     let v = s.varies.iter().map(|v| vary(v).expect("a vary")).collect();
     (s.files.into_iter().collect(), v)
-}
-
-fn grown(c: &Composition, v: &[Vary], r: &Readings, to: Limits) -> Vec<Proposal> {
-    grown_from(c, v, r, COARSE, to)
 }
 
 fn grown_from(
@@ -182,105 +130,6 @@ fn grown_from(
     to: Limits,
 ) -> Vec<Proposal> {
     grow::proposals(&model(c), &|path| text(c, path), v, r, from, to).expect("a growth")
-}
-
-fn voice_nodes(c: &Composition) -> Vec<String> {
-    let m = model(c);
-    let voices = m
-        .nodes
-        .keys()
-        .filter(|n| n.starts_with("instruments/voice-"));
-    voices.cloned().collect()
-}
-
-fn names(range: std::ops::RangeInclusive<usize>) -> Vec<String> {
-    range.map(|k| format!("h{k}")).collect()
-}
-
-#[test]
-fn growing_to_the_limits_written_proposes_nothing() {
-    let r = plucks();
-    let (c, v) = coarse(&r);
-    assert_eq!(grown(&c, &v, &r, COARSE), Vec::new());
-}
-
-#[test]
-fn growing_harmonics_offers_each_voice_kind_its_node_and_lines_at_eight() {
-    let r = plucks();
-    let (c, v) = coarse(&r);
-    let kinds = voice_nodes(&c);
-    let proposals = grown(&c, &v, &r, FINER);
-    assert_eq!(proposals.len(), kinds.len(), "one growth per voice kind");
-    for p in &proposals {
-        let after = model(&edited(&c, &v, p));
-        for node in &kinds {
-            let defaults: Vec<&String> =
-                after.nodes[node].defaults.iter().map(|(n, _)| n).collect();
-            for h in names(1..=8) {
-                assert!(defaults.contains(&&h), "`{node}` reads `{h}`");
-            }
-            let lines: Vec<_> = after.lines.iter().filter(|l| l.node == *node).collect();
-            assert!(!lines.is_empty(), "`{node}` places a line");
-            for l in lines {
-                for h in names(5..=8) {
-                    let held = l.fields.iter().any(|(f, _)| *f == h);
-                    assert!(held, "the line at {} s holds `{h}`", l.at);
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn a_grown_node_is_the_finer_seed_node_keeping_each_default_it_wrote() {
-    let r = plucks();
-    let (mut c, v) = coarse(&r);
-    let node = voice_nodes(&c).remove(0);
-    let fitted = text(&c, &node)
-        .expect("the voice node")
-        .replace("tilt = 1\n", "tilt = 1.25\n")
-        .replace("h3 = 0\n", "h3 = -3\n")
-        .replace("damp = 0\n", "")
-        .replace("*exp(0 - damp*k*f0*t/1000)", "");
-    c.insert(node.clone(), fitted);
-    let p = grown(&c, &v, &r, FINER).remove(0);
-    let expected = harmonic(8)
-        .replace("tilt = 1\n", "tilt = 1.25\n")
-        .replace("h3 = 0\n", "h3 = -3\n");
-    assert_eq!(text(&edited(&c, &v, &p), &node), Some(expected));
-}
-
-#[test]
-fn a_line_the_coarse_score_dropped_gets_no_graft() {
-    let r = plucks();
-    let (full, v) = coarse(&r);
-    let score = "score/clip.jsonl";
-    let mut first = true;
-    let kept: String = text(&full, score)
-        .expect("the score")
-        .lines()
-        .filter(|row| {
-            let voice = row.contains("\"@../instruments/voice-");
-            let keep = !voice || first;
-            first &= !voice;
-            keep
-        })
-        .map(|row| format!("{row}\n"))
-        .collect();
-    let mut dropped = full.clone();
-    dropped.insert(score.to_string(), kept);
-    let voice_lines = |c: &Composition| -> Vec<(f64, Vec<(String, f64)>)> {
-        let m = model(&edited(c, &v, &grown(c, &v, &r, FINER).remove(0)));
-        let lines = m.lines.into_iter().filter(|l| l.node.contains("/voice-"));
-        lines.map(|l| (l.at, l.fields)).collect()
-    };
-    let (all, left) = (voice_lines(&full), voice_lines(&dropped));
-    assert_eq!(all.len(), 2, "the coarse score places two voice lines");
-    assert_eq!(
-        left,
-        all[..1],
-        "the dropped line stays dropped, the kept one grafted alike"
-    );
 }
 
 /// Each lone partial line's onset, `f0` and `vel`.

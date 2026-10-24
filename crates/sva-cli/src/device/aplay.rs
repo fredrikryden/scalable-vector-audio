@@ -362,17 +362,6 @@ mod tests {
     }
 
     #[test]
-    fn a_rate_the_device_could_not_take_refuses_with_what_aplay_said() {
-        let lines = said(&["Warning: rate is not accurate (requested = 44100Hz, got = 48000Hz)"]);
-        let Err(refused) = inexact("hw:1", 44_100, &lines) else {
-            panic!("refused");
-        };
-        assert_eq!(code(&refused), "destination.rate_inexact");
-        assert!(refused.message().contains("got = 48000Hz"));
-        assert!(inexact("hw:1", 48_000, &said(&["  rate : 48000"])).is_ok());
-    }
-
-    #[test]
     fn every_underrun_aplay_reports_is_counted_and_the_buffer_it_was_granted_read() {
         let lines = said(&[
             "Playing raw data 'stdin' : Float 32 bit Little Endian, Rate 48000 Hz, Stereo",

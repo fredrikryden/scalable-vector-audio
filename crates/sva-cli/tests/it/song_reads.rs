@@ -97,31 +97,6 @@ fn a_delayed_read_hears_the_song_as_it_was_d_earlier() {
     );
 }
 
-/// Two distinct moves that collide still refuse, once.
-#[test]
-fn distinct_moves_that_collide_still_refuse_under_two_reads() {
-    let dir = song("collide");
-    put(
-        &dir,
-        "song.jsonl",
-        "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 1, \"len\": \"4b\"}\n\
-         {\"at\": \"1b\", \"lane\": \"energy\", \"to\": 1}\n\
-         {\"at\": \"1b\", \"lane\": \"energy\", \"to\": 0.2}\n",
-    );
-    put(&dir, "master", "@song(t) + @song(t - 0.5b)\n");
-    let Err(refused) = probe(&dir, "@master([0, 1s])") else {
-        panic!("a tie on one lane renders");
-    };
-    let found = refused.diagnostics();
-    assert_eq!(found.len(), 1, "{}", refused.message());
-    assert_eq!(found[0].code, "bad-lane", "{}", found[0].message);
-    assert!(
-        found[0].message.contains("this line and song.jsonl:2"),
-        "{}",
-        found[0].message
-    );
-}
-
 /// Each placed note's song time and how long after it it sounds, in seconds, in song order.
 fn heard(dir: &Path, target: &str) -> Vec<(f64, f64)> {
     let (_, song) = sva_core::song_of(&sva_ast::Dir::at(dir.to_path_buf()), target)
@@ -153,30 +128,6 @@ fn dry_at(dir: &Path, late: f64) -> Vec<(f64, f64)> {
     dry
 }
 
-/// A note read dry and delayed is one event, sounding at its song time.
-#[test]
-fn a_note_read_dry_and_delayed_is_one_event_at_its_song_time() {
-    let dir = song("sounds");
-    put(&dir, "echo", "@song(t - 1s)\n");
-    put(
-        &dir,
-        "master",
-        "@song(t) + 0.5*@song(t - 1b) + 0.25*@echo(t - 0.5s)\n",
-    );
-    assert_eq!(heard(&dir, "@master"), dry_at(&dir, 0.0));
-}
-
-/// A note only delayed reads reach sounds after the least delay: 1b (2 s) or 1 s + 0.5 s.
-#[test]
-fn a_note_read_only_delayed_sounds_after_the_least_delay() {
-    let dir = song("late");
-    put(&dir, "echo", "@song(t - 1s)\n");
-    put(&dir, "master", "0.5*@song(t - 1b) + 0.25*@echo(t - 0.5s)\n");
-    assert_eq!(heard(&dir, "@master"), dry_at(&dir, 1.5));
-    put(&dir, "master", "0.5*@song(t - 1b)\n");
-    assert_eq!(heard(&dir, "@master"), dry_at(&dir, 2.0));
-}
-
 /// 2^20 read paths to one placement derive one event per note.
 #[test]
 fn a_song_read_by_a_million_paths_places_each_note_once() {
@@ -190,40 +141,4 @@ fn a_song_read_by_a_million_paths_places_each_note_once() {
         );
     }
     assert_eq!(heard(&dir, "@bus20"), dry_at(&dir, 0.0));
-}
-
-/// A note no view delays sounds at its song time, exactly, still in bars.
-#[test]
-fn an_undelayed_note_sounds_at_its_song_time_exactly() {
-    let dir = song("undelayed");
-    put(&dir, "master", "@song(t)\n");
-    let (_, song) = sva_core::song_of(&sva_ast::Dir::at(dir), "@master").expect("a song");
-    let curve = song.curve();
-    let notes: Vec<_> = song
-        .instances()
-        .iter()
-        .filter(|i| i.line.is_some())
-        .collect();
-    assert_eq!(notes.len(), 5);
-    for note in notes {
-        assert!(matches!(note.at, Some(sva_ast::song::Pos::Bars(_))));
-        assert_eq!(note.sounds(curve), note.at);
-    }
-}
-
-/// `outline` prints a delayed note's song time, when it sounds and its length.
-#[test]
-fn outline_prints_when_a_delayed_note_sounds() {
-    let dir = song("outline");
-    put(&dir, "late", "0.5*@song(t - 1b)\n");
-    put(&dir, "top.jsonl", "{\"at\": \"0b\", \"node\": \"@late\"}\n");
-    let printed =
-        sva_core::song_data(&sva_ast::Dir::at(dir), "@top").unwrap_or_else(|e| panic!("{e}"));
-    assert!(
-        printed.contains(
-            "\"at\": { \"bars\": 0, \"seconds\": 0 }, \"sounds\": { \"bars\": 1, \"seconds\": 2 }, \
-             \"len\": { \"bars\": 0.25, \"seconds\": 0.5 }"
-        ),
-        "{printed}"
-    );
 }

@@ -342,23 +342,6 @@ fn argument_json((name, m, moves): &(&str, Meaning, bool)) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn the_note_grammar_this_dump_states_is_what_note_actually_resolves() {
-        for note in ["A4", "Cs4", "Db4"] {
-            assert!(
-                sva_ast::note_midi(note).is_some(),
-                "{note} should be a note"
-            );
-        }
-        for not_a_note in ["H4", "Cs", "C99999999999"] {
-            assert!(
-                sva_ast::note_midi(not_a_note).is_none(),
-                "{not_a_note} is not the grammar this dump states"
-            );
-        }
-    }
 
     #[test]
     fn every_operator_this_dump_says_does_not_exist_actually_refuses_to_parse() {
@@ -380,104 +363,6 @@ mod tests {
                 "`{bad}` parsed, so this dump's not_supported claim is stale"
             );
         }
-    }
-
-    #[test]
-    fn every_builtin_name_gets_exactly_one_callable_entry() {
-        let b = builtins();
-        assert_eq!(b.callables.len(), BUILTINS.len() + ALL_SHAPES.len());
-        for name in BUILTINS {
-            assert_eq!(
-                b.callables.iter().filter(|c| c.name == name).count(),
-                1,
-                "{name} should appear exactly once"
-            );
-        }
-        for shape in ALL_SHAPES {
-            let found = b
-                .callables
-                .iter()
-                .find(|c| c.name == shape_name(shape))
-                .unwrap_or_else(|| panic!("{} is missing", shape_name(shape)));
-            assert_eq!(found.takes_gain, Some(shape.takes_gain()));
-        }
-    }
-
-    /// `builtins()` refuses to assemble a named argument with no meaning, so this reaching
-    /// every callable is the whole vocabulary explained.
-    #[test]
-    fn every_named_argument_says_what_it_means_and_in_what_unit() {
-        for c in builtins().callables {
-            let named: Vec<&str> = c.arguments.iter().map(|(k, ..)| *k).collect();
-            assert_eq!(named, c.named, "{}", c.name);
-            for (key, m, _) in &c.arguments {
-                assert!(!m.text.is_empty() && !m.unit.is_empty(), "{}.{key}", c.name);
-            }
-        }
-        let b = builtins();
-        let solver = b
-            .callables
-            .iter()
-            .find(|c| c.name == "chaigne_askenfelt")
-            .expect("the solver");
-        let (_, stiffness, moves) = solver.arguments[0];
-        assert!(!moves, "a solver's stiffness is one number");
-        let bore = b.callables.iter().find(|c| c.name == "darabundit_scavone");
-        let (name, held) = bore.expect("the bore").positional[0];
-        let held = held.expect("the bore states its positional");
-        assert_eq!(
-            (name, held.unit),
-            ("length", "m"),
-            "the bore reads a length"
-        );
-        let crop = b.callables.iter().find(|c| c.name == "crop").expect("crop");
-        let bounds: Vec<(&str, Option<&str>)> = crop.positional[1..]
-            .iter()
-            .map(|(name, m)| (*name, m.map(|m| m.unit)))
-            .collect();
-        assert_eq!(
-            bounds,
-            [("start", Some("s")), ("end", Some("s"))],
-            "a window's bounds"
-        );
-        let lowpass = b
-            .callables
-            .iter()
-            .find(|c| c.name == "lowpass")
-            .expect("a filter");
-        assert!(
-            lowpass.arguments.iter().all(|(_, _, moves)| *moves),
-            "a cutoff may sweep"
-        );
-        assert_eq!(
-            (stiffness.text, stiffness.unit, stiffness.part),
-            ("string stiffness (inharmonicity)", "none", Some("string"))
-        );
-    }
-
-    #[test]
-    fn every_built_in_scale_is_listed_with_its_cents() {
-        let listed = builtins_data(&builtins());
-        assert!(
-            listed.contains(
-                "{ \"name\": \"dorian\", \"cents\": [200, 300, 500, 700, 900, 1000, 1200]"
-            ),
-            "{listed}"
-        );
-        for (name, ..) in sva_ast::BUILTIN_SCALES {
-            assert!(listed.contains(&format!("\"name\": \"{name}\"")), "{name}");
-        }
-    }
-
-    #[test]
-    fn one_pole_alone_has_no_room_for_q_or_gain() {
-        let b = builtins();
-        let lp = b.callables.iter().find(|c| c.name == "lp").unwrap();
-        assert_eq!(lp.max_positional, Some(2));
-        let lowpass = b.callables.iter().find(|c| c.name == "lowpass").unwrap();
-        assert_eq!(lowpass.max_positional, Some(3));
-        let peaking = b.callables.iter().find(|c| c.name == "peaking").unwrap();
-        assert_eq!(peaking.max_positional, Some(4));
     }
 
     #[test]

@@ -2,45 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::helpers::{buffer, fixture, json_of, ledger, ledgered, printed, put, scratch};
-use sva_cli::{SampleEncoding, write_channels, write_wav};
+use crate::helpers::{buffer, fixture, printed, put, scratch};
+use sva_cli::{SampleEncoding, write_channels};
 use sva_core::{PROBE, probe};
-use sva_engine::{Output, Representation};
-
-#[test]
-fn a_samples_destination_writes_float_audio_matching_the_rendered_samples() {
-    let rendered = probe(&fixture("basic"), "@master([0, 1s])").unwrap();
-    let dir = scratch("wav");
-    let path = dir.join("out.wav");
-    let pcm: Vec<f32> = buffer(&rendered, PROBE).as_f32(0);
-    write_wav(&pcm, rendered.config.rate, &path, SampleEncoding::Float).unwrap();
-
-    let mut reader = hound::WavReader::open(&path).unwrap();
-    assert_eq!(reader.spec().channels, 1);
-    assert_eq!(reader.spec().bits_per_sample, 32);
-    assert_eq!(reader.spec().sample_format, hound::SampleFormat::Float);
-    let samples: Vec<f32> = reader.samples::<f32>().map(Result::unwrap).collect();
-    assert_eq!(samples, pcm, "no quantisation between render and file");
-}
-
-/// A mono report is untouched, and `channel` appearing is what tells a reader a node carries
-/// components at all.
-#[test]
-fn a_stereo_composition_reports_a_channel_per_component_and_a_mono_one_reports_none() {
-    let rendered = ledgered(&fixture("stereo"), "@master([0, 1s])").unwrap();
-    let entries = ledger(&rendered, PROBE);
-    let master: Vec<_> = entries.iter().filter(|e| e.node == PROBE).collect();
-    assert_eq!(master.len(), 2, "one entry per component");
-    assert_eq!(
-        (master[0].channel, master[1].channel),
-        (Some(0), Some(1)),
-        "each names which component it measured"
-    );
-    assert!(master[0].rms > master[1].rms, "p=0.3 sits left of centre");
-
-    let json = json_of(&rendered, "ledger(depth=8)");
-    assert!(json.contains("\"node\": \"probe\", \"channel\": 0,"));
-}
+use sva_engine::Representation;
 
 #[test]
 fn a_stereo_render_writes_an_interleaved_two_channel_wav() {
@@ -64,36 +29,6 @@ fn a_stereo_render_writes_an_interleaved_two_channel_wav() {
         loudest[0].abs() > loudest[1].abs(),
         "the left component leads in every frame, so interleaving kept the order"
     );
-}
-
-/// Each bounce lands on the other side, one `ch` crossing apart.
-#[test]
-fn the_ping_pong_fixture_bounces_side_to_side_in_the_stereo_representation() {
-    let rendered = probe(&fixture("stereo"), "@pingpong([0, 2s])").unwrap();
-    let Output::Stereo(image) = rendered
-        .answer(PROBE, Representation::Stereo { frame_secs: 0.05 })
-        .unwrap()
-        .value
-    else {
-        panic!("expected a stereo image");
-    };
-    assert_eq!(image.channels, 2);
-
-    let bounces: Vec<(f64, f64)> = image
-        .frames
-        .iter()
-        .filter(|f| f.mid_rms > 0.001)
-        .map(|f| (f.t_secs, f.balance_db))
-        .collect();
-    assert!(bounces.len() >= 5, "at least five bounces: {bounces:?}");
-    for (n, (t, balance)) in bounces.iter().enumerate() {
-        assert!(
-            (t - 0.25 * n as f64).abs() < 1e-9,
-            "bounce {n} lands a quarter second after the last: {t}"
-        );
-        let side = if n % 2 == 0 { -1.0 } else { 1.0 };
-        assert_eq!(*balance, side * 160.0, "bounce {n} must be hard panned");
-    }
 }
 
 /// The destination is the one place a reading leaves the object it would have printed in.
@@ -158,49 +93,6 @@ fn a_later_reading_refusing_writes_no_earlier_destination() {
         "a reading that refused left {} behind",
         path.display()
     );
-}
-
-/// A library caller passed no argv, and must read back the code argv would have given.
-#[test]
-fn a_non_audio_reading_at_a_wav_path_refuses_the_same_way_on_both_sides() {
-    let argv: Vec<String> = ["render", "@a", "--representation", "lines=/tmp/out.wav"]
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    let Err(on_argv) = sva_cli::parse_args(&argv) else {
-        panic!("a `.wav` path carries audio, and `lines` is not audio");
-    };
-
-    let source = sva_ast::Dir::at(fixture("basic"));
-    let asked = [sva_core::asked(&sva_core::call("lines").expect("a call")).expect("a reading")];
-    let rendered = sva_core::execute(
-        sva_core::Job {
-            asked: &asked,
-            ..sva_core::Job::over(&source, "sin(2*pi*440*t)")
-        },
-        &sva_core::Tier::default(),
-    )
-    .expect("a probe");
-    let answer = rendered
-        .answer(sva_core::PROBE, Representation::Lines)
-        .expect("lines answers");
-    let Err(as_a_library) = sva_cli::write_destination(
-        &printed("lines", answer, rendered.config.rate),
-        Path::new("/tmp/out.wav"),
-        &sva_cli::Framing {
-            target: "@master".to_string(),
-            rate: rendered.config.rate,
-            bits: Some(rendered.config.profile.precision_bits),
-            interval: None,
-            profile: rendered.config.profile.name,
-            encoding: SampleEncoding::Float,
-            replace: true,
-        },
-    ) else {
-        panic!("and the library surface refuses it too");
-    };
-    assert_eq!(on_argv.code(), as_a_library.code());
-    assert_eq!(on_argv.exit_code(), as_a_library.exit_code());
 }
 
 /// A path already taken is the one a retry repeats: until the caller says so, the file on

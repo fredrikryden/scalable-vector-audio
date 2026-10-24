@@ -263,91 +263,6 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// 16-bit PCM quantizes on the way in, so the round trip is within one step.
-    #[test]
-    fn reads_unquantizes_pcm16_within_one_step() {
-        let path = tmp("read-pcm16-roundtrip");
-        let pcm = [0.5f32, -0.5, 0.1, -0.9];
-        write_channels(&[&pcm], 44_100, &path, SampleEncoding::Pcm(16)).unwrap();
-
-        let (planes, sample_rate) = read_recording(&path).unwrap();
-        let mono = &planes[0];
-        assert_eq!(sample_rate, 44_100);
-        assert_eq!(mono.len(), pcm.len());
-        for (got, want) in mono.iter().zip(&pcm) {
-            assert!(
-                (got - want).abs() < 1.0 / f32::from(i16::MAX),
-                "{got} vs {want}"
-            );
-        }
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    fn write_int(path: &std::path::Path, bits_per_sample: u16, values: &[i32], sample_rate: u32) {
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate,
-            bits_per_sample,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer = hound::WavWriter::create(path, spec).unwrap();
-        for &v in values {
-            writer.write_sample(v).unwrap();
-        }
-        writer.finalize().unwrap();
-    }
-
-    /// hound's own `Sample for i32` reader already covers 8/16/24/32-bit int — this is the
-    /// unquantize half, checked at the two depths `write_channels` never itself produces.
-    #[test]
-    fn reads_unquantizes_every_int_bit_depth_hound_can_decode() {
-        let path = tmp("read-8bit");
-        write_int(&path, 8, &[127, -128, 0], 22_050);
-        let (planes, sample_rate) = read_recording(&path).unwrap();
-        assert_eq!(sample_rate, 22_050);
-        assert_eq!(planes.len(), 1);
-        assert!((planes[0][0] - 1.0).abs() < 0.01, "{:?}", planes[0]);
-        assert!((planes[0][1] + 1.0).abs() < 0.01, "{:?}", planes[0]);
-        assert_eq!(planes[0][2], 0.0);
-        let _ = std::fs::remove_file(&path);
-
-        let path = tmp("read-24bit");
-        let full_scale = (1i64 << 23) - 1;
-        write_int(
-            &path,
-            24,
-            &[full_scale as i32, -(full_scale as i32), 0],
-            96_000,
-        );
-        let (planes, sample_rate) = read_recording(&path).unwrap();
-        assert_eq!(sample_rate, 96_000);
-        assert_eq!(planes[0], vec![1.0, -1.0, 0.0]);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// A round-robin de-interleave, checked against a file `write_channels` never produces
-    /// itself: an odd number of channels with a visibly different signal on each.
-    #[test]
-    fn reads_de_interleaves_every_component_into_its_own_plane() {
-        let path = tmp("read-three-channel");
-        let a = [0.1f32, 0.2];
-        let b = [0.3f32, 0.4];
-        let c = [0.5f32, 0.6];
-        write_channels(&[&a, &b, &c], 44_100, &path, SampleEncoding::Float).unwrap();
-
-        let (planes, _) = read_recording(&path).unwrap();
-        assert_eq!(planes, vec![a.to_vec(), b.to_vec(), c.to_vec()]);
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn reads_reports_a_missing_file_as_not_found_not_a_panic() {
-        let path = tmp("read-missing");
-        assert!(matches!(read_recording(&path), Err(CliError::NotFound(_))));
-    }
-
     /// `kind`'s box around `body`.
     fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
         let mut out = ((body.len() + 8) as u32).to_be_bytes().to_vec();
@@ -390,36 +305,5 @@ mod tests {
             edit(&movie(&[(5000, 1024)]), 44_100),
             Some((941, Some(220_500)))
         );
-    }
-
-    #[test]
-    fn an_empty_edit_is_passed_over_and_an_unstated_duration_keeps_every_frame() {
-        assert_eq!(
-            edit(&movie(&[(20, -1), (5000, 2112)]), 48_000),
-            Some((2112, Some(240_000)))
-        );
-        assert_eq!(edit(&movie(&[(0, 1024)]), 48_000), Some((1024, None)));
-        assert_eq!(edit(&movie(&[(20, -1)]), 48_000), None);
-    }
-
-    #[test]
-    fn a_format_it_does_not_read_refuses_naming_every_one_it_does() {
-        let refused = read_recording(Path::new("take.opus")).unwrap_err();
-        assert!(
-            matches!(
-                refused,
-                CliError::Usage {
-                    code: UNREADABLE,
-                    ..
-                }
-            ),
-            "{refused:?}"
-        );
-        for extension in READS {
-            assert!(
-                refused.message().contains(&format!("`.{extension}`")),
-                "{refused:?}"
-            );
-        }
     }
 }

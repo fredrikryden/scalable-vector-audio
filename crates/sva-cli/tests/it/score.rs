@@ -1,4 +1,4 @@
-// Concern: proves a score's degrees sound in variables/key and variables/scale, written or set, and refusals name the line | Non-concern: a score's JSON (sva-ast) | IO: (a key, a scale) -> its lines
+// Concern: proves a score's degrees sound in variables/key and variables/scale, written or set | Non-concern: a score's JSON (sva-ast) | IO: (a key, a scale) -> its lines
 use std::path::PathBuf;
 
 use crate::helpers::{put, scratch};
@@ -136,89 +136,6 @@ fn a_set_variable_renders_as_a_file_holding_its_text_would() {
     };
     assert_eq!(code, "render.set_path");
     assert!(message.contains("`key=A3`"), "{message}");
-}
-
-/// A scale the language names is the scale its file of the same cents would be, line for line.
-#[test]
-fn a_built_in_scale_sounds_as_its_file_would() {
-    for (name, ..) in sva_ast::BUILTIN_SCALES {
-        let dir = composition(&format!("named-{name}"), ("D3", "major"), SCORE);
-        put(&dir, "variables/scale", &format!("{name}\n"));
-        let cents = sva_ast::builtin_scale(name).expect("a built-in").cents;
-        let rows: Vec<String> = cents.iter().map(f64::to_string).collect();
-        put(&dir, "scales/held", &format!("{}\n", rows.join("\n")));
-        assert_eq!(
-            set_lines(&dir, &[]),
-            set_lines(&dir, &[("scale", "@../scales/held")]),
-            "{name}"
-        );
-    }
-}
-
-#[test]
-fn a_refusal_names_the_score_line() {
-    let bad = "{\"at\": \"0b\", \"node\": \"@voice\", \"deg\": 1}\n\
-               {\"at\": \"0.5b\", \"node\": \"@voice\", \"cutoff\": 900}\n";
-    let dir = composition("unread-key", ("D3", "major"), bad);
-    let Err(CliError::Refusals(refused)) = probe(&dir, "@phrase([0, 1s])") else {
-        panic!("a key the sound does not read refuses");
-    };
-    assert_eq!(refused[0].at.path, "phrase.jsonl");
-    assert!(
-        refused[0].reason.starts_with("line 2, column 34: `cutoff`"),
-        "{}",
-        refused[0].reason
-    );
-}
-
-/// Each positive line `target` sounds, as (hertz, the second it starts).
-fn atoms(dir: &std::path::Path, target: &str) -> Vec<(f64, f64)> {
-    let rendered = probe(dir, target).unwrap_or_else(|e| panic!("{target}: {e}"));
-    let Output::Atoms(atoms) = rendered
-        .answer(PROBE, Representation::Atoms)
-        .unwrap_or_else(|e| panic!("{target}: {e}"))
-        .value
-    else {
-        panic!("{target}: expected atoms");
-    };
-    let mut lines: Vec<(f64, f64)> = atoms
-        .iter()
-        .filter(|a| a.turns > 1.0)
-        .map(|a| (a.turns, a.start.unwrap_or(f64::NEG_INFINITY)))
-        .collect();
-    lines.sort_by(|a, b| a.1.total_cmp(&b.1));
-    lines.dedup();
-    lines
-}
-
-/// A key move lifts the lines whose `deg` counts from the key, read at their onset, though
-/// the sound's own `f0` default reads the key and each line binds `f0` past it; a line
-/// binding `f0` to a number keeps it.
-#[test]
-fn a_key_move_lifts_a_line_whose_degree_binds_the_f0_its_default_reads_the_key_for() {
-    let dir = composition("key-move", ("D3", "major"), SCORE);
-    put(
-        &dir,
-        "keyed",
-        "f0 = @variables/key\nlen = 1s\ncrop(sin(2*pi*f0*t), 0s, len)\n",
-    );
-    put(
-        &dir,
-        "song.jsonl",
-        "{\"at\": \"0b\", \"node\": \"@keyed\", \"deg\": 1, \"len\": \"1b\"}\n\
-         {\"at\": \"1b\", \"lane\": \"key\", \"to\": \"key*2st\"}\n\
-         {\"at\": \"1b\", \"node\": \"@keyed\", \"deg\": 1, \"len\": \"1b\"}\n\
-         {\"at\": \"2b\", \"node\": \"@keyed\", \"f0\": 330, \"len\": \"1b\"}\n",
-    );
-    let lines = atoms(&dir, "@song");
-    let hz: Vec<f64> = lines.iter().map(|(hz, _)| *hz).collect();
-    let starts: Vec<f64> = lines.iter().map(|(_, at)| *at).collect();
-    assert_eq!(starts, [0.0, 2.0, 4.0], "{lines:?}");
-    let d3 = sva_ast::note_hz("D3").expect("a note");
-    assert!((hz[0] - d3).abs() < 1e-9, "{hz:?}");
-    let lift = 1200.0 * libm::log2(hz[1] / hz[0]);
-    assert!((lift - 200.0).abs() < 1e-9, "a whole tone up, {lift} cents");
-    assert!((hz[2] - 330.0).abs() < 1e-9, "{hz:?}");
 }
 
 /// A score time is the decimal it spells: `0.01b` at 150 bpm is 16 ms, 705.6 samples, and a

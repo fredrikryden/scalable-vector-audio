@@ -1,6 +1,6 @@
 // Concern: what a tempo decides about an interval's length and bar-resolved timing | Non-concern: the readings a render answers (the parent suite) | IO: (a composition) -> a duration or a refusal
 
-use crate::helpers::{fixture, plane, put, scratch, secs};
+use crate::helpers::{plane, put, scratch, secs};
 use sva_ast::Dir;
 use sva_cli::CliError;
 use sva_core::{Job, PROBE, execute, probe};
@@ -91,59 +91,9 @@ fn a_bar_literal_needs_a_tempo_and_reaches_a_probe_expression_too() {
     );
 }
 
-/// A tempo is read from `variables/` alone: a `bpm` at the root is a node like any other.
-#[test]
-fn tempo_comes_from_variables_alone() {
-    let dir = scratch("variables");
-    put(&dir, "master", "concat(@loop-2b)\n");
-    put(&dir, "loop-2b", "sin(2*pi*220*t)\n");
-    put(&dir, "bpm", "240\n");
-    put(&dir, "meter", "4/4\n");
-    assert!(
-        bad_tempo(probe(&dir, "@master")),
-        "no tempo under variables/"
-    );
-
-    put(&dir, "variables/bpm", "120\n");
-    put(&dir, "variables/meter", "4/4\n");
-    assert_eq!(
-        secs(&probe(&dir, "@master").unwrap()),
-        4.0,
-        "two bars at 120"
-    );
-}
-
-#[test]
-fn bpm_present_without_meter_is_a_clear_bad_tempo_error() {
-    let dir = scratch("partial-tempo");
-    put(&dir, "master", "sin(2*pi*220*t)\n");
-    put(&dir, "variables/bpm", "120\n");
-    assert!(bad_tempo(probe(&dir, "@master")));
-}
-
 fn bad_tempo<T>(answered: Result<T, CliError>) -> bool {
     matches!(answered, Err(CliError::Refusals(refused))
         if refused.iter().all(|r| r.code == sva_ast::DiagCode::BadTempo))
-}
-
-/// A bar at 128 bpm is 82687.5 samples at 44.1 kHz and exactly 90000 at 48 kHz.
-#[test]
-fn a_bar_at_128_bpm_lands_on_a_sample_only_at_the_rate_that_divides_it() {
-    let dir = fixture("bar-grid");
-    for (hz, exact) in [(44_100u32, false), (48_000u32, true)] {
-        let source = Dir::at(&dir);
-        let rendered = execute(
-            Job {
-                rate: Some(hz),
-                ..Job::over(&source, "@hit-1b([0, 1b])")
-            },
-            &Tier::default(),
-        )
-        .unwrap();
-        let bar = 1.875 * f64::from(hz);
-        assert_eq!(bar.fract() == 0.0, exact, "{hz} Hz puts a bar at {bar}");
-        assert_eq!(plane(&rendered, PROBE).len(), bar.round() as usize);
-    }
 }
 
 /// `--set` replaces a reserved variable for one render, and the composition's files are

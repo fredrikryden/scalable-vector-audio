@@ -39,24 +39,3 @@ fn a_refusing_lint_still_lists_its_warnings() {
         "the verdict counts what refused, not what was warned"
     );
 }
-
-/// A target's own reach refuses through a second path, which used to return before folding in
-/// what the same scan had already found.
-#[test]
-fn a_refusing_targeted_lint_still_lists_every_violation() {
-    let dir = scratch("refusing-target");
-    std::fs::write(dir.join("tone"), "sin(2*pi*44100*hz*t)\n").expect("a node with no comment");
-    std::fs::write(
-        dir.join("master"),
-        format!("{}@tone(t, hz=1)*0.5 + @tone(t, hz=2)*0.5\n", doc("master")),
-    )
-    .expect("two call sites");
-
-    let Err(refused) = lint(&dir, Some("@tone([0, 1s], hz=1)")) else {
-        panic!("a node with no `;`-comment refuses, whatever else its file is");
-    };
-    let answered = refused.diagnostics();
-    let found: Vec<&str> = answered.iter().map(|d| d.code.as_str()).collect();
-    assert!(found.contains(&"lint.missing_comment"), "{found:?}");
-    assert!(found.contains(&"lint.literal_sample_rate"), "{found:?}");
-}

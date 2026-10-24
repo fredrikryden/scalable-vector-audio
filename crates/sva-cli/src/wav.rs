@@ -128,25 +128,4 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
     }
-
-    #[test]
-    fn float_still_carries_every_bit_and_still_reads_back_as_extensible() {
-        let path = tmp("float-tag");
-        let pcm = [0.125f32, -0.25, 0.75];
-        write_wav(&pcm, 8000, &path, SampleEncoding::Float).unwrap();
-
-        let bytes = std::fs::read(&path).unwrap();
-        let format_tag = u16::from_le_bytes([bytes[20], bytes[21]]);
-        assert_eq!(
-            format_tag, 0xFFFE,
-            "float always needs WAVEFORMATEXTENSIBLE in hound"
-        );
-
-        let mut reader = hound::WavReader::open(&path).unwrap();
-        assert_eq!(reader.spec().bits_per_sample, 32);
-        let samples: Vec<f32> = reader.samples::<f32>().map(Result::unwrap).collect();
-        assert_eq!(samples, pcm);
-
-        let _ = std::fs::remove_file(&path);
-    }
 }

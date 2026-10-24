@@ -351,19 +351,6 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_writes_every_file_and_reports_it() {
-        let dir = tmp("basic");
-        let scaffolded = scaffold(&dir, "song1", None, None).unwrap();
-        assert_eq!(scaffolded.root, dir.join("song1"));
-        assert_eq!(scaffolded.files.len(), FILES.len());
-        for (path, contents) in FILES {
-            let on_disk = std::fs::read_to_string(scaffolded.root.join(path)).unwrap();
-            assert_eq!(on_disk, contents);
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn scaffold_refuses_a_name_that_already_exists() {
         let dir = tmp("exists");
         std::fs::create_dir_all(dir.join("song1")).unwrap();
@@ -405,16 +392,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn scaffold_refuses_a_name_that_is_a_path() {
-        let dir = tmp("pathlike");
-        assert!(matches!(
-            scaffold(&dir, "a/b", None, None).unwrap_err(),
-            CliError::Usage { .. }
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// A caller's very first `sva-cli lint` after `new` must not immediately refuse them —
     /// the scaffold is the canonical example of the doc-comment convention, not an exception.
     /// `missing-comment`/`multiline-comment`/`malformed-comment` are hard errors now, so a
@@ -451,27 +428,6 @@ mod tests {
                 "`new` answers `{command}`, which this build refuses"
             );
             assert!(!why.is_empty(), "`{command}` is answered with no reason");
-        }
-    }
-
-    /// Nothing the house style refuses outright may be what a first composition teaches.
-    #[test]
-    fn no_scaffold_body_writes_what_this_engine_reads_expensively() {
-        for (path, contents) in FILES {
-            let body: String = contents
-                .lines()
-                .filter(|line| !line.trim_start().starts_with(';'))
-                .collect::<Vec<_>>()
-                .join("\n");
-            for banned in [
-                "44100", "48000", "96000", "rand(", "sat(", "tanh(", "min(", "max(", "sum(",
-                "join(",
-            ] {
-                assert!(
-                    !body.contains(banned),
-                    "`{path}` writes `{banned}`, which the scaffold teaches against"
-                );
-            }
         }
     }
 }

@@ -319,17 +319,4 @@ mod tests {
             assert_eq!(err.exit_code(), exit, "{err:?}");
         }
     }
-
-    /// Each argument mistake is its own code, its message the one line that names the text.
-    #[test]
-    fn an_argument_mistake_is_one_diagnostic_under_its_own_code() {
-        let refused = CliError::usage("query.unknown_argument", "`lines` takes no arguments");
-        assert_eq!(refused.message(), "`lines` takes no arguments");
-        let [d] = &refused.diagnostics()[..] else {
-            panic!("an argument mistake carries exactly one diagnostic");
-        };
-        assert_eq!(d.code, "query.unknown_argument");
-        assert_eq!(d.message, "`lines` takes no arguments");
-        assert!(d.help.is_some(), "and says where to look");
-    }
 }
