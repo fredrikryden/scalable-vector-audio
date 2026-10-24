@@ -3,10 +3,10 @@
 use serde_json::Value;
 use sva_engine::bands::BandFloor;
 use sva_engine::beating::{Beating, BeatingWindow};
+use sva_engine::hits::{Cue, Hit, Hits, Kind};
 use sva_engine::internal::{BARKS, Internal};
 use sva_engine::loudness_pattern::{LoudnessPattern, PatternFrame};
 use sva_engine::pitch::Note;
-use sva_engine::score::{Cue, Event, Hit, Kind, Partial, Score, Sound, Tone, Voiced};
 use sva_engine::sharpness::{Sharpness, SharpnessFrame};
 use sva_engine::spectrum::{Band, Peak};
 use sva_engine::{
@@ -79,6 +79,14 @@ impl<'v> At<'v> {
                 .num()
             })
             .collect()
+    }
+
+    /// A list of exactly `N` numbers.
+    fn fixed<const N: usize>(&self) -> Read<[f64; N]> {
+        let held = self.numbers()?;
+        let len = held.len();
+        <[f64; N]>::try_from(held)
+            .map_err(|_| format!("`{}` holds {len} numbers, not {N}", self.path))
     }
 
     /// The one of `all` whose `key` the text names.
@@ -270,63 +278,24 @@ fn crest(at: At) -> Read<Output> {
     })))
 }
 
-fn score(at: At) -> Read<Output> {
-    let voice = |v: At| {
-        Ok(Voiced {
-            hz: field!(v, "hz").num()?,
-            tone: field!(v, "tone").keyed(&[Tone::Tonal, Tone::Noisy], Tone::key)?,
-            new: field!(v, "new").flag()?,
-            share: field!(v, "share").num()?,
-            db: field!(v, "db").num()?,
-            bend_cents: field!(v, "bend_cents").maybe()?,
-            coherence: field!(v, "coherence").maybe()?,
-            partials: field!(v, "partials").items(|p| {
-                Ok(Partial {
-                    hz: field!(p, "hz").num()?,
-                    db: field!(p, "db").num()?,
-                    harmonic: field!(p, "harmonic").count()?,
-                })
-            })?,
+fn hits(at: At) -> Read<Output> {
+    let hit = |h: At| {
+        Ok(Hit {
+            at_secs: field!(h, "at_secs").num()?,
+            end_secs: field!(h, "end_secs").num()?,
+            next_secs: field!(h, "next_secs").num()?,
+            kind: field!(h, "kind").keyed(&[Kind::New, Kind::Restrike, Kind::Held], Kind::key)?,
+            cue: field!(h, "cue").keyed(&[Cue::Attack, Cue::Grid, Cue::Crop], Cue::key)?,
+            attack_secs: field!(h, "attack_secs").num()?,
+            level_db: field!(h, "level_db").num()?,
+            band_db: field!(h, "band_db").fixed()?,
+            strength: field!(h, "strength").num()?,
         })
     };
-    let event = |e: At| {
-        let hit = field!(e, "hit");
-        let period = match (
-            field!(e, "period_hz").maybe()?,
-            field!(e, "periodicity").maybe()?,
-        ) {
-            (Some(hz), Some(clarity)) => Some((hz, clarity)),
-            _ => None,
-        };
-        let main = field!(e, "main");
-        Ok(Event {
-            at_secs: field!(e, "at_secs").num()?,
-            end_secs: field!(e, "end_secs").num()?,
-            next_secs: field!(e, "next_secs").num()?,
-            kind: field!(e, "kind").keyed(&[Kind::New, Kind::Restrike, Kind::Held], Kind::key)?,
-            cue: field!(e, "cue")
-                .keyed(&[Cue::Attack, Cue::Partial, Cue::Grid, Cue::Crop], Cue::key)?,
-            sound: field!(e, "sound").keyed(
-                &[Sound::Tonal, Sound::NoisyPitched, Sound::Noisy],
-                Sound::key,
-            )?,
-            hit: match hit.value {
-                Value::Null => None,
-                _ => Some(hit.keyed(&[Hit::Kick, Hit::Snare, Hit::Hat], Hit::key)?),
-            },
-            attack_secs: field!(e, "attack_secs").num()?,
-            level_db: field!(e, "level_db").num()?,
-            period,
-            main: match main.value {
-                Value::Null => None,
-                _ => Some(main.count()?),
-            },
-            voices: field!(e, "voices").items(voice)?,
-        })
-    };
-    Ok(Output::Score(Box::new(Score {
+    Ok(Output::Hits(Box::new(Hits {
         resolution_secs: field!(at, "resolution_secs").num()?,
-        events: field!(at, "events").items(event)?,
+        bands_hz: field!(at, "bands_hz").fixed()?,
+        hits: field!(at, "hits").items(hit)?,
     })))
 }
 
@@ -423,7 +392,7 @@ pub fn reading(representation: Representation, value: &Value, path: &str) -> Rea
         Representation::Bands => bands(at),
         Representation::Loudness { .. } => loudness(at),
         Representation::Crest => crest(at),
-        Representation::Score => score(at),
+        Representation::Hits => hits(at),
         Representation::LoudnessPattern { .. } => loudness_pattern(at),
         Representation::Sharpness { .. } => sharpness(at),
         Representation::Beating { .. } => beating(at),

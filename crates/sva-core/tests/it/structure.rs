@@ -144,7 +144,7 @@ fn partials(m: &Model) -> Vec<(f64, Option<f64>, Option<f64>)> {
 }
 
 #[test]
-fn growing_lone_partials_adds_sounding_ones_at_each_onset_in_order() {
+fn growing_lone_partials_adds_sounding_ones_at_each_hit_in_order() {
     let r = plucks();
     for lone in [0, 1] {
         let from = Limits { harmonics: 4, lone };
@@ -155,7 +155,22 @@ fn growing_lone_partials_adds_sounding_ones_at_each_onset_in_order() {
         let (c, v) = written(&r, from);
         let before = partials(&model(&c));
         let proposals = grown_from(&c, &v, &r, from, to);
-        assert_eq!(proposals.len(), 2, "one growth per onset from {from:?}");
+        let onsets: Vec<f64> = proposals
+            .iter()
+            .filter_map(|p| p.label.strip_prefix("lone partials at "))
+            .map(|at| at.trim_end_matches('s').parse().expect("an onset"))
+            .collect();
+        assert_eq!(
+            onsets.len(),
+            proposals.len(),
+            "one growth per hit from {from:?}"
+        );
+        for pluck in [0.0, 0.3] {
+            assert!(
+                onsets.iter().any(|at: &f64| (at - pluck).abs() <= 0.005),
+                "a growth at the pluck at {pluck} s from {from:?}: {onsets:?}"
+            );
+        }
         for p in &proposals {
             let after = partials(&model(&edited(&c, &v, p)));
             let added: Vec<_> = after.iter().filter(|l| !before.contains(l)).collect();

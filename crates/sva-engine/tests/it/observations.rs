@@ -41,7 +41,7 @@ fn every_representation_reports_source_and_profile() {
     );
     let id = sampled.id("node").expect("the root");
     for name in [
-        "samples", "spectrum", "envelope", "bands", "crest", "loudness", "score",
+        "samples", "spectrum", "envelope", "bands", "crest", "loudness", "hits",
     ] {
         let representation = Representation::from_name(name).expect("a known reading");
         let found = answer(&sampled, id, representation).unwrap_or_else(|e| panic!("{name}: {e}"));

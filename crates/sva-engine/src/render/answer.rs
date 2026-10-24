@@ -13,8 +13,8 @@ use sva_samples::measure::{
 };
 use sva_samples::{
     Buffer, Consumes, Extent, Peak, PitchFrame, Profile, Source, measure::bands, measure::crest,
-    measure::envelope, measure::formants, measure::loudness, measure::loudness_pattern,
-    measure::pitch, measure::score, measure::spectrum, measure::stereo, measure_alias,
+    measure::envelope, measure::formants, measure::hits, measure::loudness,
+    measure::loudness_pattern, measure::pitch, measure::spectrum, measure::stereo, measure_alias,
 };
 
 use crate::error::{Diagnostic, EngineError, Located};
@@ -1024,7 +1024,7 @@ pub fn off_buffer(buffer: &Buffer, representation: Representation) -> Result<Out
         }
         Representation::Bands => Output::Bands(Box::new(bands::analyze(&planes, sr, start))),
         Representation::Crest => Output::Crest(Box::new(crest::analyze(&planes, sr))),
-        Representation::Score => Output::Score(Box::new(score::measure(&planes, sr, start))),
+        Representation::Hits => Output::Hits(Box::new(hits::measure(&planes, sr, start))),
         Representation::Internal { spl_db } => {
             Output::Internal(Box::new(internal::measure(&planes, sr, start, spl_db)))
         }

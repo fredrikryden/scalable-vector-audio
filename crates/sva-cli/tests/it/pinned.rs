@@ -66,7 +66,7 @@ const READINGS: [&str; 15] = [
     "bands",
     "crest",
     "loudness",
-    "score",
+    "hits",
     "alias",
     "bindings",
     "arguments",
@@ -97,7 +97,7 @@ const PINNED: &str = r#"
 3 bands 8d18c12abb247ca1
 3 crest 871492938378bf0f
 3 loudness 691ca4a23b72fb64
-3 score 371994ee5977f165
+3 hits 118a6129db0a790e
 3 alias 57b3de39acaa9baf
 3 bindings f15293e1080c5049
 3 arguments eb3ed92e88f435e1
@@ -140,7 +140,7 @@ const PINNED: &str = r#"
 8 bands 02245c806e0fde9a
 8 crest 7b7793adeb78eb3e
 8 loudness b2f79549e9145e00
-8 score 58e4936c1f4acb9c
+8 hits 08e304e92adcc9e1
 8 alias refused "engine.alias_needs_a_closed_form"
 8 bindings 5ce608c3a8b79a86
 8 arguments b642f09606176b94

@@ -14,8 +14,8 @@ use sva_samples::measure::periodicity::Periodicity;
 use sva_samples::measure::self_similarity::SelfSimilarity;
 use sva_samples::measure::sharpness::Sharpness;
 use sva_samples::{
-    Alias, Bands, Buffer, Consumes, Crest, EnvelopeFrame, FormantFrame, LedgerEntry, Loudness,
-    PitchFrame, Score, Source, Spectrum, StereoImage,
+    Alias, Bands, Buffer, Consumes, Crest, EnvelopeFrame, FormantFrame, Hits, LedgerEntry,
+    Loudness, PitchFrame, Source, Spectrum, StereoImage,
 };
 
 use crate::arguments::Arguments;
@@ -338,17 +338,16 @@ static LOUDNESS: Reading = Reading {
     },
 };
 
-static SCORE: Reading = Reading {
-    name: "score",
+static HITS: Reading = Reading {
+    name: "hits",
     takes: &[],
     reads: Reads::Samples,
-    help: "its events as a score: each one's onset, placed at the sample its strike rises, its \
-           end and the next, new, a re-strike or held from the start, tonal, noisy-pitched or \
-           noisy, an unpitched hit's kind, its attack, level and periodicity, and its voices, \
-           several where a chord sounds, each with its f0, tonal or noisy, whether it sounds \
-           newly there, its bend and its partials, the loudest new one its main; every \
-           channel's samples averaged",
-    build: |_| Representation::Score,
+    help: "its hits: every peak of an attack novelty, each one's onset, placed at the sample \
+           its strike rises, its end and the next, new, a re-strike or held from the start, \
+           its attack and level, its energy in its first 120 ms below, between and above \
+           `bands_hz`, and its strength, how far the peak stands over the novelty about it; \
+           no pitch; every channel's samples averaged",
+    build: |_| Representation::Hits,
 };
 
 static LOUDNESS_PATTERN: Reading = Reading {
@@ -593,7 +592,7 @@ pub static READINGS: [&Reading; 30] = [
     &BANDS,
     &CREST,
     &LOUDNESS,
-    &SCORE,
+    &HITS,
     &ALIAS,
     &DISSONANCE,
     &VOICE_LEADING,
@@ -645,7 +644,7 @@ pub enum Representation {
     Loudness {
         window_secs: f64,
     },
-    Score,
+    Hits,
     Alias {
         oversample: u32,
     },
@@ -737,7 +736,7 @@ pub enum Output {
     Bands(Box<Bands>),
     Crest(Box<Crest>),
     Loudness(Box<Loudness>),
-    Score(Box<Score>),
+    Hits(Box<Hits>),
     Alias(Box<Alias>),
     Ledger(Vec<LedgerEntry>),
     Dissonance(Box<Dissonance>),
@@ -822,7 +821,7 @@ impl Representation {
             Representation::Bands => &BANDS,
             Representation::Crest => &CREST,
             Representation::Loudness { .. } => &LOUDNESS,
-            Representation::Score => &SCORE,
+            Representation::Hits => &HITS,
             Representation::Alias { .. } => &ALIAS,
             Representation::Harmony { reading, .. } => match reading {
                 Harmonic::Dissonance { .. } => &DISSONANCE,

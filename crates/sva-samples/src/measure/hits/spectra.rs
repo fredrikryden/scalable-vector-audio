@@ -1,4 +1,4 @@
-// Concern: the averaged spectra, levels and peaks the score's rules read off one clip | Non-concern: what a rule decides (strikes.rs, voices.rs) | IO: (samples, span) -> power, peaks, levels
+// Concern: the averaged spectra and levels the hits' rules read off one clip | Non-concern: what a rule decides (strikes.rs) | IO: (samples, span) -> power, levels
 
 use std::f64::consts::TAU;
 
@@ -7,10 +7,6 @@ use crate::fft::fft;
 const SPECTRUM_SAMPLES_48K: f64 = 4096.0;
 const LEAST_SAMPLES_48K: f64 = 256.0;
 pub const LEVEL_FRAME_SECS: f64 = 0.005;
-const PEAK_HI_HZ: f64 = 10_000.0;
-const PEAK_LO_HZ: f64 = 25.0;
-pub const PEAK_FLOOR_DB: f64 = -45.0;
-pub const PEAK_PROMINENCE_DB: f64 = 10.0;
 
 pub fn sized(samples_48k: f64, sr: f64) -> usize {
     crate::measure::scaled_pow2(samples_48k, sr)
@@ -44,10 +40,6 @@ pub fn median(values: &[f64]) -> f64 {
     }
 }
 
-pub fn cents(a: f64, b: f64) -> f64 {
-    1200.0 * libm::log2(a / b)
-}
-
 pub fn db_of_power(p: f64) -> f64 {
     10.0 * libm::log10(p)
 }
@@ -60,7 +52,6 @@ pub struct Clip {
     pub bin_hz: f64,
     pub level_t: Vec<f64>,
     pub level_db: Vec<f64>,
-    pub tick: Vec<f64>,
     pub top_db: f64,
 }
 
@@ -80,9 +71,6 @@ impl Clip {
         let k = ((LEVEL_FRAME_SECS * sr) as usize).max(1);
         let rms = rms_frames(&x, k);
         let level_db: Vec<f64> = rms.iter().map(|r| 20.0 * libm::log10(*r)).collect();
-        let diff: Vec<f64> = (0..x.len())
-            .map(|i| x[i] - if i == 0 { 0.0 } else { x[i - 1] })
-            .collect();
         let n = sized(SPECTRUM_SAMPLES_48K, sr);
         Clip {
             level_t: (0..rms.len())
@@ -90,7 +78,6 @@ impl Clip {
                 .collect(),
             top_db: level_db.iter().copied().fold(f64::NEG_INFINITY, f64::max),
             level_db,
-            tick: rms_frames(&diff, k),
             n,
             bin_hz: sr / n as f64,
             x,
@@ -165,57 +152,5 @@ impl Clip {
                 .map(|p| p / count as f64 / n as f64)
                 .collect(),
         )
-    }
-
-    pub fn hz(&self, bin: usize) -> f64 {
-        bin as f64 * self.bin_hz
-    }
-
-    /// (hz, dB), parabolically interpolated in dB.
-    pub fn peaks(&self, p: &[f64], floor_db: f64, prominence_db: f64) -> Vec<(f64, f64)> {
-        let most = p.iter().copied().fold(0.0, f64::max);
-        let l: Vec<f64> = p
-            .iter()
-            .map(|v| db_of_power(v + most * 1e-8 + 1e-30))
-            .collect();
-        let top = (0..l.len())
-            .filter(|&i| self.hz(i) > PEAK_LO_HZ && self.hz(i) < PEAK_HI_HZ)
-            .map(|i| l[i])
-            .fold(f64::NEG_INFINITY, f64::max);
-        let mut out = Vec::new();
-        for i in 2..l.len().saturating_sub(2) {
-            let f = self.hz(i);
-            if f > PEAK_HI_HZ {
-                break;
-            }
-            let around = l[i.saturating_sub(3)..(i + 4).min(l.len())]
-                .iter()
-                .copied()
-                .fold(f64::NEG_INFINITY, f64::max);
-            if !(f > PEAK_LO_HZ
-                && l[i] > top + floor_db
-                && l[i] >= l[i - 1]
-                && l[i] > l[i + 1]
-                && l[i] == around)
-            {
-                continue;
-            }
-            let (a, b, c) = (l[i - 1], l[i], l[i + 1]);
-            let curve = a - 2.0 * b + c;
-            let shift = match curve != 0.0 {
-                true => (0.5 * (a - c) / curve).clamp(-0.5, 0.5),
-                false => 0.0,
-            };
-            let lo = f * libm::pow(2.0, -1.0 / 6.0) - 4.0 * self.bin_hz;
-            let hi = f * libm::pow(2.0, 1.0 / 6.0) + 4.0 * self.bin_hz;
-            let near: Vec<f64> = (0..l.len())
-                .filter(|&j| self.hz(j) > lo && self.hz(j) < hi)
-                .map(|j| l[j])
-                .collect();
-            if b - median(&near) >= prominence_db {
-                out.push((f + shift * self.bin_hz, b - 0.25 * (a - c) * shift));
-            }
-        }
-        out
     }
 }

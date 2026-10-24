@@ -268,7 +268,7 @@ RENDER:
   per `frame`; for the spectrum at one instant, read a range one frame long.
   A measured `envelope` is framed too, and reads every channel: a frame's
   `rms` is the root mean square of all its channels' samples together, its
-  `peak` the largest magnitude in any channel. `score` and `partials` read
+  `peak` the largest magnitude in any channel. `hits` and `partials` read
   every channel's samples averaged, one mono signal. Every
   other measured reading but `stereo` reads every channel in power, as
   `envelope` reads a level: a spectrum's power per bin (`spectrum`, `pitch`,
@@ -403,7 +403,7 @@ SOLVE:
   reading with one set of arguments subtract to a residual vector:
 {rules}
   A level is floored at {floor} dB before it subtracts. A residual inside both
-  sides' stated bounds counts as zero; of these readings only `score` states
+  sides' stated bounds counts as zero; of these readings only `hits` states
   one, and `loudness_pattern` counts zero a cell both sides hold under its
   threshold. Then `norm(v)` (the root of the sum of squares), `sum(v)`, `max(v)`,
   `abs(x)` (each value's magnitude), `dot([w1, w2, ...], v)` (one literal
@@ -828,9 +828,10 @@ NEW:
   Writes a starter composition at ./<name>, and refuses if that directory
   exists. `--from <recording>` writes instead the starter a priced fit shrinks
   (PRICED FIT): one structure per group its readings find, a harmonic series
-  (its stretch `inh` 0, so inharmonic as priced as harmonic) per voice tone of
-  the `score` reading, a lone partial, and a noise band per event sound, its
-  band where `internal` puts that sound's loudness; every voice, partial and noise
+  (its stretch `inh` 0, so inharmonic as priced as harmonic) per voice tone a
+  harmonic sieve hears at each of the `hits` reading's hits, a lone partial,
+  and a noise band per hit and one over the clip, each where `internal` puts
+  that span's loudness; every voice, partial and noise
   they offer as a score line, `fits/clip` and the recording itself, and no
   annotation. `--harmonics <n>` (default {harmonics}) sets the harmonics a
   series holds and `--lone <n>` (default {lone}, 0 for none) the lone

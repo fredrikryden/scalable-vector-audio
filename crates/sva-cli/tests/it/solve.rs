@@ -511,3 +511,67 @@ fn sample_of_a_path_is_the_recording_at_the_render_rate() {
         "names what works"
     );
 }
+
+/// `score` left the language: a cost reading it refuses before any render, naming `hits`.
+#[test]
+fn a_cost_reading_score_refuses_as_retired_naming_hits() {
+    let (dir, reference) = composition("solve-score-retired");
+    let cost = format!("norm(repr.score(@tone) - repr.score(sample(\"{reference}\")))");
+    let answer = refuses(
+        &dir,
+        &["solve", &cost, "--vary", "gain=0..1"],
+        "query.retired",
+        3,
+    );
+    assert!(answer.to_string().contains("write `hits"), "{answer}");
+}
+
+/// Two `hits` subtract as a set by onset: every hit 4 ms later, inside both resolutions,
+/// costs nothing, and one hit the other side lacks costs 1 s.
+#[test]
+fn the_hits_residual_pairs_onsets_nearest_first_an_unpaired_one_a_second() {
+    let (dir, reference) = composition("solve-hits-residual");
+    let root = dir.parent().expect("a parent");
+    let analyzed = root.join("hits.json");
+    let written = format!("hits={}", analyzed.display());
+    let out = storeless(&dir, &["analyze", &reference, "--representation", &written]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let mut held: Value =
+        serde_json::from_slice(&std::fs::read(&analyzed).expect("written")).expect("JSON");
+    let value = &mut held["data"]["representations"]["hits"]["value"]["hits"];
+    let hits = value["items"].as_array_mut().expect("hits");
+    assert!(!hits.is_empty(), "the reference is heard: {hits:?}");
+    for hit in hits.iter_mut() {
+        let at = hit["at_secs"].as_f64().expect("a time");
+        hit["at_secs"] = Value::from(at + 0.004);
+    }
+    let mut lone = hits[0].clone();
+    lone["at_secs"] = Value::from(1000.0);
+    hits.push(lone);
+    let count = hits.len();
+    value["pagination"]["count"] = Value::from(count);
+    std::fs::write(root.join("moved.json"), held.to_string()).expect("written");
+    let tick = "0*norm(repr.envelope(@tone) - repr.envelope(@tone))";
+    let cost = format!(
+        "norm(repr.hits(sample(\"{reference}\")) - load_json(\"../moved.json\", \".data\")) + {tick}"
+    );
+    let answer = refuses(
+        &dir,
+        &[
+            "solve",
+            &cost,
+            "--vary",
+            "gain=0..1/0.5",
+            "--max-renders",
+            "1",
+        ],
+        "",
+        0,
+    );
+    let terms = items(at(&answer, &["data", "cost", "terms", "items"]));
+    assert_eq!(terms[0]["value"], 1.0, "{answer:?}");
+}

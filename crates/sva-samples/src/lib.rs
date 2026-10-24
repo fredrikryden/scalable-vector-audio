@@ -41,10 +41,10 @@ pub use measure::bands::{BAND_COUNT, BandFloor, BandTrack, Bands, DECIMATED_HZ, 
 pub use measure::crest::{BandCrest, Crest};
 pub use measure::envelope::EnvelopeFrame;
 pub use measure::formants::{Formant, FormantFrame, MAX_ORDER, default_order};
+pub use measure::hits::Hits;
 pub use measure::ledger::{LedgerEntry, SignalKind, Unit};
 pub use measure::loudness::{Loudness, LoudnessFrame, PEAK_NOTE, RateUnderWeighting, Unweighted};
 pub use measure::pitch::{Note, PitchFrame};
-pub use measure::score::Score;
 pub use measure::spectrum::{
     Band, MAX_PINNED_FRAME, Peak, Spectrum, db, fitted_frame, magnitudes, pinned_frame,
     third_octave_edges,

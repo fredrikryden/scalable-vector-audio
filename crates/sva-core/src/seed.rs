@@ -1,7 +1,7 @@
 // Concern: the starter a priced fit shrinks, a structure per group the clip's readings find, a line per voice, partial and noise | Non-concern: fitting it | IO: (samples, rate) -> readings -> starter
 
 use sva_samples::measure::partials::{self, Asked, Curve, Kind as TrackKind};
-use sva_samples::measure::{internal, score};
+use sva_samples::measure::{hits, internal, voiced};
 
 use crate::model::Model;
 use crate::solve::prox::state::reached;
@@ -106,6 +106,7 @@ pub(crate) fn s6(x: f64) -> String {
 }
 
 pub(crate) const PARTIAL: &str = "instruments/partial";
+const NOISE: &str = "instruments/noise";
 
 pub(crate) fn voice(tone: &str) -> String {
     format!("instruments/voice-{tone}")
@@ -121,7 +122,7 @@ pub(crate) fn level_db(level: f64, vel: f64, tilt: f64, k: usize) -> f64 {
 }
 
 /// The frequency and amplitude of each track sounding just after onset `e`, loudest first.
-pub(crate) fn loud(r: &Readings, e: &score::Event) -> Vec<(f64, f64)> {
+pub(crate) fn loud(r: &Readings, e: &hits::Hit) -> Vec<(f64, f64)> {
     let t = e.at_secs + LONE_AFTER_SECS;
     let mut loud: Vec<(f64, f64)> = r
         .tracks
@@ -139,7 +140,7 @@ pub(crate) fn loud(r: &Readings, e: &score::Event) -> Vec<(f64, f64)> {
 }
 
 /// A lone partial's score line at onset `e` playing `hz` at `vel`, its node read as `node`.
-pub(crate) fn lone_line(node: &str, e: &score::Event, hz: f64, vel: f64) -> String {
+pub(crate) fn lone_line(node: &str, e: &hits::Hit, hz: f64, vel: f64) -> String {
     format!(
         "{{\"at\": \"{}s\", \"node\": \"{node}\", \"f0\": \"{}hz\", \"vel\": {}, \"len\": \"{}s\"}}",
         s6(e.at_secs),
@@ -261,7 +262,7 @@ fn sigmoid(x: f64) -> f64 {
 pub struct Readings {
     pub(crate) voices: Vec<Voice>,
     tracks: Vec<partials::Track>,
-    pub(crate) events: Vec<score::Event>,
+    pub(crate) events: Vec<hits::Hit>,
     ear: internal::Internal,
     dur: f64,
 }
@@ -278,7 +279,8 @@ pub fn read(channels: &[Vec<f32>], rate: f64) -> Readings {
         .collect();
     let x = &x[..];
     let planes = [x];
-    let read = score::measure(&planes, rate, 0.0);
+    let read = hits::measure(&planes, rate, 0.0);
+    let voiced = voiced::measure(&planes, rate, 0.0, &read);
     let tracks: Vec<partials::Track> = partials::measure(&planes, rate, 0.0, PARTIALS)
         .tracks
         .into_iter()
@@ -286,8 +288,8 @@ pub fn read(channels: &[Vec<f32>], rate: f64) -> Readings {
         .collect();
     let dur = x.len() as f64 / rate;
     let mut voices: Vec<Voice> = Vec::new();
-    for e in &read.events {
-        for v in e.voices.iter().filter(|v| v.new) {
+    for (e, heard) in read.hits.iter().zip(&voiced) {
+        for v in heard.iter().filter(|v| v.new) {
             let (mut s, mut w) = (0.0, 0.0);
             for p in v.partials.iter().filter(|p| p.harmonic > 0) {
                 let a = libm::pow(10.0, p.db / 20.0);
@@ -340,7 +342,7 @@ pub fn read(channels: &[Vec<f32>], rate: f64) -> Readings {
     Readings {
         voices,
         tracks,
-        events: read.events,
+        events: read.hits,
         ear: internal::measure(&planes, rate, 0.0, sva_engine::DEFAULT_SPL_DB),
         dur,
     }
@@ -404,48 +406,37 @@ pub fn starter(r: &Readings, clip: &str, limits: Limits) -> Seeded {
     if lone_lines > 0 {
         files.push((PARTIAL.to_string(), lone()));
     }
-    let mut spans: Vec<(&str, f64, f64)> = events
+    let mut spans: Vec<(f64, f64)> = events
         .iter()
-        .map(|e| (e.sound.key(), e.at_secs, e.next_secs - e.at_secs))
+        .map(|e| (e.at_secs, e.next_secs - e.at_secs))
         .collect();
-    let mut sounds: Vec<&str> = spans.iter().map(|(k, ..)| *k).collect();
-    sounds.sort_unstable();
-    sounds.dedup();
-    if sounds.is_empty() {
-        sounds.push(score::Sound::Noisy.key());
-    }
-    for sound in &sounds {
-        spans.push((sound, 0.0, *dur));
-    }
-    for (n, sound) in sounds.iter().enumerate() {
-        let held: Vec<(f64, f64, (f64, f64))> = spans
-            .iter()
-            .filter(|(k, ..)| k == sound)
-            .map(|(_, at, len)| (*at, *len, band(ear, *at, *len)))
-            .collect();
-        let centre = |side: fn(&(f64, f64)) -> f64| {
-            let mut logs: Vec<f64> = held.iter().map(|(.., b)| libm::log(side(b))).collect();
-            logs.sort_by(f64::total_cmp);
-            sva_formula::exp(logs[logs.len() / 2])
-        };
-        let (lo, hi) = (centre(|b| b.0), centre(|b| b.1));
-        files.push((
-            format!("instruments/noise-{sound}"),
-            noisy(7 + n as u64, (0.005, 0.2, sigmoid(-1.0), 0.05, lo, hi)),
+    spans.push((0.0, *dur));
+    let held: Vec<(f64, f64, (f64, f64))> = spans
+        .iter()
+        .map(|(at, len)| (*at, *len, band(ear, *at, *len)))
+        .collect();
+    let centre = |side: fn(&(f64, f64)) -> f64| {
+        let mut logs: Vec<f64> = held.iter().map(|(.., b)| libm::log(side(b))).collect();
+        logs.sort_by(f64::total_cmp);
+        sva_formula::exp(logs[logs.len() / 2])
+    };
+    let (lo, hi) = (centre(|b| b.0), centre(|b| b.1));
+    files.push((
+        NOISE.to_string(),
+        noisy(7, (0.005, 0.2, sigmoid(-1.0), 0.05, lo, hi)),
+    ));
+    for (at, len, (lo, hi)) in held {
+        lines.push((
+            at,
+            format!(
+                "{{\"at\": \"{}s\", \"node\": \"@../{NOISE}\", \"vel\": 0, \"len\": \"{}s\", \
+                 \"lo\": \"{}hz\", \"hi\": \"{}hz\"}}",
+                s6(at),
+                s6(len),
+                g(lo.round()),
+                g(hi.round())
+            ),
         ));
-        for (at, len, (lo, hi)) in held {
-            lines.push((
-                at,
-                format!(
-                    "{{\"at\": \"{}s\", \"node\": \"@../instruments/noise-{sound}\", \"vel\": 0, \
-                     \"len\": \"{}s\", \"lo\": \"{}hz\", \"hi\": \"{}hz\"}}",
-                    s6(at),
-                    s6(len),
-                    g(lo.round()),
-                    g(hi.round())
-                ),
-            ));
-        }
     }
     lines.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut score_text = String::new();

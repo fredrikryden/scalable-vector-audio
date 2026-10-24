@@ -40,35 +40,6 @@ fn printed(path: &std::path::Path, readings: &str) -> serde_json::Value {
     serde_json::from_slice(&out.stdout).expect("one envelope")
 }
 
-/// Every event's `at_secs` in the `score` a file reads as, in order.
-fn event_times(path: &std::path::Path) -> Vec<f64> {
-    let read = printed(path, "score");
-    read["data"]["representations"]["score"]["value"]["events"]["items"]
-        .as_array()
-        .unwrap_or_else(|| panic!("an event list: {read}"))
-        .iter()
-        .map(|e| e["at_secs"].as_f64().expect("a time"))
-        .collect()
-}
-
-/// A 440 Hz strike with a 1.5 ms rise and a `decay` fall, `secs` long, at each of `struck`.
-fn strikes(rate: u32, len_secs: f64, struck: &[f64], (decay, secs): (f64, f64)) -> Vec<f32> {
-    let sr = f64::from(rate);
-    let mut samples = vec![0.0f32; (sr * len_secs) as usize];
-    for at in struck {
-        let from = (at * sr) as usize;
-        for n in 0..(sr * secs) as usize {
-            let t = n as f64 / sr;
-            let shape = (1.0 - sva_formula::exp(-t / 0.0015)) * sva_formula::exp(-t / decay);
-            let wave = libm::sin(std::f64::consts::TAU * 440.0 * t);
-            if let Some(s) = samples.get_mut(from + n) {
-                *s += (0.7 * shape * wave) as f32;
-            }
-        }
-    }
-    samples
-}
-
 fn decoded(path: &std::path::Path) -> Buffer {
     let (planes, rate) = sva_cli::read_recording(path).expect("a readable wav");
     Buffer::of_planes(
@@ -131,72 +102,6 @@ fn a_two_channel_file_answers_a_stereo_image_a_mono_or_three_channel_one_cannot(
     );
 }
 
-/// BRIEF section 9 gates a groove on onsets to 1 ms. A hop says which strike, never when:
-/// the novelty names the hop and the samples about it say where the strike rises.
-#[test]
-fn a_scores_events_land_within_one_millisecond_of_a_grid() {
-    let rate = 48_000u32;
-    let struck = [0.25f64, 0.5, 0.75];
-    let path = written(
-        "score-grid",
-        rate,
-        &[&strikes(rate, 1.0, &struck, (0.02, 0.08))],
-    );
-    let found = event_times(&path);
-    assert_eq!(
-        found.len(),
-        struck.len(),
-        "three strikes, three events: {found:?}"
-    );
-    for (heard, wanted) in found.iter().zip(struck) {
-        assert!(
-            (heard - wanted).abs() <= 0.001,
-            "{heard} is more than a millisecond from {wanted}"
-        );
-    }
-    let read = printed(&path, "score");
-    let score = &read["data"]["representations"]["score"];
-    assert_eq!(
-        score["value"]["resolution_secs"], 0.005,
-        "a reader states the hop its novelty was read at, not the sample period: {score}"
-    );
-    assert_eq!(score["source"], "measured", "{score}");
-
-    let dest = path.with_file_name("score.json");
-    let read = printed(&path, &format!("score={}", dest.display()));
-    assert_eq!(
-        read["data"]["written"]["items"][0]["path"],
-        dest.display().to_string(),
-        "a destination is named in `written`: {read}"
-    );
-    let file: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&dest).expect("a written reading"))
-            .expect("JSON");
-    let events = &file["data"]["representations"]["score"]["value"]["events"];
-    assert_eq!(events["pagination"]["count"], struck.len(), "{file}");
-}
-
-/// A novelty needs a frame before the one it scores, and the target's first has none: a
-/// target that opens at silence and sounds in its first frame saw the strike that started it.
-#[test]
-fn a_strike_at_zero_is_an_event() {
-    let rate = 48_000u32;
-    let struck = [0.0f64, 0.25, 0.5];
-    let path = written(
-        "score-at-zero",
-        rate,
-        &[&strikes(rate, 0.8, &struck, (0.02, 0.08))],
-    );
-    let found = event_times(&path);
-    assert_eq!(found.len(), struck.len(), "a strike at zero too: {found:?}");
-    for (heard, wanted) in found.iter().zip(struck) {
-        assert!(
-            (heard - wanted).abs() <= 0.001,
-            "{heard} is more than a millisecond from {wanted}"
-        );
-    }
-}
-
 fn keys(value: &serde_json::Value) -> Vec<&str> {
     let mut held: Vec<&str> = value
         .as_object()
@@ -208,10 +113,10 @@ fn keys(value: &serde_json::Value) -> Vec<&str> {
     held
 }
 
-/// The JSON a fit reads: each reading's fields, its events', voices', frames' and notes', and
-/// the arguments it spells. A consumer outside this repository parses these names.
+/// The JSON a fit reads: each reading's fields, its hits', frames' and windows', and the
+/// arguments it spells. A consumer outside this repository parses these names.
 #[test]
-fn score_loudness_pattern_sharpness_and_beating_print_the_fields_a_fit_reads() {
+fn hits_loudness_pattern_sharpness_and_beating_print_the_fields_a_fit_reads() {
     let rate = 48_000u32;
     let sr = f64::from(rate);
     let chord: Vec<f32> = (0..(sr * 1.2) as usize)
@@ -234,64 +139,29 @@ fn score_loudness_pattern_sharpness_and_beating_print_the_fields_a_fit_reads() {
             (0.2 * (note(220.0, 0.05) + note(277.18, 0.05) + note(330.0, 0.6))) as f32
         })
         .collect();
-    let path = written("score-shape", rate, &[&chord]);
-    let read = printed(&path, "score,loudness_pattern,sharpness,beating");
+    let path = written("hits-shape", rate, &[&chord]);
+    let read = printed(&path, "hits,loudness_pattern,sharpness,beating");
     let held = &read["data"]["representations"];
 
-    let score = &held["score"];
-    assert_eq!(score["args"], serde_json::json!({}), "{score}");
+    let hits = &held["hits"];
+    assert_eq!(hits["args"], serde_json::json!({}), "{hits}");
     assert_eq!(
-        keys(&score["value"]),
-        ["events", "model", "resolution_secs"]
+        keys(&hits["value"]),
+        ["bands_hz", "hits", "model", "resolution_secs"]
     );
-    let event = &score["value"]["events"]["items"][0];
     assert_eq!(
-        keys(event),
+        keys(&hits["value"]["hits"]["items"][0]),
         [
             "at_secs",
             "attack_secs",
+            "band_db",
             "cue",
             "end_secs",
-            "hit",
             "kind",
             "level_db",
-            "main",
             "next_secs",
-            "period_hz",
-            "periodicity",
-            "sound",
-            "voices",
+            "strength",
         ]
-    );
-    let voice = &event["voices"]["items"][0];
-    assert_eq!(
-        keys(voice),
-        [
-            "bend_cents",
-            "coherence",
-            "db",
-            "hz",
-            "new",
-            "partials",
-            "share",
-            "tone"
-        ]
-    );
-    assert_eq!(
-        keys(&voice["partials"]["items"][0]),
-        ["db", "harmonic", "hz"]
-    );
-    let events = score["value"]["events"]["items"]
-        .as_array()
-        .expect("events");
-    assert_eq!(events.len(), 2, "two strikes: {score}");
-    assert!(
-        events[0]["voices"]["items"]
-            .as_array()
-            .expect("voices")
-            .len()
-            >= 2,
-        "a chord is several voices: {score}"
     );
 
     let pattern = &held["loudness_pattern"];
@@ -366,13 +236,14 @@ fn score_loudness_pattern_sharpness_and_beating_print_the_fields_a_fit_reads() {
 /// The codes a caller branches on: a reading gone, a value it cannot read, an argument a
 /// reading does not take.
 #[test]
-fn the_score_and_perceptual_readings_refuse_with_stable_codes() {
+fn the_hits_and_perceptual_readings_refuse_with_stable_codes() {
     for (asked, code) in [
         ("onsets", "query.retired"),
+        ("score", "query.retired"),
         ("panel", "query.retired"),
         ("sharpness(spl=loud)", "query.bad_value"),
         ("loudness_pattern(spl=90)", "query.bad_value"),
-        ("score(frame=10ms)", "query.unknown_argument"),
+        ("hits(frame=10ms)", "query.unknown_argument"),
         ("sharpness(window=1s)", "query.unknown_argument"),
         ("beating(peaks=2)", "query.unknown_argument"),
     ] {

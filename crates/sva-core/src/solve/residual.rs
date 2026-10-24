@@ -4,7 +4,7 @@ use sva_engine::Output;
 
 /// Every level is floored here before it subtracts: the profile's silence threshold.
 pub const FLOOR_DB: f64 = -120.0;
-/// What an event with no partner on the other side counts, in seconds.
+/// What a hit with no partner on the other side counts, in seconds.
 pub const MISSED_ONSET_SECS: f64 = 1.0;
 /// What a note with no partner in its frame counts, in cents: an octave.
 pub const MISSED_NOTE_CENTS: f64 = 1200.0;
@@ -32,11 +32,9 @@ pub const RULES: [(&str, &str); 11] = [
         "each third-octave band's level in dB, band by band",
     ),
     (
-        "score",
-        "its events a set by onset: nearest pairs first, each pair's distance in seconds less \
-         both sides' `resolution_secs`, zero inside them, each event left unpaired counting 1 \
-         s; then each pair's voices a set, nearest pairs first, in cents, each voice left \
-         unpaired counting 1200 cents",
+        "hits",
+        "its hits a set by onset: nearest pairs first, each pair's distance in seconds less \
+         both sides' `resolution_secs`, zero inside them, each hit left unpaired counting 1 s",
     ),
     (
         "pitch",
@@ -177,26 +175,11 @@ pub fn residual(a: &Output, b: &Output) -> Option<Vec<f64>> {
             };
             tracks(&level(a), &level(b))
         }
-        (Output::Score(a), Output::Score(b)) => {
-            let times = |s: &sva_engine::Score| -> Vec<f64> {
-                s.events.iter().map(|e| e.at_secs).collect()
-            };
+        (Output::Hits(a), Output::Hits(b)) => {
+            let times =
+                |h: &sva_engine::Hits| -> Vec<f64> { h.hits.iter().map(|h| h.at_secs).collect() };
             let zone = a.resolution_secs + b.resolution_secs;
-            let (pairs, left) = paired(&times(a), &times(b));
-            let mut out: Vec<f64> = pairs.iter().map(|p| (p.2 - zone).max(0.0)).collect();
-            out.extend(std::iter::repeat_n(MISSED_ONSET_SECS, left));
-            for &(i, j, _) in &pairs {
-                let voices = |e: &sva_engine::score::Event| -> Vec<f64> {
-                    e.voices.iter().map(|v| cents(v.hz)).collect()
-                };
-                out.extend(sets(
-                    &voices(&a.events[i]),
-                    &voices(&b.events[j]),
-                    0.0,
-                    MISSED_NOTE_CENTS,
-                ));
-            }
-            out
+            sets(&times(a), &times(b), zone, MISSED_ONSET_SECS)
         }
         (Output::LoudnessPattern(a), Output::LoudnessPattern(b)) => {
             let t = a.threshold_sone.max(b.threshold_sone);

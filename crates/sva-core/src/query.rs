@@ -12,10 +12,14 @@ use sva_engine::{
 
 use crate::cli_error::CliError;
 
-pub const RETIRED: [(&str, &str); 4] = [
+pub const RETIRED: [(&str, &str); 5] = [
     ("exact-envelope", "envelope, symbolic on a closed form"),
     ("exact-derivative", "derivative, symbolic on a closed form"),
-    ("onsets", "score, each event's `at_secs`"),
+    ("onsets", "hits, each hit's `at_secs`"),
+    (
+        "score",
+        "hits, each hit's onset, span and band energy; pitch, the peaks sounding",
+    ),
     (
         "panel",
         "sharpness,beating,envelope(frame=10ms),pitch(frame=100ms, peaks=1)",
@@ -75,6 +79,17 @@ pub fn retired(name: &str) -> Option<&'static str> {
         .iter()
         .find(|(gone, _)| *gone == name)
         .map(|(_, write)| *write)
+}
+
+/// A reading that left the language refused, naming what to write instead.
+pub fn refuse_retired(name: &str) -> Result<(), CliError> {
+    match retired(name) {
+        Some(write) => Err(CliError::usage(
+            "query.retired",
+            format!("`{name}` left the language; write `{write}`"),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// A comma list of calls; a comma inside a call's parentheses separates its arguments, and
@@ -309,7 +324,7 @@ impl Asked {
             | R::Derivative
             | R::Samples
             | R::Crest
-            | R::Score
+            | R::Hits
             | R::Numbers
             | R::Bindings
             | R::Arguments => Vec::new(),
@@ -435,12 +450,7 @@ impl Asked {
 /// The reading a call names, each argument read as that reading takes it.
 pub fn asked(call: &Call) -> Result<Asked, CliError> {
     let name = call.name.as_str();
-    if let Some(write) = retired(name) {
-        return Err(CliError::usage(
-            "query.retired",
-            format!("`{name}` left the language; write `{write}`"),
-        ));
-    }
+    refuse_retired(name)?;
     let Some(row) = READINGS.iter().find(|row| row.name == name) else {
         let names: Vec<&str> = READINGS.iter().map(|row| row.name).collect();
         return Err(CliError::usage(

@@ -7,6 +7,7 @@ pub mod crest;
 pub mod envelope;
 pub mod formants;
 pub mod harmony;
+pub mod hits;
 pub mod internal;
 pub mod ledger;
 pub mod loudness;
@@ -16,13 +17,13 @@ pub mod partials;
 pub mod peaks;
 pub mod periodicity;
 pub mod pitch;
-pub mod score;
 pub mod self_similarity;
 pub mod sharpness;
 pub mod sliding;
 pub mod spectrum;
 pub mod stereo;
 pub(crate) mod stiff;
+pub mod voiced;
 
 pub(crate) fn scaled_pow2(samples_48k: f64, sr: f64) -> usize {
     let n = (samples_48k * sr / 48_000.0).max(2.0);

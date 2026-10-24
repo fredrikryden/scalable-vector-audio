@@ -3,7 +3,7 @@
 use sva_ast::{Token, TokenKind, tokenize};
 
 use crate::cli_error::CliError;
-use crate::query::{Asked, asked, call};
+use crate::query::{Asked, asked, call, refuse_retired};
 
 /// The readings a cost subtracts, each by the rule `residual.rs` states for it.
 pub const SUBTRACTS: [&str; 11] = [
@@ -12,7 +12,7 @@ pub const SUBTRACTS: [&str; 11] = [
     "bands",
     "crest",
     "spectrum",
-    "score",
+    "hits",
     "pitch",
     "loudness_pattern",
     "sharpness",
@@ -716,6 +716,7 @@ impl Parser<'_> {
             _ => return Err(self.ended("a reading's name follows `repr.`")),
         };
         self.at += 1;
+        refuse_retired(&name)?;
         if !SUBTRACTS.contains(&name.as_str()) && !SCALARS.contains(&name.as_str()) {
             return Err(refused(
                 "solve.unsupported_reading",

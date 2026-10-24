@@ -17,13 +17,13 @@ use sva_engine::harmony::dissonance::{self, Dissonance, Extreme};
 use sva_engine::harmony::inharmonicity::{self, Inharmonicity, Series, Weighted};
 use sva_engine::harmony::tonnetz::{self, Quality, TonalDistance, Triad};
 use sva_engine::harmony::voice_leading::{self, VoiceLeading};
+use sva_engine::hits::{self, Hits};
 use sva_engine::internal::{self, BARKS, Internal};
 use sva_engine::loudness_pattern::{self, LoudnessPattern};
 use sva_engine::modulation::{self, Modulation};
 use sva_engine::partials::{self, Partials};
 use sva_engine::periodicity::{self, Periodicity, Track, Window};
 use sva_engine::pitch as pitch_names;
-use sva_engine::score::{self, Score};
 use sva_engine::self_similarity::{self, SelfSimilarity};
 use sva_engine::sharpness::{self, Sharpness};
 use sva_engine::sliding::Stats;
@@ -231,53 +231,29 @@ fn crest_json(c: &Crest) -> String {
     )
 }
 
-fn score_json(s: &Score) -> String {
-    let voice = |v: &score::Voiced| {
-        format!(
-            "\n      {{ \"hz\": {}, \"tone\": \"{}\", \"new\": {}, \"share\": {}, \"db\": {}, \
-             \"bend_cents\": {}, \"coherence\": {}, \"partials\": {} }}",
-            num(v.hz),
-            v.tone.key(),
-            v.new,
-            num(v.share),
-            num(v.db),
-            maybe(v.bend_cents),
-            maybe(v.coherence),
-            list(&v.partials, |p| format!(
-                "{{ \"hz\": {}, \"db\": {}, \"harmonic\": {} }}",
-                num(p.hz),
-                num(p.db),
-                p.harmonic
-            ))
-        )
-    };
-    let event = |e: &score::Event| {
+fn hits_json(h: &Hits) -> String {
+    let hit = |h: &hits::Hit| {
         format!(
             "\n    {{ \"at_secs\": {}, \"end_secs\": {}, \"next_secs\": {}, \"kind\": \"{}\", \
-             \"cue\": \"{}\", \"sound\": \"{}\", \"hit\": {}, \"attack_secs\": {}, \
-             \"level_db\": {}, \"period_hz\": {}, \"periodicity\": {}, \"main\": {}, \
-             \"voices\": {} }}",
-            num(e.at_secs),
-            num(e.end_secs),
-            num(e.next_secs),
-            e.kind.key(),
-            e.cue.key(),
-            e.sound.key(),
-            e.hit
-                .map_or_else(|| NONE.to_string(), |h| format!("\"{}\"", h.key())),
-            num(e.attack_secs),
-            num(e.level_db),
-            maybe(e.period.map(|p| p.0)),
-            maybe(e.period.map(|p| p.1)),
-            counted(e.main),
-            list(&e.voices, voice)
+             \"cue\": \"{}\", \"attack_secs\": {}, \"level_db\": {}, \"band_db\": {}, \
+             \"strength\": {} }}",
+            num(h.at_secs),
+            num(h.end_secs),
+            num(h.next_secs),
+            h.kind.key(),
+            h.cue.key(),
+            num(h.attack_secs),
+            num(h.level_db),
+            numbers(&h.band_db),
+            num(h.strength)
         )
     };
     format!(
-        "{{ \"model\": \"{}\", \"resolution_secs\": {}, \"events\": {} }}",
-        escape(score::MODEL),
-        num(s.resolution_secs),
-        list(&s.events, event)
+        "{{ \"model\": \"{}\", \"resolution_secs\": {}, \"bands_hz\": {}, \"hits\": {} }}",
+        escape(hits::MODEL),
+        num(h.resolution_secs),
+        numbers(&h.bands_hz),
+        list(&h.hits, hit)
     )
 }
 
@@ -1001,7 +977,7 @@ pub fn value_json(output: &Output, limit: Option<usize>, skim: bool) -> String {
         Output::Bands(b) => bands_json(b, limit),
         Output::Loudness(l) => loudness_json(l, limit),
         Output::Crest(c) => crest_json(c),
-        Output::Score(s) => score_json(s),
+        Output::Hits(h) => hits_json(h),
         Output::Alias(a) => alias_json(a),
         Output::Dissonance(d) => dissonance_json(d),
         Output::VoiceLeading(v) => voice_leading_json(v),
