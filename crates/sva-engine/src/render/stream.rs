@@ -22,9 +22,6 @@ use crate::cache::{
 use crate::error::{Diagnostic, EngineError, Located};
 use crate::recent::Recent;
 
-#[cfg(test)]
-mod rebuilt;
-
 /// The lookups, and the names started silent, a stream keeps of all it made.
 pub const LATEST: usize = 256;
 

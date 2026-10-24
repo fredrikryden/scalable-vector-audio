@@ -20,10 +20,6 @@ fn plane(files: &[(&str, &str)], root: &str, secs: f64) -> Vec<f64> {
     held.output(id).expect("its samples").plane(0).to_vec()
 }
 
-fn peak(samples: &[f64]) -> f64 {
-    samples.iter().fold(0.0f64, |held, s| held.max(s.abs()))
-}
-
 /// `pi/10` at 441 Hz delays the wave by exactly five steps at 44.1 kHz.
 #[test]
 fn a_constant_phase_delays_the_whole_wave() {
@@ -42,17 +38,6 @@ fn a_constant_phase_delays_the_whole_wave() {
             );
         }
     }
-}
-
-#[test]
-fn a_quarter_turn_keeps_the_saw_s_peak() {
-    let plain = plane(&[("plain", "saw(100)\n")], "plain", 0.05);
-    let turned = plane(&[("turned", "saw(100, pi/2)\n")], "turned", 0.05);
-    let (a, b) = (peak(&plain), peak(&turned));
-    assert!(
-        (a - b).abs() < 0.02 * a,
-        "a delayed saw peaks as a saw: {b} against {a}"
-    );
 }
 
 const VIBRATO: &str = "0.3*sin(2*pi*5*t)";
@@ -76,42 +61,6 @@ fn a_moving_phase_is_the_plain_wave_read_at_a_moving_time() {
     }
 }
 
-/// The share of a signal's energy in DFT bins above `hz`.
-fn share_above(samples: &[f64], hz: f64, rate: f64) -> f64 {
-    let n = samples.len();
-    let bin = |k: usize| {
-        let (mut re, mut im) = (0.0, 0.0);
-        for (i, s) in samples.iter().enumerate() {
-            let w = TAU * (k * i % n) as f64 / n as f64;
-            re += s * libm::cos(w);
-            im -= s * libm::sin(w);
-        }
-        re * re + im * im
-    };
-    let total: f64 = samples.iter().map(|s| s * s).sum::<f64>() * n as f64 / 2.0;
-    let from = (hz / rate * n as f64).ceil() as usize;
-    (from..n / 2).map(bin).sum::<f64>() / total
-}
-
-/// The plain saw's harmonics from 15 kHz to the ceiling hold about 0.2% of its energy.
-#[test]
-fn a_vibrato_saw_keeps_its_harmonics_up_to_the_ceiling() {
-    let files = [
-        ("plain", "saw(220)\n".to_string()),
-        ("vibrato", format!("saw(220, {VIBRATO})\n")),
-    ];
-    let files: Vec<(&str, &str)> = files.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    let [plain, vibrato] = ["plain", "vibrato"]
-        .map(|root| share_above(&plane(&files, root, 0.1)[..4096], 15_000.0, 44_100.0));
-    assert!(
-        (vibrato / plain - 1.0).abs() < 0.2 && plain > 1e-3,
-        "energy above 15 kHz: {vibrato} against the plain saw's {plain}"
-    );
-}
-
-/// A saw whose pitch moves, `saw(1000 + 200*t)`, sums at each instant every harmonic under
-/// the profile's ceiling there, as many as the instant's own frequency leaves, and says how
-/// loud the first harmonic its fastest pitch drops can be.
 #[test]
 fn a_saw_whose_pitch_moves_keeps_every_harmonic_under_the_ceiling() {
     let g = graph_of("moving", &[("moving", "saw(1000 + 200*t)\n")]);

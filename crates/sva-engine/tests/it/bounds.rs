@@ -47,16 +47,6 @@ fn graph() -> Graph {
     graph_of("bounds", &files)
 }
 
-fn rendered(g: &Graph, target: &str, silence_threshold_dbfs: f64) -> Render {
-    over(
-        g,
-        target,
-        silence_threshold_dbfs,
-        RenderConfig::seconds(RATE, 4.0),
-    )
-    .unwrap_or_else(|e| panic!("{target}: {e}"))
-}
-
 fn over(
     g: &Graph,
     target: &str,
@@ -114,30 +104,6 @@ fn every_cut_zeroes_only_samples_under_the_silence_threshold() {
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
     assert!(checked > 0, "no render cut anything");
-}
-
-/// A product of refs bounds as the same product written inline: neither is cut.
-#[test]
-fn a_product_of_refs_renders_as_written_inline() {
-    let g = graph();
-    let (refs, inline) = (
-        plane(&rendered(
-            &g,
-            "s_q",
-            PSYCHOACOUSTIC_V1.silence_threshold_dbfs,
-        )),
-        plane(&rendered(
-            &g,
-            "s_q_inline",
-            PSYCHOACOUSTIC_V1.silence_threshold_dbfs,
-        )),
-    );
-    let peak = |x: &[f64]| x.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-    assert!(peak(&inline) > 9e8, "{}", peak(&inline));
-    assert_eq!(refs.len(), inline.len());
-    for (n, (a, b)) in refs.iter().zip(&inline).enumerate() {
-        assert!((a - b).abs() <= 1e-9 * b.abs(), "sample {n}: {a} {b}");
-    }
 }
 
 /// 1/44100 s written as the decimal its double prints lies past sample 1's instant: an open

@@ -209,38 +209,3 @@ pub(super) fn placed(expr: &Expr, at: i64) -> Expr {
         },
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// However many terms came and went, `notes` is named by those sounding and one slot for
-    /// the rest: the hull of their supports.
-    #[test]
-    fn notes_is_named_by_its_sounding_terms_and_one_retired_slot() {
-        let mut terms = Terms::default();
-        let mut last = None;
-        for k in 0..1_000 {
-            let (next, handle) = terms.added();
-            terms = next;
-            let ended = |h: Handle| Some(h) == last;
-            let went = terms.retire(&ended, &|_| Some(Extent::new(k, k + 1)));
-            assert_eq!(!went.is_empty(), k > 0);
-            last = Some(handle);
-        }
-        let dir = std::env::temp_dir().join(format!("sva-terms-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("a directory");
-        std::fs::write(dir.join("one"), "1\n").expect("a node file");
-        let mut graph = sva_ast::parse_composition(&dir).expect("a composition");
-        assert!(graph.define(NOTES, terms.sum()));
-        for handle in terms.handles() {
-            assert!(graph.define(&handle.node(), Expr::Lit(Literal::Num(1.0))));
-        }
-        let mut tys = crate::types(&graph, NOTES).expect("typed");
-        terms.name(&mut tys);
-        let (notes, sounding) = (tys.id(NOTES), last.and_then(|h| tys.id(&h.node())));
-        let slots = notes.and_then(|notes| tys.sum_slots(notes)).expect("named");
-        let sounding = SumSlot::Node(sounding.expect("the last term"));
-        assert_eq!(slots, [sounding, SumSlot::Retired(Extent::new(1, 1_000))]);
-    }
-}

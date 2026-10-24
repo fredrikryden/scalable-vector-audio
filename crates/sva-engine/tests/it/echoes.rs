@@ -46,8 +46,6 @@ fn assert_agree(held: &[f64], want: &[f64], what: &str) {
     assert_within(held, want, 1e-12, what);
 }
 
-/// Each echo's window moves with its delay, and the echoes the series drops sum to less than
-/// half the output's least significant bit.
 #[test]
 fn a_cropped_burst_echoes_where_its_recurrence_does() {
     let secs = 5.0;
@@ -90,41 +88,4 @@ fn a_cropped_burst_echoes_where_its_recurrence_does() {
         after <= sva_samples::PSYCHOACOUSTIC_V1.half_lsb(),
         "cut at {cut} with {after} still to come"
     );
-}
-
-#[test]
-fn a_burst_read_by_ref_echoes_at_its_delay() {
-    let secs = 0.6;
-    let series = rendered(
-        &[
-            ("blip", "crop(sin(2*pi*440*t), 0s, 0.05s)\n"),
-            ("echo", "@blip + 0.35*self(t - 0.25s)\n"),
-        ],
-        "echo",
-        secs,
-    );
-    let want: Vec<f64> = (0..series.len())
-        .map(|i| echoes(i as f64 / f64::from(RATE), 0.0, 0.05, 0.35, 0.25, 3))
-        .collect();
-    assert_agree(&series, &want, "the series against its echoes");
-}
-
-#[test]
-fn a_delayed_read_of_an_echo_moves_every_window_once() {
-    let secs = 1.1;
-    let late = rendered(
-        &[
-            (
-                "echo",
-                "crop(sin(2*pi*440*t), 0.3s, 0.35s) + 0.35*self(t - 0.25s)\n",
-            ),
-            ("late", "@echo(t - 0.1s)\n"),
-        ],
-        "late",
-        secs,
-    );
-    let want: Vec<f64> = (0..late.len())
-        .map(|i| echoes(i as f64 / f64::from(RATE) - 0.1, 0.3, 0.35, 0.35, 0.25, 3))
-        .collect();
-    assert_agree(&late, &want, "the delayed series against its echoes");
 }

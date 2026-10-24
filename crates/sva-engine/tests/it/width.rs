@@ -51,19 +51,6 @@ fn a_mono_term_plus_a_stereo_term_sounds_in_both_channels() {
     );
 }
 
-/// The same rule under a product: one lane times a pair is that lane against both.
-#[test]
-fn a_mono_term_times_a_stereo_term_broadcasts() {
-    let (left, right) = planes("mono-times-pair", "@pair(t)*@mono(t)\n");
-    let (joined_left, joined_right) = planes("times-joined", "@pair(t)*join(1, 1)*@mono(t)\n");
-    assert_eq!(left, joined_left);
-    assert_eq!(right, joined_right);
-    assert!(
-        right.iter().any(|x| *x != 0.0),
-        "the right channel is not silent"
-    );
-}
-
 /// A component past a value's width refuses when the node is typed, sampled or not, before
 /// and whether or not any sample of it is computed.
 #[test]

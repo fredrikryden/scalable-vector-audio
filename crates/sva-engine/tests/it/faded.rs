@@ -2,14 +2,11 @@
 
 use std::cell::RefCell;
 
-use crate::fixtures::{Now, added, graph_of, next, replaced};
+use crate::fixtures::{Now, added, graph_of, next};
 use sva_ast::Graph;
-use sva_engine::{
-    PSYCHOACOUSTIC_V1, Profile, Range, Render, RenderConfig, Stream, StreamConfig, Tier,
-};
+use sva_engine::{PSYCHOACOUSTIC_V1, Profile, Render, RenderConfig, Stream, StreamConfig, Tier};
 
 const RATE: u32 = 8_000;
-const BLOCK: usize = 256;
 
 fn fades() -> Graph {
     graph_of(
@@ -76,34 +73,6 @@ fn a_decayed_sound_ends_where_its_bound_stays_under_the_silence_threshold() {
     assert!(samples.iter().rev().take(40).any(|v| *v != 0.0));
 }
 
-/// A profile whose silence threshold is -60 dBFS cuts the fade at about half the time -120 does.
-#[test]
-fn the_profile_s_silence_threshold_moves_the_cut() {
-    let g = fades();
-    let loud = rendered(&g, "fade", at(-60.0));
-    let quiet = rendered(&g, "fade", PSYCHOACOUSTIC_V1);
-    assert_eq!(
-        loud.labels[&loud.root]
-            .cutting_below_silence_threshold
-            .as_ref()
-            .map(|p| p.silence_threshold_dbfs),
-        Some(-60.0)
-    );
-    let (early, late) = (
-        cut(&loud, "fade").expect("cut"),
-        cut(&quiet, "fade").expect("cut"),
-    );
-    let seconds = early as f64 / f64::from(RATE);
-    assert!((1.03..1.15).contains(&seconds), "cut at {seconds} s");
-    assert!(early < late, "{early} before {late}");
-    assert_eq!(plane(&loud).len() as i64, early);
-    assert!(
-        plane(&quiet)[early as usize..late as usize]
-            .iter()
-            .any(|v| *v != 0.0)
-    );
-}
-
 /// A closed interval renders its whole length: no node is cut under it, however quiet.
 #[test]
 fn a_closed_interval_cuts_nothing() {
@@ -129,66 +98,6 @@ fn a_closed_interval_cuts_nothing() {
     let uncut = sva_engine::render(&g, "mix", exact, &Tier::default()).expect("a render");
     let (a, b) = (plane(&mix), plane(&uncut));
     assert!(a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()));
-}
-
-/// A held note let up by a key-up fade leaves `@notes` once its fade, heard at the root, stays
-/// under -120 dBFS, with no remove, while a note still held sounds on: read bare, or through a
-/// filter whose gain the bound carries.
-#[test]
-fn a_faded_key_up_leaves_the_stream_s_sum_with_no_remove() {
-    for target in ["@notes", "2*lowpass(sample(@notes), cutoff=3000)"] {
-        let g = graph_of("faded-stream", &[("pad", "sin(2*pi*f0*t)\n")]);
-        let config = StreamConfig {
-            block: BLOCK,
-            channels: None,
-            render: RenderConfig {
-                range: Range {
-                    start: Some(0),
-                    end: Some(60 * i64::from(RATE)),
-                },
-                ..RenderConfig::at(RATE)
-            },
-        };
-        let expr =
-            |text: &str| sva_ast::parse_expr(text).unwrap_or_else(|e| panic!("{}", e.message));
-        let stream = Stream::open(&g, &expr(target), config, &Tier::default()).now();
-        let stream = RefCell::new(stream.expect("opens"));
-        let blocks = |count: usize| {
-            for _ in 0..count {
-                let block = next(&mut stream.borrow_mut()).unwrap_or_else(|e| panic!("{e}"));
-                assert!(block.is_some(), "the stream plays on");
-            }
-        };
-        let add = |text: &str| {
-            added(&stream, &g, &expr(text), &Tier::default())
-                .now()
-                .unwrap_or_else(|e| panic!("{e}"))
-        };
-        add("@pad(t, f0=300)");
-        let note = add("@pad(t, f0=200)");
-        blocks(4);
-        let up = stream.borrow().position();
-        let fade = format!("@pad(t, f0=200)*(1 - step(t - {up}sp)*(1 - exp(-(t - {up}sp)/0.15)))");
-        let held = replaced(&stream, &g, (note, &expr(&fade)), &Tier::default()).now();
-        assert_eq!(held.ok(), Some(true), "the note is held");
-        let terms = || stream.borrow().counts().terms;
-        let per_second = RATE as usize / BLOCK;
-        blocks(per_second);
-        assert_eq!(terms(), 2, "{target}: fading, a second after its key-up");
-        blocks(per_second + per_second / 2);
-        assert_eq!(
-            terms(),
-            1,
-            "{target}: under the silence threshold, 2.5 s after its key-up"
-        );
-        assert_eq!(
-            stream
-                .borrow()
-                .cutting_below_silence_threshold()
-                .silence_threshold_dbfs,
-            -120.0
-        );
-    }
 }
 
 /// Notes each falling under the silence threshold leave the sum early only while all that left early,

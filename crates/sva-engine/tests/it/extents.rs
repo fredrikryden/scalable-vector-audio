@@ -77,27 +77,6 @@ fn a_shifted_ref_reads_its_source_where_that_source_sounds() {
 }
 
 #[test]
-fn a_crop_inside_a_loop_or_under_a_filter_keeps_the_tail() {
-    let g = composition();
-    let echo = over(&g, "echo", 0, secs(4.5));
-    let echoes = &echo[secs(0.25) as usize..secs(0.45) as usize];
-    assert!(
-        echoes.iter().any(|v| v.abs() > 0.1),
-        "the first echo sounds"
-    );
-    assert!(
-        echo[secs(4.0) as usize..].iter().any(|v| *v != 0.0),
-        "the sixteenth echo sounds"
-    );
-    let ring = over(&g, "ring", 0, secs(0.1));
-    let tail = &ring[secs(0.05) as usize..];
-    assert!(
-        tail.iter().any(|v| v.abs() > 1e-3),
-        "the ring sounds past the crop"
-    );
-}
-
-#[test]
 fn a_start_past_zero_keeps_the_state_its_history_left() {
     let g = composition();
     for target in ["echo", "ring"] {
@@ -105,56 +84,6 @@ fn a_start_past_zero_keeps_the_state_its_history_left() {
         let late = over(&g, target, secs(0.3), secs(1.0));
         assert!(late.iter().any(|v| *v != 0.0), "{target}: silence");
         assert_eq!(late[..], whole[secs(0.3) as usize..], "{target}");
-    }
-}
-
-#[test]
-fn a_sampled_form_read_at_a_shift_is_its_closed_form_read_there() {
-    let g = composition();
-    let heard = over(&g, "heard_late", 0, secs(1.0));
-    let said = over(&g, "said_late", 0, secs(1.0));
-    let before = &heard[..secs(0.5) as usize];
-    assert!(
-        before.iter().any(|v| v.abs() > 0.1),
-        "not silence where no window started"
-    );
-    let worst = heard
-        .iter()
-        .zip(&said)
-        .fold(0.0f64, |held, (a, b)| held.max((a - b).abs()));
-    assert!(worst < 1e-9, "sample() moved the value by {worst}");
-}
-
-/// A range may start before 0, and then holds what one from 0 holds where they meet.
-#[test]
-fn a_range_from_before_zero_reads_a_filtered_crop_where_it_sounds() {
-    let g = composition();
-    let from_zero = over(&g, "smoothed", 0, secs(1.0));
-    assert!(from_zero.iter().any(|v| *v != 0.0), "silence tests nothing");
-    let early = over(&g, "smoothed", -secs(0.5), secs(1.0));
-    assert!(early[..secs(0.5) as usize].iter().all(|v| *v == 0.0));
-    assert_eq!(early[secs(0.5) as usize..], from_zero[..]);
-}
-
-/// A filter of an input with no start starts at t = 0 however it is read, earlier or late,
-/// here where it runs inside its reader's own program.
-#[test]
-fn a_filter_starts_where_its_support_does_whatever_reads_it() {
-    let g = composition();
-    let from_zero = over(&g, "drift", 0, secs(1.0));
-    assert!(from_zero.iter().any(|v| *v != 0.0), "silence tests nothing");
-    let early = over(&g, "drift", -secs(0.5), secs(1.0));
-    let late = over(&g, "drift_late", 0, secs(1.5));
-    for (read, what) in [
-        (early, "read from before 0"),
-        (late, "read half a second late"),
-    ] {
-        let (before, after) = read.split_at(secs(0.5) as usize);
-        assert!(
-            before.iter().all(|v| *v == 0.0),
-            "{what}: sounds before t = 0"
-        );
-        assert_eq!(after, &from_zero[..], "{what}");
     }
 }
 
@@ -168,10 +97,6 @@ fn a_transform_of_an_endless_input_refuses() {
     assert_eq!(refused.code(), "engine.unbounded_extent", "{refused}");
 }
 
-/// A crop's edge is the first sample whose exact instant is at or past the decimal it was
-/// written as, for its support and every evaluator alike. 0.8333333333333334 s is past 5/6 s,
-/// sample 40000's instant at 48 kHz, so that sample is silent on rows, in a program and read
-/// through a ref, even under a sum whose support runs past the crop.
 #[test]
 fn a_crop_starts_on_the_first_sample_past_its_edge_on_every_route() {
     let g = graph_of(

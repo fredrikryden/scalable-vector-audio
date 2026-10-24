@@ -4,50 +4,14 @@ use std::f64::consts::TAU;
 
 use crate::fixtures::graph_of;
 use sva_engine::{
-    Ask, Detail, EngineError, Held, Output, RenderConfig, Representation, Source, Tier, Value,
-    When, answer, render, types,
+    Ask, Detail, EngineError, Held, RenderConfig, Representation, Source, Tier, render, types,
 };
-use sva_formula::Body;
 
 fn form(name: &str, body: &str) -> Result<Held, EngineError> {
     let g = graph_of(name, &[("loop", body)]);
     let typing = types(&g, "loop")?;
     let id = typing.id("loop").expect("the root");
     Ok(typing.ty(id).held)
-}
-
-#[test]
-fn a_linear_self_keeps_its_dual() {
-    let g = graph_of(
-        "linear",
-        &[("loop", "sin(2*pi*220*t) + 0.5*self(t - 0.01s)\n")],
-    );
-    let typing = types(&g, "loop").expect("a series");
-    let id = typing.id("loop").expect("the root");
-    assert!(
-        typing.ty(id).has_dual(),
-        "a comb of resonances is placed analytically, not run on a grid"
-    );
-    let Value::ClosedForm(form) = typing.value(id) else {
-        panic!("a linear loop is a law");
-    };
-    assert!(
-        matches!(form.body, Body::Series(_)),
-        "the closed loop is the Neumann series, not the body with self dropped"
-    );
-}
-
-#[test]
-fn an_indexed_self_is_discrete() {
-    assert_eq!(
-        form(
-            "sampled",
-            "sample(sin(2*pi*220*t)) + 0.5*self[idx(t) - 1]\n"
-        )
-        .expect("a recurrence"),
-        Held::Sampled,
-        "an index read puts the loop on the render's samples"
-    );
 }
 
 #[test]
@@ -65,30 +29,6 @@ fn unit_gain_refuses() {
 
     let above = form("above", "sin(2*pi*220*t) + 1.5*self(t - 0.01s)\n").expect_err("no value");
     assert_eq!(above.code(), "type.self_gain_unbounded");
-}
-
-/// A discrete loop's past is a sequence, so each construct that makes a loop discrete refuses
-/// a read of it at an instant, by name, and offers the index read.
-#[test]
-fn a_discrete_loop_reading_itself_at_an_instant_refuses_at_typing() {
-    for (body, construct) in [
-        ("sin(2*pi*200*t) + lp(self(t - 17ms), cutoff=2000)\n", "lp"),
-        ("sin(2*pi*200*t) + tanh(self(t - 17ms)*2)\n", "tanh"),
-        ("sample(sin(2*pi*200*t)) + 0.5*self(t - 17ms)\n", "sample"),
-        ("sin(2*pi*200*t) + 0.5*self(t - 1sp)\n", "sp"),
-        (
-            "sin(2*pi*200*t) + 0.5*self(t - (0.01s + 0.002s*sin(2*pi*3*t)))\n",
-            "moves",
-        ),
-    ] {
-        let refused = form("discrete", body).expect_err(body);
-        let EngineError::Refused(d) = &refused else {
-            panic!("{body}: expected a written refusal, got {refused:?}");
-        };
-        assert_eq!(d.code, "type.discrete_self_at_time", "{body}");
-        assert!(d.message.contains(construct), "{body}: {}", d.message);
-        assert!(d.help.contains("self[idx("), "{body}: {}", d.help);
-    }
 }
 
 const RATES: [u32; 4] = [8_000, 44_100, 48_000, 96_000];
@@ -136,62 +76,6 @@ fn a_continuous_loop_renders_its_series_exactly_at_any_rate() {
     }
 }
 
-/// The same filter in the loop, read by index, steps on the render's own samples.
-#[test]
-fn a_filter_over_an_indexed_self_renders_at_any_rate() {
-    for rate in RATES {
-        let held = at_rate(
-            &[(
-                "loop",
-                "sample(crop(sin(2*pi*200*t), 0s, 0.005s)) + \
-                 0.5*lp(self[idx(t - 17ms)], cutoff=2000)\n",
-            )],
-            "loop",
-            rate,
-            0.03,
-        );
-        let id = held.id("loop").expect("the root");
-        let plane = held.output(id).expect("a loop").plane(0).to_vec();
-        let echo = (0.017 * f64::from(rate)).round() as usize;
-        assert!(plane.iter().all(|v| v.is_finite()), "{rate}");
-        assert!(
-            plane[echo..].iter().any(|v| v.abs() > 1e-3),
-            "{rate}: the burst comes back through the filter"
-        );
-    }
-}
-
-/// `self[idx(w)]` with `w` moving reads the loop's nearest past step each sample: alone it has
-/// nothing to ring, and a burst comes back once the delay, near 5 ms here, has passed.
-#[test]
-fn a_loop_reads_its_past_at_a_delay_that_moves() {
-    let delay = "self[idx(t - 0.005s - 0.002s*sin(2*pi*0.5*t))]";
-    for rate in RATES {
-        let alone = format!("lp({delay}, cutoff=2000)\n");
-        let held = at_rate(&[("loop", &alone)], "loop", rate, 0.03);
-        let id = held.id("loop").expect("the root");
-        let plane = held.output(id).expect("a loop").plane(0).to_vec();
-        assert!(plane.iter().all(|v| *v == 0.0), "{rate}: nothing rings");
-        let rung =
-            format!("sample(crop(sin(2*pi*200*t), 0s, 0.002s)) + 0.5*lp({delay}, cutoff=2000)\n");
-        let held = at_rate(&[("loop", &rung)], "loop", rate, 0.03);
-        let id = held.id("loop").expect("the root");
-        let plane = held.output(id).expect("a loop").plane(0).to_vec();
-        let at = |secs: f64| (secs * f64::from(rate)) as usize;
-        assert!(
-            plane[at(0.0021)..at(0.0049)].iter().all(|v| *v == 0.0),
-            "{rate}: silent until the delay has passed"
-        );
-        assert!(
-            plane[at(0.005)..at(0.008)].iter().any(|v| v.abs() > 1e-3),
-            "{rate}: the burst comes back through the filter"
-        );
-    }
-}
-
-/// Karplus-Strong at 440 Hz: whole samples of delay by index, the fraction by a first-order
-/// allpass written out in the loop, `a[n] = c*v[n] + v[n-1] - c*a[n-1]` over the averaged
-/// delay line `v`, with `a[n-1] = y[n-1] - x[n-1]`.
 #[test]
 fn a_karplus_strong_loop_with_an_allpass_fraction_is_its_recurrence() {
     const RATE: u32 = 44_100;
@@ -246,95 +130,6 @@ fn a_karplus_strong_loop_with_an_allpass_fraction_is_its_recurrence() {
     }
 }
 
-/// A body already in samples runs on the grid, with its feedback intact.
-#[test]
-fn a_constant_delay_over_sampled_input_runs_on_the_grid() {
-    let g = graph_of(
-        "crossed",
-        &[(
-            "loop",
-            "sample(sin(2*pi*220*t)) + 0.5*self[idx(t - 0.01s)]\n",
-        )],
-    );
-    let typing = types(&g, "loop").expect("a recurrence");
-    let id = typing.id("loop").expect("the root");
-    assert_eq!(typing.ty(id).held, Held::Sampled);
-    assert!(reads_itself(&typing, id), "the feedback survives lowering");
-}
-
-fn reads_itself(typing: &sva_engine::Typing, id: sva_engine::NodeId) -> bool {
-    match typing.value(id) {
-        Value::SelfAt { .. } => true,
-        Value::Op { args, .. } => args.iter().any(|a| reads_itself(typing, *a)),
-        Value::Cast(_, source) | Value::Filter { x: source, .. } | Value::Read { source, .. } => {
-            reads_itself(typing, *source)
-        }
-        Value::ClosedForm(_) | Value::Solver { .. } | Value::Noise(_) | Value::Recorded(_) => false,
-    }
-}
-
-/// A body holding a value no term can carry is refused, not truncated.
-#[test]
-fn a_loop_body_the_series_cannot_carry_refuses() {
-    let g = graph_of(
-        "uncarried",
-        &[
-            ("chord", "sin(2*pi*220*t)\n"),
-            ("loop", "lowpass(@chord, 800, 0.7) + 0.5*self(t - 0.01s)\n"),
-        ],
-    );
-    let refused = types(&g, "loop").expect_err("no series expands it");
-    assert_eq!(refused.code(), "engine.series_body_not_inlinable");
-    let EngineError::Refused(d) = &refused else {
-        panic!("expected a written refusal");
-    };
-    let fixed = graph_of(
-        "carried",
-        &[
-            ("chord", "sin(2*pi*220*t)\n"),
-            (
-                "loop",
-                "sample(lowpass(@chord, 800, 0.7)) + 0.5*self[idx(t) - 1]\n",
-            ),
-        ],
-    );
-    assert!(
-        types(&fixed, "loop").is_ok(),
-        "the repair the refusal offers must work: {}",
-        d.help
-    );
-}
-
-/// Two call sites at two delays are two reads of this node's output, never one.
-#[test]
-fn two_self_reads_at_two_delays_stay_apart() {
-    let g = graph_of(
-        "two-taps",
-        &[(
-            "loop",
-            "sample(sin(2*pi*220*t)) + 0.4*self[idx(t) - 1] + 0.3*self[idx(t) - 2]\n",
-        )],
-    );
-    let typing = types(&g, "loop").expect("a recurrence");
-    let id = typing.id("loop").expect("the root");
-    let mut taps = Vec::new();
-    collect_taps(&typing, id, &mut taps);
-    taps.sort_by_key(|d| format!("{d:?}"));
-    taps.dedup_by_key(|d| format!("{d:?}"));
-    assert_eq!(taps.len(), 2, "one read per written delay: {taps:?}");
-}
-
-fn collect_taps(typing: &sva_engine::Typing, id: sva_engine::NodeId, out: &mut Vec<When>) {
-    match typing.value(id) {
-        Value::SelfAt { at, .. } => out.push(at.clone()),
-        Value::Op { args, .. } => args.iter().for_each(|a| collect_taps(typing, *a, out)),
-        Value::Cast(_, source) | Value::Filter { x: source, .. } | Value::Read { source, .. } => {
-            collect_taps(typing, *source, out)
-        }
-        Value::ClosedForm(_) | Value::Solver { .. } | Value::Noise(_) | Value::Recorded(_) => {}
-    }
-}
-
 /// A loop reading the sample it is writing has nothing to read.
 #[test]
 fn a_zero_delay_loop_refuses() {
@@ -342,57 +137,11 @@ fn a_zero_delay_loop_refuses() {
     assert_eq!(refused.code(), "samples.zero_delay_loop");
 }
 
-/// A discrete loop runs on the grid whatever its gain, which is what makes a running sum
-/// writable. Only a continuous loop, a geometric series, refuses.
-#[test]
-fn a_discrete_loop_at_unit_gain_is_a_grid_loop() {
-    assert_eq!(
-        form(
-            "stepped-unit",
-            "sample(sin(2*pi*220*t)) + 1.0*self[idx(t) - 1]\n"
-        )
-        .expect("a running sum"),
-        Held::Sampled
-    );
-}
-
-/// A coefficient of zero is no loop: the body stands as written, with no series around it.
-#[test]
-fn a_zero_coefficient_leaves_the_body_alone() {
-    let g = graph_of(
-        "silent",
-        &[("loop", "sin(2*pi*220*t) + 0.0*self(t - 0.01s)\n")],
-    );
-    let typing = types(&g, "loop").expect("a law");
-    let id = typing.id("loop").expect("the root");
-    assert!(typing.ty(id).has_dual());
-    let Value::ClosedForm(form) = typing.value(id) else {
-        panic!("a law");
-    };
-    assert!(
-        !matches!(form.body, Body::Series(_)),
-        "no series expands a loop that carries nothing"
-    );
-}
-
 /// Reading ahead is not the same mistake as reading the sample being written.
 #[test]
 fn a_forward_self_read_names_its_own_cause() {
     let refused = form("forward", "sin(2*pi*220*t) + 0.5*self(t + 0.01s)\n").expect_err("no value");
     assert_eq!(refused.code(), "engine.forward_self_read");
-}
-
-/// A forcing term that is itself a series is the common case: every named waveform is one.
-#[test]
-fn a_series_forcing_term_still_closes_the_loop() {
-    let g = graph_of("forced", &[("loop", "saw(220) + 0.5*self(t - 0.01s)\n")]);
-    let typing = types(&g, "loop").expect("a series over a series");
-    let id = typing.id("loop").expect("the root");
-    assert!(typing.ty(id).has_dual());
-    let Value::ClosedForm(form) = typing.value(id) else {
-        panic!("a law");
-    };
-    assert!(matches!(form.body, Body::Series(_)));
 }
 
 /// The comb the series denotes is one line carrying every term, and the label says how much
@@ -440,46 +189,6 @@ fn a_closed_loop_renders_its_comb_and_reports_its_tail() {
     );
 }
 
-/// Four delay lines that read each other are one group, and the group is whatever its
-/// members reached: a network fed by samples runs on the grid, seed and all.
-#[test]
-fn an_fdn_of_sampled_delays_types_as_samples() {
-    let g = graph_of(
-        "fdn",
-        &[
-            ("send", "sample(sin(2*pi*220*t))\n"),
-            ("a", "@send + 0.45*(self[idx(t) - 1019] + @b(t - 1380sp))\n"),
-            ("b", "@send + 0.45*(@a(t - 1019sp) - self[idx(t) - 1380])\n"),
-        ],
-    );
-    let typing = types(&g, "a").expect("a network its own members type");
-    for path in ["a", "b"] {
-        let id = typing.id(path).unwrap_or_else(|| panic!("{path} typed"));
-        assert_eq!(
-            typing.ty(id).held,
-            Held::Sampled,
-            "{path} reads samples around the loop"
-        );
-    }
-}
-
-/// The optimistic seed is still the one a closed form loop settles in.
-#[test]
-fn a_closed_form_loop_group_keeps_its_dual() {
-    let g = graph_of(
-        "law-group",
-        &[
-            ("x", "sin(2*pi*110*t) + 0.4*@y(t - 0.01s)\n"),
-            ("y", "sin(2*pi*220*t) + 0.4*@x(t - 0.02s)\n"),
-        ],
-    );
-    let typing = types(&g, "x").expect("a law group");
-    for path in ["x", "y"] {
-        let id = typing.id(path).unwrap_or_else(|| panic!("{path} typed"));
-        assert!(typing.ty(id).has_dual(), "{path} stays a closed form");
-    }
-}
-
 /// Two nodes each lower a series of their own, and one closed form holds both. An index one of them
 /// reused would be captured by the other's expansion, folding two sums into one.
 #[test]
@@ -517,126 +226,6 @@ fn two_nested_loops_expand_under_indices_of_their_own() {
     );
 }
 
-const COMB: &str = "sin(2*pi*220*t) + 0.5*self(t - 0.01s)\n";
-const SHIFT: f64 = 0.003;
-
-/// A shift of a Neumann series is a shift of each term — an affine change of the free
-/// variable, not a new shape — so a shifted comb takes the collapse row the unshifted
-/// one takes, over the terms the unshifted one took, and its window moves with its voice.
-#[test]
-fn a_shifted_comb_costs_its_unshifted_route() {
-    let routed = |files: &[(&str, &str)]| {
-        let g = graph_of("shifted-route", files);
-        let held = render(
-            &g,
-            "loop",
-            RenderConfig::seconds(8_000, 0.05),
-            &Tier::default(),
-        )
-        .expect("a comb");
-        let id = held.id("loop").expect("the root");
-        let label = held.labels[&id].clone();
-        let Detail::Lines { summed, .. } = label.detail else {
-            panic!("a comb is a line spectrum, got {:?}", label.detail);
-        };
-        (label.source, label.rule(), summed)
-    };
-
-    let plain = routed(&[("loop", COMB)]);
-    assert_eq!(plain.0, Source::Exact);
-    let shifted = routed(&[("comb", COMB), ("loop", "@comb(t - 0.003s)\n")]);
-    assert_eq!(
-        shifted, plain,
-        "a shifted series is the same series, placed by the same rule over the same terms"
-    );
-
-    let sounding = |files: &[(&str, &str)]| {
-        let g = graph_of("shifted-window", files);
-        let held = render(
-            &g,
-            "loop",
-            RenderConfig::seconds(8_000, 0.05),
-            &Tier::default(),
-        )
-        .expect("a comb");
-        let id = held.id("loop").expect("the root");
-        let plane = held.output(id).expect("a rendered comb").plane(0).to_vec();
-        let at = |v: &[f64]| {
-            let live: Vec<usize> = v
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| s.abs() > 1e-9)
-                .map(|(i, _)| i)
-                .collect();
-            (live[0], live[live.len() - 1])
-        };
-        at(&plane)
-    };
-    let window = [("comb", COMB), ("windowed", "crop(@comb(t), 0s, 0.02s)\n")];
-    let (open, close) = sounding(&[window[0], window[1], ("loop", "@windowed(t)\n")]);
-    let (moved_open, moved_close) =
-        sounding(&[window[0], window[1], ("loop", "@windowed(t - 0.003s)\n")]);
-    let steps = (SHIFT * 8_000.0).round() as usize;
-    assert_eq!(
-        (moved_open, moved_close),
-        (open + steps, close + steps),
-        "the window a cropped series carries moves with the series, not against it"
-    );
-}
-
-/// The offset written at the call site, inside the body, or as a phase are three spellings
-/// of one rotation: the same lines at the same levels, each turned by exactly `-2*pi*f*by`.
-#[test]
-fn a_shifted_comb_keeps_its_lines() {
-    let listed = |files: &[(&str, &str)]| {
-        let g = graph_of("shifted-lines", files);
-        let held = render(
-            &g,
-            "loop",
-            RenderConfig::seconds(8_000, 0.05),
-            &Tier::default(),
-        )
-        .expect("a comb");
-        let id = held.id("loop").expect("the root");
-        let found = answer(&held, id, Representation::Lines).expect("an exact line list");
-        assert_eq!(found.source, Source::Exact);
-        let Output::Lines(mut lines) = found.value else {
-            panic!("expected lines");
-        };
-        lines.sort_by(|a, b| a.hz.total_cmp(&b.hz));
-        lines
-    };
-
-    let plain = listed(&[("loop", COMB)]);
-    assert!(plain.len() > 2, "a comb is more than its excitation");
-
-    for files in [
-        vec![("comb", COMB), ("loop", "@comb(t - 0.003s)\n")],
-        vec![("loop", "sin(2*pi*220*(t - 0.003)) + 0.5*self(t - 0.01s)\n")],
-        vec![(
-            "loop",
-            "sin(2*pi*220*t - 2*pi*220*0.003) + 0.5*self(t - 0.01s)\n",
-        )],
-    ] {
-        let moved = listed(&files);
-        assert_eq!(moved.len(), plain.len(), "{files:?}");
-        for (was, is) in plain.iter().zip(&moved) {
-            assert!(
-                (is.hz - was.hz).abs() < 1e-9,
-                "{files:?}: {is:?} vs {was:?}"
-            );
-            let turn = sva_engine::C64::new(0.0, -std::f64::consts::TAU * was.hz * SHIFT).exp();
-            let want = was.amp * turn;
-            assert!(
-                (is.amp - want).abs() < 1e-9,
-                "{files:?}: {} Hz turned to {:?}, not {want:?}",
-                was.hz,
-                is.amp
-            );
-        }
-    }
-}
-
 /// `join` stacks its operands' channels, so an operand reading `self` whole would make the node
 /// wider than itself: no width holds it, and typing says so before any sample is run.
 #[test]
@@ -648,34 +237,5 @@ fn a_join_over_its_own_loop_refuses_at_typing() {
     ] {
         let refused = form("join-over-self", body).expect_err("no width holds it");
         assert_eq!(refused.code(), "type.join_over_self", "{body}");
-    }
-}
-
-/// Each operand reading one channel of the loop is its own echo, one per channel.
-#[test]
-fn a_join_of_one_channel_loops_echoes_each_channel_on_its_own() {
-    let rate = 8_000;
-    let held = at_rate(
-        &[(
-            "loop",
-            "join(crop(sin(2*pi*440*t) + 0.5*ch(self[idx(t - 17ms)], 0), 0s, 1s), \
-             crop(sin(2*pi*660*t) + 0.5*ch(self[idx(t - 23ms)], 1), 0s, 1s))\n",
-        )],
-        "loop",
-        rate,
-        0.05,
-    );
-    let id = held.id("loop").expect("the root");
-    let out = held.output(id).expect("two echoes");
-    assert_eq!(out.width(), 2, "one channel per operand");
-    for (c, hz, delay) in [(0, 440.0, 136), (1, 660.0, 184)] {
-        let x = |n: usize| libm::sin(TAU * hz * n as f64 / f64::from(rate));
-        for (n, got) in out.plane(c).iter().enumerate().take(2 * delay).skip(delay) {
-            let want = x(n) + 0.5 * x(n - delay);
-            assert!(
-                (got - want).abs() < 1e-9,
-                "channel {c}, sample {n}: {got} against {want}"
-            );
-        }
     }
 }

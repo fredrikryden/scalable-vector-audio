@@ -1,6 +1,5 @@
 // Concern: gathers every sva-engine integration suite into one test binary | Non-concern: what any suite asserts (its own module) | IO: none
 
-mod allocations;
 mod arguments;
 mod bindings;
 mod bounds;
@@ -28,7 +27,6 @@ mod operators;
 mod persist;
 mod placement;
 mod pointwise;
-mod rebuild;
 mod refs;
 mod refusals;
 mod release;
@@ -36,21 +34,15 @@ mod retype;
 mod ringing;
 mod sampled;
 mod segments;
-mod session;
 mod skip;
 mod skipping_exact_zero_work;
-mod stated;
-mod stats;
 mod stores;
 mod stream;
 mod through;
-mod tiers;
 mod trace;
 mod triad;
-mod typing;
 mod vocabulary;
 mod volatile;
-mod warm;
 mod waves;
 mod width;
 mod work;

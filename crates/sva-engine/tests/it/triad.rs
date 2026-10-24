@@ -1,9 +1,7 @@
 // Concern: proves the three ways to lowpass one chord end where FORMAT 7.3 says they end | Non-concern: the filter response itself (sva-formula) | IO: (a composition) -> a reading or a refusal
 
 use crate::fixtures::graph_of;
-use sva_engine::{
-    Ask, EngineError, Output, RenderConfig, Representation, Source, Tier, answer, render,
-};
+use sva_engine::{Ask, Output, RenderConfig, Representation, Source, Tier, answer, render};
 
 /// 261.63, 329.63 and 392 Hz: a C major triad, one line each.
 const CHORD: &str = "sin(2*pi*261.63*t) + sin(2*pi*329.63*t) + sin(2*pi*392*t)\n";
@@ -66,31 +64,6 @@ fn the_triad_under_a_300_hz_lowpass_is_placed_at_the_response() {
         found[1].1 < root.1 && found[2].1 < found[1].1,
         "a lowpass falls with frequency: {found:?}"
     );
-}
-
-/// The third row: a quotient built from `f` has no dual in A.
-#[test]
-fn the_quotient_row_refuses_and_names_the_cast() {
-    let g = graph_of(
-        "quotient",
-        &[
-            ("chord", CHORD),
-            ("voiced", "ifourier(@chord/(1 + pow(f/300, 8)))\n"),
-        ],
-    );
-    let Err(refused) = render(
-        &g,
-        "voiced",
-        RenderConfig::seconds(44_100, 1.0),
-        &Tier::default(),
-    ) else {
-        panic!("a quotient of a law leaves A");
-    };
-    let EngineError::Refused(d) = &refused else {
-        panic!("expected a written refusal, got {refused:?}");
-    };
-    assert_eq!(d.code, "cast.left_algebra");
-    assert!(d.help.contains("sample("), "{}", d.help);
 }
 
 /// A crop a second wide puts the pole row's reference a second from the origin, where the

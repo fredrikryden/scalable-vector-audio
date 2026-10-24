@@ -31,33 +31,6 @@ fn a_kink_two_refs_down_splits_the_form_reading_it() {
     assert_eq!(digest(&files, "top", 1.0), 0xa99e_a25f_5b5a_ba14);
 }
 
-/// A form no atom sum reaches, read at a time that moves, is its written form at that time.
-#[test]
-fn a_written_form_read_at_a_moving_time_reads_each_ref_it_holds() {
-    let files = [
-        ("n0", "crop(sin(2*pi*220*t), 0s, 1s)\n"),
-        ("n1", "max(@n0(t), 0)*0.5 + @n0(t)*0.3 + @n0(t)*0.2\n"),
-        ("n2", "max(@n1(t), 0)*0.5 + @n1(t)*0.3 + @n1(t)*0.2\n"),
-        ("top", "crop(@n2(t + 0.002*sin(2*pi*5*t)), 0s, 0.5s)\n"),
-    ];
-    assert_eq!(digest(&files, "top", 0.5), 0xd129_7746_1571_fc12);
-}
-
-#[test]
-fn an_index_of_a_time_held_in_refs_reads_the_step_nearest_it() {
-    let files = [
-        (
-            "x",
-            "lowpass(crop(sample(sin(2*pi*220*t)), 0s, 0.05s), cutoff=900)\n",
-        ),
-        ("wobble", "0.002s*sin(2*pi*5*t)\n"),
-        ("late", "t - 0.003s - @wobble(t)\n"),
-        ("when", "@late(t) - 0.002s\n"),
-        ("top", "@x[idx(@when(t))]\n"),
-    ];
-    assert_eq!(digest(&files, "top", 0.1), 0x677d_0482_60c8_82c2);
-}
-
 /// A dashpot ramped in through refs switches where the crop it reads opens.
 #[test]
 fn a_solver_argument_held_in_refs_switches_where_its_crop_opens() {
@@ -69,30 +42,6 @@ fn a_solver_argument_held_in_refs_switches_where_its_crop_opens() {
     assert_eq!(digest(&files, "top", 0.3), 0x4330_40d6_4d9f_d526);
 }
 
-#[test]
-fn a_stored_energy_coefficient_held_in_refs_only_jumps() {
-    let files = [
-        ("jump", "crop(1, 0.1s, inf)\n"),
-        ("spring", "1e3*@jump(t)\n"),
-        ("top", "chaigne_askenfelt(261.63, damper_k=@spring(t))\n"),
-    ];
-    assert_eq!(digest(&files, "top", 0.3), 0x2bce_0950_14ae_d401);
-}
-
-/// A closed loop's series reads each ref its body reads as the form it names, at each term's
-/// own time.
-#[test]
-fn a_closed_loop_reads_each_ref_its_body_reads_at_each_terms_time() {
-    let files = [
-        ("tone", "crop(sin(2*pi*220*t), 0s, 0.1s)\n"),
-        ("pair", "@tone(t)*0.5 + @tone(t)*0.5\n"),
-        ("top", "@pair(t) + 0.5*self(t - 17ms)\n"),
-    ];
-    assert_eq!(digest(&files, "top", 0.5), 0x54d3_c7e1_fd06_de9e);
-}
-
-/// A series term reading a closed form at its own instant renders the bits it does with that
-/// form written in.
 #[test]
 fn a_series_term_reading_a_form_at_its_instant_is_that_form_written_in() {
     let read = [

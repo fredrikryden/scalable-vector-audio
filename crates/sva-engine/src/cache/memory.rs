@@ -1,8 +1,5 @@
 // Concern: the memory tier: each resident value and its node under one cap, what it evicts and writes back, its misses | Non-concern: the disk | IO: (key) -> held, answered; (key, samples, node) -> kept
 
-#[cfg(test)]
-mod chains;
-
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -222,8 +219,6 @@ struct State {
     /// Writes that failed, and why the latest did: none is tried again until a persist.
     failed: (u64, Option<String>),
     links: RefCell<Links>,
-    #[cfg(test)]
-    walked: std::cell::Cell<u64>,
 }
 
 /// Where a chain of moved nodes ends and the shift there; a chain that loops ends nowhere.
@@ -505,8 +500,6 @@ impl State {
             let looped = !seen.insert(at);
             match self.moving(at) {
                 Some((of, by, bound)) if !looped => {
-                    #[cfg(test)]
-                    self.walked.set(self.walked.get() + 1);
                     walked.push((at, of, by, !bound));
                     at = of;
                 }

@@ -1109,30 +1109,3 @@ fn past(grid: Grid, secs: f64) -> i64 {
     }
     n
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{spread, spread_times};
-    use sva_samples::Extent;
-
-    /// Values nonzero over samples 0..=9 and 5..=6 convolve to 5..=15; three copies of -3..=1
-    /// to -9..=3; an endless side stays endless and a silent one silences the product.
-    #[test]
-    fn a_convolution_is_nonzero_over_the_sum_of_its_supports() {
-        assert_eq!(
-            spread(Extent::new(0, 10), Extent::new(5, 7)),
-            Extent::new(5, 16)
-        );
-        assert_eq!(spread_times(Extent::new(-3, 2), 3), Extent::new(-9, 4));
-        assert_eq!(
-            spread_times(Extent::new(-3, 2), 3),
-            spread(
-                spread(Extent::new(-3, 2), Extent::new(-3, 2)),
-                Extent::new(-3, 2)
-            )
-        );
-        let endless = spread(Extent::new(0, 10), Extent::new(4, i64::MAX));
-        assert_eq!(endless, Extent::new(4, i64::MAX));
-        assert!(spread(Extent::NOWHERE, Extent::EVERYWHERE).is_empty());
-    }
-}

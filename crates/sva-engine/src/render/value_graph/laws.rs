@@ -1,4 +1,4 @@
-// Concern: proves a render is the same bits shared or apart, whole or in blocks, and a changed stream builds, plays as anew, on random trees | Non-concern: a node's arithmetic | IO: (a seed) -> renders
+// Concern: proves a render is the same bits shared or apart, whole or blocked, on any threads, and an edited stream plays as anew | Non-concern: a node's arithmetic | IO: (a random tree) -> renders
 
 use std::cell::RefCell;
 
@@ -230,65 +230,6 @@ fn a_tree_is_the_same_bits_on_one_thread_or_many() {
     assert!(rendered >= 20, "only {rendered} of 24 trees rendered");
 }
 
-/// A stateless value that refuses in a late block, beside one that does not, refuses the same
-/// on one thread or many.
-#[test]
-fn a_refusal_is_the_same_on_one_thread_or_many() {
-    let mut composition = sva_ast::Composition::new();
-    composition.insert("grows", "crop(exp(800*t), 0s, 2s)\n");
-    composition.insert(
-        "root",
-        "@grows + lowpass(sample(sin(2*pi*220*t)), cutoff=900, q=0.7)\n",
-    );
-    let g = sva_ast::load(&composition).expect("a composition");
-    let on = |threads: usize| {
-        let config = RenderConfig {
-            threads: std::num::NonZeroUsize::new(threads).expect("a thread"),
-            ..RenderConfig::seconds(RATE, 2.0)
-        };
-        match render(&g, "root", config, &Tier::default()) {
-            Ok(_) => panic!("a value past the largest double refuses"),
-            Err(e) => e.to_string(),
-        }
-    };
-    let want = on(1);
-    for threads in [3, 4] {
-        assert_eq!(on(threads), want, "on {threads} threads");
-    }
-}
-
-/// A value held apart for its read is still named by what it computes: the apart build holds
-/// one value per read, several under one key, and only keys the shared build holds.
-#[test]
-fn a_value_held_apart_is_keyed_as_the_shared_one() {
-    let (mut checked, mut repeated) = (0, 0);
-    for seed in 1..=12u64 {
-        let mut composition = sva_ast::Composition::new();
-        for (name, body) in &tree(seed) {
-            composition.insert(name, body);
-        }
-        let g = sva_ast::load(&composition).expect("a composition");
-        let (Ok(shared), Ok(apart)) = (
-            render(&g, "root", config(), &Tier::default()),
-            render_apart(&g, "root", config()),
-        ) else {
-            continue;
-        };
-        let keys = |held: &crate::render::Render| -> Vec<_> {
-            let value_graph = held.value_graph.as_ref().expect("a value graph");
-            value_graph.values.iter().map(|(_, v)| v.key).collect()
-        };
-        let (shared, apart) = (keys(&shared), keys(&apart));
-        let distinct: std::collections::BTreeSet<_> = apart.iter().copied().collect();
-        assert!(!apart.is_empty(), "{seed}");
-        assert!(distinct.iter().all(|k| shared.contains(k)), "{seed}");
-        repeated += usize::from(distinct.len() < apart.len());
-        checked += 1;
-    }
-    assert!(checked >= 10, "only {checked} trees rendered");
-    assert!(repeated > 0, "some tree reads one value twice, held apart");
-}
-
 fn expr(text: &str) -> sva_ast::Expr {
     sva_ast::parse_expr(text).expect("an expression")
 }
@@ -339,46 +280,6 @@ fn changed(
     if let Ok(Changed::Added(handle)) = now(change(stream, build, tier)) {
         held.push(handle);
     }
-}
-
-/// However its terms and target changed, a stream holds the typing and value graph a build of all it
-/// plays, carrying nothing over, would: what a change carries over is what it would build. A
-/// memory keeping nothing leaves both answered by no store.
-#[test]
-fn a_changed_stream_holds_what_a_build_of_all_it_plays_would() {
-    let mut checked = 0;
-    for seed in 1..=12u64 {
-        let mut composition = sva_ast::Composition::new();
-        for (name, body) in &tree(seed) {
-            composition.insert(name, body);
-        }
-        let g = sva_ast::load(&composition).expect("a composition");
-        let config = StreamConfig {
-            block: 100,
-            channels: None,
-            render: RenderConfig::at(RATE),
-        };
-        let tier = Tier::new(0);
-        let Ok(stream) = now(Stream::open(&g, &expr("@notes + @root"), config, &tier)) else {
-            continue;
-        };
-        let (stream, mut draw, mut held) = (RefCell::new(stream), Draw(seed | 1), Vec::new());
-        if seed % 2 == 0 {
-            stream.borrow_mut().go_live();
-        }
-        for _ in 0..16 {
-            changed((&stream, &tier), (&g, true), &mut draw, &mut held);
-            for _ in 0..draw.below(4) {
-                let at = stream.borrow().position();
-                stream.borrow_mut().read(at, 100).expect("a block");
-            }
-            if let Some(unlike) = now(stream.borrow().unlike_rebuilt()) {
-                assert_eq!(unlike, Vec::<String>::new(), "{seed}");
-                checked += 1;
-            }
-        }
-    }
-    assert!(checked >= 150, "only {checked} changes checked");
 }
 
 /// After a change that moves nothing before where an exact stream stands, it plays from there

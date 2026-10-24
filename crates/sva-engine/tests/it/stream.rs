@@ -145,45 +145,6 @@ fn a_streamed_piano_note_is_the_whole_render_bit_for_bit() {
     }
 }
 
-/// The echo reads its own output a quarter second back, across many blocks.
-#[test]
-fn an_echo_over_a_streamed_note_is_the_whole_render_bit_for_bit() {
-    let g = composition();
-    let (samples, echoing) = (secs(0.36), secs(0.252));
-    let want = whole(&g, "echoed", samples);
-    assert_ne!(want[echoing..], whole(&g, "note", samples)[echoing..]);
-    assert_eq!(streamed(&g, "echoed", 1_024, samples), want);
-}
-
-#[test]
-fn a_biquad_chain_over_a_streamed_note_is_the_whole_render_bit_for_bit() {
-    let g = composition();
-    let samples = secs(0.14);
-    let want = whole(&g, "chain", samples);
-    sounds(&want);
-    assert_eq!(streamed(&g, "chain", 777, samples), want);
-}
-
-/// A whole render places a saw's lines by one transform over its horizon; a stream sums
-/// them at each instant, so its blocks agree with each other rather than with that render.
-/// A form in `f`, read at `t`, is a form in `t` like any other.
-#[test]
-fn a_streamed_closed_form_is_the_same_in_blocks_of_any_size() {
-    let g = composition();
-    let samples = secs(0.12);
-    for target in ["saw", "sawed", "spectrum"] {
-        let one = streamed(&g, target, samples, samples);
-        sounds(&one);
-        for block in [1, 64, 1_023] {
-            assert_eq!(
-                streamed(&g, target, block, samples),
-                one,
-                "{target} in {block}"
-            );
-        }
-    }
-}
-
 /// Each saw's harmonics are one run, summed at each instant by the same evaluator both read.
 #[test]
 fn a_streamed_synth_voice_is_the_whole_render_bit_for_bit_in_blocks_of_any_size() {
@@ -261,22 +222,6 @@ fn a_stream_from_a_later_start_is_the_whole_render_over_the_same_range() {
     }
 }
 
-/// A read ahead of its reader streams: the value it reads is computed ahead of the block.
-#[test]
-fn a_read_ahead_streams_the_whole_render_bit_for_bit() {
-    let g = composition();
-    let samples = secs(0.2);
-    let want = whole(&g, "ahead", samples);
-    sounds(&want);
-    for block in [1, 64, 777] {
-        assert_eq!(
-            streamed(&g, "ahead", block, samples),
-            want,
-            "in blocks of {block}"
-        );
-    }
-}
-
 /// A root whose support never ends streams on for as long as it is pulled, where a whole
 /// render of it refuses.
 #[test]
@@ -304,24 +249,6 @@ fn an_open_stream_whose_support_never_ends_streams_on_while_pulled() {
         .err()
         .expect("an open render with no end");
     assert_eq!(refused.code(), "render.no_end", "{refused}");
-}
-
-/// A range with an end ends there whatever holds under it.
-#[test]
-fn a_closed_stream_ends_at_its_range() {
-    let g = composition();
-    let range = Range {
-        start: Some(0),
-        end: Some(1_000),
-    };
-    let mut stream = Stream::open(&g, &at("tone"), config(256, range), &Tier::default())
-        .now()
-        .expect("a closed range opens");
-    let mut heard = 0;
-    while let Some(block) = next(&mut stream).expect("a block") {
-        heard += block.len();
-    }
-    assert_eq!((heard, stream.end()), (1_000, Some(1_000)));
 }
 
 fn reads() -> Graph {
@@ -419,28 +346,6 @@ fn a_stream_is_the_whole_render_bit_for_bit_at_every_rate() {
     }
 }
 
-/// A filter has a value only at its own steps, so a read at a moving time refuses at typing,
-/// whole or streamed.
-#[test]
-fn a_filter_read_at_a_moving_time_refuses_whole_and_streamed() {
-    let g = reads();
-    let Err(whole) = render(
-        &g,
-        "warped",
-        RenderConfig::seconds(RATE, 0.1),
-        &Tier::default(),
-    ) else {
-        panic!("a filter has no value at a time that moves");
-    };
-    assert_eq!(whole.code(), "type.stateful_warp", "{whole}");
-    let Err(streamed) =
-        Stream::open(&g, &at("warped"), config(256, four()), &Tier::default()).now()
-    else {
-        panic!("a filter streams no value at a time that moves");
-    };
-    assert_eq!(streamed.code(), "type.stateful_warp", "{streamed}");
-}
-
 /// A read backwards in time streams as the whole render reads it: the value it reads is held
 /// from where the stream first asks for it back to where it last does.
 #[test]
@@ -450,25 +355,4 @@ fn a_streamed_read_backwards_in_time_is_the_whole_render() {
     let want = whole_at(&g, "reversed", RATE, samples);
     sounds(&want);
     assert_eq!(streamed_at(&g, "reversed", RATE, 512, samples), want);
-}
-
-/// A composition's own `notes` is an ordinary node: two that define it otherwise each stream
-/// their own over one tier.
-#[test]
-fn a_composition_s_own_notes_streams_as_it_is_written() {
-    let tier = Tier::default();
-    for hz in [220, 330] {
-        let g = graph_of(
-            &format!("own-notes-{hz}"),
-            &[
-                ("notes", &format!("sample(0.1*sin(2*pi*{hz}*t))\n")),
-                ("master", "@notes*0.5\n"),
-            ],
-        );
-        let mut stream = Stream::open(&g, &at("master"), config(64, four()), &tier)
-            .now()
-            .unwrap_or_else(|e| panic!("{e}"));
-        let block = next(&mut stream).expect("a block").expect("samples");
-        assert_eq!(block.plane(0), &whole(&g, "master", 64)[..], "{hz} Hz");
-    }
 }

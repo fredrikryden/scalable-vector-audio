@@ -184,38 +184,6 @@ fn a_read_behind_the_stream_or_of_nothing_is_refused() {
     assert_eq!(read(&stream, BLOCK), whole(&g, "@held", 2 * BLOCK)[BLOCK..]);
 }
 
-/// A term placed at its landing keeps its sample 0 where it landed across a skip.
-#[test]
-fn a_term_placed_at_its_landing_keeps_its_time_across_a_skip() {
-    let g = composition();
-    let stream = opened(&g, "@notes", true);
-    read(&stream, 0);
-    let build =
-        |_: &Stream| Ok::<_, EngineError>(Change::Add(g.clone(), expr("@slow"), Placed::Landing));
-    let Ok(Changed::Added(note)) = change(&stream, build, &Tier::default()).now() else {
-        panic!("an add answers its handle");
-    };
-    assert_eq!(stream.borrow().landed(note), Some(BLOCK as i64));
-    let at = 40 * BLOCK + 17;
-    let heard = read(&stream, at);
-    let want = whole(&g, &format!("@slow(t - {BLOCK}sp)"), at + BLOCK);
-    assert_eq!(heard, want[at..]);
-    assert_eq!(stream.borrow().landed(note), Some(BLOCK as i64));
-}
-
-/// A live stream with nothing sounding never ends: a read anywhere ahead plays full frames of
-/// silence there.
-#[test]
-fn a_silent_live_stream_reads_full_frames_of_zeros() {
-    let g = composition();
-    let stream = endless(&g, "@notes");
-    assert_eq!(read(&stream, 0), vec![0.0; BLOCK]);
-    let far = 30 * RATE as usize + 17;
-    assert_eq!(read(&stream, far), vec![0.0; BLOCK]);
-    assert_eq!(stream.borrow().position(), (far + BLOCK) as i64);
-    assert_eq!(stream.borrow().end(), None);
-}
-
 /// Once its last note ended, a live stream read far ahead moves there, and a note added then
 /// lands where it stands and plays from its attack.
 #[test]

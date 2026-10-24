@@ -44,11 +44,6 @@ impl Memory {
             .collect()
     }
 
-    pub(crate) fn staged(&self) -> Vec<String> {
-        let held = self.held.lock().unwrap();
-        held.keys().filter(|n| n.contains('/')).cloned().collect()
-    }
-
     pub(crate) fn at(&self, name: &str) -> String {
         format!("{}{name}", self.prefix)
     }

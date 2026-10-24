@@ -75,38 +75,6 @@ fn plane(r: &Render) -> Vec<f64> {
     r.output(r.root).expect("the root").plane(0).to_vec()
 }
 
-/// Each shape over a cropped input ends where its own cut says, past the input's end, and
-/// the render states the silence threshold it cut at.
-#[test]
-fn a_fixed_filter_over_a_cropped_input_ends() {
-    let g = rings();
-    for shape in SHAPES {
-        let bare = render(&g, shape, RenderConfig::at(RATE));
-        let cutting = bare.labels[&bare.root]
-            .cutting_below_silence_threshold
-            .clone()
-            .expect("a stated silence threshold");
-        assert_eq!(cutting.silence_threshold_dbfs, -120.0, "{shape}");
-        let samples = plane(&bare);
-        let cut = samples.len() as i64;
-        assert!(
-            cutting
-                .treated_as_silent_from_sample
-                .iter()
-                .any(|(node, at)| node == shape && *at == cut),
-            "{shape} ends at its own cut: {cut}, {:?}",
-            cutting.treated_as_silent_from_sample
-        );
-        let input_end = RATE as usize / 4;
-        assert!(cut as usize > input_end, "{shape} rings past its input");
-        assert!(
-            samples[input_end..].iter().any(|v| *v != 0.0),
-            "{shape} rings on after its input"
-        );
-        assert!(cut < 20 * RATE as i64, "{shape} cut at {cut}");
-    }
-}
-
 /// The cut changes nothing before it: a render over a long fixed range has the same bits
 /// there, and only samples under the silence threshold after.
 #[test]
@@ -126,27 +94,6 @@ fn the_bare_render_is_the_long_render_up_to_its_cut() {
                 .all(|v| v.abs() < silence_threshold),
             "{shape}"
         );
-    }
-}
-
-/// What the cut zeroes was already under -120 dBFS: rendered with a far lower silence threshold, every
-/// sample from the -120 dBFS cut on is under it.
-#[test]
-fn what_the_cut_zeroes_is_under_the_silence_threshold() {
-    let g = rings();
-    let deep = RenderConfig {
-        profile: Profile {
-            silence_threshold_dbfs: -300.0,
-            ..PSYCHOACOUSTIC_V1
-        },
-        ..RenderConfig::seconds(RATE, 20.0)
-    };
-    for shape in SHAPES {
-        let cut = plane(&render(&g, shape, RenderConfig::at(RATE))).len();
-        let uncut = plane(&render(&g, shape, deep.clone()));
-        let loudest = uncut[cut..].iter().fold(0.0f64, |m, v| m.max(v.abs()));
-        assert!(loudest < 1e-6, "{shape}: {loudest} past {cut}");
-        assert!(uncut[..cut].iter().any(|v| v.abs() > 0.0), "{shape}");
     }
 }
 

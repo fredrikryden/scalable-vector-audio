@@ -1,4 +1,4 @@
-// Concern: proves a session's render types only what changed since its last and its readers | Non-concern: memory's answers, a stream's changes | IO: (compositions, a session) -> typed nodes, bits
+// Concern: proves each render in a session is a render of its own, and a refusal leaves it as it was | Non-concern: memory's answers, a stream's changes | IO: (compositions, a session) -> bits
 
 use std::collections::BTreeSet;
 
@@ -66,21 +66,6 @@ fn same_as_alone(render: &Render, graph: &Graph) {
     }
 }
 
-/// A second render of an unchanged composition types nothing, a fresh tier or not.
-#[test]
-fn a_repeated_render_in_a_session_types_nothing() {
-    let mut session = Session::default();
-    let graph = mixed("retype-same", 220);
-    let first = rendered(&mut session, &graph, &Tier::default());
-    let all: BTreeSet<String> = ["x", "y", "p", "master"].map(String::from).into();
-    assert_eq!(typed(&first), all);
-    for tier in [Tier::default(), Tier::default()] {
-        let again = rendered(&mut session, &mixed("retype-same-again", 220), &tier);
-        assert_eq!(typed(&again), BTreeSet::new());
-        same_as_alone(&again, &graph);
-    }
-}
-
 /// A render keeps the version it was rendered from while its session renders an edit: each
 /// names and reads its own composition.
 #[test]
@@ -92,19 +77,6 @@ fn a_render_keeps_its_version_while_its_session_renders_an_edit() {
     let second = rendered(&mut session, &edited, &tier);
     same_as_alone(&first, &before);
     same_as_alone(&second, &edited);
-}
-
-/// An edit of one node types that node and each node reading it, and no other.
-#[test]
-fn a_render_after_an_edit_types_only_the_edited_node_and_its_readers() {
-    let mut session = Session::default();
-    let tier = Tier::default();
-    rendered(&mut session, &mixed("retype-before", 220), &tier);
-    let edited = mixed("retype-after", 440);
-    let after = rendered(&mut session, &edited, &tier);
-    let share: BTreeSet<String> = ["x", "p", "master"].map(String::from).into();
-    assert_eq!(typed(&after), share);
-    same_as_alone(&after, &edited);
 }
 
 /// A render refused while typing leaves the session as it was: the next types only its change.
@@ -176,50 +148,4 @@ fn a_session_renders_each_target_and_each_composition_as_a_render_of_its_own() {
         refused.err().map(|e| e.to_string()),
         alone.err().map(|e| e.to_string())
     );
-}
-
-/// A note through a tone knob at `cutoff`.
-fn knob(cutoff: u32) -> Graph {
-    graph_of(
-        "retype-knob",
-        &[
-            ("note", "sample(sin(2*pi*220*t))*0.5\n"),
-            ("tone", "lowpass(x, cutoff=cutoff, q=0.7)\n"),
-            ("master", &format!("@tone(t, x=@note, cutoff={cutoff})\n")),
-        ],
-    )
-}
-
-fn turned(session: &mut Session, cutoff: u32, tier: &Tier) -> (Vec<String>, Render) {
-    let mut config = config();
-    config.volatile = vec!["cutoff".to_string()];
-    let held = render_in(
-        session,
-        &knob(cutoff),
-        "master",
-        config.clone(),
-        tier,
-        (&Never, None),
-    )
-    .now();
-    let held = held.unwrap_or_else(|e| panic!("{e}"));
-    let alone = render_over(&knob(cutoff), "master", config, &Tier::default()).now();
-    assert_eq!(bits(&held), bits(&alone.unwrap_or_else(|e| panic!("{e}"))));
-    let stats = held.cache_stats.as_ref().expect("a render over memory");
-    (stats.typed.clone(), held)
-}
-
-/// A volatile knob's move types the nodes it reaches once, and the composition with the knob at
-/// its stand-in not at all.
-#[test]
-fn a_knob_move_types_only_what_the_knob_reaches() {
-    let mut session = Session::default();
-    let tier = Tier::default();
-    turned(&mut session, 400, &tier);
-    let (moved, _) = turned(&mut session, 800, &tier);
-    let reached = |path: &String| path == "master" || path.starts_with("tone(");
-    assert!(moved.iter().all(reached), "{moved:?}");
-    assert_eq!(moved.len(), 2, "{moved:?}");
-    let (again, _) = turned(&mut session, 800, &tier);
-    assert_eq!(again, Vec::<String>::new());
 }

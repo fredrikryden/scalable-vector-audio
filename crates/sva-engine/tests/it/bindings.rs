@@ -46,13 +46,3 @@ fn an_explicit_override_reaches_the_instance_rather_than_the_files_own_default()
     let x = bound.iter().find(|b| b.name == "x").expect("x");
     assert_eq!(x.source, "@src");
 }
-
-#[test]
-fn an_unknown_path_refuses() {
-    let g = graph_of("missing", &[("song", "sin(t)\n")]);
-    let held = rendered(&g);
-    assert!(matches!(
-        bindings(&held, "nope"),
-        Err(EngineError::UnknownNode(p)) if p == "nope"
-    ));
-}

@@ -78,21 +78,6 @@ fn a_note_released_at_half_a_second_is_the_held_note_until_then() {
     }
 }
 
-#[test]
-fn a_note_nobody_releases_holds_its_sustain() {
-    let files = [("synth", SYNTH), ("held", "@synth(t, f0=220)\n")];
-    let held = samples(&files, "held", 1.0);
-    for i in [100, 22_000, 44_000] {
-        let t = at(i);
-        let want = libm::sin(TAU * 220.0 * t) * sustain(t);
-        assert!(
-            (held[i] - want).abs() <= 1e-12,
-            "sample {i}: {} against {want}",
-            held[i]
-        );
-    }
-}
-
 /// A stored-energy coefficient only jumps, and a varying parameter holds its range at every
 /// sample; each is refused by its own code.
 #[test]

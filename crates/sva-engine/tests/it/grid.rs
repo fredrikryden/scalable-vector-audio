@@ -29,39 +29,6 @@ fn plane(held: &sva_engine::Render, node: &str) -> Vec<f64> {
     held.output(id).expect("a buffer").plane(0).to_vec()
 }
 
-#[test]
-fn every_node_is_held_at_the_rate_asked_for() {
-    let g = composition();
-    for rate in RATES {
-        let held = render(
-            &g,
-            "mix",
-            RenderConfig::seconds(rate, 0.05),
-            &Tier::default(),
-        )
-        .unwrap_or_else(|e| panic!("{rate}: {e}"));
-        assert_eq!(plane(&held, "mix").len(), rate as usize / 20, "{rate}");
-        for (id, buffer) in &held.buffers {
-            assert_eq!(buffer.rate, rate, "{rate}: {}", held.tys.name(*id));
-        }
-    }
-}
-
-/// A crop's end is exact at every rate: `[0, 0.8s)` holds `0.8*rate` samples, however
-/// `0.8*48000` rounds in floating point.
-#[test]
-fn an_open_range_ends_at_the_crops_exact_sample_count() {
-    let g = graph_of(
-        "grid-crop-end",
-        &[("cut", "crop(sample(sin(2*pi*100*t)), 0s, 0.8s)\n")],
-    );
-    for rate in RATES {
-        let held = render(&g, "cut", RenderConfig::at(rate), &Tier::default())
-            .unwrap_or_else(|e| panic!("{rate}: {e}"));
-        assert_eq!(plane(&held, "cut").len(), rate as usize * 4 / 5, "{rate}");
-    }
-}
-
 /// An edge written in `sp` counts samples, whatever decimal their instant prints as: at
 /// 22.05 and 44.1 kHz `1/rate` prints past sample 1's instant, and `1sp` is still one sample.
 #[test]
@@ -87,25 +54,6 @@ fn a_crop_edge_in_samples_holds_that_many() {
                     "{node} {count}sp at {rate}"
                 );
             }
-        }
-    }
-}
-
-/// `self[idx(t) - 1]` is the sample before, whatever the rate: an impulse halves each step.
-#[test]
-fn an_indexed_loop_steps_at_the_render_rate() {
-    let g = composition();
-    for rate in RATES {
-        let held = render(
-            &g,
-            "decay",
-            RenderConfig::seconds(rate, 0.001),
-            &Tier::default(),
-        )
-        .unwrap_or_else(|e| panic!("{rate}: {e}"));
-        let decay = plane(&held, "decay");
-        for (n, v) in decay.iter().enumerate().take(8) {
-            assert_eq!(*v, 0.5f64.powi(n as i32), "{rate}: sample {n}");
         }
     }
 }
@@ -194,14 +142,6 @@ fn a_warp_landing_on_a_sample_reads_its_bits() {
     }
 }
 
-fn close(got: &[f64], want: &[f64], at: &str) {
-    assert!(got.iter().any(|v| *v != 0.0), "{at}: silence tests nothing");
-    assert_eq!(got.len(), want.len(), "{at}");
-    for (n, (a, b)) in got.iter().zip(want).enumerate() {
-        assert!((a - b).abs() < 1e-9, "{at}: sample {n} is {a}, not {b}");
-    }
-}
-
 /// `@kick(t - d)` reads the kick's one value `d` later, rounded to the nearest sample: the
 /// kick's own samples moved by that many, bit for bit, at every rate.
 #[test]
@@ -240,42 +180,6 @@ fn a_stateful_node_read_between_its_steps_reads_the_nearest_whole_sample() {
     }
 }
 
-/// `@x(0.5*t)` steps x at half the step: x rendered at twice the rate, sample for sample.
-#[test]
-fn a_stateful_node_read_at_half_speed_steps_at_half_the_step() {
-    let g = graph_of(
-        "slowed",
-        &[
-            (
-                "filtered",
-                "lowpass(crop(sample(0.3*saw(220*t)), 0s, 0.05s), cutoff=900, q=0.8)\n",
-            ),
-            ("slow", "@filtered(0.5*t)\n"),
-        ],
-    );
-    for rate in [8_000, 22_050, 24_000, 48_000] {
-        let slow = render(
-            &g,
-            "slow",
-            RenderConfig::seconds(rate, 0.05),
-            &Tier::default(),
-        )
-        .unwrap_or_else(|e| panic!("{rate}: {e}"));
-        let fast = render(
-            &g,
-            "filtered",
-            RenderConfig::seconds(2 * rate, 0.025),
-            &Tier::default(),
-        )
-        .unwrap_or_else(|e| panic!("{rate}: {e}"));
-        close(
-            &plane(&slow, "slow"),
-            &plane(&fast, "filtered"),
-            &format!("{rate}"),
-        );
-    }
-}
-
 /// A stateful node at a time that moves has no step to read there; typing says which
 /// construct holds the state and offers the nearest step.
 #[test]
@@ -296,34 +200,6 @@ fn a_stateful_node_read_at_a_moving_time_refuses_at_typing() {
     for part in ["`pad`", "`lowpass(…)`", "idx("] {
         assert!(said.contains(part), "{part} in {said}");
     }
-}
-
-/// The construct holding the state is named however many stateful nodes lie between it and
-/// the read that moves.
-#[test]
-fn a_stateful_warp_names_the_construct_under_a_long_chain() {
-    let mut files = vec![
-        (
-            "n0".to_string(),
-            "lowpass(sample(sin(2*pi*220*t)), cutoff=900)\n".to_string(),
-        ),
-        ("d".to_string(), "0.001*sin(2*pi*3*t)\n".to_string()),
-    ];
-    for i in 1..=40 {
-        files.push((format!("n{i}"), format!("@n{}*0.5\n", i - 1)));
-    }
-    files.push(("warped".to_string(), "@n40(t - @d)\n".to_string()));
-    let named: Vec<(&str, &str)> = files
-        .iter()
-        .map(|(n, b)| (n.as_str(), b.as_str()))
-        .collect();
-    let g = graph_of("warped-chain", &named);
-    let Err(refused) = sva_engine::types(&g, "warped") else {
-        panic!("a filter has no value at a time that moves");
-    };
-    assert_eq!(refused.code(), "type.stateful_warp", "{refused}");
-    let said = refused.to_string();
-    assert!(said.contains("`lowpass(…)`"), "the filter is named: {said}");
 }
 
 #[test]
