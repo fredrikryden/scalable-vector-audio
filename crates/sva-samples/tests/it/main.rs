@@ -17,6 +17,7 @@ mod measure_harmony;
 mod measure_hearing;
 mod measure_hits;
 mod measure_inharmonicity;
+mod measure_internal;
 mod measure_ledger;
 mod measure_loudness;
 mod measure_modulation;

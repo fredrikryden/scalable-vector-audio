@@ -233,6 +233,59 @@ fn hits_loudness_pattern_sharpness_and_beating_print_the_fields_a_fit_reads() {
     );
 }
 
+/// `internal`'s fields, each channel's and each band's: a band holds one element per
+/// `1 / rate_hz` from the clip's start to its last frame.
+#[test]
+fn internal_prints_each_channels_bands_and_their_elements() {
+    let rate = 16_000u32;
+    let path = written("internal-shape", rate, &[&tone(rate, 1000.0, 0.3)]);
+    let read = printed(&path, "internal");
+    let internal = &read["data"]["representations"]["internal"];
+    assert_eq!(
+        internal["args"],
+        serde_json::json!({ "spl": "100db" }),
+        "{internal}"
+    );
+    let value = &internal["value"];
+    assert_eq!(
+        keys(value),
+        [
+            "channels",
+            "hop_secs",
+            "model",
+            "rate_hz",
+            "scale",
+            "spl_db",
+            "start_secs"
+        ]
+    );
+    let channels = value["channels"]["items"].as_array().expect("channels");
+    assert_eq!(channels.len(), 149);
+    assert_eq!(keys(&channels[0]), ["bands", "hz", "window_secs"]);
+    let frames = 300.0;
+    for channel in channels {
+        for band in channel["bands"]["items"].as_array().expect("bands") {
+            assert_eq!(
+                keys(band),
+                [
+                    "bandwidth_hz",
+                    "element",
+                    "elements",
+                    "hz",
+                    "rate_bound_hz",
+                    "rate_hz"
+                ]
+            );
+            let per_frame = band["rate_hz"].as_f64().expect("a rate") * 0.001;
+            assert_eq!(
+                band["elements"].as_array().expect("elements").len(),
+                libm::floor(frames * per_frame) as usize + 1,
+                "{band}"
+            );
+        }
+    }
+}
+
 /// The codes a caller branches on: a reading gone, a value it cannot read, an argument a
 /// reading does not take.
 #[test]

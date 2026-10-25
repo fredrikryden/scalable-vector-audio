@@ -17,8 +17,9 @@ use sva_engine::harmony::dissonance::{self, Dissonance, Extreme};
 use sva_engine::harmony::inharmonicity::{self, Inharmonicity, Series, Weighted};
 use sva_engine::harmony::tonnetz::{self, Quality, TonalDistance, Triad};
 use sva_engine::harmony::voice_leading::{self, VoiceLeading};
+use sva_engine::hearing;
 use sva_engine::hits::{self, Hits};
-use sva_engine::internal::{self, BARKS, Internal};
+use sva_engine::internal::{self, Internal, modulation::Element};
 use sva_engine::loudness_pattern::{self, LoudnessPattern};
 use sva_engine::modulation::{self, Modulation};
 use sva_engine::partials::{self, Partials};
@@ -326,26 +327,35 @@ fn numbers_json(w: &sva_engine::Written) -> String {
 }
 
 fn internal_json(r: &Internal) -> String {
-    let frames: Vec<usize> = (0..r.frames).collect();
-    let step = internal::FRAME_SECS;
     format!(
-        "{{ \"model\": \"{}\", \"rate_hz\": {}, \"start_secs\": {}, \"spl_db\": {}, \
-         \"frame_secs\": {}, \"bands\": {BARKS}, \"modulation_hz\": {}, \"frames\": {} }}",
+        "{{ \"model\": \"{}; {}\", \"rate_hz\": {}, \"start_secs\": {}, \"spl_db\": {}, \
+         \"scale\": {}, \"hop_secs\": {}, \"channels\": {} }}",
         escape(internal::MODEL),
+        escape(hearing::MODEL),
         num(r.rate),
         num(r.start_secs),
         num(r.spl_db),
-        num(step),
-        numbers(&internal::channels(step)),
-        list(&frames, |m| {
-            let sets: Vec<usize> = (0..r.sets).collect();
-            format!(
-                "\n    {{ \"t_secs\": {}, \"specific\": {}, \"jnd\": {} }}",
-                num(r.start_secs + *m as f64 * step),
-                numbers(&r.specific[m * BARKS..(m + 1) * BARKS]),
-                list(&sets, |s| numbers(r.row(*s, *m)))
-            )
-        }),
+        num(r.scale),
+        num(r.hop_secs),
+        list(&r.channels, |c| format!(
+            "\n    {{ \"hz\": {}, \"window_secs\": {}, \"bands\": {} }}",
+            num(c.hz),
+            num(c.window_secs),
+            list(&c.bands, |b| format!(
+                "{{ \"hz\": {}, \"bandwidth_hz\": {}, \"element\": \"{}\", \"rate_hz\": {}, \
+                 \"rate_bound_hz\": {}, \"elements\": {} }}",
+                num(b.band.hz),
+                num(b.band.bandwidth_hz),
+                match b.band.element {
+                    Element::Lowpass => "lowpass",
+                    Element::Real => "real",
+                    Element::Magnitude => "magnitude",
+                },
+                num(b.rate_hz),
+                num(b.rate_bound_hz),
+                numbers(&b.elements)
+            ))
+        )),
     )
 }
 

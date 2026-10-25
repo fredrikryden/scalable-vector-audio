@@ -113,9 +113,10 @@ pub fn threshold_excitation_db(hz: f64) -> f64 {
 pub const LOWER_SLOPE_ANCHOR_DB: f64 = 51.0;
 pub const LOWER_SLOPE: f64 = 0.35;
 pub const P_FLOOR: f64 = 0.1;
+const P51_ERBS: f64 = 4.0;
 
 pub fn p51(hz: f64) -> f64 {
-    4.0 * hz / erb_hz(hz)
+    P51_ERBS * hz / erb_hz(hz)
 }
 
 pub fn roex_p(centre_hz: f64, component_hz: f64, x_db: f64) -> f64 {
@@ -127,9 +128,18 @@ pub fn roex_p(centre_hz: f64, component_hz: f64, x_db: f64) -> f64 {
     slope.max(P_FLOOR)
 }
 
-pub fn roex(p: f64, centre_hz: f64, component_hz: f64) -> f64 {
-    let pg = p * (component_hz - centre_hz).abs() / centre_hz;
+fn roex_of(pg: f64) -> f64 {
     (1.0 + pg) * sva_formula::exp(-pg)
+}
+
+pub fn roex(p: f64, centre_hz: f64, component_hz: f64) -> f64 {
+    roex_of(p * (component_hz - centre_hz).abs() / centre_hz)
+}
+
+/// The level-free roex centred on `component_hz`, read at `hz`: its p g as 4 |f - fc| / ERB(fc),
+/// which is p51 g where fc > 0 and its limit at 0 Hz.
+pub fn roex_around(component_hz: f64, hz: f64) -> f64 {
+    roex_of(P51_ERBS * (hz - component_hz).abs() / erb_hz(component_hz))
 }
 
 /// sqrt(2) Phi^-1(2^-1/2) to f64, as MODEL derives it; the hearing suite recomputes it.

@@ -397,10 +397,11 @@ static INTERNAL: Reading = Reading {
     name: "internal",
     takes: &[Arg::Spl],
     reads: Reads::Samples,
-    help: "the ear's internal representation at 1 Bark by 10 ms: specific loudness by ISO \
-           532-1's time-varying stages and each band's level through a modulation filterbank, \
-           every element over its JND, so two subtract into an ideal observer's d' by `norm`; \
-           a full-scale sine at `spl` dB SPL; every channel averaged",
+    help: "the ear's internal reading: excitation per 0.25 Cam channel after ISO 532-2's ear, \
+           its level over threshold, and each channel's modulation bands after Jepsen et al. \
+           (2008), every band sampled at its own information rate with that rate's proven bound, \
+           its elements in dB over threshold; a full-scale sine at `spl` dB SPL; every \
+           channel's power averaged",
     build: |g| Representation::Internal {
         spl_db: g.spl_db.unwrap_or(DEFAULT_SPL_DB),
     },

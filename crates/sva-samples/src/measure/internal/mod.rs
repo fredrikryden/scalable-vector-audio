@@ -1,316 +1,372 @@
-// Concern: the reading `internal`: N' per Bark per frame, its modulation, each over its JND, off power per bin | Non-concern: where the power came from | IO: (planes, spl) -> Internal
+// Concern: the reading `internal` at scale s: excitation per ERB-number channel, its level over threshold, the modulation bands | Non-concern: the curves (hearing.rs) | IO: (planes, spl, s) -> Internal
 
-//! One cell per Bark band per 10 ms frame per element set, each element over its JND, so two
-//! readings subtract into `d'` of an ideal observer with a diagonal covariance. The band-passes
-//! read what the lowpass leaves, so a steady level reads in none; past the frames' Nyquist no
-//! band-pass is held.
+pub mod modulation;
+mod rate;
 
-pub mod iso;
+use std::f64::consts::{LN_10, PI};
 
-use sva_formula::C64;
-
+use super::hearing::{
+    self, CAM_FIRST, CAM_LAST, CAM_SPACING, HOP_SECS, WINDOW_SECS, WINDOW_SPLITS_HZ,
+};
 use crate::fft;
-use iso::{CORE, Decay, ROWS, THIRDS};
+use modulation::Band;
+use rate::Rate;
 
-pub const MODEL: &str = "specific loudness N' per Bark every 10 ms after ISO 532-1:2017's \
-     time-varying method: its third-octave band responses, their smoothing, core loudness, \
-     nonlinear decay at 1/48000 s and upper slopes, the 0.1 Bark rows pooled by mean; each band's \
-     mean square is defined as sum_j |H_b(f_j)|^2 P_j off a 20 ms periodic Hann frame's power per \
-     bin 2|X|^2/(n sum w^2), the ends mirrored, not the standard's time-domain filter output, so \
-     a steady 1 kHz sine or a noise reads within 1 % of the standard's N', a 100 Hz sine about \
-     17 % above it and an onset up to half a frame early; a full-scale sine at `spl` dB SPL; each element over its JND: N' as E = \
-     10 log10(4 (1 + N'/u)^4 - 3), the level above threshold ISO's core law gives it at (u = \
-     0.0635 10^(0.025 LTQ)), in the 1 dB intensity JND (Zwicker and Fastl 2007, 7.1); E through \
-     the modulation filterbank of Ewert and Dau (2000, JASA 108) and Dau et al. (1997, JASA \
-     102): a first-order 2.5 Hz lowpass in the same 1 dB, and complex first-order band-passes \
-     of Q = 1 an octave apart from 4 Hz whose upper edge 1.5 fc is under the frames' Nyquist, \
-     fed E less the lowpass, each element twice its magnitude over the -26 dB AM depth JND \
-     (Viemeister 1979, JASA 66) in dB, (20/ln 10) 10^(-26/20); every channel averaged. The \
-     lowpass's complement feeding the band-passes is this reading's structure, not the papers': \
-     a first-order complex band-pass of Q = 1 passes 1/sqrt(5) of a steady level, which would \
-     read each 1 dB of level as some 2 JND in every band-pass. Cells count as independent \
-     though the window, the decay, the upper slopes and the overlapping filters correlate \
-     neighbours. Envelope beats past the frames' 50 Hz Nyquist alias into the \
-     band-passes; a 2 ms envelope read them off at some 0.2 JND per cell less on clip1, for \
-     3 to 5 times a fit's evaluation, so the frames stay 10 ms";
+pub const MODEL: &str = "the ear's internal reading at scale s, through the hearing curves \
+     (their own model text): frames every s ms, from the first whose window reaches the clip, \
+     silence before it, to the clip's end, the elements from 0; each channel framed by \
+     the Hann window of the Glasberg and Moore (2002) range holding its centre, the ranges \
+     half-open [lo, hi), the window cos^2(pi t/T) of T = s times that range's length read at \
+     the clip's own instants about the frame's time, silence outside the clip, its DFT \
+     zero-padded to the next power of two, power per bin one-sided over the window's energy, \
+     every channel's power averaged, a full-scale sine at `spl` dB SPL; channels from 1.8 Cam \
+     every 0.25 s Cam up to 38.9; excitation E = sum over every bin of roex(p/s) G P, p as \
+     ISO 532-2 sets it, X the bin's level per ERB through the level-free roex centred on it, no \
+     bin left out but those whose weight is 0 in f64, no g > 4 cut and no floor; V = 10 \
+     log10(1 + E/E_T), a model form: the level of the signal plus a noise of excitation E_T \
+     over that noise, read as Florentine and Buus's (1981, JASA 70(6) 1646-1654, doi \
+     10.1121/1.387219) excitation-level observer; on each channel's V at the hop, Jepsen, \
+     Ewert and Dau's (2008, JASA 124 422-438, sec. II.B.4, doi 10.1121/1.2924135) modulation \
+     stage whole: a first-order 150 Hz lowpass (Kohlrausch, Fassel and Dau 2000, JASA 108, \
+     doi 10.1121/1.429605), then a second-order Butterworth lowpass at 2.5 Hz and complex \
+     first-order resonators of 5 Hz bandwidth at 5 and 10 Hz and Q = 2 above, each centre's \
+     lower -3 dB edge the last one's upper edge, the top centre at most min(fc/4, 1000 Hz) \
+     and every upper edge under the hop's Nyquist, outputs above 10 Hz times 1/sqrt(2), the \
+     element the real output at and under 10 Hz and the magnitude above (Dau, Kollmeier and \
+     Kohlrausch 1997a, JASA 102, doi 10.1121/1.420344), each filter's poles e^(s_k h) at the \
+     hop h, unity gain at its passband's centre; each band's elements at its information rate \
+     min(2B, 1/h), B = (int_0^inf |H|^2)^2 / int_0^inf |H|^4 the statistical bandwidth \
+     (Bendat and Piersol, Random Data, 4th ed. 2010) of H the transform of the squared window \
+     normalised to 1 at 0 times 1/(1 + j nu/150) times the band, 2B independent values per \
+     second (Shannon 1949, Proc. IRE 37(1), doi 10.1109/JRPROC.1949.232969), integrated on \
+     Gauss-Legendre panels until Trefethen's (2008, SIAM Rev. 50(1) 67-87, doi \
+     10.1137/060659831, eq. 4.14) bound over H's continuation off the real axis is under 2^-53 \
+     of the integral, the tail bounded in closed form, the f64 roundings counted, and that \
+     proven bound on each rate reported beside it; element j of a band at the frame nearest \
+     j/rate, ties to even";
 
-pub const FRAME_SECS: f64 = 0.01;
-pub const WINDOW_SECS: f64 = 0.02;
-pub const BARKS: usize = 24;
-const LEVEL_JND_DB: f64 = 1.0;
-const DEPTH_JND_DB: f64 = -26.0;
-const LOWPASS_HZ: f64 = 2.5;
-const FIRST_BANDPASS_HZ: f64 = 4.0;
-const Q: f64 = 1.0;
-
-/// The frames a reading takes: `window` samples in an `n`-point transform every `hop`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Grid {
-    pub sr: f64,
-    pub n: usize,
-    pub window: usize,
-    pub hop: usize,
-    pub left: usize,
-    pub frames: usize,
-    pub len: usize,
-}
-
-impl Grid {
-    pub fn of(sr: f64, len: usize) -> Grid {
-        let window = libm::round(WINDOW_SECS * sr) as usize;
-        let n = (2 * window).next_power_of_two();
-        let hop = libm::round(FRAME_SECS * sr) as usize;
-        Grid {
-            sr,
-            n,
-            window,
-            hop,
-            left: (n - window) / 2,
-            frames: len / hop + 1,
-            len,
-        }
-    }
-
-    pub fn bins(&self) -> usize {
-        self.n / 2 + 1
-    }
-
-    pub fn step_secs(&self) -> f64 {
-        self.hop as f64 / self.sr
-    }
-
-    /// The sample frame `m`'s window starts at.
-    pub fn first(&self, m: usize) -> i64 {
-        (m * self.hop) as i64 - (self.n / 2) as i64 + self.left as i64
-    }
-
-    pub fn scale(&self) -> f64 {
-        let w2: f64 = hann(self.window).iter().map(|x| x * x).sum();
-        2.0 / (self.n as f64 * w2)
-    }
-
-    /// The sample a read at `s` lands on, the ends mirrored.
-    pub fn mirrored(&self, s: i64) -> i64 {
-        let len = self.len as i64;
-        if len <= 1 {
-            return 0;
-        }
-        let period = 2 * (len - 1);
-        let k = s.rem_euclid(period);
-        if k >= len { period - k } else { k }
-    }
-}
-
-pub fn hann(n: usize) -> Vec<f64> {
-    (0..n)
-        .map(|i| 0.5 - 0.5 * libm::cos(std::f64::consts::TAU * i as f64 / n as f64))
-        .collect()
-}
-
-/// `P[m * bins + j]`: each frame's power per bin.
-pub fn bin_power(x: &[f64], g: &Grid) -> Vec<f64> {
-    let w = hann(g.window);
-    let scale = g.scale();
-    let twiddles = fft::twiddles(g.n);
-    let bins = g.bins();
-    let mut p = vec![0.0; g.frames * bins];
-    let (mut re, mut im) = (vec![0.0; g.n], vec![0.0; g.n]);
-    for m in 0..g.frames {
-        re.iter_mut().for_each(|v| *v = 0.0);
-        im.iter_mut().for_each(|v| *v = 0.0);
-        for (k, wk) in w.iter().enumerate() {
-            re[g.left + k] = wk * x[g.mirrored(g.first(m) + k as i64) as usize];
-        }
-        fft::fft_with(&mut re, &mut im, &twiddles);
-        for j in 0..bins {
-            p[m * bins + j] = (re[j] * re[j] + im[j] * im[j]) * scale;
-        }
-    }
-    p
-}
-
-/// The Bark of a frequency, Zwicker and Terhardt (1980), JASA 68, 1523-1525.
-pub fn bark(hz: f64) -> f64 {
-    13.0 * libm::atan(0.00076 * hz) + 3.5 * libm::atan((hz / 7500.0) * (hz / 7500.0))
-}
-
-/// The band-pass centres the frames' step holds.
-pub fn channels(step_secs: f64) -> Vec<f64> {
-    let nyquist = 0.5 / step_secs;
-    let mut out = Vec::new();
-    let mut fc = FIRST_BANDPASS_HZ;
-    while fc * (1.0 + 0.5 / Q) < nyquist {
-        out.push(fc);
-        fc *= 2.0;
-    }
-    out
-}
-
+/// A clip's sample rate, its `spl`, the scale and what each frame reads off them.
 pub struct Ear {
-    pub grid: Grid,
-    pub spl_db: f64,
-    /// `|H_b(f_j)|^2`, `[b * bins + j]`.
-    response: Vec<f64>,
-    smooth: [f64; THIRDS],
-    pa2: f64,
-    unit: [f64; BARKS],
-    lowpass: f64,
-    poles: Vec<C64>,
+    rate: f64,
+    spl_db: f64,
+    scale: f64,
+    hop_secs: f64,
+    ranges: Vec<Range>,
+    channels: Vec<Channel>,
 }
 
-pub struct Forward {
-    pub frames: usize,
-    /// `[(set * frames + m) * BARKS + i]`, each in its JND.
-    pub elements: Vec<f64>,
-    /// N' in sone per Bark, `[m * BARKS + i]`.
-    pub specific: Vec<f64>,
+struct Range {
+    window_secs: f64,
+    n: usize,
+    twiddles: Vec<(f64, f64)>,
+    hz: Vec<f64>,
+    gain: Vec<f64>,
+    around: Vec<(usize, Vec<f64>)>,
+}
+
+struct Channel {
+    hz: f64,
+    range: usize,
+    threshold: f64,
+    lower: usize,
+    upper: (usize, Vec<f64>),
+    bands: Vec<(Band, Rate)>,
+}
+
+fn nonzero(weights: Vec<f64>) -> (usize, Vec<f64>) {
+    let first = weights.iter().position(|w| *w != 0.0).unwrap_or(0);
+    let last = weights
+        .iter()
+        .rposition(|w| *w != 0.0)
+        .map_or(first, |i| i + 1);
+    (first, weights[first..last].to_vec())
+}
+
+fn decibels(x: f64) -> f64 {
+    libm::pow(10.0, x / 10.0)
+}
+
+impl Range {
+    fn of(window_secs: f64, rate: f64, spl_db: f64, top_hz: f64) -> Range {
+        let n = (libm::ceil(window_secs * rate).max(1.0) as usize).next_power_of_two();
+        let hz: Vec<f64> = (0..=n / 2).map(|j| j as f64 * rate / n as f64).collect();
+        let full_scale = decibels(spl_db) / 0.5;
+        let gain = hz
+            .iter()
+            .enumerate()
+            .map(|(j, f)| {
+                let sides = match j == 0 || j == n / 2 {
+                    true => 1.0,
+                    false => 2.0,
+                };
+                decibels(hearing::ear_gain_db(*f)) * full_scale * sides / n as f64
+            })
+            .collect();
+        let around = hz
+            .iter()
+            .take_while(|f| **f < top_hz)
+            .map(|centre| {
+                nonzero(
+                    hz.iter()
+                        .map(|f| hearing::roex_around(*centre, *f))
+                        .collect(),
+                )
+            })
+            .collect();
+        Range {
+            window_secs,
+            n,
+            twiddles: fft::twiddles(n),
+            hz,
+            gain,
+            around,
+        }
+    }
+
+    /// The eardrum power per bin of the frame centred at `t`, every plane's averaged.
+    fn power(&self, planes: &[&[f64]], rate: f64, t: f64) -> Vec<f64> {
+        let half = self.window_secs / 2.0;
+        let first = libm::floor((t - half) * rate) as i64 + 1;
+        let last = (libm::ceil((t + half) * rate) as i64 - 1).min(first + self.n as i64 - 1);
+        let weights: Vec<(usize, f64)> = (first..=last)
+            .enumerate()
+            .map(|(k, s)| {
+                let c = libm::cos(PI * (s as f64 / rate - t) / self.window_secs);
+                (k, c * c)
+            })
+            .collect();
+        let energy: f64 = weights.iter().map(|(_, w)| w * w).sum();
+        let len = planes[0].len() as i64;
+        let bins = self.hz.len();
+        let mut sum = vec![0.0; bins];
+        let (mut re, mut im) = (vec![0.0; self.n], vec![0.0; self.n]);
+        for pair in planes.chunks(2) {
+            re.iter_mut().for_each(|v| *v = 0.0);
+            im.iter_mut().for_each(|v| *v = 0.0);
+            for (k, w) in &weights {
+                let s = first + *k as i64;
+                if (0..len).contains(&s) {
+                    re[*k] = w * pair[0][s as usize];
+                    im[*k] = pair.get(1).map_or(0.0, |p| w * p[s as usize]);
+                }
+            }
+            fft::fft_with(&mut re, &mut im, &self.twiddles);
+            for (j, total) in sum.iter_mut().enumerate() {
+                let mirror = (self.n - j) % self.n;
+                *total += 0.5
+                    * (re[j] * re[j]
+                        + im[j] * im[j]
+                        + re[mirror] * re[mirror]
+                        + im[mirror] * im[mirror]);
+            }
+        }
+        let count = planes.len() as f64;
+        sum.iter()
+            .zip(&self.gain)
+            .map(|(p, g)| match energy > 0.0 {
+                true => p / count / energy * g,
+                false => 0.0,
+            })
+            .collect()
+    }
+
+    fn levels(&self, power: &[f64]) -> Vec<f64> {
+        self.around
+            .iter()
+            .map(|(from, row)| {
+                let sum: f64 = row.iter().zip(&power[*from..]).map(|(w, p)| w * p).sum();
+                10.0 * libm::log10(sum)
+            })
+            .collect()
+    }
+}
+
+impl Channel {
+    fn excitation(&self, scale: f64, hz: &[f64], power: &[f64], levels: &[f64]) -> f64 {
+        let below: f64 = (0..self.lower)
+            .filter(|i| power[*i] > 0.0)
+            .map(|i| {
+                let p = hearing::roex_p(self.hz, hz[i], levels[i]) / scale;
+                hearing::roex(p, self.hz, hz[i]) * power[i]
+            })
+            .sum();
+        let (from, weights) = &self.upper;
+        let above: f64 = weights
+            .iter()
+            .zip(&power[*from..])
+            .map(|(w, p)| w * p)
+            .sum();
+        below + above
+    }
+
+    fn level(&self, excitation: f64) -> f64 {
+        10.0 / LN_10 * libm::log1p(excitation / self.threshold)
+    }
 }
 
 impl Ear {
-    pub fn of(grid: Grid, spl_db: f64) -> Ear {
-        let bins = grid.bins();
-        let mut response = vec![0.0; THIRDS * bins];
-        for b in 0..THIRDS {
-            for j in 0..bins {
-                response[b * bins + j] = iso::response(b, j as f64 * grid.sr / grid.n as f64);
-            }
-        }
-        let step = grid.step_secs();
-        let smooth = std::array::from_fn(|b| iso::smoothing(b, step));
-        let unit = std::array::from_fn(|i| {
-            let z = i as f64 + 0.5;
-            iso::core_unit(
-                (0..CORE)
-                    .find(|k| z <= iso::upper_bark(*k))
-                    .unwrap_or(CORE - 1),
-            )
-        });
-        let poles = channels(step)
+    pub fn of(rate: f64, spl_db: f64, scale: f64) -> Ear {
+        let hop_secs = scale * HOP_SECS;
+        let centres: Vec<f64> = (0..)
+            .map(|k| CAM_FIRST + k as f64 * CAM_SPACING * scale)
+            .take_while(|z| *z <= CAM_LAST)
+            .map(hearing::cam_hz)
+            .collect();
+        let range_of = |hz: f64| WINDOW_SPLITS_HZ.partition_point(|split| *split <= hz);
+        let tops: Vec<f64> = (0..WINDOW_SECS.len())
+            .map(|r| {
+                centres
+                    .iter()
+                    .filter(|hz| range_of(**hz) == r)
+                    .fold(0.0, |a: f64, b| a.max(*b))
+            })
+            .collect();
+        let ranges: Vec<Range> = WINDOW_SECS
             .iter()
-            .map(|fc| {
-                let r = sva_formula::exp(-std::f64::consts::PI * fc / Q * step);
-                let (s, c) = libm::sincos(std::f64::consts::TAU * fc * step);
-                C64::new(r * c, r * s)
+            .zip(&tops)
+            .map(|(secs, top)| Range::of(scale * secs, rate, spl_db, *top))
+            .collect();
+        let rates: Vec<Vec<Rate>> = ranges
+            .iter()
+            .zip(&tops)
+            .map(|(range, top)| {
+                modulation::bank(*top, hop_secs)
+                    .iter()
+                    .map(|b| rate::rate(b, range.window_secs, hop_secs))
+                    .collect()
+            })
+            .collect();
+        let channels = centres
+            .iter()
+            .map(|hz| {
+                let r = range_of(*hz);
+                let bins = &ranges[r].hz;
+                let lower = bins.partition_point(|f| f < hz);
+                let upper = nonzero(
+                    bins[lower..]
+                        .iter()
+                        .map(|f| hearing::roex(hearing::roex_p(*hz, *f, 0.0) / scale, *hz, *f))
+                        .collect(),
+                );
+                let bands = modulation::bank(*hz, hop_secs)
+                    .into_iter()
+                    .zip(rates[r].iter().copied())
+                    .collect();
+                Channel {
+                    hz: *hz,
+                    range: r,
+                    threshold: decibels(hearing::threshold_excitation_db(*hz)),
+                    lower,
+                    upper: (lower + upper.0, upper.1),
+                    bands,
+                }
             })
             .collect();
         Ear {
-            grid,
+            rate,
             spl_db,
-            response,
-            smooth,
-            pa2: 8e-10 * libm::pow(10.0, spl_db / 10.0),
-            unit,
-            lowpass: sva_formula::exp(-std::f64::consts::TAU * LOWPASS_HZ * step),
-            poles,
+            scale,
+            hop_secs,
+            ranges,
+            channels,
         }
     }
 
-    pub fn sets(&self) -> usize {
-        2 + self.poles.len()
-    }
-
-    /// Each frame's third-octave mean squares off its power per bin, `[m * THIRDS + b]`.
-    pub fn thirds(&self, p: &[f64]) -> Vec<f64> {
-        let bins = self.grid.bins();
-        let frames = p.len() / bins;
-        let mut out = vec![0.0; frames * THIRDS];
-        for m in 0..frames {
-            let row = &p[m * bins..(m + 1) * bins];
-            for b in 0..THIRDS {
-                out[m * THIRDS + b] = self.response[b * bins..(b + 1) * bins]
-                    .iter()
-                    .zip(row)
-                    .map(|(h, x)| h * x)
-                    .sum();
-            }
-        }
-        out
-    }
-
-    fn depth_unit() -> f64 {
-        20.0 / std::f64::consts::LN_10 * libm::pow(10.0, DEPTH_JND_DB / 20.0)
-    }
-
-    /// The reading of a transform's power per bin, `p[m * bins + j]`.
-    pub fn forward(&self, p: &[f64]) -> Forward {
-        let frames = p.len() / self.grid.bins();
-        let mut smoothed = self.thirds(p);
-        for b in 0..THIRDS {
-            let a = self.smooth[b];
-            for _ in 0..3 {
-                let mut y = 0.0;
-                for m in 0..frames {
-                    y = a * y + (1.0 - a) * smoothed[m * THIRDS + b];
-                    smoothed[m * THIRDS + b] = y;
-                }
-            }
-        }
-        let mut core = vec![0.0; frames * CORE];
-        for m in 0..frames {
-            let level = self.levels(&smoothed[m * THIRDS..(m + 1) * THIRDS]);
-            core[m * CORE..(m + 1) * CORE].copy_from_slice(&iso::core(&level));
-        }
-        Decay::of(self.grid.step_secs()).run(&mut core);
-        let mut specific = vec![0.0; frames * BARKS];
-        let mut rows = [0.0; ROWS];
-        for m in 0..frames {
-            let nm: [f64; CORE] = core[m * CORE..(m + 1) * CORE]
-                .try_into()
-                .expect("a frame's core bands");
-            iso::slopes(&nm, &mut rows);
-            for i in 0..BARKS {
-                specific[m * BARKS + i] = rows[10 * i..10 * i + 10].iter().sum::<f64>() / 10.0;
-            }
-        }
-        let sets = self.sets();
-        let mut elements = vec![0.0; sets * frames * BARKS];
-        let level_e: Vec<f64> = specific
+    /// E per channel at frame `m`, centred at `m` hops.
+    fn excitation(&self, planes: &[&[f64]], m: i64) -> Vec<f64> {
+        let t = m as f64 * self.hop_secs;
+        let read: Vec<Option<(Vec<f64>, Vec<f64>)>> = self
+            .ranges
             .iter()
             .enumerate()
-            .map(|(k, n)| equivalent(*n, self.unit[k % BARKS]))
+            .map(|(r, range)| {
+                self.channels.iter().any(|c| c.range == r).then(|| {
+                    let power = range.power(planes, self.rate, t);
+                    let levels = range.levels(&power);
+                    (power, levels)
+                })
+            })
             .collect();
-        let at = |s: usize, m: usize, i: usize| (s * frames + m) * BARKS + i;
-        let mut low = vec![0.0; frames * BARKS];
-        let a = self.lowpass;
-        for i in 0..BARKS {
-            let mut y = 0.0;
-            for m in 0..frames {
-                let e = level_e[m * BARKS + i];
-                y = a * y + (1.0 - a) * e;
-                low[m * BARKS + i] = y;
-                elements[at(0, m, i)] = e / LEVEL_JND_DB;
-                elements[at(1, m, i)] = y / LEVEL_JND_DB;
-            }
-        }
-        let unit = Ear::depth_unit();
-        for (c, p) in self.poles.iter().enumerate() {
-            let g = 1.0 - p.abs();
-            for i in 0..BARKS {
-                let mut y = C64::new(0.0, 0.0);
-                for m in 0..frames {
-                    let x = level_e[m * BARKS + i] - low[m * BARKS + i];
-                    y = *p * y + C64::new(g * x, 0.0);
-                    elements[at(2 + c, m, i)] = 2.0 * y.abs() / unit;
-                }
-            }
-        }
-        Forward {
-            frames,
-            elements,
-            specific,
-        }
+        self.channels
+            .iter()
+            .map(|c| {
+                let (power, levels) = read[c.range].as_ref().expect("a read range");
+                c.excitation(self.scale, &self.ranges[c.range].hz, power, levels)
+            })
+            .collect()
     }
 
-    fn levels(&self, smoothed: &[f64]) -> [f64; THIRDS] {
-        std::array::from_fn(|b| iso::level(self.pa2 * smoothed[b]))
+    /// The first frame any window reaches the clip from, and the clip's last frame.
+    fn frames(&self, len: usize) -> (i64, i64) {
+        let longest = self
+            .ranges
+            .iter()
+            .map(|r| r.window_secs)
+            .fold(0.0, f64::max);
+        let first = -(libm::ceil(longest / 2.0 / self.hop_secs) as i64);
+        let last = libm::floor(len as f64 / (self.hop_secs * self.rate)) as i64;
+        (first, last)
+    }
+
+    pub fn read(&self, planes: &[&[f64]], start_secs: f64) -> Internal {
+        let (first, last) = self.frames(super::held(planes));
+        let mut levels = vec![Vec::new(); self.channels.len()];
+        for m in first..=last {
+            for ((c, e), v) in self
+                .channels
+                .iter()
+                .zip(self.excitation(planes, m))
+                .zip(&mut levels)
+            {
+                v.push(c.level(e));
+            }
+        }
+        let from = (-first) as usize;
+        let channels = self
+            .channels
+            .iter()
+            .zip(&levels)
+            .map(|(c, v)| Heard {
+                hz: c.hz,
+                window_secs: self.ranges[c.range].window_secs,
+                bands: modulation::elements(v, from, self.hop_secs, &c.bands)
+                    .into_iter()
+                    .zip(&c.bands)
+                    .map(|(elements, (band, rate))| Sampled {
+                        band: *band,
+                        rate_hz: rate.per_frame / self.hop_secs,
+                        rate_bound_hz: rate.bound / self.hop_secs,
+                        elements,
+                    })
+                    .collect(),
+            })
+            .collect();
+        Internal {
+            rate: self.rate,
+            start_secs,
+            spl_db: self.spl_db,
+            scale: self.scale,
+            hop_secs: self.hop_secs,
+            channels,
+        }
     }
 }
 
-/// The level above threshold ISO 532-1's core law gives `n` at, unit `u`.
-fn equivalent(n: f64, u: f64) -> f64 {
-    let q = 1.0 + n.max(0.0) / u;
-    let q4 = q * q * q * q;
-    10.0 * libm::log10(4.0 * q4 - 3.0)
+/// One band's elements, element `j` at `j / rate_hz` from the clip's start; `rate_bound_hz`
+/// bounds how far `rate_hz` is from the one its exact statistical bandwidth gives.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sampled {
+    pub band: Band,
+    pub rate_hz: f64,
+    pub rate_bound_hz: f64,
+    pub elements: Vec<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Heard {
+    pub hz: f64,
+    pub window_secs: f64,
+    pub bands: Vec<Sampled>,
 }
 
 /// What `internal` reads off samples.
@@ -319,44 +375,11 @@ pub struct Internal {
     pub rate: f64,
     pub start_secs: f64,
     pub spl_db: f64,
-    pub frames: usize,
-    pub sets: usize,
-    pub specific: Vec<f64>,
-    pub elements: Vec<f64>,
-}
-
-impl Internal {
-    /// Frame `m`'s elements of set `s`.
-    pub fn row(&self, s: usize, m: usize) -> &[f64] {
-        let at = (s * self.frames + m) * BARKS;
-        &self.elements[at..at + BARKS]
-    }
-}
-
-/// Every channel's samples averaged, one silent sample where there are none.
-pub fn mono(planes: &[&[f64]]) -> Vec<f64> {
-    let len = super::held(planes);
-    let count = planes.len() as f64;
-    match len {
-        0 => vec![0.0],
-        _ => (0..len)
-            .map(|n| planes.iter().map(|p| p[n]).sum::<f64>() / count)
-            .collect(),
-    }
+    pub scale: f64,
+    pub hop_secs: f64,
+    pub channels: Vec<Heard>,
 }
 
 pub fn measure(planes: &[&[f64]], sr: f64, start: f64, spl_db: f64) -> Internal {
-    let x = mono(planes);
-    let grid = Grid::of(sr, x.len());
-    let ear = Ear::of(grid, spl_db);
-    let f = ear.forward(&bin_power(&x, &grid));
-    Internal {
-        rate: sr,
-        start_secs: start,
-        spl_db,
-        frames: f.frames,
-        sets: ear.sets(),
-        specific: f.specific,
-        elements: f.elements,
-    }
+    Ear::of(sr, spl_db, 1.0).read(planes, start)
 }

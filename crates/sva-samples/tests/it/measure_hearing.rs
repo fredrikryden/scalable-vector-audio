@@ -2,7 +2,8 @@
 
 use sva_samples::measure::hearing::{
     C3, D_PRIME_TWO_DOWN_ONE_UP, P_FLOOR, cam, cam_hz, ear_gain_db, erb_hz, free_field_db,
-    frequency_jnd_hz, level_jnd_db, middle_ear_db, p51, roex, roex_p, threshold_excitation_db,
+    frequency_jnd_hz, level_jnd_db, middle_ear_db, p51, roex, roex_around, roex_p,
+    threshold_excitation_db,
 };
 
 fn close(got: f64, want: f64, within: f64) {
@@ -133,4 +134,22 @@ fn the_roex_upper_slope_ignores_level_and_the_lower_widens_with_it_down_to_its_f
         1.4 * sva_formula::exp(-0.4),
         1e-15,
     );
+}
+
+#[test]
+fn the_level_free_roex_around_a_component_is_its_p51_roex_and_holds_at_zero_hertz() {
+    for (component, hz) in [(1000.0, 800.0), (1000.0, 1300.0), (63.0, 2000.0)] {
+        close(
+            roex_around(component, hz),
+            roex(p51(component), component, hz),
+            1e-15,
+        );
+    }
+    let pg = 4.0 * 100.0 / erb_hz(0.0);
+    close(
+        roex_around(0.0, 100.0),
+        (1.0 + pg) * sva_formula::exp(-pg),
+        1e-15,
+    );
+    close(roex_around(0.0, 0.0), 1.0, 0.0);
 }
