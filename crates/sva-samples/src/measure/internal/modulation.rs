@@ -52,7 +52,7 @@ impl Band {
         }
     }
 
-    pub fn gain(&self) -> f64 {
+    pub(super) fn gain(&self) -> f64 {
         match self.element {
             Element::Magnitude => FRAC_1_SQRT_2,
             _ => 1.0,
@@ -79,51 +79,6 @@ impl Band {
             _ => y.re,
         }
     }
-
-    /// `|H(nu)|^2` of the filter from V to the output `y` at the hop: the 150 Hz lowpass's
-    /// pole times this band's, a real band through `(M(nu) + conj M(-nu))/2`, the map to
-    /// `Re y` of a real input.
-    pub(super) fn digital(&self, nu: f64, hop_secs: f64) -> f64 {
-        let turn = |hz: f64| {
-            let (s, c) = libm::sincos(-TAU * hz * hop_secs);
-            C64::new(c, s)
-        };
-        let a = one_pole(PRE_LOWPASS_HZ, hop_secs);
-        let pre = (C64::new(1.0, 0.0) - turn(nu).scale(a)).abs();
-        let pre = (1.0 - a) / pre;
-        let band = match self.element {
-            Element::Lowpass => {
-                let (c1, c2, g) = lowpass(hop_secs);
-                let z = turn(nu);
-                g.abs() / (C64::new(1.0, 0.0) - z.scale(c1) - (z * z).scale(c2)).abs()
-            }
-            element => {
-                let m = |nu: f64| {
-                    let (r, pole) = resonator(self, hop_secs);
-                    C64::new(1.0 - r, 0.0) / (C64::new(1.0, 0.0) - pole * turn(nu))
-                };
-                match element {
-                    Element::Real => (m(nu) + m(-nu).conj()).scale(0.5).abs(),
-                    _ => m(nu).abs(),
-                }
-            }
-        };
-        let h = pre * band;
-        h * h
-    }
-}
-
-fn lowpass(hop_secs: f64) -> (f64, f64, f64) {
-    let w = TAU * LOWPASS_HZ * hop_secs * FRAC_1_SQRT_2;
-    let r = sva_formula::exp(-w);
-    let (c1, c2) = (2.0 * r * libm::cos(w), -r * r);
-    (c1, c2, 1.0 - c1 - c2)
-}
-
-fn resonator(band: &Band, hop_secs: f64) -> (f64, C64) {
-    let r = sva_formula::exp(-PI * band.bandwidth_hz * hop_secs);
-    let (s, c) = libm::sincos(TAU * band.hz * hop_secs);
-    (r, C64::new(r * c, r * s))
 }
 
 /// Each resonator's lower -3 dB edge is the last one's upper edge.
@@ -176,27 +131,23 @@ pub(super) fn outputs(
     bands
         .iter()
         .map(|(band, rate)| {
+            let per_frame = rate.per_frame;
             let out = filtered(&pre, band, hop_secs);
-            (0..count(frames, rate.per_frame))
-                .map(|j| out[from + sampled(j, rate.per_frame) as usize])
+            let count = libm::floor((frames - 1) as f64 * per_frame) as usize + 1;
+            (0..count)
+                .map(|j| out[from + (j as f64 / per_frame).round_ties_even() as usize])
                 .collect()
         })
         .collect()
 }
 
-pub(super) fn count(frames: usize, per_frame: f64) -> usize {
-    libm::floor((frames - 1) as f64 * per_frame) as usize + 1
-}
-
-/// The frame element `j` reads, ties to even.
-pub(super) fn sampled(j: usize, per_frame: f64) -> i64 {
-    (j as f64 / per_frame).round_ties_even() as i64
-}
-
 fn filtered(x: &[f64], band: &Band, hop_secs: f64) -> Vec<C64> {
     match band.element {
         Element::Lowpass => {
-            let (c1, c2, g) = lowpass(hop_secs);
+            let w = TAU * LOWPASS_HZ * hop_secs * FRAC_1_SQRT_2;
+            let r = sva_formula::exp(-w);
+            let (c1, c2) = (2.0 * r * libm::cos(w), -r * r);
+            let g = 1.0 - c1 - c2;
             let (mut y1, mut y2) = (0.0, 0.0);
             x.iter()
                 .map(|v| {
@@ -208,7 +159,9 @@ fn filtered(x: &[f64], band: &Band, hop_secs: f64) -> Vec<C64> {
                 .collect()
         }
         _ => {
-            let (r, pole) = resonator(band, hop_secs);
+            let r = sva_formula::exp(-PI * band.bandwidth_hz * hop_secs);
+            let (s, c) = libm::sincos(TAU * band.hz * hop_secs);
+            let pole = C64::new(r * c, r * s);
             let mut y = C64::new(0.0, 0.0);
             x.iter()
                 .map(|v| {

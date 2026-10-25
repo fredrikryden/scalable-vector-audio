@@ -235,11 +235,9 @@ fn a_steady_tone_ripples_by_the_published_models_stated_limit() {
 }
 
 /// `elements` on the reading's own excitation answers what `read` maps through each band's
-/// element, element `j` at the frame `round(j / per_frame)`, and each kernel is its band's:
-/// 1 at 0 Hz for the lowpass, even for a real band, a magnitude band's over twice as large at
-/// its centre as at its mirror.
+/// element.
 #[test]
-fn elements_are_the_readings_outputs_and_each_kernel_its_bands() {
+fn elements_are_the_readings_outputs() {
     let rate = 8_000.0;
     let x: Vec<f64> = tone(1000.0, 40.0, 0.25).into_iter().step_by(6).collect();
     let ear = Ear::of(rate, SPL, 1.0);
@@ -251,26 +249,10 @@ fn elements_are_the_readings_outputs_and_each_kernel_its_bands() {
     });
     let (first, last) = ear.frames(x.len());
     assert_eq!(frames, (first..=last).collect::<Vec<_>>());
-    for (c, (heard, bands)) in read.channels.iter().zip(&outputs).enumerate() {
-        for (k, (sampled, ys)) in heard.bands.iter().zip(bands).enumerate() {
-            let per_frame = sampled.rate_hz * read.hop_secs;
-            for (j, (e, y)) in sampled.elements.iter().zip(ys).enumerate() {
+    for (heard, bands) in read.channels.iter().zip(&outputs) {
+        for (sampled, ys) in heard.bands.iter().zip(bands) {
+            for (e, y) in sampled.elements.iter().zip(ys) {
                 assert_eq!(*e, sampled.band.element(*y));
-                let at = (j as f64 / per_frame).round_ties_even() as i64;
-                assert_eq!(ear.sampled(c, k, j), at);
-            }
-            let (near, far) = (ear.kernel(c, k, 3.0), ear.kernel(c, k, -3.0));
-            match sampled.band.element {
-                Element::Lowpass => {
-                    assert!((ear.kernel(c, k, 0.0) - 1.0).abs() < 1e-12);
-                    assert!((near - far).abs() <= 1e-15 * near);
-                }
-                Element::Real => assert!((near - far).abs() <= 1e-15 * near),
-                Element::Magnitude => {
-                    let hz = sampled.band.hz;
-                    let (up, down) = (ear.kernel(c, k, hz), ear.kernel(c, k, -hz));
-                    assert!(up > 2.0 * down, "{hz} Hz: {up} against {down}");
-                }
             }
         }
     }
