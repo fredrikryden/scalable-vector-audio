@@ -1,6 +1,7 @@
 // Concern: the solve and seed refusals while the solver is rebuilt, its model's modules, `fits/`, a cost leaf's hint outside a cost | Non-concern: argv (sva-cli), JS options | IO: () -> CliError
 
 pub mod atoms;
+pub mod bits;
 pub mod dual;
 pub mod spectrum;
 

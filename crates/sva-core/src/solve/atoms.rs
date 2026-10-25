@@ -515,13 +515,13 @@ impl Feasible {
         }
     }
 
-    fn hz_of(&self, atom: &Atom) -> (f64, f64) {
+    pub fn hz_of(&self, atom: &Atom) -> (f64, f64) {
         (self.hz.0, self.hz.1 / atom.harmonics() as f64)
     }
 
     /// A deviation's range, and an offset's and their sum's: the width of its quantity's
     /// either way.
-    fn offset(&self) -> f64 {
+    pub fn offset(&self) -> f64 {
         self.db.1 - self.db.0
     }
 
