@@ -9,6 +9,7 @@ mod calculus;
 mod casts;
 mod chains;
 mod disk;
+mod draw;
 mod echoes;
 mod edit;
 mod extents;

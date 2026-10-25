@@ -496,6 +496,11 @@ fn called<N: Number>(
     if name == "rand" {
         return drawn(inst, args, cx).map(N::of);
     }
+    if name == "draw" {
+        let (key, seed) = crate::lower::draw_arguments(args)?;
+        return crate::lower::keyed_draw(amount(inst, key, cx)?, amount(inst, seed, cx)?)
+            .map(N::of);
+    }
     let mut positional = Vec::new();
     let mut named = Vec::new();
     for arg in args {

@@ -54,6 +54,9 @@ impl<N: Number> Lowering<'_, N> {
         if name == sva_ast::PWL || name == sva_ast::PWL_INTEGRAL {
             return self.knots(name, args, span, cx, var);
         }
+        if name == "draw" {
+            return self.keyed(args, span, cx, var);
+        }
         let mut chosen = Vec::new();
         let named = self.named_values(name, args, span, cx, &mut chosen)?;
         let view: Vec<(&str, N)> = named.iter().map(|(k, v)| (k.as_str(), *v)).collect();
@@ -316,6 +319,71 @@ impl<N: Number> Lowering<'_, N> {
         }
     }
 
+    /// `draw(k, seed=)` is the draw `noise` gives its line `k` under that seed: one number at
+    /// any rate, as both fold to numbers when the node lowers and neither reads `t`.
+    fn keyed(
+        &mut self,
+        args: &[Arg],
+        span: ByteSpan,
+        cx: Cx,
+        var: Var,
+    ) -> Result<Piece<N>, EngineError> {
+        let bad = || EngineError::BadArity("draw".to_string());
+        let (key, seed) = draw_arguments(args).ok_or_else(bad)?;
+        let k = self.key_number(key, "k", (cx, var), span)?;
+        let seed = self.key_number(seed, "seed", (cx, var), span)?;
+        match keyed_draw(k.v(), seed.v()) {
+            Some(drawn) => Ok(Piece::ClosedForm(Body::Const(Complex::real(N::of(drawn))))),
+            None => Err(self.refused_at(
+                "engine.draw_past_index",
+                format!(
+                    "`draw` reads `k={}`, past the last whole step an i64 holds; a \
+                     correctness limit, with no override",
+                    k.v()
+                ),
+                "key the draw by a whole number within an i64",
+                Some(span),
+            )),
+        }
+    }
+
+    /// A draw's key or seed, folded to the number it names when the node lowers.
+    fn key_number(
+        &mut self,
+        written: &Expr,
+        key: &str,
+        (cx, var): (Cx, Var),
+        span: ByteSpan,
+    ) -> Result<N, EngineError> {
+        let folded = match self.walk(written, cx, var)? {
+            Piece::ClosedForm(body) => {
+                let folded = crate::refs::fold_constants(self.typing, &body);
+                if super::holds_infinite(&folded) {
+                    return Err(self.infinite(&format!(
+                        "`draw` reads `{key}={}`, which is infinite, and a draw is keyed by a \
+                         finite number",
+                        sva_ast::render_expr(written)
+                    )));
+                }
+                super::constant_value(&folded, var)
+            }
+            Piece::Value(_) => None,
+        };
+        folded.ok_or_else(|| {
+            self.refused_at(
+                "engine.non_constant_argument",
+                format!(
+                    "`draw` reads `{key}={}` as one number when its node lowers, and this one \
+                     moves: a draw is keyed, never a function of time.",
+                    sva_ast::render_expr(written)
+                ),
+                "write a number, a parameter its row binds, or a finite sum's index; \
+                 `rand(t, seed=k)` is noise in time",
+                Some(span),
+            )
+        })
+    }
+
     fn parts(&mut self, bodies: Vec<Body<N>>, span: ByteSpan) -> Vec<Part<N>> {
         bodies
             .into_iter()
@@ -454,7 +522,7 @@ impl Lowering<'_> {
         let lines = self.noise_band(&view, period, span)?;
         self.note_call(name, span, positional_named(name, &numbers, &named), chosen);
         Ok(Piece::ClosedForm(Body::Series(Box::new(
-            sva_formula::noise_in(*seed as u64, period, named_or(&view, "color", 1.0), lines),
+            sva_formula::noise_in(seed_of(*seed), period, named_or(&view, "color", 1.0), lines),
         ))))
     }
 
@@ -768,7 +836,38 @@ pub(crate) fn rand_arguments(
             None => 0.0,
         },
     };
-    Some((key, seed as u64))
+    Some((key, seed_of(seed)))
+}
+
+/// The key and the seed of `draw(k, seed=)`, each by position or by name.
+pub(crate) fn draw_arguments(args: &[Arg]) -> Option<(&Expr, &Expr)> {
+    let written = |at: usize, key: &str| {
+        args.iter()
+            .filter_map(|a| match a {
+                Arg::Pos(x) => Some(x),
+                Arg::Named(..) => None,
+            })
+            .nth(at)
+            .or_else(|| {
+                args.iter().find_map(|a| match a {
+                    Arg::Named(k, x) if k == key => Some(x),
+                    _ => None,
+                })
+            })
+    };
+    Some((written(0, "k")?, written(1, "seed")?))
+}
+
+/// The one keyed draw `noise` gives its line `key` under `seed`, the seed read as noise
+/// reads its own; `None` past any whole step, or for a seed no finite number names.
+pub(crate) fn keyed_draw(key: f64, seed: f64) -> Option<f64> {
+    seed.is_finite().then_some(())?;
+    sva_formula::draw_nearest(seed_of(seed), key)
+}
+
+/// A seed is the whole part of its number, as every keyed builtin reads it.
+pub(crate) fn seed_of(seed: f64) -> u64 {
+    seed as u64
 }
 
 /// The noise's draw at the step of `rate` nearest an instant, ties to even.

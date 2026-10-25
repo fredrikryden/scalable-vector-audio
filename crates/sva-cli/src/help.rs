@@ -279,7 +279,11 @@ RENDER:
   solver and `rand` step at the rate asked for, where `1sp` is one step, so an
   `sp` count or `self[idx(t) - 1]` means one sample at whatever rate is asked.
   `rand` draws once per step, keyed by that step's index; a key between steps
-  reads the step nearest it, ties to even.
+  reads the step nearest it, ties to even. `draw(k, seed=s)` is one number at
+  any rate: the draw `noise` gives its line `k` under seed `s`, `k` read at its
+  nearest whole step. Both fold to numbers when the node lowers, a parameter a
+  row binds or a finite sum's index among them; either reading `t` refuses as
+  `engine.non_constant_argument`.
 
   `--set <name>=<text>` renders as if the variable `variables/<name>` held
   `<text>`, and writes no file: `--set key=G3` transposes every degree to G3,

@@ -27,6 +27,7 @@ const WAVE_NAMED: &[&str] = &["tol"];
 const SAT_NAMED: &[&str] = &["drive"];
 const CROP_NAMED: &[&str] = &["start", "end", "rise", "fall"];
 const RAND_NAMED: &[&str] = &["seed"];
+const DRAW_NAMED: &[&str] = &["seed"];
 const DELTA_NAMED: &[&str] = &["k"];
 const STFT_NAMED: &[&str] = &["window", "hop"];
 const NOISE_NAMED: &[&str] = &["period", "color", "lo", "hi"];
@@ -175,6 +176,7 @@ pub fn recognized_named(name: &str) -> Option<&'static [&'static str]> {
         SERIES | "pv" => NO_NAMED,
         "crop" => CROP_NAMED,
         "rand" => RAND_NAMED,
+        "draw" => DRAW_NAMED,
         "delta" => DELTA_NAMED,
         "chaigne_askenfelt" => CHAIGNE_ASKENFELT_NAMED,
         "willemsen_bilbao_serafin" => WILLEMSEN_BILBAO_SERAFIN_NAMED,

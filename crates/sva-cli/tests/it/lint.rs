@@ -80,3 +80,26 @@ fn lint_reads_a_noise_band_as_render_does() {
     let codes: Vec<String> = linted.diagnostics().into_iter().map(|d| d.code).collect();
     assert_eq!(codes, ["engine.noise_band_empty"], "{linted}");
 }
+
+/// A draw is read as render reads it: one keyed by numbers lints clean, one keyed by `t`
+/// refuses as render does.
+#[test]
+fn lint_reads_a_draw_as_render_does() {
+    let held = composition(
+        "draw-held",
+        &[(
+            "master",
+            "crop(draw(3, seed=7)*sin(2*pi*440*t), 0s, 0.1s)\n",
+        )],
+    );
+    lint(&held, Some("@master")).expect("a draw keyed by numbers lints clean");
+    let dir = composition(
+        "draw-timed",
+        &[("master", "crop(draw(t, seed=7), 0s, 0.1s)\n")],
+    );
+    let Err(linted) = lint(&dir, Some("@master")) else {
+        panic!("a draw keyed by t lints clean");
+    };
+    let codes: Vec<String> = linted.diagnostics().into_iter().map(|d| d.code).collect();
+    assert_eq!(codes, ["engine.non_constant_argument"], "{linted}");
+}

@@ -64,6 +64,19 @@ pub fn meaning(builtin: &str, key: &str) -> Option<Meaning> {
             "none",
         ),
         ("rand", "seed") => plain("which hash the key is drawn through", "none"),
+        ("draw", "k") => plain(
+            "the key, drawn at its nearest whole step, ties to even: the same unit-interval \
+             value `noise` gives its line k under the same seed, at any rate. It folds to a \
+             number when the node lowers, as a row's bound parameter does; one that reads `t` \
+             refuses as engine.non_constant_argument",
+            "none",
+        ),
+        ("draw", "seed") => plain(
+            "which hash the key is drawn through, its whole part, below 0 read as 0, as noise \
+             reads its own; it folds to a number when the node lowers, and one that reads `t` \
+             refuses as engine.non_constant_argument",
+            "none",
+        ),
         ("delta", "k") => plain("derivative order of the impulse", "none"),
         ("stft", "window") => plain(
             "frame length, a whole number of steps of the rate in use",

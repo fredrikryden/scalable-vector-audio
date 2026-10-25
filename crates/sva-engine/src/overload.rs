@@ -92,6 +92,10 @@ const RAND: &[Param] = &[
     need("key", ParamKind::Signal),
     opt("seed", ParamKind::Scalar),
 ];
+const DRAW: &[Param] = &[
+    need("k", ParamKind::Scalar),
+    need("seed", ParamKind::Scalar),
+];
 const SERIES_PARAMS: &[Param] = &[
     need("k", ParamKind::Index),
     need("lo", ParamKind::Bound),
@@ -302,6 +306,7 @@ pub static SIGNATURES: &[Signature] = &[
     plain("hammer_pulse", VELOCITY, dual_form),
     plain("helmholtz", VOLUME, dual_form),
     plain("rand", RAND, scalar),
+    plain("draw", DRAW, scalar),
     plain("delta", SIGNAL, dual_form),
     plain("pv", SIGNAL, dual_form),
     plain("sum", SERIES_PARAMS, series),

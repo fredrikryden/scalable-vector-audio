@@ -23,7 +23,7 @@ pub const RESERVED: [(&str, &str); 6] = [
 
 pub const CHANNEL: &str = "ch";
 
-const ARITHMETIC: [&str; 24] = [
+const ARITHMETIC: [&str; 25] = [
     "sin",
     "cos",
     "exp",
@@ -41,6 +41,7 @@ const ARITHMETIC: [&str; 24] = [
     "sat",
     "crop",
     "rand",
+    "draw",
     "delta",
     "pv",
     SERIES,
