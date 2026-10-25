@@ -18,7 +18,9 @@ pub const MODEL: &str = "each atom's samples are its node's formula evaluated as
      its cell [(2n - 1)/(2 rate), (2n + 1)/(2 rate)), the atom held at its base level and \
      turning at its base frequency before on, and at its last level and frequency past end; \
      partials and harmonics are summed sample by sample where `coherent`, else each \
-     transformed alone and added in power; a noise is read in expectation over its lines' \
+     transformed alone and added in power; a tonal line alone is the same samples of that line \
+     only, its frequency at the frame's instant read off the same table, held as its phase \
+     is; a noise is read in expectation over its lines' \
      phases, independent and uniform, as the window's autocorrelation times the band's \
      continuous autocorrelation, (1/2) int_lo^hi' cos(2 pi f tau) df, hi' = min(hi, the \
      audible ceiling); every bin carries `bound`, its distance from the same transform of \
@@ -160,7 +162,7 @@ impl<'a> Model<'a> {
         let mut out = Bins::silent(frame.hz().len());
         let windows: Vec<Window<f64>> = self
             .tonal()
-            .map(|a| samples(a, &self.clip, frame.first(), count))
+            .map(|a| samples(a, &self.clip, frame.first(), count, None))
             .collect();
         match self.coherent {
             true if !windows.is_empty() => {
@@ -189,6 +191,23 @@ impl<'a> Model<'a> {
         out
     }
 
+    /// Each tonal line alone, by atom then line: its frequency at the frame's instant, its bins.
+    pub fn tonal_lines(&self, frame: &Frame) -> Vec<(f64, Bins)> {
+        let count = frame.weights().len();
+        self.tonal()
+            .flat_map(|atom| {
+                let hz = tables(atom)
+                    .and_then(|(_, hz)| hz)
+                    .map(|hz| turning_at(&hz, frame.at()));
+                (0..atom.harmonics()).map(move |j| {
+                    let window = samples(atom, &self.clip, frame.first(), count, Some(j));
+                    let bins = transformed(frame, &window);
+                    (hz.map_or(0.0, |hz| (j + 1) as f64 * hz), bins)
+                })
+            })
+            .collect()
+    }
+
     /// Each bin's `d|X|^2/dx` for every number `x` of `atoms[i]` in `values()`' order, by forward
     /// mode: `2 Re(conj(X) dX)`, a noise's through its expected power.
     pub fn tangents(&self, frame: &Frame, i: usize) -> Vec<Vec<f64>> {
@@ -208,7 +227,7 @@ impl<'a> Model<'a> {
         for a in heard {
             for (s, x) in sum
                 .iter_mut()
-                .zip(samples(a, &self.clip, frame.first(), count).x)
+                .zip(samples(a, &self.clip, frame.first(), count, None).x)
             {
                 *s += x;
             }
@@ -216,7 +235,7 @@ impl<'a> Model<'a> {
         let (re, im) = transform(frame, &sum);
         (0..numbers)
             .map(|j| {
-                let moved = samples(&atom.seeded(j), &self.clip, frame.first(), count);
+                let moved = samples(&atom.seeded(j), &self.clip, frame.first(), count, None);
                 let dx: Vec<f64> = moved.x.iter().map(|x| x.tangent).collect();
                 let (d_re, d_im) = transform(frame, &dx);
                 frame
@@ -410,6 +429,19 @@ fn turned_at<N: Num>(hz: &Knots<N>, t: f64, hint: &mut usize) -> (N, bool) {
     }
 }
 
+/// Held at its first value before its first knot and its last past its last.
+fn turning_at(hz: &Knots<f64>, t: f64) -> f64 {
+    let (times, values) = (hz.times(), hz.values());
+    match () {
+        () if t <= hz.first() => values[0],
+        () if t >= hz.last() => values[values.len() - 1],
+        () => {
+            let k = hz.segment(t);
+            values[k] + (values[k + 1] - values[k]) * (t - times[k]) / (times[k + 1] - times[k])
+        }
+    }
+}
+
 fn amplitude<N: Num>(level: &Knots<N>, steep: f64, t: f64, hint: &mut usize) -> (N, f64) {
     let arg = level_at(level, t, hint) * NEPER_PER_DB;
     let a = arg.exp();
@@ -487,9 +519,15 @@ fn lines<N: Num>(atom: &Atom<N>) -> Vec<(f64, f64, Option<N>, f64)> {
     out
 }
 
-/// A partial's or harmonic's window of samples; an atom whose tables its node refuses is
-/// silence, as its crop is.
-fn samples<N: Num>(atom: &Atom<N>, clip: &Clip, from: i64, count: usize) -> Window<N> {
+/// A partial's or harmonic's window of samples, of line `only` where given; an atom whose
+/// tables its node refuses is silence, as its crop is.
+fn samples<N: Num>(
+    atom: &Atom<N>,
+    clip: &Clip,
+    from: i64,
+    count: usize,
+    only: Option<usize>,
+) -> Window<N> {
     let mut out = Window {
         x: vec![N::ZERO; count],
         bound: vec![0.0; count],
@@ -498,7 +536,12 @@ fn samples<N: Num>(atom: &Atom<N>, clip: &Clip, from: i64, count: usize) -> Wind
     let Some((level, Some(hz))) = tables(atom) else {
         return out;
     };
-    let lines = lines(atom);
+    let lines: Vec<_> = lines(atom)
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| only.is_none_or(|j| j == *i))
+        .map(|(_, line)| line)
+        .collect();
     let fastest = hz.values().iter().fold(0.0, |m: f64, v| m.max(v.v().abs()));
     let steep = steepest(&atom.level, atom.on.v());
     let (grid, rate) = (Grid::of(clip.rate), f64::from(clip.rate));

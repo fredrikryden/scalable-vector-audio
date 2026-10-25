@@ -1,4 +1,4 @@
-// Concern: states what the objective owes: no bits for the clip itself, a tone's derived bits, a noise's variance over keyed renders, Rice | Non-concern: N0's fit | IO: (atoms, clip) -> asserts
+// Concern: states what the objective owes: no bits for the clip itself, a tone's derived bits, variance over keyed renders, Rice | Non-concern: N0's fit | IO: (atoms, clip) -> asserts
 
 use std::f64::consts::{LN_2, PI};
 
@@ -91,31 +91,19 @@ fn a_known_tone_against_silence_costs_the_derived_bits() {
     );
 }
 
-/// Lowpass and real bands are what the lines option was measured on.
-#[test]
-fn a_noise_atom_sits_within_its_stated_variance_over_keyed_renders() {
-    const RENDERS: u64 = 48;
+/// The renders' variance over predicted per band kind (lowpass, real, magnitude), over
+/// `renders` renders of `atoms` keyed 1 on, in the band's channels from 0.15 to 0.35 s.
+fn renders_over_predicted(atoms: &dyn Fn(u64) -> Vec<Atom>, renders: u64) -> [f64; 3] {
     let clip = Clip {
         rate: 8_000,
         len: 4_000,
     };
-    let noise = |key| {
-        Atom::noise(
-            key,
-            0.0,
-            (1000.0, 1250.0),
-            Trajectory {
-                base: -40.0,
-                knots: vec![(clip.secs(), 0.0)],
-            },
-        )
-    };
     let model = Objective::new(&vec![0.0; clip.len], clip, SPL, 1.0, N0);
-    let expected = model.expect(&[noise(0)], true);
-    let reads: Vec<Vec<f64>> = (1..=RENDERS)
-        .map(|key| flat(&model.ear().read(&[&rendered(&[noise(key)], &clip)], 0.0)))
+    let expected = model.expect(&atoms(0), true);
+    let reads: Vec<Vec<f64>> = (1..=renders)
+        .map(|key| flat(&model.ear().read(&[&rendered(&atoms(key), &clip)], 0.0)))
         .collect();
-    let n = RENDERS as f64;
+    let n = renders as f64;
     let mut sums = [(0.0, 0.0); 3];
     let mut i = 0;
     for (channel, bands) in model.heard().channels.iter().zip(&expected) {
@@ -137,7 +125,25 @@ fn a_noise_atom_sits_within_its_stated_variance_over_keyed_renders() {
             }
         }
     }
-    let ratios = sums.map(|(renders, predicted)| renders / predicted);
+    sums.map(|(renders, predicted)| renders / predicted)
+}
+
+fn band(key: u64) -> Atom {
+    Atom::noise(
+        key,
+        0.0,
+        (1000.0, 1250.0),
+        Trajectory {
+            base: -40.0,
+            knots: vec![(0.5, 0.0)],
+        },
+    )
+}
+
+/// Lowpass and real bands are what the lines option was measured on.
+#[test]
+fn a_noise_atom_sits_within_its_stated_variance_over_keyed_renders() {
+    let ratios = renders_over_predicted(&|key| vec![band(key)], 48);
     println!("renders' variance over predicted: lowpass, real, magnitude {ratios:?}");
     for ratio in &ratios[..2] {
         assert!((ratio - 1.0).abs() < 0.15, "{ratios:?}");
@@ -145,6 +151,31 @@ fn a_noise_atom_sits_within_its_stated_variance_over_keyed_renders() {
     assert!(
         (ratios[2] - 1.89).abs() < 0.01,
         "objective's MODEL states 1.89: {ratios:?}"
+    );
+}
+
+/// A fixed tone off the line grid inside the band, 15 dB over it, so its beats with the noise
+/// lines are most of what the renders vary by, each render's noise keyed anew. Its slowest beats, at 0.3 Hz, leave the
+/// lowpass about one independent value per render over 0.2 s, so 200 renders, not 48.
+#[test]
+fn a_tone_in_a_noise_sits_within_its_stated_variance_over_keyed_renders() {
+    let tone = Atom::partial(
+        0,
+        0.0,
+        Trajectory::steady(1125.7),
+        Trajectory {
+            base: -25.0,
+            knots: vec![(0.5, 0.0)],
+        },
+    );
+    let ratios = renders_over_predicted(&|key| vec![tone.clone(), band(key + 1)], 200);
+    println!("a tone in a noise, renders' variance over predicted: {ratios:?}");
+    for ratio in &ratios[..2] {
+        assert!((ratio - 1.0).abs() < 0.15, "{ratios:?}");
+    }
+    assert!(
+        (ratios[2] - 1.93).abs() < 0.01,
+        "objective's MODEL states 1.93: {ratios:?}"
     );
 }
 
@@ -357,5 +388,55 @@ fn rice_moments_hold_on_both_sides_of_the_switch() {
             held.mean_bound < 1e-12 * m && held.variance_bound < 1e-10 * s,
             "{held:?}"
         );
+    }
+}
+
+/// Every element's `v` and bound, folded bit by bit (FNV-1a over their bits).
+fn folded(expected: &sva_core::solve::objective::Elements) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for element in expected.iter().flatten().flatten() {
+        for bits in [element.noise.v.to_bits(), element.noise.bound.to_bits()] {
+            hash = (hash ^ bits).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+/// With no partial or harmonic, `v_i` and its bound are commit 6b's, bit for bit, on one noise
+/// and on two sharing lines.
+#[test]
+fn without_tonal_lines_v_is_the_noise_pair_sum_bit_for_bit() {
+    let noise = |key, (lo, hi), len| {
+        Atom::noise(
+            key,
+            0.0,
+            (lo, hi),
+            Trajectory {
+                base: -40.0,
+                knots: vec![(len as f64 / 8_000.0, 0.0)],
+            },
+        )
+    };
+    let fixtures: [(Vec<Atom>, usize, u64); 2] = [
+        (
+            vec![noise(0, (1000.0, 1250.0), 4_000)],
+            4_000,
+            0x76e1_7c47_ad3c_e5ab,
+        ),
+        (
+            vec![
+                noise(0, (1000.0, 1250.0), 1_600),
+                noise(1, (1100.0, 1300.0), 1_600),
+            ],
+            1_600,
+            0xfcdb_7da7_0665_36a1,
+        ),
+    ];
+    for (atoms, len, pinned) in fixtures {
+        let clip = Clip { rate: 8_000, len };
+        let model = Objective::new(&vec![0.0; clip.len], clip, SPL, 1.0, N0);
+        let held = folded(&model.expect(&atoms, true));
+        println!("{} noises: folded {held:#018x}", atoms.len());
+        assert_eq!(held, pinned, "{held:#018x}");
     }
 }

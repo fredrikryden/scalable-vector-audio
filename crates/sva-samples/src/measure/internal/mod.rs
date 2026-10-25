@@ -156,6 +156,7 @@ impl Range {
             weights,
             offset: first as f64 - t * rate,
             period: self.window_secs * rate,
+            at: t,
         }
     }
 
@@ -178,6 +179,7 @@ pub struct Frame<'a> {
     weights: Vec<f64>,
     offset: f64,
     period: f64,
+    at: f64,
 }
 
 impl Frame<'_> {
@@ -198,6 +200,11 @@ impl Frame<'_> {
 
     pub fn period(&self) -> f64 {
         self.period
+    }
+
+    /// The instant, in seconds, the window is centred at: its frame's, every range's alike.
+    pub fn at(&self) -> f64 {
+        self.at
     }
 
     /// The bins this window supplies, its own range's.

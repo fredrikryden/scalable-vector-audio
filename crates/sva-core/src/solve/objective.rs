@@ -1,6 +1,8 @@
 // Concern: OBJECTIVE: a state's expected elements, variances N0 rho + v, Rice moments, residual bits against the clip, the total with B(x) | Non-concern: tangents, search | IO: (clip, atoms, N0) -> bits
 
+use std::cell::RefCell;
 use std::f64::consts::{LN_2, LN_10, PI, SQRT_2};
+use std::rc::Rc;
 
 use sva_engine::fft;
 use sva_engine::internal::modulation::Element;
@@ -17,14 +19,29 @@ pub const MODEL: &str = "residual bits = sum_i [d_i^2 log2(e)/2 + log2(sigma_i/s
      = N0 rho_kc + v_i; the model's elements are the reading of each frame's expected \
      excitation, partials and harmonics as written and noise in expectation over its lines' \
      phases (spectrum.rs); v_i is the variance the render's own noise lines k/T give element i \
-     at the frame it reads, each line's excitation e_k through that frame's bins, filters set \
-     by the frame's whole expected spectrum, and V linearised, s = 10 log10(e)/(E_T + E), a \
-     model form whose error is measured, not bounded: over 48 keyed renders of a 1 to 1.25 \
-     kHz band at 8 kHz the renders' variance is 0.94, 1.02 and 1.89 times v in the lowpass, \
-     real and magnitude bands, the log's curvature the linear form drops: v = \
-     s^2 sum over ordered pairs of distinct lines of e_k e_l K((l - k)/T) (Isserlis 1918, doi \
+     at the frame it reads, alone and beating with each partial's and harmonic's lines, each \
+     line's excitation e_k through that frame's bins, filters set by the frame's whole \
+     expected spectrum, and V linearised, s = 10 log10(e)/(E_T + E), a model form whose error \
+     is measured, not bounded: over 48 keyed renders of a 1 to 1.25 kHz band at 8 kHz the \
+     renders' variance is 0.94, 1.02 and 1.89 times v in the lowpass, real and magnitude \
+     bands, and over 200 with a fixed 1125.7 Hz tone 15 dB over the band 1.03, 1.08 and 1.93, \
+     at equal power 1.32, 1.30 and 2.25, the log's curvature the linear form drops: v = s^2 \
+     [sum over ordered pairs of distinct noise lines of e_k e_l K((l - k)/T) + sum over tonal \
+     lines j and noise lines k of P_j e_k (K(f_j - k/T) + K(k/T - f_j))] (Isserlis 1918, doi \
      10.1093/biomet/12.1-2.134: a pair's beat at their difference, of random phase, so pairs \
-     do not covary), a line's own term (n = 0) never counted, so v >= 0, summed as s^2 [K(0) \
+     do not covary; a tonal line's beat with line k carries k's phase alone, so it covaries \
+     with no noise pair, and with another tonal line's beat with k by a term turning at f_j - \
+     f_j', dropped as its time average, a model form, both its signs counted as both orders \
+     of a noise pair are; P_j \
+     line j's excitation through the frame's bins of its exact samples alone, spectrum.rs, \
+     f_j its frequency at the frame's instant, a glide's beat read at its instantaneous \
+     frequency, a model form), every beat term >= 0 and a noise line's own term (n = 0) \
+     never counted, a tonal line being no noise line, so v >= 0; the beat sum direct, its \
+     terms >= 0: per band sum_k x_k G_jk within gamma_(L + 2) of itself plus e_x sum_k G_jk, \
+     times 1 + gamma_(L + 4) (G the rounded pair of K, its sum raised by gamma_L), P_j \
+     within e_P = sum_b W_b e_b (1 + gamma_B) + gamma_B P_j (e_b its bins' bound), the sum \
+     over j within sum_j [e_P (S_j + dS_j) + P_j dS_j] + gamma_(2J) of itself, added to v's \
+     bound times s^2; the noise pairs summed as s^2 [K(0) \
      q + sum_(n != 0) K(n/T) r(n)], q the ordered pairs of distinct atoms on one line, r the \
      autocorrelation of x_k, line k's excitation summed over atoms, the second sum by \
      Parseval, (1/M) sum_f Re K^(f) |X(f)|^2 over M = 2^ceil(log2 2L) >= 2L - 1 points (no \
@@ -69,7 +86,8 @@ pub struct Objective {
 }
 
 /// The noise atoms' line spans in `atoms`' order, the grid from `lowest` over `span` lines,
-/// `kernels[c][k]` the band's `K(n/T)`, the transform's twiddles and each channel's `E_T`.
+/// `kernels[c][k]` the band's `K(n/T)`, the transform's twiddles, each channel's `E_T`, and
+/// the beat kernels of the last frame's tonal lines by their frequency's bits.
 struct Lines {
     spans: Vec<(i64, i64)>,
     lowest: i64,
@@ -77,6 +95,15 @@ struct Lines {
     kernels: Vec<Vec<Kernel>>,
     twiddles: Vec<(f64, f64)>,
     thresholds: Vec<f64>,
+    beats: RefCell<Vec<(u64, Rc<Beats>)>>,
+}
+
+/// A tonal line at `f` against the grid: `rows[c][k][i]` is `K(f - l/T) + K(l/T - f)` for
+/// line `l = lowest + i` through channel `c`'s band `k`, beside each row's sum, raised by its
+/// rounding so it is at least the exact sum of the rounded terms.
+struct Beats {
+    rows: Vec<Vec<Vec<f64>>>,
+    sums: Vec<Vec<f64>>,
 }
 
 /// A band's `K(n/T)` for `|n| < L`: `K(0)`, the sum and 2-norm of the rest, and the real part
@@ -292,7 +319,42 @@ impl Objective {
             kernels,
             twiddles,
             thresholds: self.ear.thresholds(),
+            beats: RefCell::default(),
         }
+    }
+
+    /// A tonal line at `hz` against the noise lines `lines` spans, through every band.
+    fn beats(&self, lines: &Lines, hz: f64) -> Beats {
+        let period = self.clip.secs();
+        let reach = 1.0 + gamma(lines.span as f64);
+        let rows: Vec<Vec<Vec<f64>>> = self
+            .heard
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(c, channel)| {
+                (0..channel.bands.len())
+                    .map(|k| {
+                        (0..lines.span)
+                            .map(|i| {
+                                let line = (lines.lowest + i as i64) as f64 / period;
+                                self.ear.kernel(c, k, hz - line) + self.ear.kernel(c, k, line - hz)
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        let sums = rows
+            .iter()
+            .map(|bands| {
+                bands
+                    .iter()
+                    .map(|row| row.iter().sum::<f64>() * reach)
+                    .collect()
+            })
+            .collect();
+        Beats { rows, sums }
     }
 
     /// Frame `m`'s `v` per channel and band, as `MODEL` sums it over the lines, beside its
@@ -312,6 +374,7 @@ impl Objective {
             kernels,
             twiddles,
             thresholds,
+            ..
         } = lines;
         let (lowest, span) = (*lowest, *span);
         if span == 0 {
@@ -320,8 +383,18 @@ impl Objective {
         let owners: Vec<i64> = spans.iter().flat_map(|(from, to)| *from..=*to).collect();
         let atoms = spans.len();
         let mut parts: Vec<Vec<f64>> = vec![Vec::new(); owners.len() + atoms];
+        let mut tones: Vec<f64> = Vec::new();
+        let mut tonal: Vec<(Vec<f64>, Vec<f64>)> = Vec::new();
         self.ear.compose(m, &mut |frame| {
             let bins = frame.hz().len();
+            for (j, (hz, held)) in model.tonal_lines(frame).into_iter().enumerate() {
+                if j == tones.len() {
+                    tones.push(hz);
+                    tonal.push((Vec::new(), Vec::new()));
+                }
+                tonal[j].0.extend(held.power);
+                tonal[j].1.extend(held.bound);
+            }
             let mut at = 0;
             for (a, (held, (from, to))) in model.lines(frame).iter().zip(spans).enumerate() {
                 let count = (to - from + 1).max(0) as usize;
@@ -336,8 +409,29 @@ impl Objective {
             }
             vec![(); bins]
         });
+        let tones_at = parts.len();
+        for (held, bound) in tonal {
+            parts.push(held);
+            parts.push(bound);
+        }
         let each = self.ear.excite_each(m, power, &parts);
-        let (each, reach) = each.split_at(owners.len());
+        let (each, rest) = each.split_at(owners.len());
+        let (reach, tonal) = rest.split_at(tones_at - owners.len());
+        let beats: Vec<Rc<Beats>> = {
+            let kept = lines.beats.take();
+            let now: Vec<(u64, Rc<Beats>)> = tones
+                .iter()
+                .map(|hz| {
+                    let found = kept.iter().find(|(key, _)| *key == hz.to_bits());
+                    let held =
+                        found.map_or_else(|| Rc::new(self.beats(lines, *hz)), |b| b.1.clone());
+                    (hz.to_bits(), held)
+                })
+                .collect();
+            let out = now.iter().map(|(_, b)| b.clone()).collect();
+            lines.beats.replace(now);
+            out
+        };
         let rows = self.ear.hz().len() as f64;
         let v = (0..excitation.len())
             .map(|c| {
@@ -360,18 +454,41 @@ impl Objective {
                 };
                 let spectrum = power_spectrum(&lines, twiddles);
                 let slope = 10.0 / LN_10 / (thresholds[c] + excitation[c]);
+                let tones: Vec<(f64, f64, &Beats)> = tonal
+                    .chunks(2)
+                    .zip(&beats)
+                    .map(|(t, b)| {
+                        let p = t[0][c];
+                        (p, t[1][c] * (1.0 + gamma(rows)) + gamma(rows) * p, &**b)
+                    })
+                    .filter(|(p, e, _)| *p > 0.0 || *e > 0.0)
+                    .collect();
+                let terms = span as f64;
                 kernels[c]
                     .iter()
-                    .map(|kernel| {
+                    .enumerate()
+                    .map(|(k, kernel)| {
                         let (rest, rest_bound) = kernel.apply(&spectrum);
-                        let out = kernel.zero * same + rest;
+                        let (mut beat, mut beat_bound) = (0.0, 0.0);
+                        for (p, e, b) in &tones {
+                            let row = &b.rows[c][k];
+                            let sum: f64 = lines.iter().zip(row).map(|(x, g)| x * g).sum();
+                            let reach = (gamma(terms + 2.0) * sum + eps * b.sums[c][k])
+                                * (1.0 + gamma(terms + 4.0));
+                            beat += p * sum;
+                            beat_bound += e * (sum + reach) + p * reach;
+                        }
+                        let beat_bound =
+                            (beat_bound + gamma(2.0 * tones.len() as f64) * beat) * (1.0 + 4.0 * U);
+                        let out = kernel.zero * same + rest + beat;
                         let v = slope * slope * out.max(0.0);
                         let bound = slope
                             * slope
                             * (kernel.zero * paired
                                 + kernel.sum * moved
                                 + rest_bound
-                                + U * out.abs())
+                                + U * out.abs()
+                                + beat_bound)
                             + gamma(10.0) * v;
                         Variance {
                             v,
