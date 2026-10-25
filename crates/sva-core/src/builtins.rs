@@ -126,7 +126,8 @@ pub const SPECIAL_FORMS: [(&str, &str); 10] = [
     ),
     (
         "noise",
-        "noise(seed, period=, color=) -- a line every 1/period hertz from 1/period up, each \
+        "noise(seed, period=, color=, lo=, hi=) -- a line every 1/period hertz from 1/period \
+         up, or only those at or above lo and at or under hi Hz, either edge alone or both, each \
          at a phase its seed draws; its level is a density in hertz that the period never \
          moves: the line at f Hz has amplitude f^log2(color)/sqrt(period), so the lines hold \
          power f^(2*log2(color))/2 a hertz, a flat noise B/2 over any B Hz, an RMS of \

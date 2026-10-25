@@ -57,3 +57,26 @@ fn lint_of_an_undefined_target_refuses_like_render() {
     assert_eq!(linted.code(), rendered.code());
     assert_eq!(linted.exit_code(), rendered.exit_code());
 }
+
+/// A noise band is read as render reads it: one holding lines lints clean, one holding none
+/// refuses as render does.
+#[test]
+fn lint_reads_a_noise_band_as_render_does() {
+    let held = composition(
+        "band-held",
+        &[(
+            "master",
+            "crop(0.1*noise(1, period=1s, lo=200hz, hi=400hz), 0s, 0.1s)\n",
+        )],
+    );
+    lint(&held, Some("@master")).expect("a band holding 201 lines lints clean");
+    let dir = composition(
+        "band-empty",
+        &[("master", "noise(1, period=1s, lo=200.1hz, hi=200.9hz)\n")],
+    );
+    let Err(linted) = lint(&dir, Some("@master")) else {
+        panic!("a band holding no line lints clean");
+    };
+    let codes: Vec<String> = linted.diagnostics().into_iter().map(|d| d.code).collect();
+    assert_eq!(codes, ["engine.noise_band_empty"], "{linted}");
+}

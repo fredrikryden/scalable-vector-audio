@@ -450,14 +450,78 @@ impl Lowering<'_> {
         {
             self.ratio_argument(name, "color", color, cx, span)?;
         }
+        let period = named_or(&view, "period", 1.0);
+        let lines = self.noise_band(&view, period, span)?;
         self.note_call(name, span, positional_named(name, &numbers, &named), chosen);
         Ok(Piece::ClosedForm(Body::Series(Box::new(
-            sva_formula::noise(
-                *seed as u64,
-                named_or(&view, "period", 1.0),
-                named_or(&view, "color", 1.0),
-            ),
+            sva_formula::noise_in(*seed as u64, period, named_or(&view, "color", 1.0), lines),
         ))))
+    }
+
+    /// The lines `lo` and `hi` keep, every line from the first where neither is written. Each
+    /// already folded to a finite number, so only its sign, order and lines are left to refuse.
+    fn noise_band(
+        &self,
+        view: &[(&str, f64)],
+        period: f64,
+        span: ByteSpan,
+    ) -> Result<(i64, sva_formula::Bound), EngineError> {
+        let edge = |key: &str| view.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+        let (lo, hi) = (edge("lo"), edge("hi"));
+        if lo.is_none() && hi.is_none() {
+            return Ok(sva_formula::noise::EVERY_LINE);
+        }
+        let refused = |code: &str, message: String, help: &str| {
+            Err(self.refused_at(code, message, help, Some(span)))
+        };
+        for (key, v) in [("lo", lo), ("hi", hi)] {
+            if let Some(v) = v.filter(|v| *v < 0.0) {
+                return refused(
+                    "engine.noise_band_negative",
+                    format!(
+                        "`noise` reads `{key}={v}`, and a band edge is a frequency in Hz, at or above 0"
+                    ),
+                    "write the edge as 0 or more hertz, as `lo=200hz`",
+                );
+            }
+        }
+        if let (Some(lo), Some(hi)) = (lo, hi)
+            && lo >= hi
+        {
+            return refused(
+                "engine.noise_band_inverted",
+                format!(
+                    "`noise` reads `lo={lo}` and `hi={hi}`, and a band's lower edge is under its upper"
+                ),
+                "write `lo` under `hi`, as `lo=200hz, hi=400hz`",
+            );
+        }
+        let Some((first, last)) = sva_formula::noise::band(period, lo.unwrap_or(0.0), hi) else {
+            return refused(
+                "engine.noise_band_past_index",
+                format!(
+                    "`noise` over `period={period}` reads an edge past line {}, the last index a \
+                     line holds; a correctness limit, with no override",
+                    i64::MAX
+                ),
+                "lower the edge or the period",
+            );
+        };
+        if let sva_formula::Bound::Finite(last) = last
+            && first > last
+        {
+            return refused(
+                "engine.noise_band_empty",
+                format!(
+                    "`noise` holds a line every {} Hz, and none lies in its band from {} to {} Hz",
+                    1.0 / period,
+                    lo.unwrap_or(0.0),
+                    hi.unwrap_or(f64::INFINITY)
+                ),
+                "widen the band to hold a multiple of 1/period, or lengthen the period",
+            );
+        }
+        Ok((first, last))
     }
 
     /// The product `arithmetic` writes, so the drive reaches the renderer and the identity.

@@ -82,6 +82,16 @@ pub fn meaning(builtin: &str, key: &str) -> Option<Meaning> {
              (`-3db` is pink), pivoting on 1 Hz; a bare number is that ratio, 1 flat",
             "ratio per octave",
         ),
+        ("noise", "lo") => plain(
+            "the band's lower edge: line k sounds where lo*period <= k, the product as f64 \
+             rounds it, each at the level color gives it; never the line at 0 Hz",
+            "Hz",
+        ),
+        ("noise", "hi") => plain(
+            "the band's upper edge: line k sounds where k <= hi*period, the product as f64 \
+             rounds it, each at the level color gives it",
+            "Hz",
+        ),
         _ => return None,
     })
 }

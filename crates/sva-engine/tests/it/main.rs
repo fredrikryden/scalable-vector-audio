@@ -1,6 +1,7 @@
 // Concern: gathers every sva-engine integration suite into one test binary | Non-concern: what any suite asserts (its own module) | IO: none
 
 mod arguments;
+mod band;
 mod bindings;
 mod bounds;
 mod cache;

@@ -230,7 +230,7 @@ impl std::error::Error for EngineError {}
 
 /// Every code a judgment in this engine can refuse under, with what trips it. The prefix
 /// says which judgment refused, per FORMAT 16.
-pub static REGISTRY: [(&str, &str); 107] = [
+pub static REGISTRY: [(&str, &str); 111] = [
     (
         "type.no_overload",
         "a builtin applied to operand types no row names",
@@ -526,6 +526,19 @@ pub static REGISTRY: [(&str, &str); 107] = [
     (
         "engine.level_not_a_ratio",
         "a filter's gain or noise's color at or below zero, which no level in dB names",
+    ),
+    ("engine.noise_band_negative", "a noise band edge below 0 Hz"),
+    (
+        "engine.noise_band_inverted",
+        "a noise band whose lower edge is at or above its upper",
+    ),
+    (
+        "engine.noise_band_empty",
+        "a noise band holding no line of its period",
+    ),
+    (
+        "engine.noise_band_past_index",
+        "a noise band edge past the last line index an i64 holds",
     ),
     (
         "engine.non_constant_argument",

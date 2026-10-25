@@ -29,7 +29,7 @@ const CROP_NAMED: &[&str] = &["start", "end", "rise", "fall"];
 const RAND_NAMED: &[&str] = &["seed"];
 const DELTA_NAMED: &[&str] = &["k"];
 const STFT_NAMED: &[&str] = &["window", "hop"];
-const NOISE_NAMED: &[&str] = &["period", "color"];
+const NOISE_NAMED: &[&str] = &["period", "color", "lo", "hi"];
 /// Every modal bank reads the same damping, mode budget and excitation beside its own
 /// geometry's names. A cavity is one mode, so `one_mode` leaves the budget out.
 macro_rules! modal_named {
