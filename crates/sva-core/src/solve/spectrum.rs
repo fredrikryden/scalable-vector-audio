@@ -38,7 +38,28 @@ pub const MODEL: &str = "each atom's samples are its node's formula evaluated as
      2/theta), each end within 1/2 of lo T and hi' T, so their gap is at most h(1 + \
      1/sin(theta/2) - 2/theta) for 0 < theta < 2 pi, h at 0, and h(N + T(hi' - lo)), N <= \
      T(hi' - lo) + 1, at any lag, and moves each bin by at most sum_d |dR(d)| |C(d)|, C the \
-     weighted envelope's autocorrelation";
+     weighted envelope's autocorrelation; the variance's lines k/T, each alone over its \
+     phase, E|X_j|^2 = (|A_j|^2 + |A_(n-j)|^2)/(4T), in closed form, not a transform per \
+     line: the gated envelope as runs, a run one segment of the level at a whole share, g \
+     e^(lambda r) with lambda = (ln 10/20)(dL/dt)/rate exact for a level straight in dB, \
+     else one sample, and the window as the reading samples it, cos^2(pi (o + s)/P) = 1/2 + \
+     (e^(i phi_s) + e^(-i phi_s))/4 over the support it weighs, padded to n (o the first \
+     sample's offset from the frame's centre, P the window's length, in samples), so a run \
+     from sample a of N samples reads g sum_m c_m e^(i m phi_a) e^(-2 pi i u a) S(m/P - u), \
+     u = (jL - kn)/(nL) mod 1 reduced in integers (L the clip's samples, -j for the mirror), \
+     S(w) = sum_(r < N) e^(r (lambda + 2 pi i w)) = expm1(N z)/expm1(z), three shifted \
+     Dirichlet-type kernels (Dirichlet's at lambda = 0), expm1(a + ib) = expm1(a) - 2 e^a \
+     sin^2(b/2) + 2i e^a sin(b/2) cos(b/2), free of cancellation; it is the per-line \
+     transform to rounding: S within rho N e^((N - 1) lambda+) + (3 pi/2) U N e^((N \
+     lambda)+ + |lambda|/2) + N(N - 1)/2 e^((N - 1)(lambda + d lambda)+) (2 pi U (3/2 + \
+     3/P) + d lambda) of the exact sum (rho = (r_N + r_1)/(1 - r_1) + gamma_9, r_x = \
+     gamma_10 (1 + 2 e^(x |lambda|/2)), r_1 with pi U e^(|lambda|/2) more; each rounded \
+     angle through |dS/db| <= sum r e^(r lambda); |sin h| >= 2|h|/pi on |h| <= pi/2), the \
+     window's phase within 2 pi (do + gamma_4 |o + a|)/P + 3U, g within its amplitude's \
+     and share's bounds, so each line's power at every bin within (2 (2Y + e) e + 2 gamma_4 \
+     (Y + e)^2)/(4T), Y = sum (|g| + dg) N e^((N - 1) lambda+), e the amplitudes' summed \
+     bound; a run's sums depend on its length and ratio alone and are kept from one frame to \
+     the next";
 
 const U: f64 = f64::EPSILON / 2.0;
 
@@ -77,10 +98,14 @@ pub struct Model<'a> {
     clip: Clip,
     coherent: bool,
     correlations: RefCell<HashMap<(u64, u64, usize), Rc<Correlation>>>,
-    lines: RefCell<HashMap<Vec<u64>, Rc<PerLine>>>,
+    sums: RefCell<HashMap<SumSlot, Kept>>,
 }
 
 type PerLine = Vec<Vec<f64>>;
+/// A range by its transform's length, first bin and window; its runs' sums by band, length
+/// and ratio.
+type SumSlot = (usize, usize, u64);
+type Kept = Vec<((u64, u64, usize, u64), Rc<Sums>)>;
 
 impl<'a> Model<'a> {
     pub fn new(atoms: &'a [Atom], clip: Clip, coherent: bool) -> Model<'a> {
@@ -89,7 +114,7 @@ impl<'a> Model<'a> {
             clip,
             coherent,
             correlations: RefCell::default(),
-            lines: RefCell::default(),
+            sums: RefCell::default(),
         }
     }
 
@@ -117,11 +142,17 @@ impl<'a> Model<'a> {
 
     /// Each noise atom's lines the render holds, in `atoms`' order, each over its phase alone.
     pub fn lines(&self, frame: &Frame) -> Vec<Lines> {
-        self.atoms
+        let slot = (frame.n(), frame.bins().start, frame.period().to_bits());
+        let kept = self.sums.borrow_mut().remove(&slot).unwrap_or_default();
+        let mut now = Kept::new();
+        let out = self
+            .atoms
             .iter()
             .filter(|a| matches!(a.sound, Sound::Noise { .. }))
-            .map(|atom| self.lines_of(atom, frame))
-            .collect()
+            .map(|atom| self.lines_of(atom, frame, &kept, &mut now))
+            .collect();
+        self.sums.borrow_mut().insert(slot, now);
+        out
     }
 
     pub fn tonal_bins(&self, frame: &Frame) -> Bins {
@@ -197,9 +228,10 @@ impl<'a> Model<'a> {
     }
 
     /// Line `k`, amplitude `1/sqrt(T)` times the envelope `y`, over its phase: `E|X_j|^2 =
-    /// (|A_j|^2 + |A_(n-j)|^2)/(4T)`, `A` the transform of `y e^(2 pi i k s/(rate T))`; kept by
-    /// all it reads.
-    fn lines_of(&self, atom: &Atom, frame: &Frame) -> Lines {
+    /// (|A_j|^2 + |A_(n-j)|^2)/(4T)`, `A` the transform of `y e^(2 pi i k s/(rate T))`, in
+    /// closed form over the envelope's runs (`MODEL`), each run's sums found in `kept`, the
+    /// range's last frame's, or made, and held in `now`.
+    fn lines_of(&self, atom: &Atom, frame: &Frame, kept: &Kept, now: &mut Kept) -> Lines {
         let Sound::Noise { lo, hi } = atom.sound else {
             unreachable!("a noise")
         };
@@ -207,59 +239,40 @@ impl<'a> Model<'a> {
         let none = Lines {
             first: 0,
             power: Rc::new(Vec::new()),
+            bound: 0.0,
         };
-        let (Some((first, last)), Some(envelope)) =
-            (line_span(lo, hi, clip), envelope(atom, clip, frame))
-        else {
+        let runs = runs(atom, clip, frame);
+        let Some((first, last)) = line_span(lo, hi, clip) else {
             return none;
         };
-        if envelope.y.iter().all(|y| *y == 0.0) {
+        if runs.iter().all(|r| r.g == 0.0) {
             return none;
         }
-        let n = frame.n();
-        let key: Vec<u64> = [
-            lo.to_bits(),
-            hi.to_bits(),
-            n as u64,
-            frame.bins().start as u64,
-        ]
-        .into_iter()
-        .chain(envelope.y.iter().map(|y| y.to_bits()))
-        .collect();
-        if let Some(power) = self.lines.borrow().get(&key) {
-            return Lines {
-                first,
-                power: power.clone(),
-            };
-        }
-        let period = clip.secs();
-        let twiddles = fft::twiddles(n);
-        let step = TAU / (f64::from(clip.rate) * period);
-        let power: Vec<Vec<f64>> = (first..=last)
-            .map(|k| {
-                let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
-                for (s, y) in envelope.y.iter().enumerate() {
-                    let (sin, cos) = libm::sincos(step * (k as f64) * s as f64);
-                    re[s] = y * cos;
-                    im[s] = y * sin;
+        let spread = Spread::of(frame, clip, (first, last));
+        let sums: Vec<Option<Rc<Sums>>> = runs
+            .iter()
+            .map(|run| {
+                let key = (lo.to_bits(), hi.to_bits(), run.len, run.lambda.to_bits());
+                if run.len == 1 {
+                    return None;
                 }
-                fft::fft_with(&mut re, &mut im, &twiddles);
-                frame
-                    .bins()
-                    .map(|j| {
-                        let mirror = (n - j) % n;
-                        (re[j] * re[j]
-                            + im[j] * im[j]
-                            + re[mirror] * re[mirror]
-                            + im[mirror] * im[mirror])
-                            / (4.0 * period)
-                    })
-                    .collect()
+                let found = kept.iter().chain(now.iter()).find(|(k, _)| *k == key);
+                let sums = match found {
+                    Some((_, sums)) => sums.clone(),
+                    None => Rc::new(spread.sums(run)),
+                };
+                if !now.iter().any(|(k, _)| *k == key) {
+                    now.push((key, sums.clone()));
+                }
+                Some(sums)
             })
             .collect();
-        let power = Rc::new(power);
-        self.lines.borrow_mut().insert(key, power.clone());
-        Lines { first, power }
+        let (power, bound) = spread.power(frame, &runs, &sums, clip.secs());
+        Lines {
+            first,
+            power: Rc::new(power),
+            bound,
+        }
     }
 
     /// E per channel at frame `m`, bracketed for the model's exact formula and for the render.
@@ -534,7 +547,8 @@ fn samples<N: Num>(atom: &Atom<N>, clip: &Clip, from: i64, count: usize) -> Wind
     out
 }
 
-fn fft_bound(n: usize) -> f64 {
+/// Higham's (2002, Thm 24.2) radix-2 bound, relative in 2-norm.
+pub fn fft_bound(n: usize) -> f64 {
     let mu = 12.0 * U;
     let gamma4 = 4.0 * U / (1.0 - 4.0 * U);
     let eta = mu + gamma4 * (SQRT_2 + mu);
@@ -644,11 +658,310 @@ fn envelope<N: Num>(atom: &Atom<N>, clip: &Clip, frame: &Frame) -> Option<Envelo
     Some(out)
 }
 
-/// `power[i]` is line `first + i`'s per bin.
+/// `power[i]` is line `first + i`'s per bin, each within `bound` of its exact value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lines {
     pub first: i64,
     pub power: Rc<PerLine>,
+    pub bound: f64,
+}
+
+/// A stretch of a noise's gated envelope over a frame, `g e^(lambda r)` at the frame's sample
+/// `at + r` for `r < len`: one segment of the level at a whole share, else one sample.
+struct Run {
+    at: usize,
+    len: usize,
+    g: f64,
+    g_bound: f64,
+    lambda: f64,
+    lambda_bound: f64,
+    piece: i64,
+    whole: bool,
+}
+
+/// `envelope`'s samples as runs: the same `amplitude` and `gate`, carried on by the level's
+/// exact ratio per sample.
+fn runs(atom: &Atom, clip: &Clip, frame: &Frame) -> Vec<Run> {
+    let Sound::Noise { lo, hi } = atom.sound else {
+        unreachable!("a noise")
+    };
+    let Some((level, _)) = tables(atom) else {
+        return Vec::new();
+    };
+    if hi <= lo {
+        return Vec::new();
+    }
+    let width = (hi - lo).sqrt();
+    let (grid, rate) = (Grid::of(clip.rate), f64::from(clip.rate));
+    let steep = steepest(&atom.level, atom.on);
+    let (times, values) = (level.times(), level.values());
+    let piece = |t: f64| match () {
+        () if t < level.first() => -1,
+        () if t >= level.last() => times.len() as i64,
+        () => level.segment(t) as i64,
+    };
+    let mut hint = 0;
+    let mut out: Vec<Run> = Vec::new();
+    for k in 0..frame.weights().len() {
+        let s = frame.first() + k as i64;
+        if s < 0 || s >= clip.len as i64 {
+            continue;
+        }
+        let (share, share_bound) = gate(s, rate, atom.on, atom.end());
+        if share == 0.0 {
+            continue;
+        }
+        let t = grid.instant(s);
+        let (p, whole) = (piece(t), share == 1.0);
+        if let Some(run) = out.last_mut()
+            && whole
+            && run.whole
+            && run.piece == p
+            && run.at + run.len == k
+        {
+            run.len += 1;
+            continue;
+        }
+        let (a, a_bound) = amplitude(&level, steep, t, &mut hint);
+        let scaled = a / width;
+        let scaled_bound = a_bound / width + 4.0 * U * scaled.abs();
+        let g = share * scaled;
+        let lambda = match usize::try_from(p) {
+            Ok(i) if whole && i + 1 < times.len() => {
+                NEPER_PER_DB * (values[i + 1] - values[i]) / ((times[i + 1] - times[i]) * rate)
+            }
+            _ => 0.0,
+        };
+        out.push(Run {
+            at: k,
+            len: 1,
+            g,
+            g_bound: share * scaled_bound
+                + (scaled.abs() + scaled_bound) * share_bound
+                + 2.0 * U * g.abs(),
+            lambda,
+            lambda_bound: gamma(6.0) * lambda.abs(),
+            piece: p,
+            whole,
+        });
+    }
+    out
+}
+
+pub fn gamma(n: f64) -> f64 {
+    n * U / (1.0 - n * U)
+}
+
+/// `[S_-1, S_0, S_1]` per line and evaluated bin, line-major.
+type Sums = Vec<[(f64, f64); 3]>;
+
+/// What every run of one frame's lines shares: the lines, the bins and mirrors evaluated, the
+/// window's period in samples, `n L` for `L` the clip's samples.
+struct Spread {
+    lines: (i64, i64),
+    evaluated: Vec<i64>,
+    n: i64,
+    samples: i64,
+    period: f64,
+}
+
+impl Spread {
+    fn of(frame: &Frame, clip: &Clip, lines: (i64, i64)) -> Spread {
+        Spread {
+            lines,
+            evaluated: frame.bins().flat_map(|j| [j as i64, -(j as i64)]).collect(),
+            n: frame.n() as i64,
+            samples: clip.len as i64,
+            period: frame.period(),
+        }
+    }
+
+    /// `(j L - k n) mod n L`, centred: over `n L`, the frequency in cycles per sample at which
+    /// bin `j` (a mirror at `-j`) reads line `k`.
+    fn reduced(&self, j: i64, k: i64) -> i128 {
+        self.wrapped(i128::from(j) * i128::from(self.samples) - i128::from(k) * i128::from(self.n))
+    }
+
+    fn wrapped(&self, r: i128) -> i128 {
+        let whole = i128::from(self.n) * i128::from(self.samples);
+        let r = r.rem_euclid(whole);
+        match 2 * r >= whole {
+            true => r - whole,
+            false => r,
+        }
+    }
+
+    fn whole(&self) -> f64 {
+        (i128::from(self.n) * i128::from(self.samples)) as f64
+    }
+
+    fn sums(&self, run: &Run) -> Sums {
+        let ratio = Ratio::of(run.len, run.lambda);
+        let whole = self.whole();
+        let shifts = [-1.0, 0.0, 1.0].map(|m: f64| m / self.period);
+        (self.lines.0..=self.lines.1)
+            .flat_map(|k| self.evaluated.iter().map(move |j| (k, *j)))
+            .map(|(k, j)| {
+                let u = self.reduced(j, k) as f64 / whole;
+                shifts.map(|shift| ratio.sum(centred(shift - u)))
+            })
+            .collect()
+    }
+
+    /// Each line's power per supplied bin, beside the bound every one is within.
+    fn power(
+        &self,
+        frame: &Frame,
+        runs: &[Run],
+        sums: &[Option<Rc<Sums>>],
+        secs: f64,
+    ) -> (PerLine, f64) {
+        let offset = frame.offset();
+        let moved =
+            U * (frame.first().unsigned_abs() as f64 + 2.0 * offset.abs()) * (1.0 + 2.0 * U);
+        let turns: Vec<((f64, f64), f64)> = runs
+            .iter()
+            .map(|run| {
+                let at = offset + run.at as f64;
+                let (sin, cos) = libm::sincos(TAU * (at / self.period));
+                let slip = TAU * (moved + gamma(4.0) * at.abs()) / self.period + 3.0 * U;
+                ((cos, sin), slip)
+            })
+            .collect();
+        let whole = self.whole();
+        let start = runs.first().map_or(0, |r| r.at) as i128;
+        let count = self.evaluated.len();
+        let power = (self.lines.0..=self.lines.1)
+            .enumerate()
+            .map(|(line, k)| {
+                let at = |e: usize| {
+                    let mut a = (0.0, 0.0);
+                    for ((run, sums), ((cos, sin), _)) in runs.iter().zip(sums).zip(&turns) {
+                        let [down, mid, up] = match sums {
+                            Some(sums) => sums[line * count + e],
+                            None => [(1.0, 0.0); 3],
+                        };
+                        let up = times(up, (*cos, *sin));
+                        let down = times(down, (*cos, -*sin));
+                        let inner = (
+                            0.5 * mid.0 + 0.25 * (up.0 + down.0),
+                            0.5 * mid.1 + 0.25 * (up.1 + down.1),
+                        );
+                        let mut term = (run.g * inner.0, run.g * inner.1);
+                        let apart = run.at as i128 - start;
+                        if apart != 0 {
+                            let q = self.wrapped(self.reduced(self.evaluated[e], k) * apart);
+                            let (sin, cos) = libm::sincos(-TAU * (q as f64 / whole));
+                            term = times(term, (cos, sin));
+                        }
+                        a = (a.0 + term.0, a.1 + term.1);
+                    }
+                    a.0 * a.0 + a.1 * a.1
+                };
+                (0..count / 2)
+                    .map(|b| (at(2 * b) + at(2 * b + 1)) / (4.0 * secs))
+                    .collect()
+            })
+            .collect();
+        let (mut amplitude, mut sizes) = (0.0, 0.0);
+        for (i, ((run, _), (_, slip))) in runs.iter().zip(sums).zip(&turns).enumerate() {
+            let ratio = Ratio::of(run.len, run.lambda);
+            let (size, sum_bound) = ratio.bound(run.lambda_bound, self.period);
+            let apart = match i == 0 || run.at == runs[0].at {
+                true => 0.0,
+                false => TAU * gamma(3.0) / 2.0 + 3.0 * U + gamma(4.0),
+            };
+            let g = run.g.abs();
+            amplitude +=
+                run.g_bound * size + g * (sum_bound + size * (0.5 * slip + gamma(7.0) + apart));
+            sizes += (g + run.g_bound) * size;
+        }
+        amplitude += gamma(runs.len() as f64) * sizes;
+        let lines = (2.0 * (2.0 * sizes + amplitude) * amplitude
+            + gamma(4.0) * 2.0 * (sizes + amplitude).powi(2))
+            / (4.0 * secs)
+            * (1.0 + 4.0 * U);
+        (power, lines)
+    }
+}
+
+fn times(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+}
+
+/// `w` moved by a whole cycle into [-1/2, 1/2], exactly (Sterbenz).
+fn centred(w: f64) -> f64 {
+    match () {
+        () if w > 0.5 => w - 1.0,
+        () if w < -0.5 => w + 1.0,
+        () => w,
+    }
+}
+
+/// `sum_(r < len) e^(r (lambda + 2 pi i w))` as `expm1(len z)/expm1(z)`, each `expm1` written
+/// `expm1(a) - 2 e^a sin^2(b/2) + 2 i e^a sin(b/2) cos(b/2)`, free of cancellation.
+struct Ratio {
+    len: usize,
+    lambda: f64,
+    one: (f64, f64),
+    all: (f64, f64),
+}
+
+impl Ratio {
+    fn of(len: usize, lambda: f64) -> Ratio {
+        let all = len as f64 * lambda;
+        Ratio {
+            len,
+            lambda,
+            one: (libm::expm1(lambda), sva_formula::exp(lambda)),
+            all: (libm::expm1(all), sva_formula::exp(all)),
+        }
+    }
+
+    fn sum(&self, w: f64) -> (f64, f64) {
+        if self.len == 1 {
+            return (1.0, 0.0);
+        }
+        let h = PI * w;
+        let side = |(m1, e): (f64, f64), h: f64| {
+            let (s, c) = libm::sincos(h);
+            (m1 - 2.0 * e * s * s, 2.0 * e * s * c)
+        };
+        let below = side(self.one, h);
+        if below == (0.0, 0.0) {
+            return (self.len as f64, 0.0);
+        }
+        let above = side(self.all, self.len as f64 * h);
+        let size = below.0 * below.0 + below.1 * below.1;
+        (
+            (above.0 * below.0 + above.1 * below.1) / size,
+            (above.1 * below.0 - above.0 * below.1) / size,
+        )
+    }
+
+    /// A bound on `|sum|` over every `w`, beside a bound on the distance of `sum(w)` from the
+    /// exact sum at the exact `lambda` and `w` (`MODEL`), `lambda` within `lambda_bound`.
+    fn bound(&self, lambda_bound: f64, period: f64) -> (f64, f64) {
+        let n = self.len as f64;
+        if self.len == 1 {
+            return (1.0, 0.0);
+        }
+        let lambda = self.lambda.abs();
+        let peak = |l: f64| n * sva_formula::exp(((n - 1.0) * l).max(0.0)) * (1.0 + 4.0 * U);
+        let size = peak(self.lambda);
+        let reach = peak(self.lambda + lambda_bound);
+        let below = gamma(10.0) * (1.0 + 2.0 * sva_formula::exp(lambda / 2.0))
+            + PI * U * sva_formula::exp(lambda / 2.0);
+        let above = gamma(10.0) * (1.0 + 2.0 * sva_formula::exp(n * lambda / 2.0));
+        let rounding = (above + below) / (1.0 - below) + gamma(9.0);
+        let turned = 1.5 * PI * U * n * sva_formula::exp((n * self.lambda).max(0.0) + lambda / 2.0);
+        let slope = (n - 1.0) / 2.0 * reach;
+        let w = U * (1.5 + 3.0 / period);
+        (
+            size,
+            (rounding * size + turned + slope * (TAU * w + lambda_bound)) * (1.0 + 4.0 * U),
+        )
+    }
 }
 
 /// The first and last line `noise` over the clip renders in `[lo, hi]` under the ceiling.

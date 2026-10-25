@@ -154,6 +154,8 @@ impl Range {
             range: self,
             first,
             weights,
+            offset: first as f64 - t * rate,
+            period: self.window_secs * rate,
         }
     }
 
@@ -174,6 +176,8 @@ pub struct Frame<'a> {
     range: &'a Range,
     first: i64,
     weights: Vec<f64>,
+    offset: f64,
+    period: f64,
 }
 
 impl Frame<'_> {
@@ -184,6 +188,16 @@ impl Frame<'_> {
 
     pub fn weights(&self) -> &[f64] {
         &self.weights
+    }
+
+    /// `weights()[k]` is `cos^2(pi (offset() + k) / period())` rounded: the first sample's
+    /// distance from the frame's centre and the window's length, both in samples.
+    pub fn offset(&self) -> f64 {
+        self.offset
+    }
+
+    pub fn period(&self) -> f64 {
+        self.period
     }
 
     /// The bins this window supplies, its own range's.

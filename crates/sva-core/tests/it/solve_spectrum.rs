@@ -4,7 +4,7 @@ use std::f64::consts::TAU;
 
 use sva_ast::Composition;
 use sva_core::solve::atoms::{Atom, Clip, NEPER_PER_DB, Trajectory, nodes, score};
-use sva_core::solve::spectrum::{Model, floor_db};
+use sva_core::solve::spectrum::{Model, fft_bound, floor_db, gamma};
 use sva_core::{Job, Output, Representation, asked, call, execute};
 use sva_engine::Tier;
 use sva_engine::fft;
@@ -328,6 +328,111 @@ fn a_noise_reads_its_exact_phase_ensemble_average() {
     );
     assert!(over > 0.5, "a sampling bound some bin comes near: {over}");
     assert!(share < 2.0, "{share}");
+}
+
+/// Each of `band()`'s lines over its phase against a per-line transform of the
+/// frame's weights times the gated envelope written here from the atom's definition: within
+/// the closed form's stated bound plus this transform's (Higham's, its inputs' rounding), at
+/// every bin, both segments and half-share edges.
+#[test]
+fn a_noise_lines_closed_form_reads_as_their_per_line_transform() {
+    let clip = Clip {
+        rate: 4_000,
+        len: 400,
+    };
+    let atom = band();
+    let model = Model::new(std::slice::from_ref(&atom), clip, true);
+    let ear = Ear::of(f64::from(clip.rate), SPL, 1.0);
+    let (rate, period) = (f64::from(clip.rate), clip.secs());
+    let u = f64::EPSILON / 2.0;
+    let (on, end) = (0.017, 0.09);
+    let envelope = |s: i64| {
+        let cell = |n: i64| (2 * n - 1) as f64 / (2.0 * rate);
+        let share = ((cell(s + 1).min(end) - cell(s).max(on)) * rate).max(0.0);
+        let t = s as f64 / rate;
+        let level = match t {
+            t if t < 0.05 => -20.0 + (-6.0) * (t - 0.017) / (0.05 - 0.017),
+            t if t < 0.09 => -26.0 + 6.0 * (t - 0.05) / (0.09 - 0.05),
+            _ => -20.0,
+        };
+        share * sva_formula::exp(NEPER_PER_DB * level) / 500f64.sqrt()
+    };
+    let rounding = gamma(16.0) + NEPER_PER_DB * gamma(8.0) * 32.0;
+    let (lines, last) = (50i64, 100i64);
+    let (mut over, mut runs) = (0.0f64, 0usize);
+    let (first, final_frame) = ear.frames(clip.len);
+    for m in (first..=final_frame).step_by(3) {
+        ear.compose(m, &mut |frame| {
+            let held = &model.lines(frame)[0];
+            let n = frame.n();
+            let samples: Vec<(usize, f64, f64)> = frame
+                .weights()
+                .iter()
+                .enumerate()
+                .filter_map(|(k, w)| {
+                    let s = frame.first() + k as i64;
+                    let g = match (0..clip.len as i64).contains(&s) {
+                        true => envelope(s),
+                        false => 0.0,
+                    };
+                    let slip = std::f64::consts::PI
+                        * gamma(6.0)
+                        * (s.unsigned_abs() as f64
+                            + frame.first().unsigned_abs() as f64
+                            + frame.offset().abs())
+                        / frame.period()
+                        + gamma(4.0);
+                    (g != 0.0).then_some((k, w * g, g * slip + (w * g).abs() * rounding))
+                })
+                .collect();
+            if samples.is_empty() {
+                assert!(held.power.is_empty(), "silence holds no lines");
+                return vec![0.0; frame.hz().len()];
+            }
+            runs += 1;
+            assert_eq!(held.first, lines, "the band's first line");
+            let size: f64 = samples.iter().map(|(_, y, _)| y.abs()).sum();
+            let energy = samples.iter().map(|(_, y, _)| y * y).sum::<f64>().sqrt();
+            let moved: f64 = samples
+                .iter()
+                .map(|(_, y, d)| d + gamma(6.0) * y.abs())
+                .sum();
+            let eps = (moved + fft_bound(n) * (n as f64).sqrt() * energy) * (1.0 + 8.0 * u);
+            let reference = (2.0 * (2.0 * size + eps) * eps
+                + 2.0 * gamma(4.0) * (size + eps).powi(2))
+                / (4.0 * period);
+            let twiddles = fft::twiddles(n);
+            for (i, k) in (lines..=last).enumerate() {
+                let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
+                for (s, y, _) in &samples {
+                    let turn = (k * *s as i64).rem_euclid(clip.len as i64) as f64;
+                    let (sin, cos) = libm::sincos(TAU * (turn / clip.len as f64));
+                    re[*s] = y * cos;
+                    im[*s] = y * sin;
+                }
+                fft::fft_with(&mut re, &mut im, &twiddles);
+                for (b, j) in frame.bins().enumerate() {
+                    let mirror = (n - j) % n;
+                    let fft = (re[j] * re[j]
+                        + im[j] * im[j]
+                        + re[mirror] * re[mirror]
+                        + im[mirror] * im[mirror])
+                        / (4.0 * period);
+                    let gap = (held.power[i][b] - fft).abs();
+                    let allowed = held.bound + reference;
+                    assert!(
+                        gap <= allowed,
+                        "frame {m}, line {k}, bin {j}: {} against {fft}, allowed {allowed}",
+                        held.power[i][b]
+                    );
+                    over = over.max(gap / allowed);
+                }
+            }
+            vec![0.0; frame.hz().len()]
+        });
+    }
+    println!("closed-form lines against their transform: gap over bounds {over}, {runs} frames");
+    assert!(runs > 0, "some frame reads the band");
 }
 
 /// The mean of keyed renders, each key its own realisation, against the expectation: each

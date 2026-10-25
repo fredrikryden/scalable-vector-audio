@@ -1,13 +1,14 @@
 // Concern: OBJECTIVE: a state's expected elements, variances N0 rho + v, Rice moments, residual bits against the clip, the total with B(x) | Non-concern: tangents, search | IO: (clip, atoms, N0) -> bits
 
-use std::f64::consts::{LN_2, LN_10, PI};
+use std::f64::consts::{LN_2, LN_10, PI, SQRT_2};
 
+use sva_engine::fft;
 use sva_engine::internal::modulation::Element;
 use sva_engine::internal::{Ear, Internal};
 
 use super::atoms::{Atom, Clip, Sound};
 use super::bits::{self, Priced};
-use super::spectrum::{Model, line_span};
+use super::spectrum::{Model, fft_bound, gamma, line_span};
 
 pub const MODEL: &str = "residual bits = sum_i [d_i^2 log2(e)/2 + log2(sigma_i/sigma_0,i)], \
      the Gaussian code length of the clip's elements given the model's over the noise-free \
@@ -23,7 +24,23 @@ pub const MODEL: &str = "residual bits = sum_i [d_i^2 log2(e)/2 + log2(sigma_i/s
      real and magnitude bands, the log's curvature the linear form drops: v = \
      s^2 sum over ordered pairs of distinct lines of e_k e_l K((l - k)/T) (Isserlis 1918, doi \
      10.1093/biomet/12.1-2.134: a pair's beat at their difference, of random phase, so pairs \
-     do not covary), a line's own term (n = 0) never counted, so v >= 0, K = |H|^2 from E to \
+     do not covary), a line's own term (n = 0) never counted, so v >= 0, summed as s^2 [K(0) \
+     q + sum_(n != 0) K(n/T) r(n)], q the ordered pairs of distinct atoms on one line, r the \
+     autocorrelation of x_k, line k's excitation summed over atoms, the second sum by \
+     Parseval, (1/M) sum_f Re K^(f) |X(f)|^2 over M = 2^ceil(log2 2L) >= 2L - 1 points (no \
+     lag wraps; K^ the transform of K placed circularly, 0 at n = 0, so n = 0 is excluded \
+     exactly), X by one M/2-point transform of x's even samples plus i its odd, then \
+     clamped at 0, where the exact value lies; within its rounding of the direct sum: |X^ - \
+     X|_2 <= phi' sqrt(M) |x|_2, phi' = phi_(M/2) + 2 sqrt(2) (gamma_5 + mu)(1 + phi_(M/2)) \
+     (Higham 2002, Accuracy and Stability of Numerical Algorithms, 2nd ed., Thm 24.2: phi_n \
+     = log2(n) eta/(1 - log2(n) eta), eta = mu + gamma_4 (sqrt(2) + mu), twiddles within mu \
+     = 12U), so |P^ - P|_2 <= M |x|_2^2 [phi' (2 + phi') + gamma_2 (1 + phi')^2], K^ within \
+     phi_M sqrt(M) |K|_2, the sum within (sqrt(M) |K|_2 dP + dK^ |P^|_2)/M plus gamma_(M/2 \
+     + 4) of its terms' moduli; each x_k within e_x = sum_b W_b e_b (1 + gamma_B) + \
+     gamma_(B + A) max x (e_b its bins' bound, spectrum.rs, W the filters' nonnegative \
+     weights over B bins, A atoms), so r and q within 2 e_x sum x + L e_x^2 at every lag, \
+     q's sum within gamma_(2A + L) more, moving v by s^2 sum_(n != 0) K and s^2 K(0); v is \
+     reported beside that bound plus gamma_10 v for s^2, K = |H|^2 from E to \
      the band's output: the squared window's transform of the channel's range, squared, times \
      the reading's own digital filters at the hop, a real band through (M(nu) + conj M(-nu))/2; \
      a real element's mean is its output and its variance v; a magnitude element's output y \
@@ -52,20 +69,102 @@ pub struct Objective {
 }
 
 /// The noise atoms' line spans in `atoms`' order, the grid from `lowest` over `span` lines,
-/// `kernels[c][k][span - 1 + n]` the band's `K(n/T)`, and each channel's `E_T`.
+/// `kernels[c][k]` the band's `K(n/T)`, the transform's twiddles and each channel's `E_T`.
 struct Lines {
     spans: Vec<(i64, i64)>,
     lowest: i64,
     span: usize,
-    kernels: Vec<Vec<Vec<f64>>>,
+    kernels: Vec<Vec<Kernel>>,
+    twiddles: Vec<(f64, f64)>,
     thresholds: Vec<f64>,
 }
 
-/// `variance` is `v_i`, a magnitude's by Rice.
+/// A band's `K(n/T)` for `|n| < L`: `K(0)`, the sum and 2-norm of the rest, and the real part
+/// of the `M`-point transform of the rest placed circularly, `K(0)` there set to 0, at
+/// `f <= M/2`, beside a bound on its 2-norm distance over all `M` from the exact transform.
+pub struct Kernel {
+    zero: f64,
+    sum: f64,
+    norm: f64,
+    half: Vec<f64>,
+    bound: f64,
+}
+
+impl Kernel {
+    /// `kernel[L - 1 + n]` is `K(n/T)`; `twiddles` are of `M >= 2L - 1` points.
+    pub fn of(kernel: &[f64], twiddles: &[(f64, f64)]) -> Kernel {
+        let m = 2 * twiddles.len();
+        let span = kernel.len().div_ceil(2);
+        assert!(m >= kernel.len(), "no lag wraps");
+        let (mut re, mut im) = (vec![0.0; m], vec![0.0; m]);
+        for (i, k) in kernel.iter().enumerate() {
+            let n = i as i64 - (span as i64 - 1);
+            if n != 0 {
+                re[n.rem_euclid(m as i64) as usize] = *k;
+            }
+        }
+        let rest = || kernel.iter().enumerate().filter(|(i, _)| *i != span - 1);
+        let sum: f64 = rest().map(|(_, k)| k).sum();
+        let norm = libm::sqrt(rest().map(|(_, k)| k * k).sum::<f64>());
+        fft::fft_with(&mut re, &mut im, twiddles);
+        re.truncate(m / 2 + 1);
+        let reach = 1.0 + gamma(kernel.len() as f64 + 2.0);
+        Kernel {
+            zero: kernel[span - 1],
+            sum: sum * reach,
+            norm: norm * reach,
+            half: re,
+            bound: fft_bound(m) * libm::sqrt(m as f64) * norm * reach * (1.0 + 2.0 * U),
+        }
+    }
+
+    /// `sum_(n != 0) K(n/T) r(n)` for `r` the autocorrelation whose transform `spectrum` holds
+    /// (Parseval), beside the bound `MODEL` states on its distance from the exact sum: the
+    /// spectrum's and this transform's, `(sqrt(M) |K|_2 spectrum.bound + bound |spectrum|_2)/M`,
+    /// and the products' and the sum's rounding.
+    pub fn apply(&self, spectrum: &Spectrum) -> (f64, f64) {
+        let power = &spectrum.power;
+        let last = power.len() - 1;
+        let inner = 1..last;
+        let (mut sum, mut size) = (0.0, 0.0);
+        for (k, p) in self.half[inner.clone()].iter().zip(&power[inner]) {
+            sum += k * p;
+            size += k.abs() * p;
+        }
+        let ends = [0, last].map(|f| self.half[f] * power[f]);
+        let m = 2.0 * last as f64;
+        let sum = 2.0 * sum + ends[0] + ends[1];
+        let size = 2.0 * size + ends[0].abs() + ends[1].abs();
+        let moved = libm::sqrt(m) * self.norm * spectrum.bound + self.bound * spectrum.norm;
+        let bound = (moved + gamma(m / 2.0 + 4.0) * size) / m * (1.0 + 4.0 * U);
+        (sum / m, bound)
+    }
+}
+
+/// `|X(f)|^2` at `f <= M/2`, the bound `MODEL` states on the 2-norm over all `M` of its
+/// distance from the exact one, and a bound on its own 2-norm over all `M`.
+pub struct Spectrum {
+    pub power: Vec<f64>,
+    pub bound: f64,
+    pub norm: f64,
+}
+
+/// `v_i` within `bound` of its exact value (`MODEL`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Variance {
+    pub v: f64,
+    pub bound: f64,
+}
+
+/// `variance` is `v_i`, a magnitude's by Rice, each moment within its bound of the exact one
+/// at `noise.v`; `noise` is `v_i` itself.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Expected {
     pub mean: f64,
     pub variance: f64,
+    pub mean_bound: f64,
+    pub variance_bound: f64,
+    pub noise: Variance,
 }
 
 pub type Elements = Vec<Vec<Vec<Expected>>>;
@@ -95,7 +194,7 @@ impl Objective {
         let model = Model::new(atoms, self.clip, coherent);
         let lines = self.lines(atoms);
         let (first, _) = self.ear.frames(self.clip.len);
-        let mut variances: Vec<Option<Vec<Vec<f64>>>> = Vec::new();
+        let mut variances: Vec<Option<Vec<Vec<Variance>>>> = Vec::new();
         let outputs = self.ear.elements(self.clip.len, &mut |m| {
             let power = self.ear.compose(m, &mut |frame| model.bins(frame).power);
             let excitation = self.ear.excite(m, &power);
@@ -115,19 +214,29 @@ impl Objective {
                             .enumerate()
                             .map(|(j, y)| {
                                 let at = (self.ear.sampled(c, k, j) - first) as usize;
-                                let v = variances[at].as_ref().map_or(0.0, |v| v[c][k]);
+                                let noise = variances[at]
+                                    .as_ref()
+                                    .map_or(Variance::default(), |v| v[c][k]);
                                 match band.element {
                                     Element::Magnitude => {
-                                        let Moments { mean, variance, .. } = rice(y.abs(), v);
+                                        let moments = rice(y.abs(), noise.v);
                                         let g = band.gain();
                                         Expected {
-                                            mean: g * mean,
-                                            variance: g * g * variance,
+                                            mean: g * moments.mean,
+                                            variance: g * g * moments.variance,
+                                            mean_bound: g * moments.mean_bound
+                                                + U * (g * moments.mean).abs(),
+                                            variance_bound: g * g * moments.variance_bound
+                                                + gamma(2.0) * (g * g * moments.variance).abs(),
+                                            noise,
                                         }
                                     }
                                     _ => Expected {
                                         mean: band.element(y),
-                                        variance: v,
+                                        variance: noise.v,
+                                        mean_bound: 0.0,
+                                        variance_bound: 0.0,
+                                        noise,
                                     },
                                 }
                             })
@@ -153,6 +262,7 @@ impl Objective {
             .max()
             .map_or(0, |top| (top - lowest + 1) as usize);
         let period = self.clip.secs();
+        let twiddles = fft::twiddles((2 * span).next_power_of_two());
         let kernels = match span {
             0 => Vec::new(),
             _ => self
@@ -163,12 +273,13 @@ impl Objective {
                 .map(|(c, channel)| {
                     (0..channel.bands.len())
                         .map(|k| {
-                            (0..2 * span - 1)
+                            let kernel: Vec<f64> = (0..2 * span - 1)
                                 .map(|i| {
                                     let n = i as f64 - (span - 1) as f64;
                                     self.ear.kernel(c, k, n / period)
                                 })
-                                .collect()
+                                .collect();
+                            Kernel::of(&kernel, &twiddles)
                         })
                         .collect()
                 })
@@ -179,11 +290,13 @@ impl Objective {
             lowest,
             span,
             kernels,
+            twiddles,
             thresholds: self.ear.thresholds(),
         }
     }
 
-    /// Frame `m`'s `v` per channel and band, as `MODEL` sums it over the lines; none without.
+    /// Frame `m`'s `v` per channel and band, as `MODEL` sums it over the lines, beside its
+    /// bound; none without.
     fn variances(
         &self,
         model: &Model,
@@ -191,61 +304,79 @@ impl Objective {
         m: i64,
         power: &[f64],
         excitation: &[f64],
-    ) -> Option<Vec<Vec<f64>>> {
+    ) -> Option<Vec<Vec<Variance>>> {
         let Lines {
             spans,
             lowest,
             span,
             kernels,
+            twiddles,
             thresholds,
         } = lines;
         let (lowest, span) = (*lowest, *span);
-        let owners: Vec<i64> = spans.iter().flat_map(|(from, to)| *from..=*to).collect();
         if span == 0 {
             return None;
         }
-        let per_bin = self.ear.compose(m, &mut |frame| {
+        let owners: Vec<i64> = spans.iter().flat_map(|(from, to)| *from..=*to).collect();
+        let atoms = spans.len();
+        let mut parts: Vec<Vec<f64>> = vec![Vec::new(); owners.len() + atoms];
+        self.ear.compose(m, &mut |frame| {
             let bins = frame.hz().len();
-            let mut each = vec![Vec::with_capacity(owners.len()); bins];
-            for (lines, (from, to)) in model.lines(frame).iter().zip(spans.iter()) {
+            let mut at = 0;
+            for (a, (held, (from, to))) in model.lines(frame).iter().zip(spans).enumerate() {
                 let count = (to - from + 1).max(0) as usize;
                 for i in 0..count {
-                    for (b, bin) in each.iter_mut().enumerate() {
-                        bin.push(match lines.power.is_empty() {
-                            true => 0.0,
-                            false => lines.power[i][b],
-                        });
+                    match held.power.is_empty() {
+                        true => parts[at + i].extend(std::iter::repeat_n(0.0, bins)),
+                        false => parts[at + i].extend_from_slice(&held.power[i]),
                     }
                 }
+                parts[owners.len() + a].extend(std::iter::repeat_n(held.bound, bins));
+                at += count;
             }
-            each
+            vec![(); bins]
         });
-        let parts: Vec<Vec<f64>> = (0..owners.len())
-            .map(|i| per_bin.iter().map(|b| b[i]).collect())
-            .collect();
         let each = self.ear.excite_each(m, power, &parts);
+        let (each, reach) = each.split_at(owners.len());
+        let rows = self.ear.hz().len() as f64;
         let v = (0..excitation.len())
             .map(|c| {
                 let mut lines = vec![0.0; span];
                 let mut pairs = vec![0.0; span];
-                for (k, e) in owners.iter().zip(&each) {
+                for (k, e) in owners.iter().zip(each) {
                     let i = (k - lowest) as usize;
                     pairs[i] += 2.0 * lines[i] * e[c];
                     lines[i] += e[c];
                 }
                 let same: f64 = pairs.iter().sum();
-                let acf: Vec<f64> = (0..span)
-                    .map(|n| (0..span - n).map(|k| lines[k] * lines[k + n]).sum())
-                    .collect();
+                let total: f64 = lines.iter().sum();
+                let top = lines.iter().fold(0.0, |a: f64, b| a.max(*b));
+                let eps = reach.iter().map(|r| r[c]).sum::<f64>() * (1.0 + gamma(rows))
+                    + gamma(rows + atoms as f64) * top;
+                let moved = (2.0 * eps * total + span as f64 * eps * eps) * (1.0 + 4.0 * U);
+                let paired = match atoms > 1 {
+                    true => moved + gamma(2.0 * atoms as f64 + span as f64) * same,
+                    false => 0.0,
+                };
+                let spectrum = power_spectrum(&lines, twiddles);
                 let slope = 10.0 / LN_10 / (thresholds[c] + excitation[c]);
                 kernels[c]
                     .iter()
                     .map(|kernel| {
-                        let mut sum = kernel[span - 1] * same;
-                        for (n, a) in acf.iter().enumerate().skip(1) {
-                            sum += a * (kernel[span - 1 + n] + kernel[span - 1 - n]);
+                        let (rest, rest_bound) = kernel.apply(&spectrum);
+                        let out = kernel.zero * same + rest;
+                        let v = slope * slope * out.max(0.0);
+                        let bound = slope
+                            * slope
+                            * (kernel.zero * paired
+                                + kernel.sum * moved
+                                + rest_bound
+                                + U * out.abs())
+                            + gamma(10.0) * v;
+                        Variance {
+                            v,
+                            bound: bound * (1.0 + 8.0 * U),
                         }
-                        slope * slope * sum
                     })
                     .collect()
             })
@@ -271,6 +402,56 @@ impl Objective {
 
     pub fn bits(&self, atoms: &[Atom], coherent: bool) -> f64 {
         self.residual_bits(&self.expect(atoms, coherent))
+    }
+}
+
+/// `X` the transform of `x` zero-padded to `M = 2 twiddles.len()` points, through one
+/// transform of `M/2` points of `x`'s even samples plus `i` its odd (`MODEL`).
+pub fn power_spectrum(x: &[f64], twiddles: &[(f64, f64)]) -> Spectrum {
+    let m = 2 * twiddles.len();
+    let half = m / 2;
+    assert!(m >= 2 * x.len().max(1) - 1, "no lag wraps");
+    let (mut re, mut im) = (vec![0.0; half], vec![0.0; half]);
+    for (i, v) in x.iter().enumerate() {
+        match i % 2 {
+            0 => re[i / 2] = *v,
+            _ => im[i / 2] = *v,
+        }
+    }
+    let inner: Vec<(f64, f64)> = twiddles.iter().step_by(2).take(half / 2).copied().collect();
+    fft::fft_with(&mut re, &mut im, &inner);
+    let power: Vec<f64> = (0..=half)
+        .map(|j| {
+            let (a, b) = (j % half, (half - j) % half);
+            let even = ((re[a] + re[b]) / 2.0, (im[a] - im[b]) / 2.0);
+            let odd = ((im[a] + im[b]) / 2.0, (re[b] - re[a]) / 2.0);
+            let (c, s) = match j < half {
+                true => twiddles[j],
+                false => (-1.0, 0.0),
+            };
+            let x = (
+                even.0 + c * odd.0 - s * odd.1,
+                even.1 + c * odd.1 + s * odd.0,
+            );
+            x.0 * x.0 + x.1 * x.1
+        })
+        .collect();
+    let phi = fft_bound(half);
+    let phi = phi + 2.0 * SQRT_2 * (gamma(5.0) + 12.0 * U) * (1.0 + phi);
+    let energy = x.iter().map(|v| v * v).sum::<f64>() * (1.0 + gamma(x.len() as f64));
+    let bound = m as f64 * energy * (phi * (2.0 + phi) + gamma(2.0) * (1.0 + phi) * (1.0 + phi));
+    let squares: f64 = power
+        .iter()
+        .enumerate()
+        .map(|(f, p)| match f == 0 || f == half {
+            true => p * p,
+            false => 2.0 * p * p,
+        })
+        .sum();
+    Spectrum {
+        power,
+        bound: bound * (1.0 + 4.0 * U),
+        norm: libm::sqrt(squares) * (1.0 + gamma(half as f64 + 3.0)),
     }
 }
 
@@ -300,10 +481,6 @@ fn chi(l: usize) -> f64 {
         at += 2;
     }
     out
-}
-
-fn gamma(n: f64) -> f64 {
-    n * U / (1.0 - n * U)
 }
 
 /// `D` by Hankel's expansion where its remainder's bound is under 2^-53 of it, beside a bound
