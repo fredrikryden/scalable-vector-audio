@@ -7,7 +7,7 @@ use sva_core::Diagnostic;
 use sva_cli::{
     CliError, Command, Finding, Format, NAME, VERSION, analyze, builtins, builtins_data, caught,
     colored, composition, cwd, diagnostics_text, error_envelope, help_data, help_text,
-    lint_bounded, lint_data, located, new_data, parse_args, render, scaffold, solve, stopped,
+    lint_bounded, lint_data, located, new_data, parse_args, render, scaffold, stopped,
     success_envelope, trace, trace_data, version_data,
 };
 
@@ -58,13 +58,7 @@ fn run() -> ExitCode {
         Ok(Command::Help) => Ok(success_envelope(&help_data(&help_text()), &[])),
         Ok(Command::Render(args)) => render(&args),
         Ok(Command::Analyze(args)) => analyze(&args),
-        Ok(Command::Solve(args)) => match solve(&args) {
-            Ok((json, code)) => {
-                println!("{json}");
-                return ExitCode::from(code);
-            }
-            Err(e) => Err(e),
-        },
+        Ok(Command::Solve) => Err(sva_core::solve::unbuilt()),
         Ok(Command::Lint {
             target,
             format,
@@ -73,16 +67,12 @@ fn run() -> ExitCode {
         Ok(Command::Trace { target }) => trace_node(&target),
         Ok(Command::Builtins) => Ok(success_envelope(&builtins_data(&builtins()), &[])),
         Ok(Command::Outline { text }) => outline(&text),
+        Ok(Command::New { from: Some(_), .. }) => Err(sva_core::solve::seed_unbuilt()),
         Ok(Command::New {
             name,
             idempotency_key,
-            from,
-            limits,
-        }) => scaffold_new(
-            &name,
-            idempotency_key.as_deref(),
-            from.as_deref().map(|f| (f, limits)),
-        ),
+            from: None,
+        }) => scaffold_new(&name, idempotency_key.as_deref()),
         Err(e) => Err(e),
     };
 
@@ -145,13 +135,9 @@ fn trace_node(target: &str) -> Result<String, CliError> {
     Ok(success_envelope(&trace_data(&traced), &[]))
 }
 
-fn scaffold_new(
-    name: &str,
-    idempotency_key: Option<&str>,
-    from: Option<(&std::path::Path, sva_core::seed::Limits)>,
-) -> Result<String, CliError> {
+fn scaffold_new(name: &str, idempotency_key: Option<&str>) -> Result<String, CliError> {
     Ok(success_envelope(
-        &new_data(&scaffold(&cwd()?, name, idempotency_key, from)?),
+        &new_data(&scaffold(&cwd()?, name, idempotency_key)?),
         &[],
     ))
 }

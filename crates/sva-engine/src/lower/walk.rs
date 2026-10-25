@@ -9,7 +9,7 @@ use crate::cast::Cast;
 use crate::error::{EngineError, Located};
 use crate::instantiate::{Cx, Node, Thunk};
 use crate::loops::{self, Tap};
-use crate::lower::dual::Number;
+use crate::lower::number::Number;
 use crate::lower::{Index, Lowering, Piece, SelfMode, constant, on};
 use crate::overload;
 use crate::time::{Affine, Lattice, Q};
@@ -18,12 +18,6 @@ use crate::typing::{Step, Value, When};
 impl<N: Number> Lowering<'_, N> {
     pub(super) fn walk(&mut self, e: &Expr, cx: Cx, var: Var) -> Result<Piece<N>, EngineError> {
         let inst = self.inst;
-        if let Expr::Var(name) = e
-            && let Some(tangent) = self.seed(cx.scope, name)
-            && let Some(r) = inst.follow(e, cx, |e2, cx2| self.walk(e2, cx2, var))
-        {
-            return self.varied(r?, tangent, var);
-        }
         if let Some(r) = inst.follow(e, cx, |e2, cx2| self.walk(e2, cx2, var)) {
             return r;
         }
@@ -36,22 +30,19 @@ impl<N: Number> Lowering<'_, N> {
                 arg,
                 address: Address::Time,
                 span,
-            } => self.rendered("a read of another node", |low| {
-                low.read(path, arg, span, cx, var)
-            }),
+            } => self.rendered(|low| low.read(path, arg, span, cx, var)),
             Node::Read {
                 path,
                 arg,
                 address: Address::Index,
                 span,
-            } => self.rendered("an index read", |low| low.indexed(path, arg, span, cx, var)),
+            } => self.rendered(|low| low.indexed(path, arg, span, cx, var)),
             Node::Own { arg, address, span } => {
-                self.rendered("`self`", |low| low.own((arg, address), span, cx, var))
+                self.rendered(|low| low.own((arg, address), span, cx, var))
             }
-            Node::Signal { of, arg, span, .. } => self
-                .rendered("a parameter read by index", |low| {
-                    low.signal(of, arg, span, cx, var)
-                }),
+            Node::Signal { of, arg, span, .. } => {
+                self.rendered(|low| low.signal(of, arg, span, cx, var))
+            }
             Node::Call { name, args, span } => self.call(name, args, span, cx, var),
         }
     }
@@ -172,9 +163,7 @@ impl<N: Number> Lowering<'_, N> {
             BinOp::Mod => "%",
         };
         let pieces = vec![N::value(left), N::value(right)];
-        self.rendered("an operation on samples", |low| {
-            low.operation(name, pieces, None, var)
-        })
+        self.rendered(|low| low.operation(name, pieces, None, var))
     }
 
     /// A body of numbers holding `inf` is the one number it folds to, and `inf - inf` or

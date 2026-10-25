@@ -3,8 +3,8 @@
 mod calls;
 mod casts;
 mod constant;
-pub mod dual;
 pub(crate) mod knots;
+pub mod number;
 pub(crate) mod physics;
 mod solvers;
 mod walk;
@@ -31,7 +31,7 @@ pub(crate) use constant::{
 };
 pub(crate) use solvers::{field, value_of};
 
-use dual::{Number, Seeds};
+use number::Number;
 
 /// One written subterm, either still inside a closed form or already a node of its own.
 pub enum Piece<N: Num = f64> {
@@ -65,7 +65,6 @@ pub struct Lowering<'a, N: Num = f64> {
     mode: SelfMode,
     own: Vec<(crate::time::Q, NodeId)>,
     grid: Grid,
-    seeds: Option<&'a Seeds>,
     number: PhantomData<N>,
 }
 
@@ -156,7 +155,6 @@ fn lowered_on(
         mode,
         own: Vec::new(),
         grid,
-        seeds: None,
         number: PhantomData,
     };
     let piece = low.walk(expr, cx, var)?;

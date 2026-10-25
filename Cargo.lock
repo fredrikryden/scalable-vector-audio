@@ -419,11 +419,9 @@ name = "sva-core"
 version = "0.15.3"
 dependencies = [
  "libm",
- "serde_json",
  "sva-ast",
  "sva-engine",
  "sva-formula",
- "sva-samples",
 ]
 
 [[package]]

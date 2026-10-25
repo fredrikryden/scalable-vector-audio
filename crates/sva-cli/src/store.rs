@@ -61,30 +61,12 @@ pub fn warning(code: &str, message: String) -> Diagnostic {
         .helped("pass `--cache <path>` elsewhere, or `--cache none` to keep no store")
 }
 
-/// `Flag` leaves a signal to the caller, which stops and persists in its own time.
-pub enum On<'a> {
-    Persist,
-    Flag(&'a std::sync::Arc<std::sync::atomic::AtomicBool>),
-}
-
-/// The process's one memory tier, opened once, over the store on `at`; under `Persist` a
-/// signal persists it before the process exits. One whose store cannot open is memory alone.
+/// The process's one memory tier, opened once, over the store on `at`; a signal persists it
+/// before the process exits. One whose store cannot open is memory alone.
 pub fn opened(
     at: &CacheAt,
     warnings: &mut Vec<Diagnostic>,
-    on: On,
 ) -> Result<&'static Tier<Directory>, CliError> {
-    if let On::Flag(flag) = on {
-        for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
-            if let Err(e) = signal_hook::flag::register(signal, std::sync::Arc::clone(flag)) {
-                warnings.push(warning(
-                    "store.unsignalled",
-                    format!("a signal would not have stopped this solve: {e}"),
-                ));
-            }
-        }
-    }
-    let persists = matches!(on, On::Persist);
     let path = match at {
         CacheAt::Off => return Ok(OPEN.get_or_init(|| Tier::alone(MEMORY_BYTES))),
         CacheAt::Path(path) => path.clone(),
@@ -102,9 +84,6 @@ pub fn opened(
             return Ok(OPEN.get_or_init(|| Tier::alone(MEMORY_BYTES)));
         }
     };
-    if !persists {
-        return Ok(tier);
-    }
     match signal_hook::iterator::Signals::new([
         signal_hook::consts::SIGINT,
         signal_hook::consts::SIGTERM,

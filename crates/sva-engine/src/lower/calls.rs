@@ -11,7 +11,7 @@ use crate::arguments::{Argument, Called, Chosen};
 use crate::cast::Cast;
 use crate::error::EngineError;
 use crate::instantiate::Cx;
-use crate::lower::dual::Number;
+use crate::lower::number::Number;
 use crate::lower::{Lowering, Piece};
 use crate::refs::{PerNode, written_form};
 use crate::time::Lattice;
@@ -60,20 +60,15 @@ impl<N: Number> Lowering<'_, N> {
         let values: Vec<(String, f64)> = named.iter().map(|(k, v)| (k.clone(), v.v())).collect();
         let solved = sva_ast::FINITE_DIFFERENCE.contains(&name);
         if solved || sva_ast::MODAL.contains(&name) {
-            return self.rendered(&format!("`{name}(...)`"), |low| {
-                low.physical(name, args, span, (values, chosen), (cx, var))
-            });
+            return self
+                .rendered(|low| low.physical(name, args, span, (values, chosen), (cx, var)));
         }
         if name == "noise" {
-            return self.rendered("`noise(...)`", |low| {
-                low.noise(args, span, (values, chosen), cx)
-            });
+            return self.rendered(|low| low.noise(args, span, (values, chosen), cx));
         }
-        if let Some(low) = N::render(self) {
-            low.note_call(name, span, written_named(&values), chosen);
-        }
+        N::render(self).note_call(name, span, written_named(&values), chosen);
         if let Some(cast) = Cast::from_name(name) {
-            return self.rendered(&format!("the cast `{name}(...)`"), |low| {
+            return self.rendered(|low| {
                 let cast = match cast {
                     Cast::Stft { .. } => Cast::Stft {
                         window: low.step_count(args, "window", span, cx)?,
@@ -85,12 +80,10 @@ impl<N: Number> Lowering<'_, N> {
             });
         }
         if let Some(shape) = crate::vocabulary::shape(name) {
-            return self.rendered(&format!("the filter `{name}(...)`"), |low| {
-                low.filter(shape, args, span, cx, var)
-            });
+            return self.rendered(|low| low.filter(shape, args, span, cx, var));
         }
         if name == "rand" {
-            return self.rendered("`rand(...)`", |low| low.drawn(args, span, cx, var));
+            return self.rendered(|low| low.drawn(args, span, cx, var));
         }
         let positional: Vec<&Expr> = args
             .iter()
@@ -118,7 +111,7 @@ impl<N: Number> Lowering<'_, N> {
         }
         if pieces.iter().any(|p| matches!(p, Piece::Value(_))) {
             let pieces: Vec<Piece> = pieces.into_iter().map(N::value).collect();
-            return self.rendered("an operation on samples", |low| {
+            return self.rendered(|low| {
                 let view: Vec<(&str, f64)> = values.iter().map(|(k, v)| (k.as_str(), *v)).collect();
                 match (name, view.iter().find(|(k, _)| *k == "drive")) {
                     ("sat", Some((_, drive))) => low.driven(pieces, *drive, span, var),
@@ -387,8 +380,7 @@ impl<N: Number> Lowering<'_, N> {
             let Arg::Named(key, value) = arg else {
                 continue;
             };
-            let folded: Option<N> =
-                crate::loops::amount_choosing(self.inst, value, cx, chosen, self.seeds);
+            let folded: Option<N> = crate::loops::amount_choosing(self.inst, value, cx, chosen);
             self.finite_argument(name, key, value, folded.map(N::v))?;
             match folded.and_then(crate::loops::plain) {
                 Some(v) => out.push((key.clone(), v)),
@@ -412,7 +404,7 @@ impl<N: Number> Lowering<'_, N> {
     /// A number a call reads as an argument. A grid count is not one: `1sp` names no
     /// cutoff, so the same fold that reads a delay answers `None` for it here.
     pub(super) fn named_value(&self, e: &Expr, cx: Cx) -> Option<N> {
-        crate::loops::plain(crate::loops::amount_seeded(self.inst, e, cx, self.seeds)?)
+        crate::loops::plain(crate::loops::amount_in(self.inst, e, cx)?)
     }
 }
 
@@ -504,9 +496,7 @@ impl Lowering<'_> {
     }
 
     fn chosen_value(&self, e: &Expr, cx: Cx, chosen: &mut Vec<Chosen>) -> Option<f64> {
-        crate::loops::plain(crate::loops::amount_choosing(
-            self.inst, e, cx, chosen, None,
-        )?)
+        crate::loops::plain(crate::loops::amount_choosing(self.inst, e, cx, chosen)?)
     }
 
     /// The numbers a call was lowered with, where it was written, and what each constant
@@ -844,7 +834,6 @@ fn power<N: Number>(base: Body<N>, exponent: Body<N>, var: Var, origin: Origin) 
 }
 
 /// Whether a real exponent names a polynomial power an atom's u16 order holds.
-/// A varied exponent is no whole one: its tangent moves the power off the integer.
 fn whole<N: Num>(n: N) -> bool {
     n.is_constant() && n.v().fract() == 0.0 && n.v().abs() <= f64::from(u16::MAX)
 }

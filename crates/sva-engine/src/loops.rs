@@ -7,7 +7,7 @@ use sva_formula::{Body, C64, IndexId, Part, Series};
 use crate::arguments::Chosen;
 use crate::error::{Diagnostic, EngineError, Located};
 use crate::instantiate::{Cx, Instances, Node};
-use crate::lower::dual::{Number, Seeds};
+use crate::lower::number::Number;
 use crate::time::{Affine, Lattice, Q};
 use sva_formula::Num;
 
@@ -423,29 +423,22 @@ fn walk(inst: &Instances, e: &Expr, cx: Cx) -> Option<Term> {
 /// A written number over every operator FORMAT 3.3 folds. What this drops is defaulted, never
 /// refused.
 pub(crate) fn amount(inst: &Instances, e: &Expr, cx: Cx) -> Option<f64> {
-    folded(inst, e, cx, &mut None, None)
+    folded(inst, e, cx, &mut None)
 }
 
-/// `amount`, noting each `min`/`max` written in the text it starts in, each varied
-/// parameter beside its tangent.
+/// `amount`, noting each `min`/`max` written in the text it starts in.
 pub(crate) fn amount_choosing<N: Number>(
     inst: &Instances,
     e: &Expr,
     cx: Cx,
     chosen: &mut Vec<Chosen>,
-    seeds: Option<&Seeds>,
 ) -> Option<N> {
-    folded(inst, e, cx, &mut Some(chosen), seeds)
+    folded(inst, e, cx, &mut Some(chosen))
 }
 
-/// The same, each varied parameter beside its tangent.
-pub(crate) fn amount_seeded<N: Number>(
-    inst: &Instances,
-    e: &Expr,
-    cx: Cx,
-    seeds: Option<&Seeds>,
-) -> Option<N> {
-    folded(inst, e, cx, &mut None, seeds)
+/// `amount` over the lowering's number.
+pub(crate) fn amount_in<N: Number>(inst: &Instances, e: &Expr, cx: Cx) -> Option<N> {
+    folded(inst, e, cx, &mut None)
 }
 
 /// A followed name continues in another text, with spans of its own.
@@ -454,17 +447,8 @@ fn folded<N: Number>(
     e: &Expr,
     cx: Cx,
     chosen: &mut Option<&mut Vec<Chosen>>,
-    seeds: Option<&Seeds>,
 ) -> Option<N> {
-    if let (Expr::Var(name), Some(seeds)) = (e, seeds)
-        && let Some(tangent) = seeds.at(cx.scope, name)
-    {
-        let held = inst.follow(e, cx, |e2, cx2| {
-            folded::<N>(inst, e2, cx2, &mut None, Some(seeds))
-        });
-        return Some(N::seeded(held??, tangent));
-    }
-    if let Some(r) = inst.follow(e, cx, |e2, cx2| folded(inst, e2, cx2, &mut None, seeds)) {
+    if let Some(r) = inst.follow(e, cx, |e2, cx2| folded(inst, e2, cx2, &mut None)) {
         return r;
     }
     let number = |x: Option<f64>| x.map(N::of);
@@ -476,8 +460,8 @@ fn folded<N: Number>(
         Node::Name(other) => number(sva_ast::note_hz(other)),
         Node::Bin(op, l, r) => {
             let (a, b) = (
-                folded::<N>(inst, l, cx, chosen, seeds)?,
-                folded::<N>(inst, r, cx, chosen, seeds)?,
+                folded::<N>(inst, l, cx, chosen)?,
+                folded::<N>(inst, r, cx, chosen)?,
             );
             Some(match op {
                 BinOp::Add => a + b,
@@ -487,7 +471,7 @@ fn folded<N: Number>(
                 BinOp::Mod => crate::lower::constant_modulo(a, b)?,
             })
         }
-        Node::Call { name, args, span } => called(inst, (name, span), args, cx, (chosen, seeds)),
+        Node::Call { name, args, span } => called(inst, (name, span), args, cx, chosen),
         // FORMAT 15.3: a ref naming one number is that number, read at bare `t`.
         Node::Read {
             path,
@@ -496,7 +480,7 @@ fn folded<N: Number>(
             ..
         } if inst.is_now(arg, cx) => {
             let (body, held) = inst.at(path)?;
-            folded(inst, body, held, &mut None, seeds)
+            folded(inst, body, held, &mut None)
         }
         _ => None,
     }
@@ -507,7 +491,7 @@ fn called<N: Number>(
     (name, at): (&str, ByteSpan),
     args: &[Arg],
     cx: Cx,
-    (chosen, seeds): (&mut Option<&mut Vec<Chosen>>, Option<&Seeds>),
+    chosen: &mut Option<&mut Vec<Chosen>>,
 ) -> Option<N> {
     if name == "rand" {
         return drawn(inst, args, cx).map(N::of);
@@ -516,9 +500,9 @@ fn called<N: Number>(
     let mut named = Vec::new();
     for arg in args {
         match arg {
-            Arg::Pos(x) => positional.push(folded::<N>(inst, x, cx, chosen, seeds)?),
+            Arg::Pos(x) => positional.push(folded::<N>(inst, x, cx, chosen)?),
             Arg::Named(key, x) => {
-                named.push((key.as_str(), folded::<N>(inst, x, cx, chosen, seeds)?));
+                named.push((key.as_str(), folded::<N>(inst, x, cx, chosen)?));
             }
         }
     }

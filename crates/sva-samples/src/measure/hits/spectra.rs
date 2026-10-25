@@ -49,7 +49,6 @@ pub struct Clip {
     pub x: Vec<f64>,
     pub sr: f64,
     pub n: usize,
-    pub bin_hz: f64,
     pub level_t: Vec<f64>,
     pub level_db: Vec<f64>,
     pub top_db: f64,
@@ -79,7 +78,6 @@ impl Clip {
             top_db: level_db.iter().copied().fold(f64::NEG_INFINITY, f64::max),
             level_db,
             n,
-            bin_hz: sr / n as f64,
             x,
             sr,
         }

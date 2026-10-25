@@ -48,7 +48,6 @@ fn fold_windows<N: Num>(atoms: Vec<SpectralAtom<N>>) -> Vec<SpectralAtom<N>> {
     out
 }
 
-/// Two edges at one instant the varied numbers move apart bound an interval of their own.
 fn sweep<N: Num>(run: Vec<SpectralAtom<N>>) -> Vec<SpectralAtom<N>> {
     if run.len() < 2 || run.iter().any(SpectralAtom::is_delta) {
         return run;

@@ -1,4 +1,4 @@
-// Concern: the reading `internal`: N' per Bark per frame, its modulation, each over its JND, off power per bin, and its adjoint | Non-concern: where the power came from | IO: (planes, spl) -> Internal
+// Concern: the reading `internal`: N' per Bark per frame, its modulation, each over its JND, off power per bin | Non-concern: where the power came from | IO: (planes, spl) -> Internal
 
 //! One cell per Bark band per 10 ms frame per element set, each element over its JND, so two
 //! readings subtract into `d'` of an ideal observer with a diagonal covariance. The band-passes
@@ -30,12 +30,7 @@ pub const MODEL: &str = "specific loudness N' per Bark every 10 ms after ISO 532
      a first-order complex band-pass of Q = 1 passes 1/sqrt(5) of a steady level, which would \
      read each 1 dB of level as some 2 JND in every band-pass. Cells count as independent \
      though the window, the decay, the upper slopes and the overlapping filters correlate \
-     neighbours. A description length weighs each element by the independent samples its \
-     channel carries per frame, 2 B dt over a frame step dt for a channel of bandwidth B \
-     (Shannon 1949, Proc. IRE 37, 10-21), no more than 1: an N' band 1, the frames' own rate, \
-     the lowpass 2 (2.5 Hz) dt, a band-pass 2 fc dt, Q = 1 putting its bandwidth at fc; the 24 \
-     Bark bands count as independent channels, the critical bands being the ear's (Zwicker \
-     and Fastl 2007, 6). Envelope beats past the frames' 50 Hz Nyquist alias into the \
+     neighbours. Envelope beats past the frames' 50 Hz Nyquist alias into the \
      band-passes; a 2 ms envelope read them off at some 0.2 JND per cell less on clip1, for \
      3 to 5 times a fit's evaluation, so the frames stay 10 ms";
 
@@ -139,14 +134,6 @@ pub fn bark(hz: f64) -> f64 {
     13.0 * libm::atan(0.00076 * hz) + 3.5 * libm::atan((hz / 7500.0) * (hz / 7500.0))
 }
 
-/// Each element set's independent samples per frame: N', the lowpass, each band-pass.
-pub fn weights(step_secs: f64) -> Vec<f64> {
-    let per_frame = |hz: f64| (2.0 * hz * step_secs).min(1.0);
-    let mut out = vec![1.0, per_frame(LOWPASS_HZ)];
-    out.extend(channels(step_secs).into_iter().map(|fc| per_frame(fc / Q)));
-    out
-}
-
 /// The band-pass centres the frames' step holds.
 pub fn channels(step_secs: f64) -> Vec<f64> {
     let nyquist = 0.5 / step_secs;
@@ -177,10 +164,6 @@ pub struct Forward {
     pub elements: Vec<f64>,
     /// N' in sone per Bark, `[m * BARKS + i]`.
     pub specific: Vec<f64>,
-    smoothed: Vec<f64>,
-    decay: Decay,
-    from: Vec<[(u8, f64); ROWS]>,
-    band: Vec<Vec<C64>>,
 }
 
 impl Ear {
@@ -267,16 +250,14 @@ impl Ear {
             let level = self.levels(&smoothed[m * THIRDS..(m + 1) * THIRDS]);
             core[m * CORE..(m + 1) * CORE].copy_from_slice(&iso::core(&level));
         }
-        let mut decay = Decay::of(self.grid.step_secs());
-        decay.run(&mut core);
-        let mut from = vec![[(0u8, 0.0); ROWS]; frames];
+        Decay::of(self.grid.step_secs()).run(&mut core);
         let mut specific = vec![0.0; frames * BARKS];
         let mut rows = [0.0; ROWS];
         for m in 0..frames {
             let nm: [f64; CORE] = core[m * CORE..(m + 1) * CORE]
                 .try_into()
                 .expect("a frame's core bands");
-            iso::slopes(&nm, &mut rows, &mut from[m]);
+            iso::slopes(&nm, &mut rows);
             for i in 0..BARKS {
                 specific[m * BARKS + i] = rows[10 * i..10 * i + 10].iter().sum::<f64>() / 10.0;
             }
@@ -286,7 +267,7 @@ impl Ear {
         let level_e: Vec<f64> = specific
             .iter()
             .enumerate()
-            .map(|(k, n)| equivalent(*n, self.unit[k % BARKS]).0)
+            .map(|(k, n)| equivalent(*n, self.unit[k % BARKS]))
             .collect();
         let at = |s: usize, m: usize, i: usize| (s * frames + m) * BARKS + i;
         let mut low = vec![0.0; frames * BARKS];
@@ -302,132 +283,34 @@ impl Ear {
             }
         }
         let unit = Ear::depth_unit();
-        let mut band = Vec::with_capacity(self.poles.len());
         for (c, p) in self.poles.iter().enumerate() {
             let g = 1.0 - p.abs();
-            let mut out = vec![C64::new(0.0, 0.0); frames * BARKS];
             for i in 0..BARKS {
                 let mut y = C64::new(0.0, 0.0);
                 for m in 0..frames {
                     let x = level_e[m * BARKS + i] - low[m * BARKS + i];
                     y = *p * y + C64::new(g * x, 0.0);
-                    out[m * BARKS + i] = y;
                     elements[at(2 + c, m, i)] = 2.0 * y.abs() / unit;
                 }
             }
-            band.push(out);
         }
         Forward {
             frames,
             elements,
             specific,
-            smoothed,
-            decay,
-            from,
-            band,
         }
     }
 
     fn levels(&self, smoothed: &[f64]) -> [f64; THIRDS] {
         std::array::from_fn(|b| iso::level(self.pa2 * smoothed[b]))
     }
-
-    /// `d/dp` of `<d, forward(p).elements>`, `[m * bins + j]`.
-    pub fn backward(&self, f: &Forward, d: &[f64]) -> Vec<f64> {
-        let frames = f.frames;
-        let at = |s: usize, m: usize, i: usize| (s * frames + m) * BARKS + i;
-        let mut de = vec![0.0; frames * BARKS];
-        let mut dlow = vec![0.0; frames * BARKS];
-        let unit = Ear::depth_unit();
-        for (c, p) in self.poles.iter().enumerate() {
-            let g = 1.0 - p.abs();
-            let ys = &f.band[c];
-            for i in 0..BARKS {
-                let mut acc = C64::new(0.0, 0.0);
-                for m in (0..frames).rev() {
-                    let y = ys[m * BARKS + i];
-                    let r = y.abs();
-                    let direct = match r > 0.0 {
-                        true => y.scale(2.0 * d[at(2 + c, m, i)] / (unit * r)),
-                        false => C64::new(0.0, 0.0),
-                    };
-                    acc = direct + p.conj() * acc;
-                    let dx = g * acc.re;
-                    de[m * BARKS + i] += dx;
-                    dlow[m * BARKS + i] -= dx;
-                }
-            }
-        }
-        let a = self.lowpass;
-        for i in 0..BARKS {
-            let mut acc = 0.0;
-            for m in (0..frames).rev() {
-                acc = (dlow[m * BARKS + i] + d[at(1, m, i)] / LEVEL_JND_DB) + a * acc;
-                de[m * BARKS + i] += (1.0 - a) * acc + d[at(0, m, i)] / LEVEL_JND_DB;
-            }
-        }
-        let mut dcore = vec![0.0; frames * CORE];
-        for m in 0..frames {
-            let mut drows = [0.0; ROWS];
-            for i in 0..BARKS {
-                let k = m * BARKS + i;
-                let dn = de[k] * equivalent(f.specific[k], self.unit[i]).1 / 10.0;
-                drows[10 * i..10 * i + 10].iter_mut().for_each(|x| *x = dn);
-            }
-            for (r, (origin, factor)) in f.from[m].iter().enumerate() {
-                dcore[m * CORE + *origin as usize] += drows[r] * factor;
-            }
-        }
-        let dcore = f.decay.back(&dcore);
-        let mut ds = vec![0.0; frames * THIRDS];
-        for m in 0..frames {
-            let s = &f.smoothed[m * THIRDS..(m + 1) * THIRDS];
-            let level = self.levels(s);
-            let dnm: [f64; CORE] = dcore[m * CORE..(m + 1) * CORE]
-                .try_into()
-                .expect("a frame's core bands");
-            let dl = iso::core_back(&level, &dnm);
-            for b in 0..THIRDS {
-                ds[m * THIRDS + b] = dl[b] * iso::level_slope(self.pa2 * s[b]) * self.pa2;
-            }
-        }
-        for b in 0..THIRDS {
-            let a = self.smooth[b];
-            for _ in 0..3 {
-                let mut acc = 0.0;
-                for m in (0..frames).rev() {
-                    acc = ds[m * THIRDS + b] + a * acc;
-                    ds[m * THIRDS + b] = (1.0 - a) * acc;
-                }
-            }
-        }
-        let bins = self.grid.bins();
-        let mut dp = vec![0.0; frames * bins];
-        for m in 0..frames {
-            for b in 0..THIRDS {
-                let x = ds[m * THIRDS + b];
-                if x == 0.0 {
-                    continue;
-                }
-                dp[m * bins..(m + 1) * bins]
-                    .iter_mut()
-                    .zip(&self.response[b * bins..(b + 1) * bins])
-                    .for_each(|(o, h)| *o += x * h);
-            }
-        }
-        dp
-    }
 }
 
-/// `(E, dE/dN')`: the level above threshold ISO 532-1's core law gives `n` at, unit `u`.
-fn equivalent(n: f64, u: f64) -> (f64, f64) {
+/// The level above threshold ISO 532-1's core law gives `n` at, unit `u`.
+fn equivalent(n: f64, u: f64) -> f64 {
     let q = 1.0 + n.max(0.0) / u;
     let q4 = q * q * q * q;
-    let inner = 4.0 * q4 - 3.0;
-    (
-        10.0 * libm::log10(inner),
-        10.0 / std::f64::consts::LN_10 * 16.0 * q * q * q / (u * inner),
-    )
+    10.0 * libm::log10(4.0 * q4 - 3.0)
 }
 
 /// What `internal` reads off samples.

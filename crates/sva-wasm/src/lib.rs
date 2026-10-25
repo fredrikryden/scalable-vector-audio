@@ -5,17 +5,16 @@
 //! `refusal` the envelope it would print.
 
 mod analyze;
-mod cost;
 mod describe;
 mod opfs;
-mod seed;
+mod solve;
 mod stats;
 mod threads;
 
 pub use analyze::analyze;
 pub use describe::{outline, readings};
 pub use opfs::DirectoryHandle;
-pub use seed::seed;
+pub use solve::seed;
 pub use stats::{subscribe, unsubscribe};
 pub use threads::start_threads;
 
@@ -169,17 +168,6 @@ struct Options {
     threads: Option<NonZeroUsize>,
     set: Vec<(String, String)>,
     limit: Limit,
-    max_renders: Option<usize>,
-    step_tol: Option<f64>,
-    cost_tol: Option<f64>,
-    progress: Option<js_sys::Function>,
-    prox: bool,
-    continuation: Option<sva_core::continuation::Scheme>,
-    steps: Option<usize>,
-    draws: Option<usize>,
-    heartbeat: Option<f64>,
-    write: bool,
-    recordings: Vec<Arc<sva_ast::Recording>>,
 }
 
 /// Values per array: stdout's cap, another, or every one (`limit: null`).
@@ -239,58 +227,48 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                 held.limit = Limit(Some(cap))
             }
             "until" => held.until = Some(text(&key, &value)?),
-            "max_renders" => held.max_renders = Some(whole(&key, &value)?),
-            "step_tol" | "cost_tol" => {
-                let tol = value.as_f64().filter(|v| v.is_finite() && *v >= 0.0);
-                let tol = tol.ok_or_else(|| {
-                    refuse(
-                        format!("`{key}` is no number at or above 0"),
-                        "pass a number",
-                    )
-                })?;
-                match key.as_str() {
-                    "step_tol" => held.step_tol = Some(tol),
-                    _ => held.cost_tol = Some(tol),
-                }
+            "max_renders" | "steps" | "draws" => {
+                whole::<usize>(&key, &value)?;
             }
-            "method" => {
-                held.prox = match value.as_string().as_deref() {
-                    Some("prox") => true,
-                    Some("compass") => false,
-                    _ => {
-                        return Err(refuse(
-                            "`method` is neither \"compass\" nor \"prox\"".into(),
-                            "pass \"prox\" for the priced fit, or leave it out",
-                        ));
-                    }
-                }
+            "step_tol" | "cost_tol" | "heartbeat" => {
+                value
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .ok_or_else(|| {
+                        refuse(
+                            format!("`{key}` is no number at or above 0"),
+                            "pass a number",
+                        )
+                    })?;
             }
-            "continuation" => held.continuation = Some(continuation(&value)?),
-            "recordings" => held.recordings = cost::recordings_of(&value)?,
-            "steps" => held.steps = Some(whole(&key, &value)?),
-            "draws" => held.draws = Some(whole(&key, &value)?),
-            "heartbeat" => {
-                let secs = value.as_f64().filter(|v| v.is_finite() && *v >= 0.0);
-                held.heartbeat = Some(secs.ok_or_else(|| {
-                    refuse(
-                        "`heartbeat` is no number of seconds at or above 0".into(),
-                        "pass the most seconds between activity lines, 0 for one every unit",
-                    )
-                })?)
+            "method" if !matches!(value.as_string().as_deref(), Some("prox" | "compass")) => {
+                return Err(refuse(
+                    "`method` is neither \"compass\" nor \"prox\"".into(),
+                    "pass \"prox\" for the priced fit, or leave it out",
+                ));
             }
-            "write" => {
-                held.write = value.as_bool().ok_or_else(|| {
-                    refuse("`write` is not a boolean".into(), "pass true or false")
-                })?
+            "method" => {}
+            "continuation" | "recordings" if !value.is_object() => {
+                return Err(refuse(
+                    format!("`{key}` is not an object"),
+                    "pass an object",
+                ));
             }
-            "progress" => {
-                held.progress = Some(value.dyn_into::<js_sys::Function>().map_err(|_| {
-                    refuse(
-                        "`progress` is no function".into(),
-                        "pass a function of one line",
-                    )
-                })?)
+            "continuation" | "recordings" => {}
+            "write" if value.as_bool().is_none() => {
+                return Err(refuse(
+                    "`write` is not a boolean".into(),
+                    "pass true or false",
+                ));
             }
+            "write" => {}
+            "progress" if !value.is_function() => {
+                return Err(refuse(
+                    "`progress` is no function".into(),
+                    "pass a function of one line",
+                ));
+            }
+            "progress" => {}
             "live" => {
                 held.live = value
                     .as_bool()
@@ -365,49 +343,6 @@ fn texts(key: &str, value: &JsValue) -> Result<Vec<(String, String)>, JsValue> {
         .collect()
 }
 
-/// `{ scheme: "path", prices: [0.01, 0.1], rounds: 6 }` or `{ scheme: "grow", harmonics: 48,
-/// lone: 8, rounds: 6 }`, all but `scheme` optional.
-fn continuation(value: &JsValue) -> Result<sva_core::continuation::Scheme, JsValue> {
-    let help = "pass { scheme: \"path\" }, with `prices` above 0 and `rounds` if wanted, or \
-                { scheme: \"grow\" }, with `harmonics`, `lone` and `rounds` if wanted";
-    let object = value
-        .dyn_ref::<js_sys::Object>()
-        .filter(|_| !js_sys::Array::is_array(value))
-        .ok_or_else(|| refuse("`continuation` is not an object".into(), help))?;
-    let mut scheme = None;
-    let mut asked = sva_core::continuation::Asked::default();
-    for entry in js_sys::Object::entries(object).iter() {
-        let pair = js_sys::Array::from(&entry);
-        let key = pair.get(0).as_string().unwrap_or_default();
-        let value = pair.get(1);
-        match key.as_str() {
-            "scheme" => scheme = Some(text("scheme", &value)?),
-            "prices" if value.is_null() || value.is_undefined() => {}
-            "prices" => {
-                let list = value
-                    .dyn_ref::<js_sys::Array>()
-                    .ok_or_else(|| refuse("`prices` is not an array".into(), help))?;
-                asked.prices = Some(
-                    list.iter()
-                        .map(|p| p.as_f64().unwrap_or(f64::NAN))
-                        .collect(),
-                );
-            }
-            "harmonics" => asked.harmonics = Some(whole("harmonics", &value)?),
-            "lone" => asked.lone = Some(whole("lone", &value)?),
-            "rounds" => asked.rounds = Some(whole("rounds", &value)?),
-            _ => {
-                return Err(refuse(
-                    format!("`continuation` holds `{key}`"),
-                    "its keys are scheme, prices, harmonics, lone and rounds",
-                ));
-            }
-        }
-    }
-    let scheme = scheme.ok_or_else(|| refuse("`continuation` names no `scheme`".into(), help))?;
-    sva_core::continuation::Scheme::of(&scheme, asked).map_err(|e| thrown(&e))
-}
-
 fn whole<N: TryFrom<u64>>(key: &str, value: &JsValue) -> Result<N, JsValue> {
     value
         .as_f64()
@@ -478,92 +413,6 @@ impl sva_ast::Source for Live {
         self.0.borrow().recording(path)
     }
 }
-
-#[wasm_bindgen(typescript_custom_section)]
-const SOLVE_PROGRESS: &str = r#"
-/**
- * A priced solve's `progress` line: a step, an activity, a stage as it finishes, or the activity
- * a refusal stopped, heard before the solve throws.
- */
-export type SolveProgress = SolveStep | SolveActivity | SolveStageFinished | SolveFailed;
-/**
- * Every 50th step and the step a phase converges or reaches its cap at, `ended` why it did,
- * null otherwise. A trial's `stage` is `<stage> trial <edit>`.
- */
-export interface SolveStep {
-    stage: string;
-    phase: string;
-    price: number;
-    step: number;
-    draws: number;
-    residual_bits: number;
-    numbers: number;
-    bits: number;
-    ended: "converged" | "cap" | "signal" | null;
-}
-/** What a priced solve is doing; `sva-cli --help`'s PRICED FIT, ACTIVITY, says each. */
-export type SolveAction =
-    | "seeding"
-    | "reading_reference"
-    | "rendering_noise"
-    | "descending"
-    | "debiasing"
-    | "ranking_proposals"
-    | "trying_proposal"
-    | "evaluating_at_cap"
-    | "measuring";
-/**
- * Heard as an activity starts, as the one it ran inside resumes, and between its units once
- * `heartbeat` seconds (default 1) have passed since the last line; 0 hears one between every
- * unit. `edit` is the structure edit a trial tries. `count` is the activity's own, `of` at most
- * that many steps or trials. `part` is the stage's place in the scheme, `of` at most that many.
- * `work.comparisons`: cell comparisons since the solve began, a counted cell of the reference's
- * `internal` reading against the same cell of one draw's reading of the model, an evaluation
- * making cells times its draws and measuring the same off its renders; `per_second` its rate
- * over the last window at least `heartbeat` long, null before one.
- */
-export interface SolveActivity {
-    action: SolveAction;
-    stage: string | null;
-    edit: string | null;
-    count: { done: number; of: number; unit: "render" | "step" | "proposal" | "trial" | "draw" } | null;
-    part: { at: number; of: number } | null;
-    work: { comparisons: number; per_second: number | null };
-    seconds: number;
-}
-/** A residual as `data.stages` lists it. */
-export interface SolveResidual {
-    residual_bits: number;
-    standard_error: number;
-    d_prime: number;
-    per_cell: number;
-}
-/**
- * A stage as `data.stages` will list it, heard as it finishes, with its terms: `length_bits` is
- * `predicted_at_cap.residual_bits` plus `bits`, null where stopped; `residual_bits` the residual
- * at the draws it was solved at. `files` the `{ path, text }`s `write` would insert for it,
- * `least` true where its `length_bits` is below every earlier stage's, so the last such is
- * `data.chosen`. Writing them loads the stage's composition once and renders nothing, cheap
- * next to its solve.
- */
-export interface SolveStageFinished {
-    stage: string;
-    finished: true;
-    stopped: boolean;
-    length_bits: number | null;
-    residual_bits: number;
-    bits: number;
-    numbers: number;
-    predicted_at_cap: SolveResidual | null;
-    least: boolean;
-    files: { items: { path: string; text: string }[] };
-}
-/**
- * The activity a refusal stopped, `action` null where it came before any; `code` the thrown
- * refusal's.
- */
-export type SolveFailed = { failed: true; code: string } & (SolveActivity | { action: null });
-"#;
 
 #[wasm_bindgen]
 pub struct Composition {
@@ -679,10 +528,9 @@ impl Composition {
         self.inner.0.borrow_mut().insert(path, text);
     }
 
-    /// `sva-cli solve`'s envelope. `cost` is `solve <cost>`'s text, as `seed` answers it, each
-    /// `sample("<path>")` in `options.recordings`, or a `SolveCost` tree. `vary`: `SolveVary`s.
-    /// `options` as the CLI's flags, `signal`, `progress(line)` and `continuation`, as
-    /// `{ scheme: "grow", harmonics: 48, lone: 8 }`; priced, `line` is a `SolveProgress`.
+    /// `sva-cli solve`'s envelope: `cost` its cost text or a `SolveCost` tree, `vary` its
+    /// `--vary`s, `options` its flags beside `signal`, `progress` and `recordings`. This build
+    /// checks them and throws `solve.unbuilt`.
     pub async fn solve(
         &self,
         #[wasm_bindgen(unchecked_param_type = "string | SolveCost")] cost: JsValue,
@@ -706,127 +554,9 @@ impl Composition {
             "write",
             "recordings",
         ];
-        let options = options_of(&options, &keys)?;
-        let heard = sva_core::solve::Recordings::new(&self.inner, options.recordings.clone());
-        let cost = match cost.as_string() {
-            Some(text) => sva_core::solve::cost_of(&heard, &text),
-            None => sva_core::solve::built(cost::tree_of(&cost, "cost")?),
-        }
-        .map_err(|e| thrown(&e))?;
-        let vary = cost::vary_of(&vary)?;
-        let stops = sva_core::solve::Stops {
-            max_renders: options
-                .max_renders
-                .unwrap_or(sva_core::solve::DEFAULT_MAX_RENDERS),
-            step_tol: options
-                .step_tol
-                .unwrap_or(sva_core::solve::DEFAULT_STEP_TOL),
-            cost_tol: options
-                .cost_tol
-                .unwrap_or(sva_core::solve::DEFAULT_COST_TOL),
-        };
-        let problem = sva_core::solve::Problem {
-            source: &heard,
-            texts: &sva_core::solve::NoFiles,
-            cost,
-            vary: vary.clone(),
-            sets: options.set.clone(),
-            rate: options.rate,
-            threads: Some(threads::limit(options.threads.or(self.threads))),
-            stops,
-        };
-        let signal = options.signal.clone().map(Signal);
-        let abandon = signal
-            .as_ref()
-            .map_or(&Never as &dyn Abandon, |signal| signal as &dyn Abandon);
-        if options.prox {
-            return self.priced(&problem, &options, abandon).await;
-        }
-        let mut heard = |point: &sva_core::solve::Point| {
-            if let Some(progress) = &options.progress {
-                let line = sva_core::solve::point_json(point);
-                let _ = progress.call1(&JsValue::NULL, &parse(&line).unwrap_or(line.into()));
-            }
-        };
-        let solved = sva_core::solve::solve(&problem, &*self.tier, &mut heard, abandon)
-            .await
-            .map_err(|e| thrown(&e))?;
-        let found = sva_core::solve::findings(&solved, &vary);
-        let data = sva_core::solve::solved_data(&solved, &vary, "");
-        if solved.stopped_by == sva_core::solve::Stopped::Cancelled {
-            let message = "the solve was aborted; `refusal.data` holds the best so far";
-            let error = JsErr::new(message);
-            error.set_name("AbortError");
-            let envelope = sva_core::error_envelope_with("cancelled", message, &data, &found);
-            error.set_refusal(parse(&envelope)?);
-            return Err(error.into());
-        }
-        parse(&sva_core::success_envelope(&data, &found))
-    }
-
-    async fn priced(
-        &self,
-        problem: &sva_core::solve::Problem<'_>,
-        options: &Options,
-        abandon: &dyn Abandon,
-    ) -> Result<JsValue, JsValue> {
-        use sva_core::fit::{capped, fitted, fitted_data, heard_json, writable};
-        let settings = sva_core::solve::prox::Settings {
-            steps: options
-                .steps
-                .unwrap_or(sva_core::solve::prox::DEFAULT_STEPS),
-            draws: options
-                .draws
-                .unwrap_or(sva_core::solve::prox::DEFAULT_DRAWS),
-            heartbeat: options
-                .heartbeat
-                .unwrap_or(sva_core::solve::prox::heard::DEFAULT_HEARTBEAT_SECS),
-        };
-        if options.write {
-            writable(&settings, ("`write`", "`steps`")).map_err(|e| thrown(&e))?;
-        }
-        let heard = |heard: &sva_core::fit::Heard| {
-            if let Some(progress) = &options.progress {
-                let line = heard_json(heard, true);
-                let _ = progress.call1(&JsValue::NULL, &parse(&line).unwrap_or(line.into()));
-            }
-        };
-        let clock = || js_sys::Date::now() / 1000.0;
-        let scheme = options.continuation.as_ref();
-        let told = (
-            &heard as &dyn Fn(&sva_core::fit::Heard),
-            &clock as &dyn Fn() -> f64,
-        );
-        let fitted = fitted(problem, &settings, scheme, &*self.tier, told, abandon)
-            .await
-            .map_err(|e| thrown(&e))?;
-        let cost = &problem.cost.text;
-        let warnings = capped(&fitted, &settings, ("`steps`", "`draws`"));
-        if fitted.ran.cancelled {
-            let data = fitted_data(&fitted, &settings, cost, "");
-            let message = "the priced solve was aborted; `refusal.data.stages` holds the stages it \
-                           finished and, `stopped` true, the solve it stopped in where one was \
-                           running: a stage's own, or a trial of an edit building the next, \
-                           labelled as its progress lines; `refusal.data.chosen` the finished one \
-                           of least predicted length at the cap's draws, and nothing was written";
-            let error = JsErr::new(message);
-            error.set_name("AbortError");
-            let envelope = sva_core::error_envelope_with("cancelled", message, &data, &warnings);
-            error.set_refusal(parse(&envelope)?);
-            return Err(error.into());
-        }
-        let mut extra = String::new();
-        if options.write {
-            for (path, text) in &fitted.files {
-                self.inner.0.borrow_mut().insert(path, text);
-            }
-            let paths = sva_core::json::list(&fitted.files, |(path, _)| {
-                format!("\"{}\"", sva_core::json::escape(path))
-            });
-            extra = format!(", \"written\": {paths}");
-        }
-        let data = fitted_data(&fitted, &settings, cost, &extra);
-        parse(&sva_core::success_envelope(&data, &warnings))
+        options_of(&options, &keys)?;
+        let _ = (cost, vary);
+        Err(thrown(&sva_core::solve::unbuilt()))
     }
 
     /// `target` and `representations` as `sva-cli render` takes them. `options`: `rate`,

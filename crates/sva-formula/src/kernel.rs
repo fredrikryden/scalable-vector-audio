@@ -3,7 +3,7 @@
 use crate::affine::{self, Coeff};
 use crate::closed_form::{Body, ClosedForm, Unary};
 use crate::complex::Cx;
-use crate::num::{Dual, Num};
+use crate::num::Num;
 use crate::refusal::Left;
 use crate::spectral_sum::SpectralSum;
 use crate::spectral_sum::atom::SpectralAtom;
@@ -57,4 +57,3 @@ macro_rules! kernel {
 }
 
 kernel!(f64);
-kernel!(Dual);

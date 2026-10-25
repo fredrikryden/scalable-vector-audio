@@ -1,7 +1,6 @@
 // Concern: the `--help` page, each flag's default printed from its own constant | Non-concern: parsing those flags (args/), the JSON a subcommand answers (output.rs) | IO: () -> the page
 
 use sva_core::DEFAULT_STORE_BYTES;
-use sva_core::solve;
 use sva_engine::resample;
 use sva_engine::{
     DEFAULT_BEATING_WINDOW_SECS, DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS, DEFAULT_FLOOR_DB,
@@ -22,22 +21,6 @@ pub fn help_text() -> String {
     let body_chars = crate::lint::BODY_CHARS;
     let representations = representations();
     let (min_frame, max_frame) = (spectrum::MIN_FRAME, spectrum::MAX_FRAME);
-    let rules = solve_rules();
-    let floor = solve::FLOOR_DB;
-    let (max_renders, step_tol, cost_tol) = (
-        solve::DEFAULT_MAX_RENDERS,
-        solve::DEFAULT_STEP_TOL,
-        solve::DEFAULT_COST_TOL,
-    );
-    let (steps, rate) = (solve::prox::DEFAULT_STEPS, solve::prox::BITS_PER_JND2);
-    let flat_from = 2 * solve::prox::step::memory();
-    let (fewest, draws) = (sva_core::continuation::FEWEST, solve::prox::DEFAULT_DRAWS);
-    let heartbeat = solve::prox::heard::DEFAULT_HEARTBEAT_SECS;
-    let rounds = sva_core::structure::assign::REASSIGN_ROUNDS;
-    let (harmonics, lone) = (
-        sva_core::seed::LIMITS.harmonics,
-        sva_core::seed::LIMITS.lone,
-    );
     let (passband, stopband) = (resample::PASSBAND, resample::STOPBAND);
     let bound = format!("{} dB", 20.0 * libm::log10(resample::BOUND));
     let formats = crate::recording::READS
@@ -52,8 +35,8 @@ DESCRIPTION:
   A composition is a directory of node files, each one closed-form expression in
   `t` or `f` on one line, or a score placing notes in time. sva-cli reads that
   composition and prints what it is and what it sounds like, as JSON on stdout.
-  `render`, `solve`, `lint` and `trace` read the current directory; `new` writes
-  beside it and `analyze` reads a file. `solve` fits variables to a reference.
+  `render`, `lint` and `trace` read the current directory; `new` writes beside
+  it and `analyze` reads a file. `solve` is being rebuilt.
 
 SCORES:
   A score is a `.jsonl` file: JSON Lines, one object per line, sorted by `at`;
@@ -386,112 +369,13 @@ SOLVE:
                 [--set <name>=<text>]... [--rate <hz>] [--threads <n>]
                 [--cache <path|none>] [--write [--confirm]]
                 [--method prox [--steps <n>] [--draws <n>] [--heartbeat <s>]
-                  [--continuation (path[:<p>,<p>...] | grow[:<h>,<l>])
-                    [--rounds <n>]]]
+                  [--continuation <scheme> [--rounds <n>]]]
 
-  Fits variables under `variables/` so the targets a cost reads match a
-  reference, and prints the values it found. It edits no file unless `--write
-  --confirm` says so. `--method prox` fits a whole composition instead: PRICED
-  FIT below.
-
-  The cost is one expression typing to one number. Its leaves are
-  `repr.<reading>(<target>, <args>)`: `<reading>` spelled as `--representation`
-  spells it, `<target>` any render target with its interval as render writes
-  one, `<args>` the reading's own: `repr.pitch(@lead([0, 2s], f0=C4),
-  frame=50ms)`. Every leaf is measured off its target's samples, as `analyze`
-  reads a file, so a recording and a render are read alike. Two leaves of one
-  reading with one set of arguments subtract to a residual vector:
-{rules}
-  A level is floored at {floor} dB before it subtracts. A residual inside both
-  sides' stated bounds counts as zero; of these readings only `hits` states
-  one, and `loudness_pattern` counts zero a cell both sides hold under its
-  threshold. Then `norm(v)` (the root of the sum of squares), `sum(v)`, `max(v)`,
-  `abs(x)` (each value's magnitude), `dot([w1, w2, ...], v)` (one literal
-  weight per value), numbers, `+`, `-`, `*` and `/` make one number. A reading
-  left unsubtracted, a vector left unreduced and a leaf of any other reading
-  refuse before anything renders. In a node, `repr` and `load_json` are names
-  the language does not know and refuse as any such name does, with a help
-  naming `solve`.
-
-  `load_json("<file>", "<jq path>")` is a leaf read off a JSON file instead of
-  a render: plain JSON, so a `.json.gz` is unpacked first (`gunzip -k`). The
-  path is relative to the directory sva-cli runs in, or absolute, as
-  `sample("<path>")`'s is. The jq path is steps only, none of jq's filters:
-  `.name`, `[3]`, and a key that is not a plain name in single quotes,
-  `['envelope(frame=10ms)']`, so it needs no escaping in the cost's double
-  quotes: `load_json("../crop.json", ".readings['periodicity(window=5.08s)']")`.
-  A number there loads as a number and a list of numbers as a vector, both
-  usable as weights and in reducers. An object loads only as the other side of
-  a subtraction from a `repr.` leaf, and is a reading as `analyze` prints its
-  `data` (the object holding `interval` and `representations`): from a bench
-  download `.readings['<call>']`, from `analyze ref.wav --representation
-  bands=ref.json` the path `.data`. The leaf's reading reads it, and refuses
-  before the first render where its kind, its arguments, its rate, its
-  profile or its interval's length differ from what the leaf renders, or
-  where a list in it was cut short (`has_more: true`; a reading written to a
-  file is whole). Its arguments are its `args`, compared one by one with the
-  leaf's, each resolved at the solve's rate, so `frame=0.05` matches
-  `frame=50ms`; a mismatch names the argument and both values, and a reading
-  with no `representation` and `args` refuses. Each file is read once per
-  solve.
-
-  `@fits/<name>` reads the cost from the file `fits/<name>` of the
-  composition, written as a node is: an annotation line `; Models: ... |
-  Neglects: ... | IO: ... | Tags: ...`, then the cost, over as many lines as
-  it needs, every `;` comment dropped. Its quotes need no shell escaping, and
-  a cost that does not parse refuses at its line and byte in that file. No
-  node lives under `fits/`, and `lint` reads nothing there. `--vary` and the
-  other flags stay on the command line:
-    ; Models: the lead's bands against the bench crop | Neglects: pitch | IO: (cutoff) -> cost | Tags: fit
-    norm(repr.bands(@lead([0, 5.083291666666667s]))
-         - load_json("../crop.json", ".readings.bands"))
-
-  `--vary <name>=<lo>..<hi>[/<step>][,log]`, once per variable, names a file
-  `variables/<name>` holding one number and the box it moves in, both bounds in
-  one unit: none, `hz`, `khz`, `s`, `ms`, `db`, `ct` or `st`. The search starts
-  at the file's value read in that unit (`0.5` is `-6.02db` under `db` bounds).
-  `/<step>` is the first step and the grid values land on, counted from `<lo>`;
-  without it the first step is a quarter of the bounds' span. `,log` moves it on
-  a log scale, where `/<step>` is the ratio a step multiplies by, a bare number
-  above 1, as `/1.25`. A name with no file, a file holding no number in that
-  unit, and a variable no target of the cost reads each refuse before the first
-  render. `--set <name>=<text>` holds a variable at `<text>`, as render takes
-  it; a name both set and varied refuses.
-
-  The search is a deterministic compass search: from its best point it renders
-  each variable one step up and one down, in the order the `--vary`s are
-  written, and moves to the best of them that improves; where none does, every
-  step halves. A point already rendered is not rendered again. One render
-  renders every target of the cost once, through render's own path, and takes
-  every reading. A target no variable reaches, such as the reference, is read
-  back from the store on every render after its first, and `trace` shows it
-  computing no samples. A solve stops `converged` once every step is under
-  `--step-tol` of its first step or the cost is at most `--cost-tol`, `budget`
-  after `--max-renders` renders, and `cancelled` on SIGINT or SIGTERM. The
-  budget is a result, warned as `solve.budget`, not an error. Each render
-  prints one JSON line on stderr:
-    {{"render": 3, "values": {{"gain": "0.4"}}, "cost": 1.25, "best": 0.98}}
-
-  `--write` writes each fitted value to its `variables/` file, its comment line
-  kept. A file it would change refuses as `conflict` unless `--confirm` is
-  written too; that refusal still carries the fit, and `would_write`, nothing
-  written. A cancelled solve writes nothing.
-
-  Its `data`:
-    {{"cost_expression": "...", "values": {{"gain": {{"value": 0.5, "text": "0.5",
-      "unit": "", "start": "0.3", "on_bound": false}}}}, "cost": {{"total": 0.09,
-      "terms": {{"items": [{{"term": "norm(...)", "value": 0.08}}], ...}}}},
-      "renders": 49, "stopped_by": "converged", "resampled": {{"items": []}},
-      "trace": {{"items": [{{"render": 1, "values": {{"gain": {{"value": 0.3,
-      "text": "0.3"}}}}, "cost": 52.1, "computed_samples": {{"@tone": 44100,
-      "sample(\"../ref.wav\")": 44101}}}}]}}}}
-  `values` is the best point, each `text` as `--set` and a file take it; `cost`
-  its total and each top-level `+` or `-` term's signed share; `trace` every
-  render in order. A value `on_bound` sat on a bound, warned as
-  `solve.on_bound`: widen it, or the model lacks what the reference holds.
-  `--write` adds `written`, each path with its `from` and `to`. Stopped by a
-  signal, the answer is the error `cancelled`, exit 130, its `data` the best so
-  far.
+  The solver is being rebuilt from scratch. This build checks a solve's argv
+  and refuses every solve as `solve.unbuilt`, fitting nothing and writing no
+  file. In a node, `repr` and `load_json` are names the language does not know
+  and refuse as any such name does, with a help naming `solve`. No node lives
+  under `fits/`, and `lint` reads nothing there.
 
 ANALYZE:
   sva-cli analyze <file> --representation <list> [--confirm]
@@ -597,249 +481,16 @@ OUTLINE:
   (`line`, `lane` or `default`), and the `size`: placed events and the engine's
   instances beside its limit.
 
-PRICED FIT:
-  `--method prox` fits every number of a composition the `--vary`s name, node
-  defaults and score fields alike, and prices the bits it writes, so the fit
-  ends at the smallest model it finds near the reference. The cost is
-    norm(repr.internal(@<model>) - repr.internal(<reference>))
-      + <price>*repr.numbers(@<model>)
-  whose `norm` term `--method prox` reads, not as the d' the expression
-  evaluates to elsewhere, but as the residual's description length: each
-  element's d squared times {rate:.4} times the independent samples per frame
-  its channel carries (`internal`'s MODEL); plus `<price>` bits on each bit
-  `numbers` (READINGS) counts, so at price 1 what prox lowers is the
-  description length a stage's `length_bits` reports. The model side is the render's own: each score
-  line lowered as a render lowers it, every number beside its tangent, split
-  into its partials (an amplitude times the cosine of a phase), its
-  short-time transform in closed form per frame (the window cut at the line's
-  crop and mirrored at the clip's ends, the master's biquads as H(f)); a
-  node's filtered noise is its rendered realisation under its gain and H(f).
-  A phase is read at a frame's middle and 5 ms either side and taken
-  quadratic. An amplitude or noise gain is read per piece: the frame cut at
-  each corner of the line's form (its crop's edges and shoulders' ends, a
-  min or max of two lines crossing, a knot), each piece read at its middle
-  and half its half-width H either side and taken quadratic, the crop's
-  shoulders applied at each sample; where the amplitude a is smooth over a
-  piece the quadratic is within max|a'''|*H^3/8 of it, H at most 10 ms.
-  The phases between lines and the noises' realisations are no part of
-  the model, so the loss is its expectation over them: the residual's bits
-  averaged over K draws (DRAWS below), each line whose node reads `ph` offset by its own
-  phase, 2 pi times splitmix64 of the line's key and the draw over 2^64, and
-  each whose node reads `seed` given its own seed off the same key on a second
-  stream, the same draws every solve, draw k of a line the same at every K,
-  the lines summed coherently as the render sums them. A line's key is its onset, the fields it binds that no
-  `--vary` names and its node reads, and its rank in written order among the
-  lines that agree on both: writing a fit, dropping a silent line, moving one
-  to a split's node or reordering the score keeps every other line's draws,
-  save a line's whose rank a dropped or reordered line agreeing on both moves.
-  Each partial is exact where its
-  phase is quadratic over the 20 ms window and its amplitude quadratic over
-  each piece; a form with no partial in it refuses by name.
-  The d' may read an interval: the model `@<model>([a, b])` and the reference
-  over the same one, as `sample("<clip>")([a, b])`, `[a, inf)` to the
-  reference's end. Both are then read from 0 to b, so each frame inside the
-  interval reads what came before it, and the residual counts only the frames
-  from a to b, a frame at a or b among them, as `cells` does;
-  `repr.numbers(@<model>)` prices the whole composition still. A model and a
-  reference over different intervals refuse as `solve.prox_cost`. A fit held
-  out is fitted over `[0, T]` and scored over `[T, inf)`:
-    sva-cli solve 'norm(repr.internal(@master([0, 1.35s]))
-      - repr.internal(sample("clip.wav")([0, 1.35s])))
-      + repr.numbers(@master)' --method prox --vary ...
-  Each number written costs its `--vary`'s bits, log2((hi-lo)/step), or of
-  ln(hi/lo)/ln(step) where log; one no `--vary` names costs none. Written are:
-  each score line's onset and each field its node has no default for, the line
-  gone where its gain (its one such field whose linear bounds start at 0) is 0;
-  each field that differs from its node's default; and each used node's
-  default, but one at 0 inside linear bounds that hold 0, or one its body no
-  longer reads once those are 0 (a bend time with no bend).
-  Each `--vary` is `[<file>:]<name>=<lo>..<hi>/<step>[,log]`, `<name>*` a
-  numbered family (`h*` is `h1`, `h2`, ...), `<file>:` scoping it to the node
-  or score at that path, and `/<step>` the number's resolution, about a JND of
-  what it moves, which sets its bits, scales its step and its price's floor.
-  The solve: from the numbers the composition holds, proximal Adam steps at
-  the cost's price, each priced number's threshold the price times its weight
-  (its bits over its size at the start) times its own step, then debiasing,
-  every zero held. Each runs until its objective (the residual's bits plus the
-  price on each bit of the numbers; the debias's unpriced) stops falling: after
-  k steps, once k is at least {flat_from} (twice Adam's first-moment memory,
-  1/(1 - beta1) steps), its least value over the last k/2 fell by no more
-  than that fall's standard error, paired over the draws: every step reads
-  the same draws, so the error is the spread of each draw's own fall between
-  the two least states, a fall the draws cannot tell from none. Proximal Adam
-  is no descent method, so each phase answers the state of the least
-  objective it evaluated, its start included: that state is what the stage
-  carries and writes and what the next phase starts from, and no phase ends
-  higher than it started.
-  `--steps` (default {steps}) caps the descent, the debias at a quarter of it;
-  a stage that reaches its cap first warns `solve.steps_cap`. `--steps 0`
-  descends nothing: the composition is scored as it is, one stage predicted
-  and measured, `files` empty and no file changed. It refuses `--write`
-  (`solve.prox_write`), there being nothing to write, and `--continuation`
-  (`solve.prox_steps`), whose stages are descents.
-  DRAWS: a stage is solved at K draws: a run's first stage at {fewest}, the
-  fewest with a standard error, each later one at the K the last ended with.
-  A descent of at least {flat_from} steps whose least objective over its later
-  half fell by no more than that least's residual's standard error over its K
-  draws, however it ended (`converged` or `cap`), is limited by the draws'
-  noise (`noise_limited`): the stage is solved again from its result at 2K,
-  the first 2K of the same draws, until K reaches `--draws` (default {draws}),
-  a cost bound, an evaluation's work growing with K; a stage whose last
-  descent is noise-limited at that cap warns `solve.draws_cap`. The ranking
-  (CONTINUATION) evaluates and solves at the stage's current K. Without
-  CONTINUATION the cost is one such stage; with it, it runs as stages.
-  A prediction fitted to few draws is optimistic, so stages are compared at
-  one K, the cap's: each finished stage's composition is evaluated once at
-  the cap's K, no descent, and its `length_bits` is that predicted residual's
-  bits plus the numbers'. Every finished stage is a candidate: `chosen` is the
-  one of least `length_bits`, the objective the descent and the ranking lower
-  at price 1. The chosen stage alone is then rendered once per draw of the
-  cap's K, each line's `ph` and `seed` its draw's, and read as `internal`.
-  The answer's `data`:
-  `stages`, each with its `label`, the structure `edits` kept before it, its
-  `descents` (each phase's `steps` taken of its `cap`, the K `draws` its loss
-  averaged, why it `ended`: `converged`, `cap` or `signal`, and whether it was
-  `noise_limited`), its `price`, its `numbers` and their `bits`, its weighted
-  `cells`, the K `draws` it was solved at, `predicted` (what the descent
-  lowered, at that K), `predicted_at_cap` (at the cap's K, null where
-  stopped) and, on the chosen stage alone, `measured` (off its renders), each
-  with its `residual_bits`, their `standard_error` from the draws' spread,
-  `d_prime` (unweighted, root mean square over the draws) and `per_cell` (the
-  root mean square d over the weighted cells, in JND), `error_bits` the
-  measured less the predicted at the cap's K (null where unmeasured), its
-  `residual_bits` (the predicted), `solved_length_bits` (the predicted
-  residual's and the numbers' bits at the K solved) and `length_bits` (the
-  same at the cap's K, null where stopped); `chosen`, that stage; `draws`,
-  the cap; `continuation`, the scheme or null; and `files`, the chosen stage's
-  text. A signal stops the solve: `stages` holds the stages it finished and,
-  `stopped` true, the solve it stopped in where one was running, no
-  candidate: a stage's own, or a trial of a structure edit building the next,
-  labelled as its progress lines, its `edits` those kept before it then its
-  own; `chosen` the least `length_bits` of those finished, null where none;
-  nothing measured, and no file is written.
-  `--write --confirm` writes the chosen stage in place: defaults in their node
-  files, score lines without their silent ones or the fields their node's
-  default restates. Every 50th step and
-  the step a phase converges or reaches its cap at print a JSON line on
-  stderr, its `stage` beside it: that last's `ended` why and its residual,
-  numbers and bits the state the phase answers; the others' `ended` null and
-  their values their own step's. Each stage `stages` lists prints one more
-  as it is listed: `{{"stage", "finished": true, "stopped", "length_bits",
-  "residual_bits", "bits", "numbers", "predicted_at_cap", "least",
-  "files"}}`, the terms as `stages` will list them, `least` true where its
-  `length_bits` is below every earlier stage's (the last such is `chosen`)
-  and `files` the paths `--write` would write for it; sva-wasm's `progress`
-  hears their texts too. Writing them loads the stage's composition once
-  and renders nothing, cheap next to its solve.
-  ACTIVITY: a line `{{"action", "stage", "edit", "count", "part", "work",
-  "seconds"}}` as each activity starts, as the one it ran inside resumes,
-  and between its units (a step, a proposal, a render, a draw) once
-  `--heartbeat` seconds (default {heartbeat}) have passed since the last
-  line; 0 prints one between every unit. A unit longer than that delays the
-  next line. `action` is what the solve is doing: `seeding` (reading the
-  clip a `grow` level's growths come from), `reading_reference`
-  (rendering and reading the reference as a solve starts),
-  `rendering_noise` (each noisy line's noise per draw, once a solve),
-  `descending`, `debiasing`, `ranking_proposals` (a round's structure
-  edits, one evaluation each), `trying_proposal` (a ranked edit solved),
-  `evaluating_at_cap` or `measuring`. `stage` is the stage it is under,
-  `edit` the edit a trial tries, null otherwise; `count` its own `{{"done",
-  "of", "unit"}}` where it counts: `render`s, `step`s of at most the cap,
-  `proposal`s, `trial`s of at most those ranked, `draw`s; null otherwise.
-  `part` is `{{"at", "of"}}`, the stage's place in the scheme and at most
-  how many (`path`: 2 and 2 a price; `grow`: 2 and one a level up to the
-  ceiling; 1 of 1 without a continuation). `work` is `{{"comparisons",
-  "per_second"}}`: cell comparisons since the solve began, one a counted
-  cell of the reference's `internal` reading (a set's Bark band at a frame
-  inside the interval) compared against the same cell of one draw's
-  reading of the model; an evaluation, gradient or none, makes cells times
-  its K draws, measuring the same off its renders; `per_second` that count's
-  rate over the last window at least `--heartbeat` long, null before one.
-  `seconds` since the solve began. A refusal prints `{{"failed": true,
-  "code", "action", ...}}` first, the activity it stopped, `action` null
-  where it came before any.
-  `sva-cli new <name> --from <clip>` writes a starter to fit.
-
-CONTINUATION:
-  `--continuation <scheme>` runs a priced fit as stages, each a fresh solve
-  from the files the last one reached, under the same `--vary`s; `chosen` is
-  the stage of least `length_bits`, the predicted at the cap's K, whatever its
-  price or the K it was solved at, and it alone is measured (PRICED FIT). Without
-  it the cost is solved as one stage. Each stage's steps below are its cap,
-  its descent ending sooner where it stops falling (PRICED FIT). The schemes are
-    path[:<p>,<p>...]   the price homotopy over the prices given, else the
-                        cost's own (a starter's `next` gives 0.01 up to 1):
-                        `start`, unpriced for 5/6 of `--steps`; `settle`,
-                        its lines spread over the nodes of one kind (one body,
-                        one set of defaults) and clustered, unpriced for 1/3;
-                        then `price <p>` for each price, `--steps` long, and
-                        after it `price <p>, restructured` where a split of one
-                        node's lines with a new node of its kind, or a fold of
-                        one node's lines into another of its kind, lowers the
-                        objective as ranked below, solved for a quarter
-                        of `--steps`.
-    grow[:<h>,<l>]      coarse to fine, at the cost's own price, up to <h>
-                        harmonics a voice and <l> lone partials an onset
-                        (default {harmonics} and {lone}), from the limits
-                        the composition holds (a starter's `--harmonics`
-                        and `--lone`): `start` and `settle` as path's,
-                        `settle` priced and `--steps` long; then
-                        `grow h=<h> lone=<l>` a level, each limit doubled
-                        (lone partials from none to one), held at the
-                        ceiling: each voice kind's harmonics raised and each
-                        onset's next loudest partials added, each line's
-                        `vel` its track's amplitude just after the onset,
-                        off the recording the cost's reference samples (up
-                        to its interval's end, PRICED FIT), where the
-                        objective falls as ranked below; then split and fold
-                        as path's; then solved `--steps` long. It stops at
-                        the ceiling, at a level that keeps no growth, or at
-                        one whose `length_bits`, at the cap's K, is no
-                        shorter than the last's.
-  A split, fold or growth is ranked without a descent: applied to the current
-  files and evaluated once, its objective plus the change one proximal step
-  from it predicts off its gradient, the residual taken linear over that step
-  and the price exact; the current files are predicted the same way. A
-  round's edits are evaluated `--threads` at a time in parallel, each reading
-  the current files' noise renders and holding only those it adds until it is
-  predicted, so its peak memory is the current files' renders once plus, a
-  thread, one edit's evaluation and new noises: it grows with `--threads`,
-  not with how many edits it ranks. An edit whose files, as written or as
-  `--write` would write them (silent lines and restated defaults dropped),
-  equal the current files' or an earlier edit's is not evaluated: it is the
-  same composition, and the first in proposal order stands for the rest. The prediction
-  ranks and does not veto: a growth's new numbers start at the readings'
-  levels and can need a whole descent to pay, which one step cannot show. So a
-  round solves the best-ranked edit whatever its prediction, then each next
-  one in rank order only while it is predicted below the current files, each
-  a descent capped at `--steps` and ending where it stops falling, all at the
-  stage's current draws (DRAWS, PRICED FIT). The first whose objective falls
-  below the current files' is kept, then the rest offered again from it; a
-  round keeping none ends at the first edit past the best predicted no lower
-  than the current files, or when none is left. Each trial's steps print as
-  progress lines whose `stage` is `<stage> trial <edit>`.
-  `--rounds <n>` (default {rounds}) sets the k-medians rounds of each cluster
-  and split, a cost bound on how long reassignment runs.
-
 NEW:
   sva-cli new <name> [--from <recording> [--harmonics <n>] [--lone <n>]]
       [--idempotency-key <key>]
 
   Writes a starter composition at ./<name>, and refuses if that directory
-  exists. `--from <recording>` writes instead the starter a priced fit shrinks
-  (PRICED FIT): one structure per group its readings find, a harmonic series
-  (its stretch `inh` 0, so inharmonic as priced as harmonic) per voice tone a
-  harmonic sieve hears at each of the `hits` reading's hits, a lone partial,
-  and a noise band per hit and one over the clip, each where `internal` puts
-  that span's loudness; every voice, partial and noise
-  they offer as a score line, `fits/clip` and the recording itself, and no
-  annotation. `--harmonics <n>` (default {harmonics}) sets the harmonics a
-  series holds and `--lone <n>` (default {lone}, 0 for none) the lone
-  partials an onset offers; `dropped` names what each left out of the
-  recording. `next` is the `solve` that fits it: through `--continuation grow`
-  where `dropped` names anything, else through `path`. `--idempotency-key <key>` records the key beside the composition, so a
-  retry under the same key succeeds identically while the tree still holds what
-  was written. Any other key, or an edited tree, refuses.
+  exists. `--from <recording>`, a starter of a recording, refuses as
+  `seed.unbuilt` while the solver is rebuilt. `--idempotency-key <key>` records
+  the key beside the composition, so a retry under the same key succeeds
+  identically while the tree still holds what was written. Any other key, or an
+  edited tree, refuses.
 
 EXAMPLES:
   sva-cli new song1 && cd song1
@@ -853,15 +504,6 @@ EXAMPLES:
     --representation samples=/tmp/song1-g.wav
   sva-cli render '@master' \
     --representation 'samples(buffer=100ms)=alsa:default,loudness'
-  sva-cli solve 'norm(repr.bands(@master([0, 4s])) - repr.bands(sample("../ref.wav")))
-    + 0.5*norm(repr.loudness(@master([0, 4s])) - repr.loudness(sample("../ref.wav")))' \
-    --vary gain=0..2/0.25 --vary cutoff=200hz..8000hz/1.25,log --rate 48000
-  sva-cli solve 'sum(abs(repr.score(@score/song([0, 8s]))
-    - repr.score(sample("/tmp/take.wav"))))' \
-    --vary bpm=100..140/2 --set key=D3 --max-renders 60 --write --confirm
-  sva-cli solve 'norm(repr.pitch(@lead([0, 2s])) - load_json("../ref.json", ".data"))' \
-    --vary detune=-50ct..50ct/10ct
-  sva-cli solve @fits/lead --vary cutoff=200hz..8000hz/1.25,log --rate 48000
   sva-cli lint
   sva-cli lint '@master'
   sva-cli trace score/phrase
@@ -984,27 +626,8 @@ DEFAULTS:
                        `~/.cache/sva`, holding at most {store_gb} GB; `none` keeps
                        no store. A store that fails fails no render: it answers
                        as without one, warned why in `diagnostics`.
-  --set <name>=<text>  a variable read as `<text>` for this render, or held for
-                       a solve. Default none: each is read off its file.
-  --max-renders <n>    the most renders a solve takes. Default {max_renders}.
-  --step-tol <x>       the fraction of each variable's first step under which a
-                       solve's search stops. Default {step_tol}.
-  --cost-tol <x>       the cost at or under which a solve stops. Default {cost_tol}.
-  --method <m>         `compass` (default) or `prox`, the priced fit.
-  --continuation <s>   runs a priced fit as a scheme's stages: CONTINUATION.
-  --rounds <n>         a continuation's k-medians rounds. Default {rounds}.
-  --steps <n>          caps each priced stage's descent, which ends sooner where
-                       its objective stops falling; 0 scores the composition as
-                       it is, without a continuation. Default {steps}.
-  --draws <n>          the most draws a priced stage's schedule doubles to, at
-                       least {fewest}; every finished stage is predicted
-                       and the chosen one measured at it.
-                       Default {draws}.
-  --heartbeat <s>      the most seconds between a priced solve's activity lines
-                       while one runs, 0 for one between every unit: PRICED FIT.
-                       Default {heartbeat}.
-  --write              a solve writes its fitted values to their `variables/`
-                       files, with `--confirm`. Default off.
+  --set <name>=<text>  a variable read as `<text>` for this render. Default
+                       none: each is read off its file.
   --confirm            replaces a destination that already holds a file. Without
                        it a path already taken refuses as `conflict` and nothing
                        is written.
@@ -1030,11 +653,10 @@ EXIT CODES:
   1  internal_error (a destination could not be written)
   3  validation_error (bad arguments, a composition that failed to parse, or a
      render the engine refused)
-  4  conflict (a name `new` would overwrite, a destination already holding a
-     file, or a variable file `solve --write` would change, without `--confirm`)
+  4  conflict (a name `new` would overwrite, or a destination already holding a
+     file, without `--confirm`)
   24 not_found (a `.wav` file, a `sample("<path>")` naming no file, or a node
      this composition does not define)
-  130 cancelled (a solve stopped by SIGINT or SIGTERM, `data` the best so far)
 
 VERB ALIASES:
   validate = lint, list = builtins, create = new, show = trace, from the `cli`
@@ -1044,29 +666,6 @@ VERB ALIASES:
 SEE ALSO:
   sva-cli --version    Show version information"#
     )
-}
-
-/// One line per reading a cost subtracts, off the table the subtraction itself keeps.
-fn solve_rules() -> String {
-    let mut out = Vec::new();
-    for (name, rule) in solve::RULES {
-        let mut line = format!("    {name:<10}");
-        if name.len() >= 10 {
-            out.push(line);
-            line = " ".repeat(14);
-        }
-        for word in rule.split(' ') {
-            if line.len() + 1 + word.len() > 80 {
-                out.push(line);
-                line = " ".repeat(15);
-            } else {
-                line.push(' ');
-            }
-            line.push_str(word);
-        }
-        out.push(line);
-    }
-    out.join("\n")
 }
 
 /// One entry per reading, off the one table: its call, what it answers off, and its line.

@@ -490,7 +490,7 @@ pub fn slide_over<N: Num>(at: &Body<N>) -> Option<Coeff<N>> {
     slide_read(at, &Opaque)
 }
 
-/// A slope of exactly one, moved by no varied number: anything else stretches time.
+/// A slope of exactly one: anything else stretches time.
 pub(crate) fn slide_read<N: Num>(at: &Body<N>, reads: &dyn Reads<N>) -> Option<Coeff<N>> {
     match affine_read_over(at, Reading::Free, reads)? {
         (Coeff::Exact(slope), offset)

@@ -399,7 +399,6 @@ fn with_operands<N: Kernel>(op: Op<N>, to: &[usize]) -> Op<N> {
 }
 
 /// What an op computes, numbers by their bits; `None` for one never shared.
-/// A number a varied one moves is never shared: only its value would key it.
 fn key<N: Kernel>(op: &Op<N>) -> Option<Vec<u64>> {
     let bits = |x: &N| x.is_constant().then(|| x.v().to_bits());
     let slots = |tag: u64, s: &[usize]| {

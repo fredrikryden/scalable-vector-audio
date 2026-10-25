@@ -81,6 +81,7 @@ fn envelope_cost(reference: &str) -> String {
 /// A well-formed solve exits 0; each mistake refuses under its own code and the exit its
 /// standard code names, and a write it may not make exits 4.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn a_solve_answers_each_exit_and_each_mistake_its_code() {
     let (dir, reference) = composition("solve-refusals");
     put(
@@ -173,6 +174,38 @@ fn a_solve_answers_each_exit_and_each_mistake_its_code() {
     );
 }
 
+/// While the solver is rebuilt, a well-formed `solve` and `new --from` each refuse under their
+/// stub code and write nothing; an argv mistake still refuses under its own.
+#[test]
+fn solve_and_new_from_refuse_as_unbuilt() {
+    let dir = scratch("solve-unbuilt");
+    let cost = envelope_cost("ref.wav");
+    let answer = refuses(
+        &dir,
+        &[
+            "solve",
+            &cost,
+            "--vary",
+            "gain=0..1/0.25",
+            "--write",
+            "--confirm",
+        ],
+        "solve.unbuilt",
+        3,
+    );
+    assert_eq!(answer["status"], "error", "{answer}");
+    refuses(&dir, &["solve", &cost], "solve.no_vary", 3);
+    let out = storeless(
+        &dir,
+        &["new", "fit", "--from", "clip.wav", "--harmonics", "2"],
+    );
+    let answer = json(&out);
+    assert_eq!(out.status.code(), Some(3), "{answer}");
+    let codes = items(at(&answer, &["error", "details", "codes", "items"]));
+    assert!(codes.iter().any(|c| c == "seed.unbuilt"), "{answer}");
+    assert!(!dir.join("fit").exists(), "nothing is written");
+}
+
 /// `argv` exits `exit`, refusing as `code` where one is named; the envelope, for more.
 fn refuses(dir: &Path, argv: &[&str], code: &str, exit: i32) -> Value {
     let out = sva(dir, argv);
@@ -192,6 +225,7 @@ fn refuses(dir: &Path, argv: &[&str], code: &str, exit: i32) -> Value {
 /// reads that `data` back as the reading its leaf subtracts, a number or numbers as weights,
 /// and each mismatch refuses under its own code before anything renders.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn load_json_reads_a_reading_a_weight_or_refuses_under_its_code() {
     let (dir, reference) = composition("solve-load-json");
     let root = dir.parent().expect("a parent");
@@ -308,6 +342,7 @@ fn load_json_reads_a_reading_a_weight_or_refuses_under_its_code() {
 /// `@fits/<name>` is the cost a file under `fits/` holds, over many lines; a typo refuses at
 /// its line in that file, a missing one as not found, and `lint` reads no node there.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn a_cost_file_is_read_from_fits_and_refuses_at_its_line() {
     let (dir, reference) = composition("solve-fits");
     std::fs::create_dir_all(dir.join("fits")).expect("a directory");
@@ -363,6 +398,7 @@ fn a_cost_file_is_read_from_fits_and_refuses_at_its_line() {
 /// The fields an agent reads off a solve: every variable's value and text, the cost's total
 /// and each term, the render count, why it stopped and each render in the trace.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn a_solve_answers_values_cost_terms_renders_stopped_by_and_trace() {
     let (dir, reference) = composition("solve-envelope");
     let cost = format!(
@@ -417,6 +453,7 @@ fn a_solve_answers_values_cost_terms_renders_stopped_by_and_trace() {
 /// A signal stops a solve between renders: exit 130, the best so far under `data`.
 #[cfg(unix)]
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn a_signal_stops_a_solve_with_the_best_so_far() {
     use std::io::{BufRead, BufReader};
     let (dir, reference) = composition("solve-signal");
@@ -456,6 +493,7 @@ fn a_signal_stops_a_solve_with_the_best_so_far() {
 /// `sample("<path>")` passes a recording at the render's rate through bit for bit, states
 /// the bound it reads another rate under, and takes a path nowhere but as its argument.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn sample_of_a_path_is_the_recording_at_the_render_rate() {
     let (dir, reference) = composition("solve-sample");
     let back = dir.parent().expect("a parent").join("back.wav");
@@ -514,6 +552,7 @@ fn sample_of_a_path_is_the_recording_at_the_render_rate() {
 
 /// `score` left the language: a cost reading it refuses before any render, naming `hits`.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn a_cost_reading_score_refuses_as_retired_naming_hits() {
     let (dir, reference) = composition("solve-score-retired");
     let cost = format!("norm(repr.score(@tone) - repr.score(sample(\"{reference}\")))");
@@ -529,6 +568,7 @@ fn a_cost_reading_score_refuses_as_retired_naming_hits() {
 /// Two `hits` subtract as a set by onset: every hit 4 ms later, inside both resolutions,
 /// costs nothing, and one hit the other side lacks costs 1 s.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn the_hits_residual_pairs_onsets_nearest_first_an_unpaired_one_a_second() {
     let (dir, reference) = composition("solve-hits-residual");
     let root = dir.parent().expect("a parent");

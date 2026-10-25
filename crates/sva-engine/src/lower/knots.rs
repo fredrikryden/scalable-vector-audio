@@ -5,7 +5,7 @@ use std::sync::Arc;
 use sva_ast::{Arg, ByteSpan, Expr, Literal, PWL_INTEGRAL};
 use sva_formula::{Body, Knots, Unknotted, Var};
 
-use crate::lower::dual::Number;
+use crate::lower::number::Number;
 
 use crate::error::EngineError;
 use crate::instantiate::Cx;
@@ -39,7 +39,7 @@ impl<N: Number> Lowering<'_, N> {
         for (k, x) in written.enumerate() {
             let number = match x {
                 Expr::Lit(Literal::Num(v)) => Some(N::of(*v)),
-                other => crate::loops::amount_seeded(self.inst, other, cx, self.seeds),
+                other => crate::loops::amount_in(self.inst, other, cx),
             };
             numbers.push(number.ok_or_else(|| {
                 refuse(

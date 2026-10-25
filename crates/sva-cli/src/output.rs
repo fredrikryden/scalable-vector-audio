@@ -61,10 +61,9 @@ pub fn trace_data(t: &crate::Traceable) -> String {
 
 pub fn new_data(s: &crate::Scaffolded) -> String {
     format!(
-        "{{ \"root\": \"{}\", \"files\": {}, \"dropped\": {}, \"next\": {} }}",
+        "{{ \"root\": \"{}\", \"files\": {}, \"next\": {} }}",
         escape(&s.root.display().to_string()),
         strings(&s.files),
-        strings(&s.dropped),
         pair_list(
             &s.next
                 .iter()

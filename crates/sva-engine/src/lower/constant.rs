@@ -3,7 +3,7 @@
 use sva_formula::closed_form::children;
 use sva_formula::{Body, ClosedForm, Cx, Fold, NodeId, Num, Origin, Part, Var};
 
-use super::dual::Number;
+use super::number::Number;
 
 pub fn is_constant<N: Num>(f: &Body<N>) -> bool {
     constant_with(f, &|_| false)

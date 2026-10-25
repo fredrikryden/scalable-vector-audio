@@ -90,6 +90,7 @@ fn labels(data: &Value) -> Vec<String> {
 /// started, and chooses the least predicted length, it alone measured;
 /// without a continuation it answers one stage at the cost's price and writes it when confirmed.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
     let (root, wav) = clip("prox-path", TONE);
     let made = json(&sva(
@@ -248,6 +249,7 @@ fn a_priced_solve_answers_its_stages_and_writes_its_choice() {
 /// least predicted length and writes it under `--confirm`. Stderr names every activity, its
 /// comparisons never falling, and each finished stage's terms.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn a_coarse_starter_grows_and_writes_its_choice() {
     let (root, wav) = clip("prox-grow", TONE);
     let made = json(&sva(
@@ -344,6 +346,7 @@ fn a_coarse_starter_grows_and_writes_its_choice() {
 /// A clip with no pitch seeds no voice node, and its `next` varies only what the starter
 /// reads: none of them is refused as reaching nothing.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn an_unpitched_starter_varies_only_what_it_reads() {
     let (root, wav) = clip(
         "prox-unpitched",
@@ -382,6 +385,7 @@ fn an_unpitched_starter_varies_only_what_it_reads() {
 /// A starter whose every score line is silent writes a score of no events: it solves at no
 /// steps and at some, and the score it writes renders silence.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn an_all_silent_fit_writes_a_score_that_renders_silence() {
     let (root, wav) = clip(
         "prox-silent",
@@ -454,6 +458,7 @@ fn an_all_silent_fit_writes_a_score_that_renders_silence() {
 /// it ran, no length at the cap's draws and not chosen.
 #[cfg(unix)]
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn a_signal_in_a_stage_lists_it_stopped() {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
@@ -560,6 +565,7 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 /// no steps, answers one stage measured as the fit measured what it wrote, changes no file and
 /// lists none; with `--write` or a continuation it refuses instead.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn zero_steps_measure_the_composition_as_written() {
     let (root, wav) = clip("prox-zero", TONE);
     let made = json(&sva(
@@ -653,6 +659,7 @@ fn zero_steps_measure_the_composition_as_written() {
 
 /// Each misuse of the priced method refuses under its own code.
 #[test]
+#[ignore = "spec for the solve rewrite"]
 fn a_priced_solve_refuses_each_mistake_under_its_code() {
     let (root, wav) = clip("prox-refusals", TONE);
     let reference = wav.display().to_string();

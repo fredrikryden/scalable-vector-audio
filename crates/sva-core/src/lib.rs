@@ -4,21 +4,15 @@ mod analyze;
 mod answer;
 mod builtins;
 mod cli_error;
-pub mod continuation;
-mod decode;
 pub mod encode;
-pub mod fit;
 pub mod json;
 mod lint_code;
-pub mod model;
 mod outline;
 mod output;
 mod query;
-pub mod seed;
 mod set;
 pub mod solve;
 mod song;
-pub mod structure;
 mod target;
 mod until;
 
@@ -292,32 +286,9 @@ fn instance_read(graph: &Graph, text: &str) -> Option<sva_ast::Expr> {
 }
 
 pub fn execute(job: Job, tier: &Tier) -> Result<Rendered, CliError> {
-    Settled::of(&job)?.execute(tier)
-}
-
-/// A job settled: everything its render reads, owned apart from the job's source and hooks.
-pub(crate) struct Settled {
-    graph: Graph,
-    config: RenderConfig,
-    song: Song,
-    expression: String,
-}
-
-impl Settled {
-    pub(crate) fn of(job: &Job) -> Result<Settled, CliError> {
-        let (graph, config, song) = settle(job)?;
-        Ok(Settled {
-            graph,
-            config,
-            song,
-            expression: job.target.to_string(),
-        })
-    }
-
-    pub(crate) fn execute(self, tier: &Tier) -> Result<Rendered, CliError> {
-        let render = render(&self.graph, PROBE, self.config, tier);
-        rendered(&self.expression, (self.graph, self.song), render)
-    }
+    let (graph, config, song) = settle(&job)?;
+    let render = render(&graph, PROBE, config, tier);
+    rendered(job.target, (graph, song), render)
 }
 
 /// `job` over `tier`, typing anew only what `session` typed otherwise; only `persist` commits
@@ -352,17 +323,10 @@ fn rendered(
 
 /// The render a job would run, and the warnings its song earns.
 pub fn plan(job: &Job) -> Result<(sva_engine::Render, Vec<sva_ast::song::Warning>), CliError> {
-    let (planned, song, _) = planned(job)?;
-    Ok((planned, song.warnings().to_vec()))
-}
-
-/// The render a job would run, its song, and the seconds a bar of its tempo lasts.
-pub(crate) fn planned(job: &Job) -> Result<(sva_engine::Render, Song, Option<f64>), CliError> {
     let (graph, config, song) = settle(job)?;
-    let per_bar = graph.tempo().map(|tempo| tempo.seconds_per_bar());
     let planned = sva_engine::plan(&graph, PROBE, config);
     let planned = planned.map_err(|e| refused(&song, &graph, e, job.target))?;
-    Ok((planned, song, per_bar))
+    Ok((planned, song.warnings().to_vec()))
 }
 
 /// Every refusal typing the target reaches, and no render's; the warnings its song earns.

@@ -1578,6 +1578,41 @@ fn object(pairs: &[(&str, JsValue)]) -> js_sys::Object {
     object
 }
 
+/// While the solver is rebuilt, `solve` and `seed` each throw their stub code as the CLI
+/// refuses it; an option no solve takes still refuses by name first.
+#[wasm_bindgen_test]
+fn solve_and_seed_throw_unbuilt() {
+    let code = |refused: JsValue| {
+        let envelope = as_text(&field(&refused, "refusal"));
+        assert_eq!(
+            field(&refused, "name").as_string().as_deref(),
+            Some("validation_error"),
+            "{envelope}"
+        );
+        envelope
+    };
+    let comp = page();
+    let vary = js_sys::Array::of1(&JsValue::from("gain=0..1/0.25"));
+    let asked = object(&[
+        ("method", JsValue::from("prox")),
+        ("steps", JsValue::from(3)),
+    ]);
+    let refused = now(comp.solve(JsValue::from("1"), vary.clone(), asked.into()))
+        .err()
+        .unwrap_or_else(|| unreachable!("solve refuses"));
+    assert!(code(refused).contains("solve.unbuilt"));
+    let unknown = object(&[("spiral", JsValue::from(1))]);
+    let refused = now(comp.solve(JsValue::from("1"), vary, unknown.into()))
+        .err()
+        .unwrap_or_else(|| unreachable!("an unknown option refuses"));
+    assert!(code(refused).contains("wasm.bad_argument"));
+    let (rate, channels) = sine_clip();
+    let refused = sva_wasm::seed(rate, channels, "clip.wav", None)
+        .err()
+        .unwrap_or_else(|| unreachable!("seed refuses"));
+    assert!(code(refused).contains("seed.unbuilt"));
+}
+
 /// A composition holding the starter `seeded` hands over, the cost text `seed` hands with it,
 /// the starter's varies, and the clip as the recording that text's `sample("clip.wav")` reads.
 fn seeded_fit(
@@ -1604,6 +1639,7 @@ fn seeded_fit(
 /// hears each listed stage as it finishes with its terms, its files rendering over the starter,
 /// the last least one's the answer's `files`; activities are timed off wasm's clock.
 #[wasm_bindgen_test]
+#[ignore = "spec for the solve rewrite"]
 fn a_coarse_starter_grows_through_its_levels() {
     let (rate, channels) = sine_clip();
     let limits = object(&[("harmonics", JsValue::from(1)), ("lone", JsValue::from(1))]);
@@ -1715,6 +1751,7 @@ fn a_coarse_starter_grows_through_its_levels() {
 /// stages, choice and files as the tree it stands for, the clip passed as a value; a text the
 /// grammar refuses refuses as `sva-cli solve` does, and a recording no page passed is named.
 #[wasm_bindgen_test]
+#[ignore = "spec for the solve rewrite"]
 fn a_seeded_cost_text_solves_as_its_tree() {
     let (rate, channels) = sine_clip();
     let seeded = sva_wasm::seed(rate, channels.clone(), "clip.wav", None)

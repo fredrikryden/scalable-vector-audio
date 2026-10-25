@@ -35,7 +35,6 @@ pub use cache::{
 };
 pub use cast::Cast;
 pub use error::{BindingFault, Diagnostic, EngineError, Located, REGISTRY};
-pub use lower::dual::{Varied, tangents};
 pub use meaning::{Meaning, meaning};
 pub use query::{
     Answer, Arg, Ask, Atom, DEFAULT_BEATING_WINDOW_SECS, DEFAULT_BUFFER_SECS, DEFAULT_CELL_SECS,
@@ -69,7 +68,6 @@ pub use sva_samples::{
     PitchFrame, Profile, Resampled, Rule, SignalKind, Source, Spectrum, StereoFrame, StereoImage,
     fitted_frame, measure_alias, pinned_frame,
 };
-pub use threads::{default_threads, each};
 pub use trace::{Traced, Up, trace};
 pub use typing::{Typing, Value, When};
 pub use vocabulary::{MAX_WIDTH, named_may_move, recognized_named, shape, shape_name};

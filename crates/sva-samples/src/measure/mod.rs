@@ -23,7 +23,6 @@ pub mod sliding;
 pub mod spectrum;
 pub mod stereo;
 pub(crate) mod stiff;
-pub mod voiced;
 
 pub(crate) fn scaled_pow2(samples_48k: f64, sr: f64) -> usize {
     let n = (samples_48k * sr / 48_000.0).max(2.0);

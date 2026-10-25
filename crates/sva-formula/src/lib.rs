@@ -49,7 +49,7 @@ pub use knots::{Knots, Unknotted};
 pub use modal::damping::Damping;
 pub use modal::{Geometry, modes};
 pub use noise::noise;
-pub use num::{Dual, Num, Sparse, Tangents};
+pub use num::Num;
 pub use origin::Origin;
 pub use refusal::{AtomSketch, Code, Factor, Left, LeftReason, Refusal};
 pub use run::{Mirror, Run};

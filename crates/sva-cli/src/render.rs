@@ -27,7 +27,7 @@ pub fn render(args: &RenderArgs) -> Result<String, CliError> {
         refuse_replacing(dest, args.confirm)?;
     }
     let mut warnings = Vec::new();
-    let tier = crate::store::opened(&args.cache, &mut warnings, crate::store::On::Persist)?;
+    let tier = crate::store::opened(&args.cache, &mut warnings)?;
     let answered = answered(args, &dir, &target, tier, &mut warnings);
     crate::store::persisted(tier, &mut warnings);
     answered.map(|data| success_envelope(&data, &warnings))

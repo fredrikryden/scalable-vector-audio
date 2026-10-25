@@ -7,7 +7,7 @@ use sva_formula::{Body, Bound, Cx as Complex, IndexId, Part, Series, Unary, Var}
 
 use crate::error::EngineError;
 use crate::instantiate::{Cx, Node};
-use crate::lower::dual::Number;
+use crate::lower::number::Number;
 use crate::lower::{Index, Lowering, Piece};
 use sva_ast::SERIES;
 
@@ -226,9 +226,7 @@ impl<N: Number> Lowering<'_, N> {
                 }
                 (Some(a), b) => {
                     let pieces = vec![N::value(a), N::value(b)];
-                    self.rendered("a term of samples", |low| {
-                        low.operation("+", pieces, Some(span), var)
-                    })?
+                    self.rendered(|low| low.operation("+", pieces, Some(span), var))?
                 }
             });
         }

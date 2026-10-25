@@ -427,7 +427,7 @@ pub fn line_atoms_read(s: &Series, band: (f64, f64, f64), reads: &dyn Reads) -> 
     line_atoms_over(s, band, reads)
 }
 
-/// The same over any number: a dual's lines carry their tangents.
+/// The same over any number.
 pub fn line_atoms_over<N: Num>(
     s: &Series<N>,
     band: (f64, f64, f64),

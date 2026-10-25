@@ -1,7 +1,5 @@
 // Concern: splits a target into the expression it renders and the interval its ref reads | Non-concern: the expression grammar (sva-ast), where an open interval ends | IO: (text) -> Target
 
-use std::ops::Range;
-
 use sva_ast::{Token, TokenKind, tokenize};
 
 use crate::cli_error::CliError;
@@ -48,35 +46,21 @@ pub struct Target {
 /// ref it samples, `sample(@a([0, 2b]))`, or of a recording, `sample("ref.wav")([0, 2b])`:
 /// nowhere else.
 pub fn target(text: &str) -> Result<Target, CliError> {
-    Ok(located(text)?.0)
-}
-
-/// `text` read from 0 to its interval's end: the same render, nothing trimmed off its start.
-pub fn from_zero(text: &str) -> Result<String, CliError> {
-    Ok(match located(text)?.1 {
-        Some(start) => format!("{}0{}", &text[..start.start], &text[start.end..]),
-        None => text.to_string(),
-    })
-}
-
-/// The target, and the bytes its interval's start is written in.
-fn located(text: &str) -> Result<(Target, Option<Range<usize>>), CliError> {
     let tokens = tokenize(text).map_err(|d| unparsed(text, &d.message))?;
-    if let Some((from, inner)) = sampled(text, &tokens) {
-        let (read, start) = own_read(inner, text)?;
+    if let Some(inner) = sampled(text, &tokens) {
+        let read = own_read(inner, text)?;
         if read.interval.is_some() {
-            let target = Target {
+            return Ok(Target {
                 expr: format!("sample({})", read.expr),
                 interval: read.interval,
-            };
-            return Ok((target, start.map(|s| s.start + from..s.end + from)));
+            });
         }
     }
     own_read(text, text)
 }
 
-/// What a target that is one `sample(@...)` call holds, and the byte it starts at.
-fn sampled<'t>(text: &'t str, tokens: &[Token]) -> Option<(usize, &'t str)> {
+/// What a target that is one `sample(@...)` call holds.
+fn sampled<'t>(text: &'t str, tokens: &[Token]) -> Option<&'t str> {
     match tokens {
         [
             Token {
@@ -96,14 +80,14 @@ fn sampled<'t>(text: &'t str, tokens: &[Token]) -> Option<(usize, &'t str)> {
                 kind: TokenKind::RParen,
                 ..
             },
-        ] if name == "sample" => Some((open.span.end, &text[open.span.end..close.span.start])),
+        ] if name == "sample" => Some(&text[open.span.end..close.span.start]),
         _ => None,
     }
 }
 
 /// `@a([0, 2b], vel=0.5)`, `sample("ref.wav")([0, 2b])`, or no interval at all. A `[` right
 /// after a ref or `self` reads an index, which the expression grammar owns.
-fn own_read(text: &str, written: &str) -> Result<(Target, Option<Range<usize>>), CliError> {
+fn own_read(text: &str, written: &str) -> Result<Target, CliError> {
     let tokens = tokenize(text).map_err(|d| unparsed(written, &d.message))?;
     let indexes = |at: usize| {
         at > 0
@@ -121,11 +105,10 @@ fn own_read(text: &str, written: &str) -> Result<(Target, Option<Range<usize>>),
         .collect();
     let at = match opens.as_slice() {
         [] => {
-            let target = Target {
+            return Ok(Target {
                 expr: text.to_string(),
                 interval: None,
-            };
-            return Ok((target, None));
+            });
         }
         [at] => *at,
         _ => return Err(misplaced(written)),
@@ -184,12 +167,10 @@ fn own_read(text: &str, written: &str) -> Result<(Target, Option<Range<usize>>),
             &text[tokens[close].span.end..]
         ),
     };
-    let target = Target {
+    Ok(Target {
         expr,
         interval: Some((start, end)),
-    };
-    let written_start = tokens[at + 1].span.start..tokens[comma - 1].span.end;
-    Ok((target, Some(written_start)))
+    })
 }
 
 /// The index of the `)` closing the call `open` opens, the interval's own end at `interval`

@@ -45,15 +45,6 @@ pub enum CliError {
         error: Box<CliError>,
         help: &'static str,
     },
-    /// An argument mistake inside a file: its code, and where in the file, from 1.
-    Located {
-        code: &'static str,
-        message: String,
-        file: String,
-        byte: usize,
-        line: usize,
-        column: usize,
-    },
 }
 
 impl CliError {
@@ -114,8 +105,7 @@ impl CliError {
             | CliError::Engine(_)
             | CliError::BadTempo(_)
             | CliError::BadProbe(_)
-            | CliError::LintRefused(_)
-            | CliError::Located { .. } => 3,
+            | CliError::LintRefused(_) => 3,
             CliError::Conflict { .. } => 4,
             CliError::NotFound(_) => 24,
             CliError::Io(_) => 1,
@@ -132,8 +122,7 @@ impl CliError {
             | CliError::Engine(_)
             | CliError::BadTempo(_)
             | CliError::BadProbe(_)
-            | CliError::LintRefused(_)
-            | CliError::Located { .. } => "validation_error",
+            | CliError::LintRefused(_) => "validation_error",
             CliError::Conflict { .. } => "conflict",
             CliError::NotFound(_) => "not_found",
             CliError::Io(_) => "internal_error",
@@ -143,7 +132,7 @@ impl CliError {
     pub fn message(&self) -> String {
         match self {
             CliError::Hinted { error, .. } => error.message(),
-            CliError::Usage { message, .. } | CliError::Located { message, .. } => message.clone(),
+            CliError::Usage { message, .. } => message.clone(),
             CliError::Refusals(rs) => format!("{} refusal(s) parsing the composition", rs.len()),
             CliError::Engine(e) => e.to_string(),
             CliError::BadTempo(m) | CliError::BadProbe(m) | CliError::Io(m) => m.clone(),
@@ -198,19 +187,6 @@ impl CliError {
                 .iter()
                 .map(|v| lint_diagnostic(v.code, &v.subject, &v.message, v.severity, v.line))
                 .collect(),
-            CliError::Located {
-                code,
-                message,
-                file,
-                byte,
-                line,
-                column,
-            } => vec![
-                Diagnostic::new(*code, message.clone())
-                    .at(Some(file.clone()), Some((*byte, 0)))
-                    .placed(Some((*line, *column)))
-                    .helped("`sva-cli --help` states how a cost reads, under SOLVE"),
-            ],
             CliError::Io(_) => Vec::new(),
         }
     }

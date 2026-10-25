@@ -564,8 +564,7 @@ static NUMBERS: Reading = Reading {
     reads: Reads::Structure,
     help: "every number the composition below the target writes: each literal of a reached \
            node's body and default lines, each field of a reached score's lines, with the name \
-           it binds; in a solve's cost it stands alone, its bits each named number's \
-           `--vary` range over its step, log2, a number no `--vary` names costing none",
+           it binds",
     build: |_| Representation::Numbers,
 };
 

@@ -125,8 +125,7 @@ pub struct SpectralAtom<N: Num = f64> {
     pub origin: Origin,
 }
 
-/// Every field but `c` and `origin`. Equal keys are like atoms, and the hash agrees; under a
-/// dual, two atoms moved differently by the varied numbers have two keys.
+/// Every field but `c` and `origin`. Equal keys are like atoms, and the hash agrees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SpectralAtomKey<K = u64, E = Edge> {
     sing: (u8, K, u16),
@@ -219,7 +218,7 @@ impl SpectralAtom {
         self.smooth_inside_over(x)
     }
 
-    /// The same atom over another number, moved by no varied number.
+    /// The same atom over another number.
     pub fn lifted<N: Num>(&self) -> SpectralAtom<N> {
         let edge = |e: Edge| Edge::of(e);
         SpectralAtom {
@@ -260,8 +259,7 @@ impl SpectralAtom {
 
 impl<N: Num> SpectralAtom<N> {
     /// Folds every absent factor to `None`, and reduces a zeroth-order delta at its point. An
-    /// amplitude past a double is refused where a sum is normalized and where one is read. A
-    /// factor at a varied zero is no absent one.
+    /// amplitude past a double is refused where a sum is normalized and where one is read.
     pub fn new(
         c: Cx<N>,
         factors: Factors<N>,

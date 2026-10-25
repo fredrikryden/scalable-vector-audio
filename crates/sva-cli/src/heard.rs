@@ -1,4 +1,4 @@
-// Concern: a composition's node texts beside the files a target or cost names: recordings, `load_json` texts | Non-concern: decoding a recording (recording.rs) | IO: (path) -> text, a recording
+// Concern: a composition's node texts beside the recordings a target names | Non-concern: decoding a recording (recording.rs) | IO: (path) -> text, a recording
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -61,24 +61,5 @@ impl Source for Heard {
         let held = Arc::clone(&recording);
         self.decoded.borrow_mut().insert(path.to_string(), held);
         Ok(Some(recording))
-    }
-}
-
-/// A `load_json` file, relative to the directory sva-cli runs in, as a recording is.
-impl sva_core::solve::Texts for Heard {
-    fn text(&self, path: &str) -> Result<Option<String>, String> {
-        let bytes = match std::fs::read(self.cwd.join(path)) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e.to_string()),
-        };
-        if bytes.starts_with(&[0x1f, 0x8b]) {
-            return Err(format!(
-                "it is gzip, and `load_json` reads plain JSON; unpack it first, as `gunzip -k {path}`"
-            ));
-        }
-        String::from_utf8(bytes)
-            .map(Some)
-            .map_err(|_| "it is not UTF-8 text".to_string())
     }
 }

@@ -64,8 +64,7 @@ impl<N: Num> PartialEq for Edge<N> {
 
 impl<N: Num> Eq for Edge<N> {}
 
-/// Numeric: by bit pattern a negative bound sorts above every positive one. Two edges at
-/// one value moved differently by the varied numbers are two edges.
+/// Numeric: by bit pattern a negative bound sorts above every positive one.
 impl<N: Num> Ord for Edge<N> {
     fn cmp(&self, other: &Edge<N>) -> std::cmp::Ordering {
         let moved = |e: &Edge<N>| match e {
@@ -279,105 +278,6 @@ pub enum Body<N: Num = f64> {
         at: Part<N>,
         table: std::sync::Arc<crate::knots::Knots<N>>,
     },
-}
-
-/// The same form over another number, moved by no varied number.
-pub fn lifted<N: Num>(f: &Body) -> Body<N> {
-    mapped(f, &N::of)
-}
-
-/// The same form, every number's tangent dropped.
-pub fn value<N: Num>(f: &Body<N>) -> Body {
-    mapped(f, &|x: N| x.v())
-}
-
-/// The same form, each number written through `num`.
-fn mapped<M: Num, N: Num>(f: &Body<M>, num: &dyn Fn(M) -> N) -> Body<N> {
-    let part = |p: &Part<M>| Part::new(p.origin, mapped(&p.body, num));
-    let parts = |ps: &[Part<M>]| ps.iter().map(part).collect();
-    let series = |s: &Series<M>| Series {
-        index: s.index,
-        lo: s.lo,
-        hi: s.hi,
-        term: part(&s.term),
-    };
-    let edge = |e: Edge<M>| match e {
-        Edge::NegInf => Edge::NegInf,
-        Edge::At(x) => Edge::At(num(x)),
-        Edge::PosInf => Edge::PosInf,
-    };
-    let complex = |c: Cx<M>| Cx::new(num(c.re), num(c.im));
-    match f {
-        Body::Const(c) => Body::Const(complex(*c)),
-        Body::Line => Body::Line,
-        Body::Index(k) => Body::Index(*k),
-        Body::Keyed { seed, of } => Body::Keyed {
-            seed: *seed,
-            of: part(of),
-        },
-        Body::Param(id) => Body::Param(*id),
-        Body::Node(id) => Body::Node(*id),
-        Body::Add(ps) => Body::Add(parts(ps)),
-        Body::Mul(ps) => Body::Mul(parts(ps)),
-        Body::Div(a, b) => Body::Div(part(a), part(b)),
-        Body::Pow(of, n) => Body::Pow(part(of), *n),
-        Body::Apply(op, of) => Body::Apply(*op, part(of)),
-        Body::Fold(op, ps) => Body::Fold(*op, parts(ps)),
-        Body::Delta { at, order } => Body::Delta {
-            at: part(at),
-            order: *order,
-        },
-        Body::Pv(at) => Body::Pv(part(at)),
-        Body::Shift { by, of } => Body::Shift {
-            by: num(*by),
-            of: part(of),
-        },
-        Body::Warp { at, of } => Body::Warp {
-            at: part(at),
-            of: part(of),
-        },
-        Body::Deriv { order, of } => Body::Deriv {
-            order: *order,
-            of: part(of),
-        },
-        Body::Crop {
-            of,
-            l,
-            r,
-            rise,
-            fall,
-        } => Body::Crop {
-            of: part(of),
-            l: edge(*l),
-            r: edge(*r),
-            rise: num(*rise),
-            fall: num(*fall),
-        },
-        Body::Join(ps) => Body::Join(parts(ps)),
-        Body::Channel(of, k) => Body::Channel(part(of), *k),
-        Body::Rational(r) => Body::Rational(Rational {
-            zeros: r.zeros.iter().map(|z| complex(*z)).collect(),
-            poles: r.poles.iter().map(|p| complex(*p)).collect(),
-            gain: complex(r.gain),
-        }),
-        Body::Series(s) => Body::Series(Box::new(series(s))),
-        Body::Modal(m) => Body::Modal(m.clone()),
-        Body::Run(run) => Body::Run(run.clone()),
-        Body::Banded(b) => Body::Banded(Box::new(crate::banded::Banded {
-            series: series(&b.series),
-            slope: b.slope.clone(),
-            offset: b.offset.clone(),
-            omega: b.omega,
-            most: b.most,
-            widest: b.widest,
-            reach: b.reach,
-            dropped_db: b.dropped_db,
-        })),
-        Body::Knots { at, table } => Body::Knots {
-            at: part(at),
-            table: std::sync::Arc::new(table.mapped(num)),
-        },
-    }
 }
 
 /// The subterms of one node: a walker states its recursion once, and every new variant

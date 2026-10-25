@@ -58,7 +58,6 @@ impl<N: Num> Cx<N> {
         self.re.v().is_finite() && self.im.v().is_finite()
     }
 
-    /// A varied zero is no zero to fold.
     pub fn is_zero(self) -> bool {
         self.re.is_zero() && self.im.is_zero()
     }
@@ -155,7 +154,6 @@ impl<N: Num> Mul for Cx<N> {
         )
     }
 }
-/// A varied zero off an axis is no axis.
 impl<N: Num> Div for Cx<N> {
     type Output = Cx<N>;
     fn div(self, o: Cx<N>) -> Cx<N> {

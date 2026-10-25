@@ -9,7 +9,6 @@ mod solve;
 
 use reading::{analyze_args, render_args};
 use solve::solve_args;
-pub use solve::{Method, SolveArgs};
 
 #[derive(Debug, PartialEq)]
 pub struct RenderArgs {
@@ -52,7 +51,8 @@ pub enum Command {
     Help,
     Render(Box<RenderArgs>),
     Analyze(Box<AnalyzeArgs>),
-    Solve(Box<SolveArgs>),
+    /// Its argv checked; the solver is being rebuilt.
+    Solve,
     /// One expression, as render's target; `None` lints every file under its own rules.
     Lint {
         target: Option<String>,
@@ -72,10 +72,8 @@ pub enum Command {
         /// Present where the caller says this is a retry, per the `cli` standard's own
         /// requirement that a create verb be made idempotent.
         idempotency_key: Option<String>,
-        /// A recording the composition starts as a priced fit's starter of.
+        /// A recording to start the composition from, which this build refuses.
         from: Option<PathBuf>,
-        /// The starter's size under `--from`.
-        limits: sva_core::seed::Limits,
     },
 }
 
@@ -170,7 +168,6 @@ fn new_args(rest: &[String]) -> Result<Command, CliError> {
         Some(_) | None => return Err(CliError::usage("cli.missing_argument", "missing <name>")),
     };
     let (mut idempotency_key, mut from) = (None, None);
-    let mut limits = sva_core::seed::LIMITS;
     let mut sized = None;
     while let Some(flag) = it.next() {
         match flag.as_str() {
@@ -178,7 +175,7 @@ fn new_args(rest: &[String]) -> Result<Command, CliError> {
             "--from" => from = Some(PathBuf::from(value(&mut it, "--from")?)),
             "--harmonics" | "--lone" => {
                 let least = usize::from(flag == "--harmonics");
-                let n = value(&mut it, flag)?
+                value(&mut it, flag)?
                     .parse::<usize>()
                     .ok()
                     .filter(|n| *n >= least)
@@ -188,10 +185,6 @@ fn new_args(rest: &[String]) -> Result<Command, CliError> {
                             format!("`{flag}` takes a whole number from {least}"),
                         )
                     })?;
-                match flag.as_str() {
-                    "--harmonics" => limits.harmonics = n,
-                    _ => limits.lone = n,
-                }
                 sized = Some(flag.clone());
             }
             _ => {
@@ -213,7 +206,6 @@ fn new_args(rest: &[String]) -> Result<Command, CliError> {
         name,
         idempotency_key,
         from,
-        limits,
     })
 }
 
@@ -422,7 +414,6 @@ mod tests {
                 name: "song1".to_string(),
                 idempotency_key: None,
                 from: None,
-                limits: sva_core::seed::LIMITS,
             }
         );
     }

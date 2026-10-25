@@ -149,15 +149,12 @@ pub struct Scaffolded {
     pub files: Vec<String>,
     /// `(command, why)` to run next, in order.
     pub next: Vec<(String, String)>,
-    /// What the starter's limits left out of the recording, each naming its flag.
-    pub dropped: Vec<String>,
 }
 
 /// What a scaffold writes, `(path, bytes)` in order, and what to run next.
 struct Tree {
     files: Vec<(String, Vec<u8>)>,
     next: Vec<(String, String)>,
-    dropped: Vec<String>,
 }
 
 fn starter() -> Tree {
@@ -170,67 +167,7 @@ fn starter() -> Tree {
             .iter()
             .map(|(c, w)| (c.to_string(), w.to_string()))
             .collect(),
-        dropped: Vec::new(),
     }
-}
-
-/// A priced fit's starter of the recording at `from`, the recording beside it.
-fn seeded(from: &Path, limits: sva_core::seed::Limits) -> Result<Tree, CliError> {
-    let (planes, rate) = crate::recording::read_recording(from)?;
-    let clip = from
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| {
-            CliError::usage(
-                "new.bad_from",
-                format!("`{}` names no file", from.display()),
-            )
-        })?
-        .to_string();
-    let seeded = sva_core::seed::seed(&planes, f64::from(rate), &clip, limits);
-    let bytes = std::fs::read(from)
-        .map_err(|e| CliError::Io(format!("could not read {}: {e}", from.display())))?;
-    let mut files: Vec<(String, Vec<u8>)> = seeded
-        .files
-        .into_iter()
-        .map(|(p, t)| (p, t.into_bytes()))
-        .collect();
-    files.push((clip, bytes));
-    let varies: Vec<String> = seeded
-        .varies
-        .iter()
-        .map(|v| format!("--vary '{v}'"))
-        .collect();
-    let (continuation, why) = match seeded.dropped.is_empty() {
-        true => (
-            format!(
-                "path:{}",
-                sva_core::continuation::path::DEFAULT_PRICES
-                    .iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ),
-            "shrinks the starter to the stage of least description length its price path \
-             holds, each price per number a stage, and writes it in place",
-        ),
-        false => (
-            "grow".to_string(),
-            "fits the starter, then grows back what its limits dropped a level at a time, \
-             each growth kept where it lowers the description length, and writes the stage of \
-             least length in place",
-        ),
-    };
-    let solve = format!(
-        "sva-cli solve @{} --method prox --continuation {continuation} {} --write --confirm",
-        sva_core::seed::COST,
-        varies.join(" ")
-    );
-    Ok(Tree {
-        files,
-        next: vec![(solve, why.to_string())],
-        dropped: seeded.dropped,
-    })
 }
 
 /// Refuses if `<dir>/<name>` already exists, so `new` never overwrites a caller's own work.
@@ -241,7 +178,6 @@ pub fn scaffold(
     dir: &Path,
     name: &str,
     idempotency_key: Option<&str>,
-    from: Option<(&Path, sva_core::seed::Limits)>,
 ) -> Result<Scaffolded, CliError> {
     if name.is_empty() || name.contains('/') || name.contains(std::path::MAIN_SEPARATOR) {
         return Err(CliError::usage(
@@ -249,10 +185,7 @@ pub fn scaffold(
             format!("`{name}` must be a single directory name, not a path"),
         ));
     }
-    let tree = match from {
-        Some((from, limits)) => seeded(from, limits)?,
-        None => starter(),
-    };
+    let tree = starter();
     let root = dir.join(name);
     if root.exists() {
         let key = idempotency_key.ok_or_else(|| CliError::Conflict {
@@ -281,7 +214,6 @@ pub fn scaffold(
             root,
             files: tree.files.iter().map(|(path, _)| path.clone()).collect(),
             next: tree.next,
-            dropped: tree.dropped,
         });
     }
     // Written aside, renamed in, the key last: a create that stopped leaves nothing behind.
@@ -308,7 +240,6 @@ pub fn scaffold(
         root,
         files,
         next: tree.next,
-        dropped: tree.dropped,
     })
 }
 
@@ -354,7 +285,7 @@ mod tests {
     fn scaffold_refuses_a_name_that_already_exists() {
         let dir = tmp("exists");
         std::fs::create_dir_all(dir.join("song1")).unwrap();
-        let err = scaffold(&dir, "song1", None, None).unwrap_err();
+        let err = scaffold(&dir, "song1", None).unwrap_err();
         assert!(matches!(err, CliError::Conflict { .. }));
         assert_eq!(
             err.exit_code(),
@@ -370,20 +301,20 @@ mod tests {
     #[test]
     fn a_retry_under_the_same_idempotency_key_answers_the_first_call_again() {
         let dir = tmp("idempotent");
-        let first = scaffold(&dir, "song1", Some("k-1"), None).expect("a fresh scaffold");
-        let again = scaffold(&dir, "song1", Some("k-1"), None).expect("a retry over the same tree");
+        let first = scaffold(&dir, "song1", Some("k-1")).expect("a fresh scaffold");
+        let again = scaffold(&dir, "song1", Some("k-1")).expect("a retry over the same tree");
         assert_eq!(first.root, again.root);
         assert_eq!(first.files, again.files);
 
         std::fs::write(first.root.join("master"), "0.0\n").unwrap();
-        let other = scaffold(&dir, "song1", Some("k-2"), None).unwrap_err();
+        let other = scaffold(&dir, "song1", Some("k-2")).unwrap_err();
         assert!(
             matches!(other, CliError::Conflict { .. }),
             "someone else's key is not a retry of this create"
         );
 
         std::fs::write(first.root.join("master"), "0.0\n").unwrap();
-        let edited = scaffold(&dir, "song1", Some("k-1"), None).unwrap_err();
+        let edited = scaffold(&dir, "song1", Some("k-1")).unwrap_err();
         assert!(
             matches!(edited, CliError::Conflict { .. }),
             "an edited tree is not a retry"
@@ -399,7 +330,7 @@ mod tests {
     #[test]
     fn the_scaffolded_composition_lints_clean_of_every_doc_comment_check() {
         let dir = tmp("lints-clean");
-        let scaffolded = scaffold(&dir, "song1", None, None).unwrap();
+        let scaffolded = scaffold(&dir, "song1", None).unwrap();
         let report = crate::lint::lint(&scaffolded.root, None);
         assert!(
             report.is_ok(),

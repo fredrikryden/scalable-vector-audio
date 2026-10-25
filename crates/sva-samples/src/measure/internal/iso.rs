@@ -1,4 +1,4 @@
-// Concern: ISO 532-1 time-varying stages and adjoints: band responses, levels, core loudness, decay, slopes | Non-concern: the transform feeding it, modulation (mod.rs) | IO: (band power) -> N' rows
+// Concern: ISO 532-1 time-varying stages: band responses, levels, core loudness, decay, slopes | Non-concern: the transform feeding it, modulation (mod.rs) | IO: (band power) -> N' rows
 
 //! Tables and stages of ISO 532-1:2017 (Zwicker), its time-varying method (5.3-5.5 and the
 //! annex program), as the mosqito port reads them: third-octave filters at 48 kHz (`REF_B`,
@@ -303,10 +303,6 @@ pub fn level(pa2: f64) -> f64 {
     10.0 * libm::log10((pa2 + FLOOR_PA2) / REF_PA2)
 }
 
-pub fn level_slope(pa2: f64) -> f64 {
-    10.0 / (std::f64::consts::LN_10 * (pa2 + FLOOR_PA2))
-}
-
 fn weighted(level: f64, band: usize) -> f64 {
     let above = |r: usize| level > RAP[r] - DLL[r][band];
     let mut dll = if above(0) { 0.0 } else { DLL[0][band] };
@@ -322,21 +318,15 @@ pub fn core_unit(k: usize) -> f64 {
     0.0635 * p10(0.025 * LTQ[k.min(19)])
 }
 
-fn core_law(le: f64, k: usize) -> (f64, f64) {
+fn core_law(le: f64, k: usize) -> f64 {
     let l = le - A0[k];
     if l <= LTQ[k] {
-        return (0.0, 0.0);
+        return 0.0;
     }
     let x = p10(0.1 * (l - DCB[k] - LTQ[k]));
     let base = 0.75 + 0.25 * x;
     let v = core_unit(k) * (base.sqrt().sqrt() - 1.0);
-    match v > 0.0 {
-        true => (
-            v,
-            core_unit(k) * 0.25 * libm::pow(base, -0.75) * 0.25 * x * 0.1 * std::f64::consts::LN_10,
-        ),
-        false => (0.0, 0.0),
-    }
+    if v > 0.0 { v } else { 0.0 }
 }
 
 pub fn core(level: &[f64; THIRDS]) -> [f64; CORE] {
@@ -356,7 +346,7 @@ pub fn core(level: &[f64; THIRDS]) -> [f64; CORE] {
             true => 0.0,
             false => level[8 + k],
         };
-        nm[k] = core_law(le, k).0;
+        nm[k] = core_law(le, k);
     }
     let korry = 0.4 + 0.32 * libm::pow(nm[0], 0.2);
     if korry <= 1.0 {
@@ -365,56 +355,11 @@ pub fn core(level: &[f64; THIRDS]) -> [f64; CORE] {
     nm
 }
 
-pub fn core_back(level: &[f64; THIRDS], dnm: &[f64; CORE]) -> [f64; THIRDS] {
-    let mut ti = [0.0; 11];
-    for (b, t) in ti.iter_mut().enumerate() {
-        *t = weighted(level[b], b);
-    }
-    let gi = [
-        ti[0..6].iter().sum::<f64>(),
-        ti[6..9].iter().sum::<f64>(),
-        ti[9..11].iter().sum::<f64>(),
-    ];
-    let mut out = [0.0; THIRDS];
-    let mut dn = *dnm;
-    let le0 = match gi[0] > 0.0 {
-        true => 10.0 * libm::log10(gi[0]),
-        false => 0.0,
-    };
-    let n0 = core_law(le0, 0).0;
-    if 0.4 + 0.32 * libm::pow(n0, 0.2) <= 1.0 {
-        dn[0] *= 0.4 + 0.384 * libm::pow(n0, 0.2);
-    }
-    let groups = [0..6, 6..9, 9..11];
-    for k in 0..20 {
-        let le = match k < 3 {
-            true if gi[k] > 0.0 => 10.0 * libm::log10(gi[k]),
-            true => 0.0,
-            false => level[8 + k],
-        };
-        let d = dn[k] * core_law(le, k).1;
-        if d == 0.0 {
-            continue;
-        }
-        match k < 3 {
-            true => {
-                let dg = d * 10.0 / (gi[k] * std::f64::consts::LN_10);
-                for b in groups[k].clone() {
-                    out[b] += dg * ti[b] * std::f64::consts::LN_10 / 10.0;
-                }
-            }
-            false => out[8 + k] += d,
-        }
-    }
-    out
-}
-
 /// ISO 532-1's nonlinear decay over frames, the input linear between them; a frame reads the
 /// state at its first step.
 pub struct Decay {
     steps: usize,
     b: [f64; 6],
-    branch: Vec<u8>,
 }
 
 impl Decay {
@@ -438,14 +383,12 @@ impl Decay {
                 sva_formula::exp(-dt / T_LONG),
                 sva_formula::exp(-dt / T_VAR),
             ],
-            branch: Vec::new(),
         }
     }
 
-    pub fn run(&mut self, core: &mut [f64]) {
+    pub fn run(&self, core: &mut [f64]) {
         let frames = core.len() / CORE;
         let b = self.b;
-        self.branch = vec![0; frames * self.steps * CORE];
         let input = core.to_vec();
         for k in 0..CORE {
             let (mut op, mut tp) = (0.0, 0.0);
@@ -469,10 +412,6 @@ impl Decay {
                         (false, true) => fall,
                         (false, false) => uo,
                     };
-                    self.branch[(k * frames + c) * self.steps + m] = u8::from(held)
-                        | u8::from(up) << 3
-                        | u8::from(falls) << 1
-                        | u8::from(release) << 2;
                     op = uo;
                     tp = u2;
                     if m == 0 {
@@ -481,57 +420,6 @@ impl Decay {
                 }
             }
         }
-    }
-
-    pub fn back(&self, d: &[f64]) -> Vec<f64> {
-        let frames = d.len() / CORE;
-        let b = self.b;
-        let mut out = vec![0.0; d.len()];
-        for k in 0..CORE {
-            let (mut gop, mut gtp) = (0.0, 0.0);
-            for c in (0..frames).rev() {
-                let (mut ghere, mut gnext) = (0.0, 0.0);
-                for m in (0..self.steps).rev() {
-                    let br = self.branch[(k * frames + c) * self.steps + m];
-                    let (held, falls, release, up) =
-                        (br & 1 != 0, br & 2 != 0, br & 4 != 0, br & 8 != 0);
-                    let mut guo = gop;
-                    if m == 0 {
-                        guo += d[c * CORE + k];
-                    }
-                    let (mut g_op, mut g_tp, mut g_u) = (0.0, 0.0, 0.0);
-                    match (release, falls) {
-                        (true, _) => {
-                            g_tp += b[5] * gtp;
-                            g_u += (1.0 - b[5]) * gtp;
-                        }
-                        (false, true) => {
-                            g_op += b[0] * gtp;
-                            g_tp -= b[1] * gtp;
-                        }
-                        (false, false) => guo += gtp,
-                    }
-                    match (held, up) {
-                        (true, _) => g_u += guo,
-                        (false, true) => {
-                            g_op += b[2] * guo;
-                            g_tp -= b[3] * guo;
-                        }
-                        (false, false) => g_op += b[4] * guo,
-                    }
-                    let w = m as f64 / self.steps as f64;
-                    ghere += g_u * (1.0 - w);
-                    gnext += g_u * w;
-                    gop = g_op;
-                    gtp = g_tp;
-                }
-                out[c * CORE + k] += ghere;
-                if c + 1 < frames {
-                    out[(c + 1) * CORE + k] += gnext;
-                }
-            }
-        }
-        out
     }
 }
 
@@ -545,29 +433,26 @@ fn range(v: f64) -> usize {
 }
 
 /// Each row the larger of its band's core loudness and the upper slope falling from below at
-/// the steepness its level gives; beside it the band it came from and its slope in that band.
-pub fn slopes(nm: &[f64; CORE], rows: &mut [f64; ROWS], from: &mut [(u8, f64); ROWS]) {
-    let (mut c, mut origin, mut factor) = (0.0, 0u8, 0.0);
-    for r in 0..ROWS {
+/// the steepness its level gives.
+pub fn slopes(nm: &[f64; CORE], rows: &mut [f64; ROWS]) {
+    let mut c = 0.0;
+    for (r, row) in rows.iter_mut().enumerate() {
         let k = row_band(r);
         if r > 0 && c > 0.0 {
             let column = k.saturating_sub(1).min(7);
             let mut i = range(c);
-            let first = USL[i][column];
             let mut rest = 0.1;
             loop {
                 let s = USL[i][column];
                 let need = (c - RNS[i]) / s;
                 if need >= rest {
                     c -= s * rest;
-                    factor *= s / first;
                     break;
                 }
                 rest -= need;
                 c = RNS[i];
                 if i == 17 {
                     c = 0.0;
-                    factor = 0.0;
                     break;
                 }
                 i += 1;
@@ -575,11 +460,8 @@ pub fn slopes(nm: &[f64; CORE], rows: &mut [f64; ROWS], from: &mut [(u8, f64); R
         }
         if nm[k] >= c {
             c = nm[k];
-            origin = k as u8;
-            factor = 1.0;
         }
-        rows[r] = c;
-        from[r] = (origin, factor);
+        *row = c;
     }
 }
 

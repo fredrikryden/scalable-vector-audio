@@ -1,1 +1,0 @@
-Concern: one solve over a composition: its cost, its variables, the search and the answer it prints | Non-concern: argv and files (sva-cli), the readings (sva-engine) | IO: (Problem) -> Solved

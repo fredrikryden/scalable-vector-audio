@@ -14,8 +14,7 @@ use crate::num::Num;
 use crate::origin::Origin;
 use atom::SpectralAtom;
 
-/// The infinite two sit beside the atoms because they carry their own truncation. A modal
-/// bank is built of plain numbers, moved by no varied one.
+/// The infinite two sit beside the atoms because they carry their own truncation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lane<N: Num = f64> {
     pub atoms: Vec<SpectralAtom<N>>,
