@@ -123,48 +123,33 @@ impl Range {
         }
     }
 
-    /// The eardrum power per bin of the frame centred at `t`, every plane's averaged.
-    fn power(&self, planes: &[&[f64]], rate: f64, t: f64) -> Vec<f64> {
+    /// The window of the frame centred at `t`.
+    fn frame(&self, rate: f64, t: f64) -> Frame<'_> {
         let half = self.window_secs / 2.0;
         let first = libm::floor((t - half) * rate) as i64 + 1;
         let last = (libm::ceil((t + half) * rate) as i64 - 1).min(first + self.n as i64 - 1);
-        let weights: Vec<(usize, f64)> = (first..=last)
-            .enumerate()
-            .map(|(k, s)| {
+        let weights: Vec<f64> = (first..=last)
+            .map(|s| {
                 let c = libm::cos(PI * (s as f64 / rate - t) / self.window_secs);
-                (k, c * c)
+                c * c
             })
             .collect();
-        let energy: f64 = weights.iter().map(|(_, w)| w * w).sum();
-        let len = planes[0].len() as i64;
-        let bins = self.hz.len();
-        let mut sum = vec![0.0; bins];
-        let (mut re, mut im) = (vec![0.0; self.n], vec![0.0; self.n]);
-        for pair in planes.chunks(2) {
-            re.iter_mut().for_each(|v| *v = 0.0);
-            im.iter_mut().for_each(|v| *v = 0.0);
-            for (k, w) in &weights {
-                let s = first + *k as i64;
-                if (0..len).contains(&s) {
-                    re[*k] = w * pair[0][s as usize];
-                    im[*k] = pair.get(1).map_or(0.0, |p| w * p[s as usize]);
-                }
-            }
-            fft::fft_with(&mut re, &mut im, &self.twiddles);
-            for (j, total) in sum.iter_mut().enumerate() {
-                let mirror = (self.n - j) % self.n;
-                *total += 0.5
-                    * (re[j] * re[j]
-                        + im[j] * im[j]
-                        + re[mirror] * re[mirror]
-                        + im[mirror] * im[mirror]);
-            }
+        let energy = weights.iter().map(|w| w * w).sum();
+        Frame {
+            range: self,
+            first,
+            weights,
+            energy,
         }
-        let count = planes.len() as f64;
-        sum.iter()
+    }
+
+    /// Power per bin over the window's energy, times the ear's gain and full scale.
+    fn eardrum(&self, power: &[f64], energy: f64) -> Vec<f64> {
+        power
+            .iter()
             .zip(&self.gain)
             .map(|(p, g)| match energy > 0.0 {
-                true => p / count / energy * g,
+                true => p / energy * g,
                 false => 0.0,
             })
             .collect()
@@ -178,6 +163,65 @@ impl Range {
                 10.0 * libm::log10(sum)
             })
             .collect()
+    }
+}
+
+/// One range's window at one frame: the samples it weighs and the bins it reads, so samples or
+/// a closed form put their power per bin through the ear alike.
+pub struct Frame<'a> {
+    range: &'a Range,
+    first: i64,
+    weights: Vec<f64>,
+    energy: f64,
+}
+
+impl Frame<'_> {
+    /// The first sample the window weighs; `weights()[k]` weighs sample `first() + k`.
+    pub fn first(&self) -> i64 {
+        self.first
+    }
+
+    pub fn weights(&self) -> &[f64] {
+        &self.weights
+    }
+
+    pub fn hz(&self) -> &[f64] {
+        &self.range.hz
+    }
+
+    /// The transform's length: the window's, zero-padded to a power of two.
+    pub fn n(&self) -> usize {
+        self.range.n
+    }
+
+    /// `|X|^2` per bin of the weighted samples, averaged over `planes`, each holding sample
+    /// `from + i` at `i`; a sample a plane does not hold is silence.
+    pub fn power(&self, planes: &[&[f64]], from: i64) -> Vec<f64> {
+        let bins = self.range.hz.len();
+        let mut sum = vec![0.0; bins];
+        let (mut re, mut im) = (vec![0.0; self.range.n], vec![0.0; self.range.n]);
+        for pair in planes.chunks(2) {
+            re.iter_mut().for_each(|v| *v = 0.0);
+            im.iter_mut().for_each(|v| *v = 0.0);
+            for (k, w) in self.weights.iter().enumerate() {
+                let i = self.first + k as i64 - from;
+                if (0..pair[0].len() as i64).contains(&i) {
+                    re[k] = w * pair[0][i as usize];
+                    im[k] = pair.get(1).map_or(0.0, |p| w * p[i as usize]);
+                }
+            }
+            fft::fft_with(&mut re, &mut im, &self.range.twiddles);
+            for (j, total) in sum.iter_mut().enumerate() {
+                let mirror = (self.range.n - j) % self.range.n;
+                *total += 0.5
+                    * (re[j] * re[j]
+                        + im[j] * im[j]
+                        + re[mirror] * re[mirror]
+                        + im[mirror] * im[mirror]);
+            }
+        }
+        let count = planes.len() as f64;
+        sum.iter().map(|p| p / count).collect()
     }
 }
 
@@ -272,8 +316,9 @@ impl Ear {
         }
     }
 
-    /// E per channel at frame `m`, centred at `m` hops.
-    fn excitation(&self, planes: &[&[f64]], m: i64) -> Vec<f64> {
+    /// E per channel at frame `m`, centred at `m` hops, of the power per bin `power` answers
+    /// each range's frame with, as `Frame::power` answers samples.
+    pub fn excitation(&self, m: i64, power: &mut dyn FnMut(&Frame) -> Vec<f64>) -> Vec<f64> {
         let t = m as f64 * self.hop_secs;
         let read: Vec<Option<(Vec<f64>, Vec<f64>)>> = self
             .ranges
@@ -281,7 +326,8 @@ impl Ear {
             .enumerate()
             .map(|(r, range)| {
                 self.channels.iter().any(|c| c.range == r).then(|| {
-                    let power = range.power(planes, self.rate, t);
+                    let frame = range.frame(self.rate, t);
+                    let power = range.eardrum(&power(&frame), frame.energy);
                     let levels = range.levels(&power);
                     (power, levels)
                 })
@@ -296,8 +342,8 @@ impl Ear {
             .collect()
     }
 
-    /// The first frame any window reaches the clip from, and the clip's last frame.
-    fn frames(&self, len: usize) -> (i64, i64) {
+    /// The first frame any window reaches a clip of `len` samples from, and its last frame.
+    pub fn frames(&self, len: usize) -> (i64, i64) {
         let longest = self
             .ranges
             .iter()
@@ -308,6 +354,11 @@ impl Ear {
         (first, last)
     }
 
+    /// Each channel's excitation at threshold, in the order `excitation` answers.
+    pub fn thresholds(&self) -> Vec<f64> {
+        self.channels.iter().map(|c| c.threshold).collect()
+    }
+
     pub fn read(&self, planes: &[&[f64]], start_secs: f64) -> Internal {
         let (first, last) = self.frames(super::held(planes));
         let mut levels = vec![Vec::new(); self.channels.len()];
@@ -315,7 +366,7 @@ impl Ear {
             for ((c, e), v) in self
                 .channels
                 .iter()
-                .zip(self.excitation(planes, m))
+                .zip(self.excitation(m, &mut |frame| frame.power(planes, 0)))
                 .zip(&mut levels)
             {
                 v.push(c.level(e));

@@ -60,14 +60,14 @@ pub use sva_samples::measure::{
     bands, beating, harmony, hearing, hits, internal, loudness_pattern, modulation, partials,
     periodicity, pitch, self_similarity, sharpness, sliding, spectrum,
 };
-pub use sva_samples::resample;
 pub use sva_samples::{
     Alias, AliasBand, BAND_COUNT, BandCrest, BandTrack, Bands, Buffer, Crest,
-    CuttingBelowSilenceThreshold, Detail, EnvelopeFrame, Extent, FormantFrame, Frames, Hits, Label,
-    LedgerEntry, Loudness, LoudnessFrame, MAX_PINNED_FRAME, Note, PEAK_NOTE, PSYCHOACOUSTIC_V1,
-    PitchFrame, Profile, Resampled, Rule, SignalKind, Source, Spectrum, StereoFrame, StereoImage,
-    fitted_frame, measure_alias, pinned_frame,
+    CuttingBelowSilenceThreshold, Detail, EnvelopeFrame, Extent, FormantFrame, Frames, Grid, Hits,
+    Label, LedgerEntry, Loudness, LoudnessFrame, MAX_PINNED_FRAME, Note, PEAK_NOTE,
+    PSYCHOACOUSTIC_V1, PitchFrame, Profile, Resampled, Rule, SignalKind, Source, Spectrum,
+    StereoFrame, StereoImage, fitted_frame, measure_alias, pinned_frame,
 };
+pub use sva_samples::{fft, resample};
 pub use trace::{Traced, Up, trace};
 pub use typing::{Typing, Value, When};
 pub use vocabulary::{MAX_WIDTH, named_may_move, recognized_named, shape, shape_name};
