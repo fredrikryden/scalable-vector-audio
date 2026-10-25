@@ -25,7 +25,7 @@ fn sin_pi(x: f64) -> (f64, f64) {
 }
 
 /// `cos^4(pi t/T)`'s transform at `x = nu T` over its value at 0; at 0, 1, 2 its weights.
-fn window_squared(x: f64) -> f64 {
+pub(super) fn window_squared(x: f64) -> f64 {
     let (k, sin) = sin_pi(x);
     if x == k {
         return match k.abs() {

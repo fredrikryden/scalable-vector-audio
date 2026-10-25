@@ -7,6 +7,7 @@ use sva_core::solve::atoms::{Atom, Clip, NEPER_PER_DB, Trajectory, nodes, score}
 use sva_core::solve::spectrum::{Model, floor_db};
 use sva_core::{Job, Output, Representation, asked, call, execute};
 use sva_engine::Tier;
+use sva_engine::fft;
 use sva_engine::hearing::{ear_gain_db, threshold_excitation_db};
 use sva_engine::internal::{Ear, Frame};
 
@@ -49,11 +50,26 @@ fn knots(base: f64, knots: &[(f64, f64)]) -> Trajectory {
     }
 }
 
+/// `|X|^2` summed over every bin of the frame's transform from 0 to Nyquist, its own range's
+/// and the rest, of `x` holding sample `i` at `i`.
+fn whole(frame: &Frame, x: &[f64]) -> f64 {
+    let n = frame.n();
+    let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
+    for (k, w) in frame.weights().iter().enumerate() {
+        let i = frame.first() + k as i64;
+        if (0..x.len() as i64).contains(&i) {
+            re[k] = w * x[i as usize];
+        }
+    }
+    fft::fft_with(&mut re, &mut im, &fft::twiddles(n));
+    (0..=n / 2).map(|j| re[j] * re[j] + im[j] * im[j]).sum()
+}
+
 /// Every frame and range of `ear` over the clip, each beside `check`.
 fn each_frame(ear: &Ear, clip: &Clip, check: &mut dyn FnMut(&Frame)) {
     let (first, last) = ear.frames(clip.len);
     for m in first..=last {
-        ear.excitation(m, &mut |frame| {
+        ear.compose(m, &mut |frame| {
             check(frame);
             vec![0.0; frame.hz().len()]
         });
@@ -62,7 +78,7 @@ fn each_frame(ear: &Ear, clip: &Clip, check: &mut dyn FnMut(&Frame)) {
 
 /// What a comparison measured: the largest gap over what its bounds allow, the largest gap
 /// past twice the rounding bound over the sampling bound, and the largest sampling bound over
-/// its frame's whole power.
+/// its range's frame's whole power, every bin of its transform.
 #[derive(Debug, Default)]
 struct Gaps {
     over_bounds: f64,
@@ -78,12 +94,25 @@ fn against_render(atoms: &[Atom], clip: &Clip, scale: f64) -> Gaps {
     let ear = Ear::of(f64::from(clip.rate), SPL, scale);
     let model = Model::new(atoms, *clip, true);
     let mut gaps = Gaps::default();
-    each_frame(&ear, clip, &mut |frame| {
-        let heard = frame.power(&[&render], 0);
-        let bins = model.bins(frame);
-        let whole: f64 = heard.iter().sum();
-        for (j, h) in heard.iter().enumerate() {
-            let (p, b, s) = (bins.power[j], bins.bound[j], bins.sampling[j]);
+    let (first, last) = ear.frames(clip.len);
+    for m in first..=last {
+        let composed = ear.compose(m, &mut |frame| {
+            let heard = frame.power(&[&render], 0);
+            let bins = model.bins(frame);
+            let whole = whole(frame, &render);
+            (0..heard.len())
+                .map(|j| {
+                    (
+                        heard[j],
+                        bins.power[j],
+                        bins.bound[j],
+                        bins.sampling[j],
+                        whole,
+                    )
+                })
+                .collect()
+        });
+        for (h, p, b, s, whole) in composed {
             let gap = (h - p).abs();
             assert!(
                 gap <= 2.0 * b + s,
@@ -99,10 +128,10 @@ fn against_render(atoms: &[Atom], clip: &Clip, scale: f64) -> Gaps {
                 gaps.sampling_share = gaps.sampling_share.max(s / whole);
             }
         }
-    });
+    }
     let (first, last) = ear.frames(clip.len);
     for m in (first..=last).step_by(11) {
-        let heard = ear.excitation(m, &mut |frame| frame.power(&[&render], 0));
+        let heard = ear.excite(m, &ear.compose(m, &mut |frame| frame.power(&[&render], 0)));
         let read = model.excitation(&ear, m);
         for (c, h) in heard.iter().enumerate() {
             let (e, least, most) = (read.excitation[c], read.least[c], read.most[c]);
@@ -247,7 +276,7 @@ fn a_noise_reads_its_exact_phase_ensemble_average() {
     let (mut over, mut share) = (0.0f64, 0.0f64);
     let (first, last) = ear.frames(clip.len);
     for m in (first..=last).step_by(9) {
-        ear.excitation(m, &mut |frame| {
+        let composed = ear.compose(m, &mut |frame| {
             let bins = model.bins(frame);
             let y: Vec<(i64, f64)> = frame
                 .weights()
@@ -262,29 +291,37 @@ fn a_noise_reads_its_exact_phase_ensemble_average() {
                 })
             };
             let n = frame.n() as f64;
-            let peak = bins.power.iter().fold(0.0f64, |a, b| a.max(*b));
-            for (j, p) in bins.power.iter().enumerate() {
-                let (b, s) = (bins.bound[j], bins.sampling[j]);
-                let beta = TAU * j as f64 / n;
-                let exact: f64 = turning
+            let exact = |bin: usize| -> f64 {
+                let beta = TAU * bin as f64 / n;
+                turning
                     .iter()
                     .map(|w| {
                         let (a, b) = (transform(beta - w), transform(beta + w));
                         half * half * (a.0 * a.0 + a.1 * a.1 + b.0 * b.0 + b.1 * b.1)
                     })
-                    .sum();
-                let gap = (p - exact).abs();
-                assert!(
-                    gap <= b + s + 1e-9 * peak,
-                    "bin {j}: {p} against {exact}, bound {b}, sampling {s}"
-                );
-                over = over.max(gap / (b + s + 1e-9 * peak));
-                if peak > 0.0 {
-                    share = share.max(s / peak);
-                }
-            }
-            bins.power
+                    .sum()
+            };
+            let peak = (0..=frame.n() / 2).fold(0.0f64, |a, bin| a.max(exact(bin)));
+            frame
+                .bins()
+                .enumerate()
+                .map(|(j, bin)| {
+                    let at = exact(bin);
+                    (bins.power[j], at, bins.bound[j], bins.sampling[j], peak)
+                })
+                .collect()
         });
+        for (j, (p, exact, b, s, peak)) in composed.into_iter().enumerate() {
+            let gap = (p - exact).abs();
+            assert!(
+                gap <= b + s + 1e-9 * peak,
+                "bin {j}: {p} against {exact}, bound {b}, sampling {s}"
+            );
+            over = over.max(gap / (b + s + 1e-9 * peak));
+            if peak > 0.0 {
+                share = share.max(s / peak);
+            }
+        }
     }
     println!(
         "noise against its exact expectation: gap over bounds {over}, sampling over peak {share}"
@@ -377,9 +414,10 @@ fn a_tone_is_first_heard_at_its_floor() {
         let gain = libm::pow(10.0, c / 10.0);
         let (first, last) = ear.frames(clip.len);
         (first..=last).fold(0.0f64, |most, m| {
-            let e = ear.excitation(m, &mut |frame| {
+            let power = ear.compose(m, &mut |frame| {
                 model.bins(frame).power.iter().map(|p| p * gain).collect()
             });
+            let e = ear.excite(m, &power);
             e.iter()
                 .zip(&thresholds)
                 .fold(most, |most, (e, t)| most.max(e / t))
@@ -459,7 +497,8 @@ fn tangents_agree_with_the_models_central_difference() {
         let mut worst = 0.0f64;
         let (first, last) = ear.frames(clip.len);
         for m in (first..=last).step_by(23) {
-            ear.excitation(m, &mut |frame| {
+            let composed = ear.compose(m, &mut |frame| {
+                let mut each: Vec<Vec<(f64, f64, f64)>> = vec![Vec::new(); frame.hz().len()];
                 for (i, atom) in atoms.iter().enumerate() {
                     let values = atom.values();
                     for (j, tangent) in model.tangents(frame, i).iter().enumerate() {
@@ -472,24 +511,30 @@ fn tangents_agree_with_the_models_central_difference() {
                             Model::new(&held, clip, true).bins(frame).power
                         };
                         let (up, down) = (at(1.0), at(-1.0));
-                        let peak = up.iter().fold(0.0f64, |a, p| a.max(p.abs()));
-                        let scale = tangent.iter().fold(0.0f64, |a, t| a.max(t.abs()));
                         for (b, t) in tangent.iter().enumerate() {
                             let central = (up[b] - down[b]) / (2.0 * step);
-                            let gap = (t - central).abs();
-                            let rounding = 1e-12 * peak / step;
-                            assert!(
-                                gap <= 1e-4 * scale + rounding,
-                                "atom {i} number {j} bin {b}: {t} against {central}"
-                            );
-                            if scale > rounding {
-                                worst = worst.max(gap / scale);
-                            }
+                            each[b].push((*t, central, up[b] / step));
                         }
                     }
                 }
-                vec![0.0; frame.hz().len()]
+                each
             });
+            for q in 0..composed.first().map_or(0, Vec::len) {
+                let peak = composed.iter().fold(0.0f64, |a, b| a.max(b[q].2.abs()));
+                let scale = composed.iter().fold(0.0f64, |a, b| a.max(b[q].0.abs()));
+                for (b, bin) in composed.iter().enumerate() {
+                    let (t, central, _) = bin[q];
+                    let gap = (t - central).abs();
+                    let rounding = 1e-12 * peak;
+                    assert!(
+                        gap <= 1e-4 * scale + rounding,
+                        "number {q} bin {b}: {t} against {central}"
+                    );
+                    if scale > rounding {
+                        worst = worst.max(gap / scale);
+                    }
+                }
+            }
         }
         println!(
             "{} atoms: tangent gap over its largest {worst}",

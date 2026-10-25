@@ -11,6 +11,7 @@ use super::hearing::{
 use crate::fft;
 use modulation::Band;
 use rate::Rate;
+use sva_formula::C64;
 
 pub const MODEL: &str = "the ear's internal reading at scale s, through the hearing curves \
      (their own model text): frames every s ms (Glasberg and Moore's 2002 1 ms hop at s = 1), \
@@ -80,6 +81,8 @@ struct Channel {
     range: usize,
     threshold: f64,
     lower: usize,
+    lower_slope: (f64, f64),
+    below: Vec<f64>,
     upper: (usize, Vec<f64>),
     bands: Vec<(Band, Rate)>,
 }
@@ -147,12 +150,10 @@ impl Range {
     fn frame(&self, rate: f64, t: f64) -> Frame<'_> {
         let (first, last) = self.span(rate, t);
         let weights: Vec<f64> = (first..=last).map(|s| self.weight(rate, t, s)).collect();
-        let energy = weights.iter().map(|w| w * w).sum();
         Frame {
             range: self,
             first,
             weights,
-            energy,
         }
     }
 
@@ -173,7 +174,6 @@ pub struct Frame<'a> {
     range: &'a Range,
     first: i64,
     weights: Vec<f64>,
-    energy: f64,
 }
 
 impl Frame<'_> {
@@ -186,8 +186,14 @@ impl Frame<'_> {
         &self.weights
     }
 
+    /// The bins this window supplies, its own range's.
     pub fn hz(&self) -> &[f64] {
-        &self.range.hz
+        &self.range.hz[self.range.supplies.clone()]
+    }
+
+    /// `hz()[i]` is transform bin `bins().start + i`.
+    pub fn bins(&self) -> std::ops::Range<usize> {
+        self.range.supplies.clone()
     }
 
     /// The transform's length: the window's, zero-padded to a power of two.
@@ -195,11 +201,11 @@ impl Frame<'_> {
         self.range.n
     }
 
-    /// `|X|^2` per bin of the weighted samples, averaged over `planes`, each holding sample
-    /// `from + i` at `i`; a sample a plane does not hold is silence.
+    /// `|X|^2` per bin of `bins()` of the weighted samples, averaged over `planes`, each
+    /// holding sample `from + i` at `i`; a sample a plane does not hold is silence.
     pub fn power(&self, planes: &[&[f64]], from: i64) -> Vec<f64> {
-        let bins = self.range.hz.len();
-        let mut sum = vec![0.0; bins];
+        let bins = self.bins();
+        let mut sum = vec![0.0; bins.len()];
         let (mut re, mut im) = (vec![0.0; self.range.n], vec![0.0; self.range.n]);
         for pair in planes.chunks(2) {
             re.iter_mut().for_each(|v| *v = 0.0);
@@ -212,7 +218,7 @@ impl Frame<'_> {
                 }
             }
             fft::fft_with(&mut re, &mut im, &self.range.twiddles);
-            for (j, total) in sum.iter_mut().enumerate() {
+            for (j, total) in bins.clone().zip(&mut sum) {
                 let mirror = (self.range.n - j) % self.range.n;
                 *total += 0.5
                     * (re[j] * re[j]
@@ -227,14 +233,23 @@ impl Frame<'_> {
 }
 
 impl Channel {
-    fn excitation(&self, scale: f64, hz: &[f64], power: &[f64], levels: &[f64]) -> f64 {
-        let below: f64 = (0..self.lower)
-            .filter(|i| power[*i] > 0.0)
-            .map(|i| {
-                let p = hearing::roex_p(self.hz, hz[i], levels[i]) / scale;
-                hearing::roex(p, self.hz, hz[i]) * power[i]
-            })
-            .sum();
+    /// `roex(p/s)` at bin `i` under the centre, `p` at level `x`.
+    fn skirt(&self, scale: f64, i: usize, x: f64) -> f64 {
+        let (p51, slope) = self.lower_slope;
+        hearing::roex_apart(
+            hearing::lower_p(p51, slope, x) / scale,
+            self.below[i],
+            self.hz,
+        )
+    }
+
+    fn excitation(&self, scale: f64, power: &[f64], levels: &[f64]) -> f64 {
+        let mut below = 0.0;
+        for i in 0..self.lower {
+            if power[i] > 0.0 {
+                below += self.skirt(scale, i, levels[i]) * power[i];
+            }
+        }
         let (from, weights) = &self.upper;
         let above: f64 = weights
             .iter()
@@ -242,6 +257,22 @@ impl Channel {
             .map(|(w, p)| w * p)
             .sum();
         below + above
+    }
+
+    fn weights(&self, scale: f64, toward: &[f64], levels: &[f64]) -> (usize, Vec<f64>) {
+        let (from, upper) = &self.upper;
+        let first = (0..self.lower).find(|i| toward[*i] > 0.0).unwrap_or(*from);
+        let start = first.min(*from);
+        let mut row = vec![0.0; from + upper.len() - start];
+        for i in first..self.lower {
+            if toward[i] > 0.0 {
+                row[i - start] = self.skirt(scale, i, levels[i]) * toward[i];
+            }
+        }
+        for (k, w) in upper.iter().enumerate() {
+            row[from + k - start] = w * toward[from + k];
+        }
+        (start, row)
     }
 
     fn level(&self, excitation: f64) -> f64 {
@@ -313,11 +344,14 @@ impl Ear {
                     .into_iter()
                     .zip(rates[r].iter().copied())
                     .collect();
+                let p51 = hearing::p51(*centre);
                 Channel {
                     hz: *centre,
                     range: r,
                     threshold: decibels(hearing::threshold_excitation_db(*centre)),
                     lower,
+                    lower_slope: (p51, hearing::lower_slope(p51)),
+                    below: hz[..lower].iter().map(|f| (f - centre).abs()).collect(),
                     upper: (lower + upper.0, upper.1),
                     bands,
                 }
@@ -340,13 +374,18 @@ impl Ear {
     }
 
     /// Frame `m`'s one spectrum, as Glasberg and Moore (2002) compose it: what `per` answers
-    /// each range's frame with, kept only at the bins in that range, in the order of `hz()`.
+    /// each range's frame with, one value per bin of its `Frame::hz()`, in the order of `hz()`.
     pub fn compose<T>(&self, m: i64, per: &mut dyn FnMut(&Frame) -> Vec<T>) -> Vec<T> {
         let t = m as f64 * self.hop_secs;
         let mut out = Vec::with_capacity(self.hz.len());
         for range in self.supplying() {
-            let mut bins = per(&range.frame(self.rate, t));
-            out.extend(bins.drain(range.supplies.clone()));
+            let bins = per(&range.frame(self.rate, t));
+            assert_eq!(
+                bins.len(),
+                range.supplies.len(),
+                "one value per supplied bin"
+            );
+            out.extend(bins);
         }
         out
     }
@@ -359,20 +398,59 @@ impl Ear {
     /// E per channel at frame `m` of `power`, `|X|^2` per bin of the composed spectrum as
     /// `compose` answers it.
     pub fn excite(&self, m: i64, power: &[f64]) -> Vec<f64> {
-        let t = m as f64 * self.hop_secs;
-        let energies: Vec<f64> = self
-            .supplying()
-            .map(|range| range.energy(self.rate, t))
-            .collect();
-        self.excited(power, &energies)
+        let (eardrum, levels) = self.heard(m, power);
+        self.channels
+            .iter()
+            .map(|c| c.excitation(self.scale, &eardrum, &levels))
+            .collect()
     }
 
-    /// Each bin's power over its window's energy, times the ear's gain and full scale, then E.
-    fn excited(&self, power: &[f64], energies: &[f64]) -> Vec<f64> {
-        let gains = self.supplying().zip(energies).flat_map(|(range, energy)| {
+    /// E per channel of each of `parts`, through the filters `power`'s levels set.
+    pub fn excite_each(&self, m: i64, power: &[f64], parts: &[Vec<f64>]) -> Vec<Vec<f64>> {
+        let (_, levels) = self.heard(m, power);
+        let toward: Vec<f64> = self
+            .factors(m)
+            .zip(power)
+            .map(|(f, p)| match *p > 0.0 {
+                true => f,
+                false => 0.0,
+            })
+            .collect();
+        let rows: Vec<(usize, Vec<f64>)> = self
+            .channels
+            .iter()
+            .map(|c| c.weights(self.scale, &toward, &levels))
+            .collect();
+        parts
+            .iter()
+            .map(|part| {
+                rows.iter()
+                    .map(|(from, row)| row.iter().zip(&part[*from..]).map(|(w, p)| w * p).sum())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn factors(&self, m: i64) -> impl Iterator<Item = f64> + '_ {
+        let t = m as f64 * self.hop_secs;
+        self.supplying().flat_map(move |range| {
+            let energy = range.energy(self.rate, t);
             range.gain[range.supplies.clone()]
                 .iter()
-                .zip(std::iter::repeat(*energy))
+                .map(move |g| match energy > 0.0 {
+                    true => g / energy,
+                    false => 0.0,
+                })
+        })
+    }
+
+    /// Each bin's power at the eardrum, beside its level per ERB.
+    fn heard(&self, m: i64, power: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let t = m as f64 * self.hop_secs;
+        let gains = self.supplying().flat_map(|range| {
+            range.gain[range.supplies.clone()]
+                .iter()
+                .zip(std::iter::repeat(range.energy(self.rate, t)))
         });
         let eardrum: Vec<f64> = power
             .iter()
@@ -390,21 +468,7 @@ impl Ear {
                 10.0 * libm::log10(sum)
             })
             .collect();
-        self.channels
-            .iter()
-            .map(|c| c.excitation(self.scale, &self.hz, &eardrum, &levels))
-            .collect()
-    }
-
-    /// E per channel at frame `m`, centred at `m` hops, of the power per bin `power` answers
-    /// each range's frame with, as `Frame::power` answers samples, composed as `compose` does.
-    pub fn excitation(&self, m: i64, power: &mut dyn FnMut(&Frame) -> Vec<f64>) -> Vec<f64> {
-        let mut energies = Vec::with_capacity(self.ranges.len());
-        let composed = self.compose(m, &mut |frame| {
-            energies.push(frame.energy);
-            power(frame)
-        });
-        self.excited(&composed, &energies)
+        (eardrum, levels)
     }
 
     /// The first frame any window reaches a clip of `len` samples from, and its last frame.
@@ -424,35 +488,63 @@ impl Ear {
         self.channels.iter().map(|c| c.threshold).collect()
     }
 
-    pub fn read(&self, planes: &[&[f64]], start_secs: f64) -> Internal {
-        let (first, last) = self.frames(super::held(planes));
+    /// Each channel's bands' outputs, before `Band::element`, of `excitation`'s E per frame.
+    pub fn elements(
+        &self,
+        len: usize,
+        excitation: &mut dyn FnMut(i64) -> Vec<f64>,
+    ) -> Vec<Vec<Vec<C64>>> {
+        let (first, last) = self.frames(len);
         let mut levels = vec![Vec::new(); self.channels.len()];
         for m in first..=last {
-            for ((c, e), v) in self
-                .channels
-                .iter()
-                .zip(self.excitation(m, &mut |frame| frame.power(planes, 0)))
-                .zip(&mut levels)
-            {
+            for ((c, e), v) in self.channels.iter().zip(excitation(m)).zip(&mut levels) {
                 v.push(c.level(e));
             }
         }
         let from = (-first) as usize;
+        self.channels
+            .iter()
+            .zip(&levels)
+            .map(|(c, v)| modulation::outputs(v, from, self.hop_secs, &c.bands))
+            .collect()
+    }
+
+    /// The frame element `j` of channel `c`'s band `k` reads.
+    pub fn sampled(&self, c: usize, k: usize, j: usize) -> i64 {
+        modulation::sampled(j, self.channels[c].bands[k].1.per_frame)
+    }
+
+    /// `|H(nu)|^2` from E (in V's units) to channel `c`'s band `k`'s output: the squared
+    /// window's normalised transform, squared, then the stage's digital filters.
+    pub fn kernel(&self, c: usize, k: usize, nu: f64) -> f64 {
+        let channel = &self.channels[c];
+        let w = rate::window_squared(nu * self.ranges[channel.range].window_secs);
+        w * w * channel.bands[k].0.digital(nu, self.hop_secs)
+    }
+
+    pub fn read(&self, planes: &[&[f64]], start_secs: f64) -> Internal {
+        let outputs = self.elements(super::held(planes), &mut |m| {
+            self.excite(m, &self.compose(m, &mut |frame| frame.power(planes, 0)))
+        });
+        self.reading(outputs, start_secs)
+    }
+
+    pub fn reading(&self, outputs: Vec<Vec<Vec<C64>>>, start_secs: f64) -> Internal {
         let channels = self
             .channels
             .iter()
-            .zip(&levels)
-            .map(|(c, v)| Heard {
+            .zip(outputs)
+            .map(|(c, bands)| Heard {
                 hz: c.hz,
                 window_secs: self.ranges[c.range].window_secs,
-                bands: modulation::elements(v, from, self.hop_secs, &c.bands)
+                bands: bands
                     .into_iter()
                     .zip(&c.bands)
-                    .map(|(elements, (band, rate))| Sampled {
+                    .map(|(ys, (band, rate))| Sampled {
                         band: *band,
                         rate_hz: rate.per_frame / self.hop_secs,
                         rate_bound_hz: rate.bound / self.hop_secs,
-                        elements,
+                        elements: ys.into_iter().map(|y| band.element(y)).collect(),
                     })
                     .collect(),
             })

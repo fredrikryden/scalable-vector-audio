@@ -224,7 +224,7 @@ fn a_steady_tone_ripples_by_the_published_models_stated_limit() {
         .expect("a 5302 Hz channel");
     let db: Vec<f64> = (100..520)
         .map(|m| {
-            let e = ear.excitation(m, &mut |frame| frame.power(&[&x], 0));
+            let e = ear.excite(m, &ear.compose(m, &mut |frame| frame.power(&[&x], 0)));
             10.0 * libm::log10(e[channel])
         })
         .collect();
@@ -232,4 +232,46 @@ fn a_steady_tone_ripples_by_the_published_models_stated_limit() {
         .iter()
         .fold((f64::MAX, f64::MIN), |(a, b), e| (a.min(*e), b.max(*e)));
     assert!((high - low - 3.43).abs() < 0.005, "{} dB", high - low);
+}
+
+/// `elements` on the reading's own excitation answers what `read` maps through each band's
+/// element, element `j` at the frame `round(j / per_frame)`, and each kernel is its band's:
+/// 1 at 0 Hz for the lowpass, even for a real band, a magnitude band's over twice as large at
+/// its centre as at its mirror.
+#[test]
+fn elements_are_the_readings_outputs_and_each_kernel_its_bands() {
+    let rate = 8_000.0;
+    let x: Vec<f64> = tone(1000.0, 40.0, 0.25).into_iter().step_by(6).collect();
+    let ear = Ear::of(rate, SPL, 1.0);
+    let read = ear.read(&[&x], 0.0);
+    let mut frames = Vec::new();
+    let outputs = ear.elements(x.len(), &mut |m| {
+        frames.push(m);
+        ear.excite(m, &ear.compose(m, &mut |frame| frame.power(&[&x], 0)))
+    });
+    let (first, last) = ear.frames(x.len());
+    assert_eq!(frames, (first..=last).collect::<Vec<_>>());
+    for (c, (heard, bands)) in read.channels.iter().zip(&outputs).enumerate() {
+        for (k, (sampled, ys)) in heard.bands.iter().zip(bands).enumerate() {
+            let per_frame = sampled.rate_hz * read.hop_secs;
+            for (j, (e, y)) in sampled.elements.iter().zip(ys).enumerate() {
+                assert_eq!(*e, sampled.band.element(*y));
+                let at = (j as f64 / per_frame).round_ties_even() as i64;
+                assert_eq!(ear.sampled(c, k, j), at);
+            }
+            let (near, far) = (ear.kernel(c, k, 3.0), ear.kernel(c, k, -3.0));
+            match sampled.band.element {
+                Element::Lowpass => {
+                    assert!((ear.kernel(c, k, 0.0) - 1.0).abs() < 1e-12);
+                    assert!((near - far).abs() <= 1e-15 * near);
+                }
+                Element::Real => assert!((near - far).abs() <= 1e-15 * near),
+                Element::Magnitude => {
+                    let hz = sampled.band.hz;
+                    let (up, down) = (ear.kernel(c, k, hz), ear.kernel(c, k, -hz));
+                    assert!(up > 2.0 * down, "{hz} Hz: {up} against {down}");
+                }
+            }
+        }
+    }
 }

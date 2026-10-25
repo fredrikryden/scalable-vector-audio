@@ -68,6 +68,7 @@ pub use sva_samples::{
     StereoFrame, StereoImage, fitted_frame, measure_alias, pinned_frame,
 };
 pub use sva_samples::{fft, resample};
+pub use threads::{default_threads, each};
 pub use trace::{Traced, Up, trace};
 pub use typing::{Typing, Value, When};
 pub use vocabulary::{MAX_WIDTH, named_may_move, recognized_named, shape, shape_name};

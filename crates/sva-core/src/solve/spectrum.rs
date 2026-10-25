@@ -77,7 +77,10 @@ pub struct Model<'a> {
     clip: Clip,
     coherent: bool,
     correlations: RefCell<HashMap<(u64, u64, usize), Rc<Correlation>>>,
+    lines: RefCell<HashMap<Vec<u64>, Rc<PerLine>>>,
 }
+
+type PerLine = Vec<Vec<f64>>;
 
 impl<'a> Model<'a> {
     pub fn new(atoms: &'a [Atom], clip: Clip, coherent: bool) -> Model<'a> {
@@ -86,6 +89,7 @@ impl<'a> Model<'a> {
             clip,
             coherent,
             correlations: RefCell::default(),
+            lines: RefCell::default(),
         }
     }
 
@@ -96,6 +100,31 @@ impl<'a> Model<'a> {
     }
 
     pub fn bins(&self, frame: &Frame) -> Bins {
+        let mut out = self.tonal_bins(frame);
+        for atom in self.atoms {
+            if let Sound::Noise { lo, hi } = atom.sound {
+                let correlation = self
+                    .correlations
+                    .borrow_mut()
+                    .entry((lo.to_bits(), hi.to_bits(), frame.n()))
+                    .or_insert_with(|| Rc::new(correlation(&self.clip, (lo, hi), frame.n())))
+                    .clone();
+                out = out.add(expected(atom, &self.clip, frame, &correlation));
+            }
+        }
+        out
+    }
+
+    /// Each noise atom's lines the render holds, in `atoms`' order, each over its phase alone.
+    pub fn lines(&self, frame: &Frame) -> Vec<Lines> {
+        self.atoms
+            .iter()
+            .filter(|a| matches!(a.sound, Sound::Noise { .. }))
+            .map(|atom| self.lines_of(atom, frame))
+            .collect()
+    }
+
+    pub fn tonal_bins(&self, frame: &Frame) -> Bins {
         let count = frame.weights().len();
         let mut out = Bins::silent(frame.hz().len());
         let windows: Vec<Window<f64>> = self
@@ -124,17 +153,6 @@ impl<'a> Model<'a> {
                 for w in &windows {
                     out = out.add(transformed(frame, w));
                 }
-            }
-        }
-        for atom in self.atoms {
-            if let Sound::Noise { lo, hi } = atom.sound {
-                let correlation = self
-                    .correlations
-                    .borrow_mut()
-                    .entry((lo.to_bits(), hi.to_bits(), frame.n()))
-                    .or_insert_with(|| Rc::new(correlation(&self.clip, (lo, hi), frame.n())))
-                    .clone();
-                out = out.add(expected(atom, &self.clip, frame, &correlation));
             }
         }
         out
@@ -170,11 +188,78 @@ impl<'a> Model<'a> {
                 let moved = samples(&atom.seeded(j), &self.clip, frame.first(), count);
                 let dx: Vec<f64> = moved.x.iter().map(|x| x.tangent).collect();
                 let (d_re, d_im) = transform(frame, &dx);
-                (0..frame.hz().len())
+                frame
+                    .bins()
                     .map(|b| 2.0 * (re[b] * d_re[b] + im[b] * d_im[b]))
                     .collect()
             })
             .collect()
+    }
+
+    /// Line `k`, amplitude `1/sqrt(T)` times the envelope `y`, over its phase: `E|X_j|^2 =
+    /// (|A_j|^2 + |A_(n-j)|^2)/(4T)`, `A` the transform of `y e^(2 pi i k s/(rate T))`; kept by
+    /// all it reads.
+    fn lines_of(&self, atom: &Atom, frame: &Frame) -> Lines {
+        let Sound::Noise { lo, hi } = atom.sound else {
+            unreachable!("a noise")
+        };
+        let clip = &self.clip;
+        let none = Lines {
+            first: 0,
+            power: Rc::new(Vec::new()),
+        };
+        let (Some((first, last)), Some(envelope)) =
+            (line_span(lo, hi, clip), envelope(atom, clip, frame))
+        else {
+            return none;
+        };
+        if envelope.y.iter().all(|y| *y == 0.0) {
+            return none;
+        }
+        let n = frame.n();
+        let key: Vec<u64> = [
+            lo.to_bits(),
+            hi.to_bits(),
+            n as u64,
+            frame.bins().start as u64,
+        ]
+        .into_iter()
+        .chain(envelope.y.iter().map(|y| y.to_bits()))
+        .collect();
+        if let Some(power) = self.lines.borrow().get(&key) {
+            return Lines {
+                first,
+                power: power.clone(),
+            };
+        }
+        let period = clip.secs();
+        let twiddles = fft::twiddles(n);
+        let step = TAU / (f64::from(clip.rate) * period);
+        let power: Vec<Vec<f64>> = (first..=last)
+            .map(|k| {
+                let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
+                for (s, y) in envelope.y.iter().enumerate() {
+                    let (sin, cos) = libm::sincos(step * (k as f64) * s as f64);
+                    re[s] = y * cos;
+                    im[s] = y * sin;
+                }
+                fft::fft_with(&mut re, &mut im, &twiddles);
+                frame
+                    .bins()
+                    .map(|j| {
+                        let mirror = (n - j) % n;
+                        (re[j] * re[j]
+                            + im[j] * im[j]
+                            + re[mirror] * re[mirror]
+                            + im[mirror] * im[mirror])
+                            / (4.0 * period)
+                    })
+                    .collect()
+            })
+            .collect();
+        let power = Rc::new(power);
+        self.lines.borrow_mut().insert(key, power.clone());
+        Lines { first, power }
     }
 
     /// E per channel at frame `m`, bracketed for the model's exact formula and for the render.
@@ -559,6 +644,28 @@ fn envelope<N: Num>(atom: &Atom<N>, clip: &Clip, frame: &Frame) -> Option<Envelo
     Some(out)
 }
 
+/// `power[i]` is line `first + i`'s per bin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lines {
+    pub first: i64,
+    pub power: Rc<PerLine>,
+}
+
+/// The first and last line `noise` over the clip renders in `[lo, hi]` under the ceiling.
+pub fn line_span(lo: f64, hi: f64, clip: &Clip) -> Option<(i64, i64)> {
+    let period = clip.secs();
+    let ceiling = PSYCHOACOUSTIC_V1.ceiling(clip.rate);
+    let Some((first, sva_formula::Bound::Finite(last))) =
+        sva_formula::noise::band(period, lo, Some(hi))
+    else {
+        return None;
+    };
+    let last = (first..=last)
+        .take_while(|k| (*k as f64 / period) < ceiling)
+        .last()?;
+    Some((first, last))
+}
+
 /// A noise's expected power per bin, `sum_d R(d) C(d) e^(-2 pi i j d/n)`, `R` the band's
 /// autocorrelation and `C` the weighted envelope's; its sampling as `MODEL` derives it.
 fn expected(atom: &Atom, clip: &Clip, frame: &Frame, correlation: &Correlation) -> Bins {
@@ -638,7 +745,7 @@ fn expected(atom: &Atom, clip: &Clip, frame: &Frame, correlation: &Correlation) 
     let mut im = vec![0.0; n];
     fft::fft_with(&mut folded, &mut im, &fft::twiddles(n));
     let err = root * folded_bound + fft_bound(n) * root * (folded_norm + folded_bound);
-    let power = folded[..bins].to_vec();
+    let power = folded[frame.bins()].to_vec();
     let sampling = power
         .iter()
         .map(|p| gap + eps * (2.0 * (p + err + gap).max(0.0).sqrt() + eps) * (1.0 + 4.0 * U))
@@ -653,7 +760,8 @@ fn expected(atom: &Atom, clip: &Clip, frame: &Frame, correlation: &Correlation) 
 /// `d E|X_j|^2` along a seeded noise's one direction: `C`'s from the envelope's transform,
 /// `d|Y|^2 = 2 Re(conj(Y) dY)`, then `sum_d (dR C + R dC) e^(-2 pi i j d/n)`.
 fn expected_tangent(atom: &Atom<Dual>, clip: &Clip, frame: &Frame) -> Vec<f64> {
-    let (n, bins) = (frame.n(), frame.hz().len());
+    let n = frame.n();
+    let bins = frame.hz().len();
     let Sound::Noise { lo, hi } = atom.sound else {
         unreachable!("a noise")
     };
@@ -697,7 +805,7 @@ fn expected_tangent(atom: &Atom<Dual>, clip: &Clip, frame: &Frame) -> Vec<f64> {
     }
     let mut im = vec![0.0; n];
     fft::fft_with(&mut folded, &mut im, &fft::twiddles(n));
-    folded[..bins].to_vec()
+    folded[frame.bins()].to_vec()
 }
 
 /// `(1/2) int_lo^top cos(2 pi f tau) df`, as `cos(pi (top + lo) tau) sin(pi (top - lo) tau) /

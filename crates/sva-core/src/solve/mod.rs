@@ -2,7 +2,9 @@
 
 pub mod atoms;
 pub mod bits;
+pub mod calibrate;
 pub mod dual;
+pub mod objective;
 pub mod spectrum;
 
 use sva_ast::Source;

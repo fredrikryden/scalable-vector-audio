@@ -119,21 +119,35 @@ pub fn p51(hz: f64) -> f64 {
     P51_ERBS * hz / erb_hz(hz)
 }
 
+/// A centre's lower-skirt coefficient: p_l falls by it per dB of X.
+pub fn lower_slope(p51: f64) -> f64 {
+    LOWER_SLOPE * (p51 / self::p51(1000.0))
+}
+
+/// The lower skirt's p at `x_db`, from the centre's `p51` and `lower_slope`.
+pub fn lower_p(p51: f64, slope: f64, x_db: f64) -> f64 {
+    (p51 - slope * (x_db - LOWER_SLOPE_ANCHOR_DB)).max(P_FLOOR)
+}
+
 pub fn roex_p(centre_hz: f64, component_hz: f64, x_db: f64) -> f64 {
     let p = p51(centre_hz);
-    let slope = match component_hz < centre_hz {
-        true => p - LOWER_SLOPE * (p / p51(1000.0)) * (x_db - LOWER_SLOPE_ANCHOR_DB),
-        false => p,
-    };
-    slope.max(P_FLOOR)
+    match component_hz < centre_hz {
+        true => lower_p(p, lower_slope(p), x_db),
+        false => p.max(P_FLOOR),
+    }
 }
 
 fn roex_of(pg: f64) -> f64 {
     (1.0 + pg) * sva_formula::exp(-pg)
 }
 
+/// The roex at `apart_hz` from `centre_hz`.
+pub fn roex_apart(p: f64, apart_hz: f64, centre_hz: f64) -> f64 {
+    roex_of(p * apart_hz / centre_hz)
+}
+
 pub fn roex(p: f64, centre_hz: f64, component_hz: f64) -> f64 {
-    roex_of(p * (component_hz - centre_hz).abs() / centre_hz)
+    roex_apart(p, (component_hz - centre_hz).abs(), centre_hz)
 }
 
 /// The level-free roex centred on `component_hz`, read at `hz`: its p g as 4 |f - fc| / ERB(fc),
