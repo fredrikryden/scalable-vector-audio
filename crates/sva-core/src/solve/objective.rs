@@ -3,6 +3,7 @@
 use std::f64::consts::LN_2;
 
 use sva_engine::internal::{Ear, Internal};
+use sva_formula::C64;
 
 use super::atoms::{Atom, Clip};
 use super::bits::{self, Priced};
@@ -46,6 +47,14 @@ impl Objective {
         &self.heard
     }
 
+    pub fn clip(&self) -> Clip {
+        self.clip
+    }
+
+    pub fn n0(&self) -> f64 {
+        self.n0
+    }
+
     /// Partials and harmonics summed in samples where `coherent`.
     pub fn expect(&self, atoms: &[Atom], coherent: bool) -> Elements {
         let model = Model::new(atoms, self.clip, coherent);
@@ -53,14 +62,19 @@ impl Objective {
             let power = self.ear.compose(m, &mut |frame| model.bins(frame).power);
             self.ear.excite(m, &power)
         });
+        self.elements(&outputs)
+    }
+
+    /// Each band's elements of `outputs`, its outputs before `Band::element`.
+    pub fn elements(&self, outputs: &[Vec<Vec<C64>>]) -> Elements {
         outputs
-            .into_iter()
+            .iter()
             .zip(&self.heard.channels)
             .map(|(bands, channel)| {
                 bands
-                    .into_iter()
+                    .iter()
                     .zip(&channel.bands)
-                    .map(|(ys, band)| ys.into_iter().map(|y| band.band.element(y)).collect())
+                    .map(|(ys, band)| ys.iter().map(|y| band.band.element(*y)).collect())
                     .collect()
             })
             .collect()

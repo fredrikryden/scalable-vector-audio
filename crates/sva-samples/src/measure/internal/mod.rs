@@ -11,7 +11,7 @@ use super::hearing::{
 use crate::fft;
 use modulation::Band;
 use rate::Rate;
-use sva_formula::C64;
+use sva_formula::{C64, Num};
 
 pub const MODEL: &str = "the ear's internal reading at scale s, through the hearing curves \
      (their own model text): frames every s ms (Glasberg and Moore's 2002 1 ms hop at s = 1), \
@@ -234,7 +234,7 @@ impl Frame<'_> {
 
 impl Channel {
     /// `roex(p/s)` at bin `i` under the centre, `p` at level `x`.
-    fn skirt(&self, scale: f64, i: usize, x: f64) -> f64 {
+    fn skirt<N: Num>(&self, scale: f64, i: usize, x: N) -> N {
         let (p51, slope) = self.lower_slope;
         hearing::roex_apart(
             hearing::lower_p(p51, slope, x) / scale,
@@ -243,24 +243,25 @@ impl Channel {
         )
     }
 
-    fn excitation(&self, scale: f64, power: &[f64], levels: &[f64]) -> f64 {
-        let mut below = 0.0;
+    fn excitation<N: Num>(&self, scale: f64, power: &[N], levels: &[N]) -> N {
+        let mut below = N::ZERO;
         for i in 0..self.lower {
-            if power[i] > 0.0 {
-                below += self.skirt(scale, i, levels[i]) * power[i];
+            if power[i].v() > 0.0 {
+                below = below + self.skirt(scale, i, levels[i]) * power[i];
             }
         }
         let (from, weights) = &self.upper;
-        let above: f64 = weights
+        let above = weights
             .iter()
             .zip(&power[*from..])
-            .map(|(w, p)| w * p)
-            .sum();
+            .fold(N::ZERO, |sum, (w, p)| sum + *p * *w);
         below + above
     }
 
-    fn level(&self, excitation: f64) -> f64 {
-        10.0 / LN_10 * libm::log1p(excitation / self.threshold)
+    /// `V`, its tangent through `ln` beside the value `log1p` gives.
+    fn level<N: Num>(&self, excitation: N) -> N {
+        let value = 10.0 / LN_10 * libm::log1p(excitation.v() / self.threshold);
+        ((excitation / self.threshold + 1.0).ln() * (10.0 / LN_10)).rebased(value)
     }
 }
 
@@ -380,28 +381,32 @@ impl Ear {
     }
 
     /// E per channel at frame `m` of `power`, `|X|^2` per bin of the composed spectrum as
-    /// `compose` answers it.
-    pub fn excite(&self, m: i64, power: &[f64]) -> Vec<f64> {
+    /// `compose` answers it; a tangent `N` carries its derivative, the lower skirts' `p` moving
+    /// with `X`.
+    pub fn excite<N: Num>(&self, m: i64, power: &[N]) -> Vec<N> {
         let t = m as f64 * self.hop_secs;
         let gains = self.supplying().flat_map(|range| {
             range.gain[range.supplies.clone()]
                 .iter()
                 .zip(std::iter::repeat(range.energy(self.rate, t)))
         });
-        let eardrum: Vec<f64> = power
+        let eardrum: Vec<N> = power
             .iter()
             .zip(gains)
             .map(|(p, (g, energy))| match energy > 0.0 {
-                true => p / energy * g,
-                false => 0.0,
+                true => *p / energy * *g,
+                false => N::ZERO,
             })
             .collect();
-        let levels: Vec<f64> = self
+        let levels: Vec<N> = self
             .around
             .iter()
             .map(|(from, row)| {
-                let sum: f64 = row.iter().zip(&eardrum[*from..]).map(|(w, p)| w * p).sum();
-                10.0 * libm::log10(sum)
+                let sum = row
+                    .iter()
+                    .zip(&eardrum[*from..])
+                    .fold(N::ZERO, |sum, (w, p)| sum + *p * *w);
+                (sum.ln() * (10.0 / LN_10)).rebased(10.0 * libm::log10(sum.v()))
             })
             .collect();
         self.channels
@@ -436,16 +441,39 @@ impl Ear {
         let (first, last) = self.frames(len);
         let mut levels = vec![Vec::new(); self.channels.len()];
         for m in first..=last {
-            for ((c, e), v) in self.channels.iter().zip(excitation(m)).zip(&mut levels) {
-                v.push(c.level(e));
+            for (e, v) in self.levels(&excitation(m)).into_iter().zip(&mut levels) {
+                v.push(e);
             }
         }
-        let from = (-first) as usize;
+        self.filtered(&levels)
+    }
+
+    /// V per channel of E per channel.
+    pub fn levels<N: Num>(&self, excitation: &[N]) -> Vec<N> {
         self.channels
             .iter()
-            .zip(&levels)
+            .zip(excitation)
+            .map(|(c, e)| c.level(*e))
+            .collect()
+    }
+
+    /// Each channel's bands' outputs of `levels[c]`, its V at every frame from the first: the
+    /// stage is linear from rest, so a tangent of V passes as V does.
+    pub fn filtered(&self, levels: &[Vec<f64>]) -> Vec<Vec<Vec<C64>>> {
+        let from = (-self.frames(0).0) as usize;
+        self.channels
+            .iter()
+            .zip(levels)
             .map(|(c, v)| modulation::outputs(v, from, self.hop_secs, &c.bands))
             .collect()
+    }
+
+    /// The first and last sample any window of frame `m` weighs.
+    pub fn reach(&self, m: i64) -> (i64, i64) {
+        let t = m as f64 * self.hop_secs;
+        self.supplying()
+            .map(|r| r.span(self.rate, t))
+            .fold((i64::MAX, i64::MIN), |(a, b), (f, l)| (a.min(f), b.max(l)))
     }
 
     pub fn read(&self, planes: &[&[f64]], start_secs: f64) -> Internal {

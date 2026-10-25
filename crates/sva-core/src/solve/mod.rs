@@ -4,6 +4,8 @@ pub mod atoms;
 pub mod bits;
 pub mod calibrate;
 pub mod dual;
+pub mod fisher;
+pub mod lm;
 pub mod objective;
 pub mod spectrum;
 

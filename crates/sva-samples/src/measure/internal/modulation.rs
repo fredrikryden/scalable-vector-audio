@@ -79,6 +79,17 @@ impl Band {
             _ => y.re,
         }
     }
+
+    /// `element`'s slope along `dy` at `y`: `gain Re(conj(y) dy)/|y|` (0 at `y = 0`), or `Re dy`.
+    pub fn element_slope(&self, y: C64, dy: C64) -> f64 {
+        match self.element {
+            Element::Magnitude => match y.abs() > 0.0 {
+                true => self.gain() * (y.re * dy.re + y.im * dy.im) / y.abs(),
+                false => 0.0,
+            },
+            _ => dy.re,
+        }
+    }
 }
 
 /// Each resonator's lower -3 dB edge is the last one's upper edge.

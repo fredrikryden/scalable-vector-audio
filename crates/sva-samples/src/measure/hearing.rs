@@ -1,5 +1,7 @@
 // Concern: cited hearing curves and their readers: ERB, ISO 532-2's ear tables, roex slopes, windows, JNDs at d' = 1 | Non-concern: a signal read through them (internal/) | IO: (Hz, dB) -> Hz, dB, p
 
+use sva_formula::Num;
+
 pub const MODEL: &str = "the hearing curves, each a transcribed value with its source or \
      derived from one: ERB = C1 (C2 f/1000 + 1) Hz and Cam = C3 log10(C2 f/1000 + 1), C1 = \
      24.673, C2 = 4.368, C3 = 2302.6/(C1 C2) = 21.366 (ISO 532-2:2017's reference code binloud.h, \
@@ -125,8 +127,8 @@ pub fn lower_slope(p51: f64) -> f64 {
 }
 
 /// The lower skirt's p at `x_db`, from the centre's `p51` and `lower_slope`.
-pub fn lower_p(p51: f64, slope: f64, x_db: f64) -> f64 {
-    (p51 - slope * (x_db - LOWER_SLOPE_ANCHOR_DB)).max(P_FLOOR)
+pub fn lower_p<N: Num>(p51: f64, slope: f64, x_db: N) -> N {
+    (N::of(p51) - (x_db - LOWER_SLOPE_ANCHOR_DB) * slope).max(N::of(P_FLOOR))
 }
 
 pub fn roex_p(centre_hz: f64, component_hz: f64, x_db: f64) -> f64 {
@@ -137,12 +139,12 @@ pub fn roex_p(centre_hz: f64, component_hz: f64, x_db: f64) -> f64 {
     }
 }
 
-fn roex_of(pg: f64) -> f64 {
-    (1.0 + pg) * sva_formula::exp(-pg)
+fn roex_of<N: Num>(pg: N) -> N {
+    (pg + 1.0) * (-pg).exp()
 }
 
 /// The roex at `apart_hz` from `centre_hz`.
-pub fn roex_apart(p: f64, apart_hz: f64, centre_hz: f64) -> f64 {
+pub fn roex_apart<N: Num>(p: N, apart_hz: f64, centre_hz: f64) -> N {
     roex_of(p * apart_hz / centre_hz)
 }
 
