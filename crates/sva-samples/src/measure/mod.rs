@@ -7,6 +7,7 @@ pub mod crest;
 pub mod envelope;
 pub mod formants;
 pub mod harmony;
+pub mod hearing;
 pub mod hits;
 pub mod internal;
 pub mod ledger;
