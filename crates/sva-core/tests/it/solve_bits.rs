@@ -177,11 +177,11 @@ fn every_code_meets_kraft_and_the_complete_ones_with_equality() {
     assert!((complete - 1.0).abs() < 1e-14, "integers: {complete}");
     for h in 2..8usize {
         let deltas = vec![0.7; h - 1];
-        let lattice = libm::pow(libm::ceil(192.0 / 0.7), (h - 1) as f64);
-        let sum = lattice * libm::exp2(-offsets(192.0, &deltas));
+        let states = (h as f64).sqrt() * libm::pow(192.0 / 0.7, (h - 1) as f64);
+        let sum = states * libm::exp2(-offsets(192.0, &deltas));
         assert!(
-            (sum - 1.0 / (h as f64).sqrt()).abs() < 1e-12 && sum <= 1.0,
-            "H = {h}: the written cells sum to {sum}, 1/sqrt(H) by the basis' volume"
+            (sum - 1.0).abs() < 1e-12,
+            "H = {h}: the basis' cells sum to {sum}"
         );
     }
 }
@@ -208,9 +208,9 @@ fn adding_an_atom_costs_its_stated_code() {
                 let shared = match born.harmonics() {
                     1 => 0.0,
                     h => {
-                        c + star(h as f64)
-                            + (h - 1) as f64 * libm::log2(libm::ceil(-2.0 * FLOOR_DB / 0.7))
-                            + 0.5 * libm::log2(h as f64)
+                        let states =
+                            (h as f64).sqrt() * libm::pow(-2.0 * FLOOR_DB / 0.7, (h - 1) as f64);
+                        c + star(h as f64) + libm::log2(states.max(1.0))
                     }
                 };
                 level + c + star((hz.knots.len() + 1) as f64) + shared
@@ -284,7 +284,7 @@ fn gram(h: usize, dependent: usize) -> f64 {
 fn the_offsets_cost_the_same_whichever_coordinate_is_dependent() {
     for h in 2..9usize {
         let deltas = vec![0.7; h - 1];
-        let cells = (h - 1) as f64 * libm::log2(libm::ceil(192.0 / 0.7));
+        let cells = (h - 1) as f64 * libm::log2(192.0 / 0.7);
         let jacobian = offsets(192.0, &deltas) - cells;
         for dependent in 0..h {
             let volume = 0.5 * libm::log2(gram(h, dependent));
@@ -295,6 +295,32 @@ fn the_offsets_cost_the_same_whichever_coordinate_is_dependent() {
         }
     }
     assert_eq!(offsets(192.0, &[]), 0.0, "one harmonic writes no offset");
+}
+
+#[test]
+fn offsets_of_one_state_cost_nothing() {
+    for h in 2..9usize {
+        let wide = 192.0 * (h as f64).sqrt();
+        assert_eq!(offsets(192.0, &vec![wide; h - 1]), 0.0, "H = {h}");
+        assert_eq!(offsets(192.0, &vec![f64::INFINITY; h - 1]), 0.0, "H = {h}");
+    }
+}
+
+#[test]
+fn offsets_of_many_cells_cost_the_ceiled_cells_and_the_basis_volume_within_the_ceil() {
+    for h in 2..9usize {
+        for delta in [0.7, 0.13, 0.031] {
+            let ratio = 192.0 / delta;
+            let ceiled =
+                (h - 1) as f64 * libm::log2(libm::ceil(ratio)) + 0.5 * libm::log2(h as f64);
+            let ceil = (h - 1) as f64 * libm::log2(libm::ceil(ratio) / ratio);
+            let gap = ceiled - offsets(192.0, &vec![delta; h - 1]);
+            assert!(
+                (-1e-12..=ceil + 1e-12).contains(&gap),
+                "H = {h}, delta {delta}: {gap} vs the ceil's {ceil}"
+            );
+        }
+    }
 }
 
 #[test]

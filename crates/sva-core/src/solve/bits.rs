@@ -22,9 +22,10 @@ pub const MODEL: &str = "B(x) in bits: the atom count n by Rissanen's (1983, doi
      and Freeman's (1987, doi 10.1111/j.2517-6161.1987.tb01695.x) delta = sqrt(12/A_ii), the \
      minimiser of log(range/delta) + A_ii delta^2/24, 1/12 a unit uniform quantiser's second \
      moment; a harmonic's H - 1 offsets, written with the last at minus their sum, share one \
-     delta and cost (H - 1) log2 ceil(2W/delta) + (1/2) log2 H, the cells of an orthonormal \
-     basis of the sum-zero offsets, whose volume is sqrt(det(M^T M)) = sqrt(H) times the \
-     written one's whichever coordinate M makes dependent; keys and phases are the ordinal's, \
+     delta and cost log2 max(1, sqrt(H) (2W/delta)^(H - 1)), the volume of the sum-zero \
+     offsets in an orthonormal basis over the cell volume delta^(H - 1), floored at one state: \
+     the written box (2W)^(H - 1) maps into that basis with volume sqrt(det(M^T M)) = sqrt(H) \
+     times its own whichever coordinate M makes dependent; keys and phases are the ordinal's, \
      0 bits; a deviation's range is minus to plus its quantity's width";
 
 /// `sum_{n >= 1} 2^-log*(n)`, as MODEL derives it; the bits suite recomputes it.
@@ -69,7 +70,8 @@ pub fn offsets(range: f64, deltas: &[f64]) -> f64 {
         "a harmonic's offsets share one precision"
     );
     let harmonics = (deltas.len() + 1) as f64;
-    (harmonics - 1.0) * number(range, *delta) + 0.5 * libm::log2(harmonics)
+    // log2 max(1, sqrt(H) (range/delta)^(H - 1)), taken in logs so no power overflows.
+    ((harmonics - 1.0) * libm::log2(range / delta) + 0.5 * libm::log2(harmonics)).max(0.0)
 }
 
 /// What a number's precision is read from (§2.3): the level JND, the frequency JND, or the
