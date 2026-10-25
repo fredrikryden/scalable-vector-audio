@@ -1,8 +1,10 @@
-// Concern: states what the reading `internal` owes silence, a tone, a wider ear, two channels and its element rates | Non-concern: the curves (measure_hearing.rs) | IO: (samples, s) -> asserts
+// Concern: what `internal` owes silence, a tone, a wider ear, two channels, element rates, composed bins, a known ripple | Non-concern: the curves (measure_hearing.rs) | IO: (samples, s) -> asserts
 
 use std::f64::consts::PI;
 
-use sva_samples::measure::hearing::{cam, ear_gain_db, threshold_excitation_db};
+use sva_samples::measure::hearing::{
+    WINDOW_SECS, WINDOW_SPLITS_HZ, cam, ear_gain_db, threshold_excitation_db,
+};
 use sva_samples::measure::internal::modulation::{Band, Element};
 use sva_samples::measure::internal::{Ear, Internal, measure};
 
@@ -186,4 +188,48 @@ fn two_channels_read_as_their_averaged_power() {
     };
     alike(&[&x, &x], &[&x]);
     alike(&[&silence, &x], &[&halved]);
+}
+
+/// A bin on a split (500 Hz at 32 kHz) takes the upper range's window; 0 Hz to Nyquist.
+#[test]
+fn each_composed_bin_comes_from_its_own_ranges_window() {
+    let rate = 32_000.0;
+    let ear = Ear::of(rate, SPL, 1.0);
+    let read = ear.compose(0, &mut |frame| {
+        let secs = (frame.weights().len() + 1) as f64 / rate;
+        frame.hz().iter().map(|hz| (*hz, secs)).collect()
+    });
+    let hz = ear.hz();
+    assert_eq!(read.len(), hz.len());
+    assert_eq!((hz[0], hz[hz.len() - 1]), (0.0, rate / 2.0));
+    assert!(hz.windows(2).all(|w| w[0] < w[1]), "{hz:?}");
+    assert!(hz.contains(&500.0));
+    for ((from, secs), f) in read.iter().zip(hz) {
+        let range = WINDOW_SPLITS_HZ.partition_point(|split| split <= f);
+        assert_eq!(from, f);
+        assert_eq!(*secs, WINDOW_SECS[range], "{f} Hz");
+    }
+}
+
+/// MODEL's known limit: short windows' +f and -f sidelobes beat at 2f, aliased by the 1 ms hop.
+#[test]
+fn a_steady_tone_ripples_by_the_published_models_stated_limit() {
+    let x = tone(1001.3, 80.0, 0.625);
+    let ear = Ear::of(RATE, SPL, 1.0);
+    let read = ear.read(&[&x], 0.0);
+    let channel = read
+        .channels
+        .iter()
+        .position(|c| libm::round(c.hz) == 5302.0)
+        .expect("a 5302 Hz channel");
+    let db: Vec<f64> = (100..520)
+        .map(|m| {
+            let e = ear.excitation(m, &mut |frame| frame.power(&[&x], 0));
+            10.0 * libm::log10(e[channel])
+        })
+        .collect();
+    let (low, high) = db
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(a, b), e| (a.min(*e), b.max(*e)));
+    assert!((high - low - 3.43).abs() < 0.005, "{} dB", high - low);
 }

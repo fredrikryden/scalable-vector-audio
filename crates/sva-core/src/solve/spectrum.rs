@@ -179,16 +179,11 @@ impl<'a> Model<'a> {
 
     /// E per channel at frame `m`, bracketed for the model's exact formula and for the render.
     pub fn excitation(&self, ear: &Ear, m: i64) -> Heard {
-        let mut held = Vec::new();
-        let excitation = ear.excitation(m, &mut |frame| {
-            let bins = self.bins(frame);
-            let power = bins.power.clone();
-            held.push(bins);
-            power
-        });
+        let bins = composed(ear, m, &mut |frame| self.bins(frame));
+        let excitation = ear.excite(m, &bins.power);
         let [least, most, render_least, render_most] =
             [(-1.0, false), (1.0, false), (-1.0, true), (1.0, true)]
-                .map(|(side, sampled)| bracket(ear, m, &held, side, sampled));
+                .map(|(side, sampled)| ear.excite(m, &shifted(&bins, side, sampled)));
         Heard {
             excitation,
             least,
@@ -196,6 +191,28 @@ impl<'a> Model<'a> {
             render_least,
             render_most,
         }
+    }
+}
+
+/// Frame `m`'s bins composed into the ear's one spectrum, each with its bound and sampling.
+fn composed(ear: &Ear, m: i64, bins: &mut dyn FnMut(&Frame) -> Bins) -> Bins {
+    let each = ear.compose(m, &mut |frame| {
+        let Bins {
+            power,
+            bound,
+            sampling,
+        } = bins(frame);
+        power
+            .into_iter()
+            .zip(bound)
+            .zip(sampling)
+            .map(|((p, b), s)| (p, b, s))
+            .collect()
+    });
+    Bins {
+        power: each.iter().map(|b| b.0).collect(),
+        bound: each.iter().map(|b| b.1).collect(),
+        sampling: each.iter().map(|b| b.2).collect(),
     }
 }
 
@@ -212,16 +229,8 @@ pub struct Heard {
     pub render_most: Vec<f64>,
 }
 
-/// The excitation of every bin moved `side` times its bound, and its sampling where
-/// `sampled`, never under silence.
-fn bracket(ear: &Ear, m: i64, held: &[Bins], side: f64, sampled: bool) -> Vec<f64> {
-    let mut next = held.iter();
-    ear.excitation(m, &mut |_| {
-        let bins = next.next().expect("one set of bins per range read");
-        shifted(bins, side, sampled)
-    })
-}
-
+/// Every bin moved `side` times its bound, and its sampling where `sampled`, never under
+/// silence.
 fn shifted(bins: &Bins, side: f64, sampled: bool) -> Vec<f64> {
     (0..bins.power.len())
         .map(|j| {
@@ -822,22 +831,18 @@ fn crossing(model: &Model, clip: &Clip, ear: &Ear, side: f64) -> f64 {
             .zip(&thresholds)
             .fold(0.0, |most: f64, (e, t)| most.max(e / t))
     };
-    let ratio = |powers: &[Vec<f64>], c: f64, m: i64| {
+    let ratio = |held: &[f64], c: f64, m: i64| {
         let gain = libm::pow(10.0, c / 10.0);
-        let mut next = powers.iter();
-        loudest(ear.excitation(m, &mut |_| {
-            let held = next.next().expect("one power per range read");
-            held.iter().map(|p| p * gain).collect()
-        }))
+        let scaled: Vec<f64> = held.iter().map(|p| p * gain).collect();
+        loudest(ear.excite(m, &scaled))
     };
     let powers = |m: i64| {
-        let mut held = Vec::new();
-        let e = ear.excitation(m, &mut |frame| {
-            let power = shifted(&model.bins(frame), side, false);
-            held.push(power.clone());
-            power
-        });
-        (loudest(e), held)
+        let held = shifted(
+            &composed(ear, m, &mut |frame| model.bins(frame)),
+            side,
+            false,
+        );
+        (loudest(ear.excite(m, &held)), held)
     };
     let (first, last) = ear.frames(clip.len);
     let mut heard: Vec<(f64, i64)> = (first..=last)
