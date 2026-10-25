@@ -1,9 +1,14 @@
 // Concern: the three atom kinds solve writes: numbers, ranges, the feasible set and its projection, rows, nodes, keys | Non-concern: what the ear reads of one | IO: (Atom) -> numbers, row, node, Atom
 
+use std::collections::HashMap;
 use std::f64::consts::{LN_10, TAU};
 
+use sva_ast::score::Item;
+use sva_ast::{Expr, Literal};
 use sva_engine::hearing::{CAM_FIRST, CAM_LAST, cam_hz};
+use sva_formula::Num;
 
+use super::dual::Dual;
 use crate::json::num;
 
 /// Every node writes these bits, so the model reads the same.
@@ -30,9 +35,9 @@ impl Clip {
 /// `base` at the atom's onset, then straight lines through each knot's time and deviation from
 /// `base`, held after the last.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Trajectory {
-    pub base: f64,
-    pub knots: Vec<(f64, f64)>,
+pub struct Trajectory<N = f64> {
+    pub base: N,
+    pub knots: Vec<(N, N)>,
 }
 
 impl Trajectory {
@@ -42,39 +47,40 @@ impl Trajectory {
             knots: Vec::new(),
         }
     }
+}
 
+impl<N: Num> Trajectory<N> {
     /// As a node folds `base + deviation`.
-    pub fn values(&self) -> impl Iterator<Item = f64> + '_ {
-        std::iter::once(self.base).chain(self.knots.iter().map(|(_, d)| self.base + d))
+    pub fn values(&self) -> impl Iterator<Item = N> + '_ {
+        std::iter::once(self.base).chain(self.knots.iter().map(|(_, d)| self.base + *d))
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Sound {
+pub enum Sound<N = f64> {
     Partial {
-        hz: Trajectory,
-        phase: f64,
+        hz: Trajectory<N>,
     },
-    /// Harmonic `k` turns `k` times as fast as `hz`, at `offsets[k - 1]` dB and `phases[k - 1]`.
+    /// Harmonic `k` turns `k` times as fast as `hz`; each but the last is at `offsets[k - 1]` dB,
+    /// the last at minus their sum, so the level is the harmonics' mean.
     Harmonic {
-        hz: Trajectory,
-        offsets: Vec<f64>,
-        phases: Vec<f64>,
+        hz: Trajectory<N>,
+        offsets: Vec<N>,
     },
     Noise {
-        lo: f64,
-        hi: f64,
-        key: u64,
+        lo: N,
+        hi: N,
     },
 }
 
 /// A level in dBFS whose last knot ends the atom; a noise's is its band's power, density times
-/// `hi - lo`.
+/// `hi - lo`. `key` is its ordinal, every phase and the noise seed drawn from it.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Atom {
-    pub on: f64,
-    pub sound: Sound,
-    pub level: Trajectory,
+pub struct Atom<N = f64> {
+    pub key: u64,
+    pub on: N,
+    pub sound: Sound<N>,
+    pub level: Trajectory<N>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,113 +94,156 @@ pub enum Quantity {
     Edge,
 }
 
-/// The draw a noise keyed `ordinal` gives its own line `k`, so no new number is written.
-pub fn phase(ordinal: u64, k: usize) -> f64 {
-    TAU * sva_formula::draw_nearest(ordinal, k as f64).expect("a line index is a whole step")
+/// Line `k`'s phase, the draw noise keyed `key` gives its own line `k`, so no number is written.
+pub fn phase(key: u64, k: usize) -> f64 {
+    TAU * sva_formula::draw_nearest(key, k as f64).expect("a line index is a whole step")
+}
+
+/// The ordinal a birth takes: one past the largest living, the first 0.
+pub fn birth(atoms: &[Atom]) -> u64 {
+    atoms.iter().map(|a| a.key + 1).max().unwrap_or(0)
+}
+
+impl<N: Num> Atom<N> {
+    pub fn end(&self) -> N {
+        self.level.knots.last().expect("a level ends on a knot").0
+    }
+
+    pub fn hz(&self) -> Option<&Trajectory<N>> {
+        match &self.sound {
+            Sound::Partial { hz } | Sound::Harmonic { hz, .. } => Some(hz),
+            Sound::Noise { .. } => None,
+        }
+    }
+
+    pub fn harmonics(&self) -> usize {
+        match &self.sound {
+            Sound::Harmonic { offsets, .. } => offsets.len() + 1,
+            _ => 1,
+        }
+    }
+
+    /// Every number but the key, in the order `with` reads.
+    pub fn values(&self) -> Vec<N> {
+        let mut out = vec![self.on];
+        let knots = |out: &mut Vec<N>, t: &Trajectory<N>| {
+            out.push(t.base);
+            for (at, d) in &t.knots {
+                out.push(*at);
+                out.push(*d);
+            }
+        };
+        match &self.sound {
+            Sound::Partial { hz } => knots(&mut out, hz),
+            Sound::Harmonic { hz, offsets } => {
+                knots(&mut out, hz);
+                out.extend(offsets);
+            }
+            Sound::Noise { lo, hi } => out.extend([*lo, *hi]),
+        }
+        knots(&mut out, &self.level);
+        out
+    }
+
+    /// The same atom with `values` in `values()`' order.
+    pub fn lifted<M: Num>(&self, values: &[M]) -> Atom<M> {
+        assert_eq!(values.len(), self.values().len(), "one value per number");
+        let mut next = values.iter().copied();
+        let mut take = || next.next().expect("counted");
+        let retake = |t: &Trajectory<N>, take: &mut dyn FnMut() -> M| Trajectory {
+            base: take(),
+            knots: t.knots.iter().map(|_| (take(), take())).collect(),
+        };
+        let on = take();
+        let sound = match &self.sound {
+            Sound::Partial { hz } => Sound::Partial {
+                hz: retake(hz, &mut take),
+            },
+            Sound::Harmonic { hz, offsets } => Sound::Harmonic {
+                hz: retake(hz, &mut take),
+                offsets: offsets.iter().map(|_| take()).collect(),
+            },
+            Sound::Noise { .. } => Sound::Noise {
+                lo: take(),
+                hi: take(),
+            },
+        };
+        let level = retake(&self.level, &mut take);
+        Atom {
+            key: self.key,
+            on,
+            sound,
+            level,
+        }
+    }
 }
 
 impl Atom {
-    pub fn partial(ordinal: u64, on: f64, hz: Trajectory, level: Trajectory) -> Atom {
-        let phase = phase(ordinal, 1);
+    pub fn partial(key: u64, on: f64, hz: Trajectory, level: Trajectory) -> Atom {
         Atom {
+            key,
             on,
-            sound: Sound::Partial { hz, phase },
+            sound: Sound::Partial { hz },
             level,
         }
     }
 
+    /// `offsets` for every harmonic but the last.
     pub fn harmonic(
-        ordinal: u64,
+        key: u64,
         on: f64,
         hz: Trajectory,
         offsets: Vec<f64>,
         level: Trajectory,
     ) -> Atom {
-        let phases = (1..=offsets.len()).map(|k| phase(ordinal, k)).collect();
         Atom {
+            key,
             on,
-            sound: Sound::Harmonic {
-                hz,
-                offsets,
-                phases,
-            },
+            sound: Sound::Harmonic { hz, offsets },
             level,
         }
     }
 
-    pub fn noise(ordinal: u64, on: f64, (lo, hi): (f64, f64), level: Trajectory) -> Atom {
+    pub fn noise(key: u64, on: f64, (lo, hi): (f64, f64), level: Trajectory) -> Atom {
         Atom {
+            key,
             on,
-            sound: Sound::Noise {
-                lo,
-                hi,
-                key: ordinal,
-            },
+            sound: Sound::Noise { lo, hi },
             level,
         }
     }
 
-    pub fn end(&self) -> f64 {
-        self.level.knots.last().expect("a level ends on a knot").0
-    }
-
-    pub fn hz(&self) -> Option<&Trajectory> {
-        match &self.sound {
-            Sound::Partial { hz, .. } | Sound::Harmonic { hz, .. } => Some(hz),
-            Sound::Noise { .. } => None,
-        }
-    }
-
-    /// Every number but phases and key, in the order `with` reads.
+    /// Each number beside its quantity, in `values()`' order.
     pub fn numbers(&self) -> Vec<(Quantity, f64)> {
-        let mut out = vec![(Quantity::Time, self.on)];
+        let mut out = vec![Quantity::Time];
         let knots = |out: &mut Vec<_>, t: &Trajectory, (base, dev)| {
-            out.push((base, t.base));
-            for (at, d) in &t.knots {
-                out.push((Quantity::Time, *at));
-                out.push((dev, *d));
+            out.push(base);
+            for _ in &t.knots {
+                out.push(Quantity::Time);
+                out.push(dev);
             }
         };
         match &self.sound {
-            Sound::Partial { hz, .. } => knots(&mut out, hz, (Quantity::Hz, Quantity::HzDeviation)),
-            Sound::Harmonic { hz, offsets, .. } => {
+            Sound::Partial { hz } => knots(&mut out, hz, (Quantity::Hz, Quantity::HzDeviation)),
+            Sound::Harmonic { hz, offsets } => {
                 knots(&mut out, hz, (Quantity::Hz, Quantity::HzDeviation));
-                out.extend(offsets.iter().map(|o| (Quantity::Offset, *o)));
+                out.extend(offsets.iter().map(|_| Quantity::Offset));
             }
-            Sound::Noise { lo, hi, .. } => {
-                out.push((Quantity::Edge, *lo));
-                out.push((Quantity::Edge, *hi));
-            }
+            Sound::Noise { .. } => out.extend([Quantity::Edge, Quantity::Edge]),
         }
         knots(&mut out, &self.level, (Quantity::Db, Quantity::DbDeviation));
-        out
+        out.into_iter().zip(self.values()).collect()
     }
 
-    pub fn with(&self, values: &[f64]) -> Atom {
-        assert_eq!(values.len(), self.numbers().len(), "one value per number");
-        let mut next = values.iter().copied();
-        let take = |next: &mut dyn Iterator<Item = f64>| next.next().expect("counted");
-        let retake = |next: &mut dyn Iterator<Item = f64>, t: &mut Trajectory| {
-            t.base = take(next);
-            for knot in &mut t.knots {
-                *knot = (take(next), take(next));
-            }
-        };
-        let mut atom = self.clone();
-        atom.on = take(&mut next);
-        match &mut atom.sound {
-            Sound::Partial { hz, .. } => retake(&mut next, hz),
-            Sound::Harmonic { hz, offsets, .. } => {
-                retake(&mut next, hz);
-                offsets.iter_mut().for_each(|o| *o = take(&mut next));
-            }
-            Sound::Noise { lo, hi, .. } => {
-                *lo = take(&mut next);
-                *hi = take(&mut next);
-            }
-        }
-        retake(&mut next, &mut atom.level);
-        atom
+    /// Every number constant but number `i`, which moves at unit speed.
+    pub fn seeded(&self, i: usize) -> Atom<Dual> {
+        let values: Vec<Dual> = self
+            .values()
+            .iter()
+            .enumerate()
+            .map(|(j, v)| Dual::new(*v, f64::from(u8::from(i == j))))
+            .collect();
+        self.lifted(&values)
     }
 
     /// One node per kind and knot count.
@@ -205,8 +254,8 @@ impl Atom {
         );
         match &self.sound {
             Sound::Partial { .. } => format!("{DIRECTORY}/partial_f{f}_l{l}"),
-            Sound::Harmonic { offsets, .. } => {
-                format!("{DIRECTORY}/harmonic_h{}_f{f}_l{l}", offsets.len())
+            Sound::Harmonic { .. } => {
+                format!("{DIRECTORY}/harmonic_h{}_f{f}_l{l}", self.harmonics())
             }
             Sound::Noise { .. } => format!("{DIRECTORY}/noise_l{l}"),
         }
@@ -215,9 +264,9 @@ impl Atom {
     pub fn node_text(&self, clip: &Clip) -> String {
         let l = self.level.knots.len();
         let end = format!("lt{l}");
+        let neper = num(NEPER_PER_DB);
         let level = format!(
-            "exp({}*{})",
-            num(NEPER_PER_DB),
+            "exp({neper}*{})",
             table("pwl", "level", &knot_names("lt", "ld", "level", l), None)
         );
         let turning = |f: usize| {
@@ -228,28 +277,33 @@ impl Atom {
                 Some(&end),
             )
         };
+        let line = |k: usize, phi: &str| format!("sin(2*pi*{k}*{phi} + 2*pi*draw({k}, seed=key))");
         let (what, body) = match &self.sound {
-            Sound::Partial { hz, .. } => (
+            Sound::Partial { hz } => (
                 format!(
                     "one partial, its frequency through {} knots",
                     hz.knots.len()
                 ),
-                format!("sin(2*pi*{} + ph1) * {level}", turning(hz.knots.len())),
+                format!("{} * {level}", line(1, &turning(hz.knots.len()))),
             ),
-            Sound::Harmonic { hz, offsets, .. } => {
+            Sound::Harmonic { hz, offsets } => {
                 let phi = turning(hz.knots.len());
-                let lines: Vec<String> = (1..=offsets.len())
-                    .map(|k| {
-                        format!(
-                            "exp({}*o{k})*sin(2*pi*{k}*{phi} + ph{k})",
-                            num(NEPER_PER_DB)
-                        )
-                    })
+                let written: Vec<String> = (1..=offsets.len()).map(|k| format!("o{k}")).collect();
+                let mut lines: Vec<String> = written
+                    .iter()
+                    .enumerate()
+                    .map(|(k, o)| format!("exp({neper}*{o})*{}", line(k + 1, &phi)))
                     .collect();
+                let last = line(self.harmonics(), &phi);
+                lines.push(match written.is_empty() {
+                    true => last,
+                    false => format!("exp({neper}*(-({})))*{last}", written.join(" + ")),
+                });
                 (
                     format!(
-                        "{} harmonics of one fundamental through {} knots",
-                        offsets.len(),
+                        "{} harmonics of one fundamental through {} knots, the last at minus the \
+                         others' offsets",
+                        self.harmonics(),
                         hz.knots.len()
                     ),
                     format!("{level} * ({})", lines.join(" + ")),
@@ -275,6 +329,7 @@ impl Atom {
         let mut fields = vec![
             ("at".to_string(), "\"0s\"".to_string()),
             ("node".to_string(), format!("\"@../{}\"", self.node())),
+            ("key".to_string(), self.key.to_string()),
             ("on".to_string(), num(self.on)),
         ];
         let knots = |fields: &mut Vec<(String, String)>,
@@ -287,23 +342,14 @@ impl Atom {
             }
         };
         match &self.sound {
-            Sound::Partial { hz, phase } => {
+            Sound::Partial { hz } => knots(&mut fields, hz, ("hz", "ft", "fd")),
+            Sound::Harmonic { hz, offsets } => {
                 knots(&mut fields, hz, ("hz", "ft", "fd"));
-                fields.push(("ph1".to_string(), num(*phase)));
-            }
-            Sound::Harmonic {
-                hz,
-                offsets,
-                phases,
-            } => {
-                knots(&mut fields, hz, ("hz", "ft", "fd"));
-                for (k, (o, ph)) in offsets.iter().zip(phases).enumerate() {
+                for (k, o) in offsets.iter().enumerate() {
                     fields.push((format!("o{}", k + 1), num(*o)));
-                    fields.push((format!("ph{}", k + 1), num(*ph)));
                 }
             }
-            Sound::Noise { lo, hi, key } => {
-                fields.push(("key".to_string(), key.to_string()));
+            Sound::Noise { lo, hi } => {
                 fields.push(("lo".to_string(), num(*lo)));
                 fields.push(("hi".to_string(), num(*hi)));
             }
@@ -314,6 +360,53 @@ impl Atom {
             .map(|(k, v)| format!("\"{k}\": {v}"))
             .collect();
         format!("{{{}}}", written.join(", "))
+    }
+
+    /// The atom a row `row` writes reads back, from its node's kind and counts and its numbers.
+    fn read(node: &str, numbers: &HashMap<&str, f64>) -> Option<Atom> {
+        let name = node.strip_prefix(&format!("../{DIRECTORY}/"))?;
+        let mut counts = HashMap::new();
+        let mut parts = name.split('_');
+        let kind = parts.next()?;
+        for part in parts {
+            let (letter, count) = part.split_at_checked(1)?;
+            counts.insert(letter, count.parse::<usize>().ok()?);
+        }
+        let get = |name: &str| numbers.get(name).copied();
+        let trajectory = |base: &str, (time, dev): (&str, &str), count: usize| {
+            Some(Trajectory {
+                base: get(base)?,
+                knots: (1..=count)
+                    .map(|i| Some((get(&format!("{time}{i}"))?, get(&format!("{dev}{i}"))?)))
+                    .collect::<Option<_>>()?,
+            })
+        };
+        let key = get("key")?;
+        let key =
+            (key >= 0.0 && key.fract() == 0.0 && key < u64::MAX as f64).then_some(key as u64)?;
+        let level = trajectory("level", ("lt", "ld"), *counts.get("l")?)?;
+        let hz = || trajectory("hz", ("ft", "fd"), *counts.get("f")?);
+        let sound = match kind {
+            "partial" => Sound::Partial { hz: hz()? },
+            "harmonic" => Sound::Harmonic {
+                hz: hz()?,
+                offsets: (1..*counts.get("h")?)
+                    .map(|k| get(&format!("o{k}")))
+                    .collect::<Option<_>>()?,
+            },
+            "noise" => Sound::Noise {
+                lo: get("lo")?,
+                hi: get("hi")?,
+            },
+            _ => return None,
+        };
+        let atom = Atom {
+            key,
+            on: get("on")?,
+            sound,
+            level,
+        };
+        (atom.values().len() + 1 == numbers.len()).then_some(atom)
     }
 }
 
@@ -345,17 +438,39 @@ fn table(name: &str, base: &str, knots: &[(String, String)], hold: Option<&str>)
     format!("{name}({})", args.join(", "))
 }
 
-/// One row each in birth order, so a row's line is its ordinal.
+/// One row each in birth order, which is their keys' order.
 pub fn score(atoms: &[Atom]) -> String {
     let mut out = String::from(
         "{\"annotation\": \"Models: the clip's atoms, one row each in birth order | Neglects: \
          what no atom explains | IO: (t) -> amplitude | Tags: score\"}\n",
     );
-    for atom in atoms {
+    let mut born: Vec<&Atom> = atoms.iter().collect();
+    born.sort_by_key(|a| a.key);
+    for atom in born {
         out.push_str(&atom.row());
         out.push('\n');
     }
     out
+}
+
+/// The atoms a score `score` wrote, `None` where it holds anything else.
+pub fn read(text: &str) -> Option<Vec<Atom>> {
+    let held = sva_ast::parse_score(text).ok()?;
+    let mut out = Vec::new();
+    for item in held.lines.iter().flat_map(|l| &l.items) {
+        let Item::Event(event) = item else {
+            return None;
+        };
+        let mut numbers = HashMap::new();
+        for bind in &event.binds {
+            let Expr::Lit(Literal::Num(v)) = &bind.value else {
+                return None;
+            };
+            numbers.insert(bind.name.as_str(), *v);
+        }
+        out.push(Atom::read(&event.node.name, &numbers)?);
+    }
+    Some(out)
 }
 
 pub fn nodes(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
@@ -369,13 +484,20 @@ pub fn nodes(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
 }
 
 /// Hz the reading spans under the Nyquist, times in the clip, levels from the floor to full
-/// scale; a noise band at least `spacing`, its lines', wide, so it always holds a line.
+/// scale; an atom at least `span`, a sample, long; a noise band at least `spacing`, its lines',
+/// wide, so it always holds a line.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Feasible {
     pub hz: (f64, f64),
     pub secs: (f64, f64),
     pub db: (f64, f64),
+    pub span: f64,
     pub spacing: f64,
+}
+
+/// As the node folds `-(o1 + o2 + ...)`'s sum.
+fn summed(offsets: &[f64]) -> f64 {
+    offsets.iter().fold(0.0, |s, o| s + o)
 }
 
 impl Feasible {
@@ -388,18 +510,17 @@ impl Feasible {
             ),
             secs: (0.0, clip.secs()),
             db: (floor_db, FULL_SCALE_DBFS),
+            span: 1.0 / f64::from(clip.rate),
             spacing: 1.0 / clip.secs(),
         }
     }
 
     fn hz_of(&self, atom: &Atom) -> (f64, f64) {
-        match &atom.sound {
-            Sound::Harmonic { offsets, .. } => (self.hz.0, self.hz.1 / offsets.len() as f64),
-            _ => self.hz,
-        }
+        (self.hz.0, self.hz.1 / atom.harmonics() as f64)
     }
 
-    /// A deviation's range: the width of its quantity's either way.
+    /// A deviation's range, and an offset's and their sum's: the width of its quantity's
+    /// either way.
     fn offset(&self) -> f64 {
         self.db.1 - self.db.0
     }
@@ -415,31 +536,39 @@ impl Feasible {
             })
         };
         let traced = |t: &Trajectory, range| ordered(t) && t.values().all(|v| inside(v, range));
+        let width = (-self.offset(), self.offset());
         let sound = match &atom.sound {
-            Sound::Partial { hz, .. } => traced(hz, self.hz_of(atom)),
-            Sound::Harmonic { hz, offsets, .. } => {
+            Sound::Partial { hz } => traced(hz, self.hz_of(atom)),
+            Sound::Harmonic { hz, offsets } => {
                 traced(hz, self.hz_of(atom))
-                    && offsets
-                        .iter()
-                        .all(|o| inside(*o, (-self.offset(), self.offset())))
+                    && offsets.iter().all(|o| inside(*o, width))
+                    && inside(summed(offsets), width)
             }
-            Sound::Noise { lo, hi, .. } => {
+            Sound::Noise { lo, hi } => {
                 hi - lo >= self.spacing && inside(*lo, self.hz) && inside(*hi, self.hz)
             }
         };
-        inside(atom.on, self.secs) && sound && traced(&atom.level, self.db)
+        inside(atom.on, self.secs)
+            && atom.end() - atom.on >= self.span
+            && sound
+            && traced(&atom.level, self.db)
     }
 
     /// Nearest in squared distance, number `i` of `numbers` weighing `weights[i] > 0`; `None`
     /// where nothing is feasible. Times and values share no constraint, so each is solved
-    /// alone and exactly: times by tree isotonic regression rooted at `on`, then clipped.
+    /// alone and exactly.
     pub fn project(&self, atom: &Atom, weights: &[f64]) -> Option<Atom> {
         let numbers = atom.numbers();
         assert_eq!(weights.len(), numbers.len(), "one weight per number");
         assert!(weights.iter().all(|w| *w > 0.0), "every weight positive");
         let (hz, db) = (self.hz_of(atom), self.db);
         let noise = matches!(atom.sound, Sound::Noise { .. });
-        if hz.0 > hz.1 || db.0 > db.1 || !db.0.is_finite() || (noise && hz.1 - hz.0 < self.spacing)
+        let short = self.secs.1 - self.secs.0 < self.span;
+        if hz.0 > hz.1
+            || db.0 > db.1
+            || !db.0.is_finite()
+            || short
+            || (noise && hz.1 - hz.0 < self.spacing)
         {
             return None;
         }
@@ -453,22 +582,20 @@ impl Feasible {
             .expect("a level");
         let (sound_times, level_times): (Vec<usize>, Vec<usize>) =
             times[1..].iter().partition(|i| **i < level_from);
-        let chains = [sound_times, level_times];
-        let solved = tree(
+        let points = |chain: &[usize]| -> Vec<(f64, f64)> {
+            chain.iter().map(|i| (values[*i], weights[*i])).collect()
+        };
+        let (on, sound_at, level_at) = timed(
             (values[0], weights[0]),
-            &chains
-                .iter()
-                .map(|c| c.iter().map(|i| (values[*i], weights[*i])).collect())
-                .collect::<Vec<Vec<_>>>(),
+            [&points(&sound_times), &points(&level_times)],
+            self.secs,
+            self.span,
         );
-        values[0] = solved.0;
-        for (chain, held) in chains.iter().zip(&solved.1) {
+        values[0] = on;
+        for (chain, held) in [(&sound_times, sound_at), (&level_times, level_at)] {
             for (i, v) in chain.iter().zip(held) {
-                values[*i] = *v;
+                values[*i] = v;
             }
-        }
-        for i in &times {
-            values[*i] = values[*i].clamp(self.secs.0, self.secs.1);
         }
         let trace = |values: &mut Vec<f64>, base: usize, range: (f64, f64), quantity| {
             let devs: Vec<usize> = (base + 1..numbers.len())
@@ -516,48 +643,159 @@ impl Feasible {
             }
         }
         trace(&mut values, level_from, db, Quantity::DbDeviation);
-        for (i, (q, _)) in numbers.iter().enumerate() {
-            if *q == Quantity::Offset {
-                values[i] = values[i].clamp(-self.offset(), self.offset());
-            }
+        let offsets: Vec<usize> = (0..numbers.len())
+            .filter(|i| numbers[*i].0 == Quantity::Offset)
+            .collect();
+        let held = summing(
+            &offsets
+                .iter()
+                .map(|i| (values[*i], weights[*i]))
+                .collect::<Vec<_>>(),
+            self.offset(),
+        );
+        for (i, o) in offsets.iter().zip(held) {
+            values[*i] = o;
         }
-        Some(atom.with(&values))
+        Some(atom.lifted(&values))
     }
 }
 
-/// A root under rising chains: each chain pooled alone, then the root's block absorbs the
-/// lowest next block while its mean is under the root's.
-fn tree(root: (f64, f64), chains: &[Vec<(f64, f64)>]) -> (f64, Vec<Vec<f64>>) {
-    let pooled: Vec<Vec<Block>> = chains.iter().map(|c| pava(c)).collect();
-    let mut next = vec![0usize; chains.len()];
-    let mut held = Block::of(root);
-    loop {
-        let lowest = (0..chains.len())
-            .filter(|c| next[*c] < pooled[*c].len())
-            .min_by(|a, b| {
-                pooled[*a][next[*a]]
-                    .mean()
-                    .total_cmp(&pooled[*b][next[*b]].mean())
-            });
-        match lowest {
-            Some(c) if pooled[c][next[c]].mean() < held.mean() => {
-                held = held.merged(&pooled[c][next[c]]);
-                next[c] += 1;
+/// Given the root `r`, each chain is its isotonic fit clamped to `[r, secs]`, or, where the
+/// last level time falls under `r + span`, that at `r + span` and the rest clamped to `[r, r +
+/// span]`; a convex piecewise quadratic in `r`, minimised exactly piece by piece.
+fn timed(
+    (y, w): (f64, f64),
+    [sound, level]: [&[(f64, f64)]; 2],
+    (lo, hi): (f64, f64),
+    span: f64,
+) -> (f64, Vec<f64>, Vec<f64>) {
+    let (sound_blocks, level_blocks) = (pava(sound), pava(level));
+    let (last, lead) = level.split_last().expect("a level ends on a knot");
+    let lead_blocks = pava(lead);
+    let last_mean = level_blocks.last().expect("a block").mean();
+    let binds = |r: f64| last_mean < r + span;
+    let top = hi - span;
+    let slope = |r: f64| {
+        let (mut a, mut b) = (w, w * y);
+        let below = |blocks: &[Block], a: &mut f64, b: &mut f64| {
+            for block in blocks.iter().filter(|block| block.mean() < r) {
+                *a += block.weight;
+                *b += block.weight * block.mean();
             }
-            _ => break,
+        };
+        below(&sound_blocks, &mut a, &mut b);
+        match binds(r) {
+            false => below(&level_blocks, &mut a, &mut b),
+            true => {
+                a += last.1;
+                b += last.1 * (last.0 - span);
+                below(&lead_blocks, &mut a, &mut b);
+                for block in lead_blocks.iter().filter(|b| b.mean() > r + span) {
+                    a += block.weight;
+                    b += block.weight * (block.mean() - span);
+                }
+            }
+        }
+        (a, b)
+    };
+    let mut corners: Vec<f64> = sound_blocks
+        .iter()
+        .chain(&level_blocks)
+        .map(Block::mean)
+        .chain(lead_blocks.iter().flat_map(|b| [b.mean(), b.mean() - span]))
+        .chain([last_mean - span])
+        .filter(|c| lo < *c && *c < top)
+        .chain([lo, top])
+        .collect();
+    corners.sort_by(f64::total_cmp);
+    corners.dedup();
+    let mut r = top;
+    for pair in corners.windows(2) {
+        let (a, b) = slope(pair[0] + (pair[1] - pair[0]) / 2.0);
+        if a * pair[1] - b >= 0.0 {
+            r = (b / a).clamp(pair[0], pair[1]);
+            break;
         }
     }
-    let root_value = held.mean();
-    let values = pooled
+    let clamped = |blocks: &[Block], (l, h): (f64, f64)| -> Vec<f64> {
+        expand(blocks).iter().map(|v| v.clamp(l, h)).collect()
+    };
+    let sound_at = clamped(&sound_blocks, (r, hi));
+    let mut level_at = match binds(r) {
+        false => clamped(&level_blocks, (r, hi)),
+        true => {
+            let mut held = clamped(&lead_blocks, (r, r + span));
+            held.push((r + span).min(hi));
+            held
+        }
+    };
+    let end = level_at.last_mut().expect("a level ends on a knot");
+    while *end - r < span {
+        match *end < hi {
+            true => *end = end.next_up(),
+            false => r = r.next_down(),
+        }
+    }
+    (r, sound_at, level_at)
+}
+
+/// Offsets in `[-width, width]` and their sum too, nearest in weighted squares: given the
+/// sum's multiplier `l`, each offset is `clamp(y_k - l/w_k)`, a sum falling in `l` and affine
+/// between the points where a clamp starts or ends, so `l` is solved exactly piece by piece.
+fn summing(points: &[(f64, f64)], width: f64) -> Vec<f64> {
+    let at = |l: f64| -> Vec<f64> {
+        points
+            .iter()
+            .map(|(y, w)| (y - l / w).clamp(-width, width))
+            .collect()
+    };
+    let free = at(0.0);
+    let total = summed(&free);
+    if total.abs() <= width {
+        return free;
+    }
+    let side = total.signum();
+    let mut corners: Vec<f64> = points
         .iter()
-        .zip(&next)
-        .map(|(blocks, taken)| {
-            let mut values = vec![root_value; blocks[..*taken].iter().map(|b| b.count).sum()];
-            values.extend(expand(&blocks[*taken..]));
-            values
-        })
+        .flat_map(|(y, w)| [w * (y - width), w * (y + width)])
+        .map(|c| c * side)
+        .filter(|c| *c > 0.0)
+        .chain([0.0])
         .collect();
-    (root_value, values)
+    corners.sort_by(f64::total_cmp);
+    corners.dedup();
+    let solve = |(a, b): (f64, f64)| {
+        let mid = side * (a + (b - a) / 2.0);
+        let (mut pull, mut give) = (-side * width, 0.0);
+        for (y, w) in points {
+            match (y - mid / w).abs() < width {
+                true => {
+                    pull += y;
+                    give += 1.0 / w;
+                }
+                false => pull += (y - mid / w).clamp(-width, width),
+            }
+        }
+        let (p, q) = (side * a, side * b);
+        (pull / give).clamp(p.min(q), p.max(q))
+    };
+    let l = corners
+        .windows(2)
+        .find(|pair| summed(&at(side * pair[1])) * side <= width)
+        .map_or(side * corners[corners.len() - 1], |pair| {
+            solve((pair[0], pair[1]))
+        });
+    let mut held = at(l);
+    while summed(&held).abs() > width {
+        let most = (0..held.len())
+            .max_by(|a, b| (held[*a] * side).total_cmp(&(held[*b] * side)))
+            .expect("an offset");
+        held[most] = match side > 0.0 {
+            true => held[most].next_down(),
+            false => held[most].next_up(),
+        };
+    }
+    held
 }
 
 fn expand(blocks: &[Block]) -> Vec<f64> {

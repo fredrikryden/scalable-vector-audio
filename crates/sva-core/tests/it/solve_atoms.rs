@@ -1,8 +1,8 @@
-// Concern: states what atoms owe their numbers, nodes, rows, keys and the feasible set after projection | Non-concern: what the ear reads of one (solve_spectrum.rs) | IO: (atoms) -> asserts
+// Concern: states what atoms owe their numbers, nodes, rows, ordinals and the feasible set after projection | Non-concern: what the ear reads of one (solve_spectrum.rs) | IO: (atoms) -> asserts
 
-use std::f64::consts::TAU;
-
-use sva_core::solve::atoms::{Atom, Clip, Feasible, Quantity, Sound, Trajectory, nodes, score};
+use sva_core::solve::atoms::{
+    Atom, Clip, Feasible, Quantity, Sound, Trajectory, birth, nodes, read, score,
+};
 
 const CLIP: Clip = Clip {
     rate: 16_000,
@@ -70,7 +70,7 @@ fn halfspaces(atom: &Atom, feasible: &Feasible) -> Vec<(Vec<(usize, f64)>, f64)>
         }
         let hz = match &atom.sound {
             Sound::Harmonic { offsets, .. } => {
-                (feasible.hz.0, feasible.hz.1 / offsets.len() as f64)
+                (feasible.hz.0, feasible.hz.1 / (offsets.len() + 1) as f64)
             }
             _ => feasible.hz,
         };
@@ -87,6 +87,17 @@ fn halfspaces(atom: &Atom, feasible: &Feasible) -> Vec<(Vec<(usize, f64)>, f64)>
     }
     if let Sound::Noise { .. } = atom.sound {
         out.push((vec![(1, 1.0), (2, -1.0)], -feasible.spacing));
+    }
+    let end = numbers.len() - 2;
+    out.push((vec![(0, 1.0), (end, -1.0)], -feasible.span));
+    let offsets: Vec<(usize, f64)> = (0..numbers.len())
+        .filter(|i| numbers[*i].0 == Quantity::Offset)
+        .map(|i| (i, 1.0))
+        .collect();
+    if !offsets.is_empty() {
+        let width = feasible.db.1 - feasible.db.0;
+        out.push((offsets.clone(), width));
+        out.push((offsets.iter().map(|(i, a)| (*i, -a)).collect(), width));
     }
     out
 }
@@ -116,10 +127,30 @@ fn dykstra(start: &[f64], w: &[f64], sets: &[(Vec<(usize, f64)>, f64)]) -> Vec<f
     x
 }
 
+/// Offsets whose sum overshoots, and level times all under the onset, so the span and the
+/// sum bind.
+fn binding() -> Vec<Atom> {
+    vec![
+        Atom::harmonic(
+            3,
+            0.2,
+            knots(300.0, &[(0.1, 20.0), (0.25, 5.0)]),
+            vec![80.0, 70.0, 60.0, -10.0, 95.0],
+            knots(-40.0, &[(0.19, 1.0), (0.05, 2.0), (0.199, 3.0)]),
+        ),
+        Atom::partial(
+            4,
+            0.4999,
+            knots(700.0, &[(0.3, 1.0)]),
+            knots(-30.0, &[(0.2, 1.0), (0.4999, -1.0)]),
+        ),
+    ]
+}
+
 #[test]
 fn a_projected_atom_holds_and_is_the_nearest_atom_that_holds() {
     let feasible = Feasible::of(&CLIP, -90.0);
-    for atom in unheld() {
+    for atom in unheld().into_iter().chain(binding()) {
         assert!(!feasible.holds(&atom), "{atom:?} starts off its ranges");
         let w = weights(&atom);
         let projected = feasible.project(&atom, &w).expect("a feasible set");
@@ -179,7 +210,7 @@ fn any_atom_projects_into_the_feasible_set() {
                     _ => draw(-20_000.0, 30_000.0),
                 })
                 .collect();
-            let atom = atom.with(&values);
+            let atom = atom.lifted(&values);
             let w: Vec<f64> = values.iter().map(|_| draw(0.01, 100.0)).collect();
             let projected = feasible.project(&atom, &w).expect("a feasible set");
             assert!(feasible.holds(&projected), "{atom:?} to {projected:?}");
@@ -215,12 +246,12 @@ fn nothing_projects_where_nothing_is_feasible() {
 fn an_atom_reads_its_numbers_back() {
     for atom in unheld() {
         let values: Vec<f64> = atom.numbers().iter().map(|(_, v)| *v).collect();
-        assert_eq!(atom.with(&values), atom);
+        assert_eq!(atom.lifted(&values), atom);
     }
 }
 
 #[test]
-fn a_row_appended_leaves_every_earlier_row_its_phases_and_key() {
+fn a_row_appended_leaves_every_earlier_row_and_writes_its_ordinal_as_its_key() {
     let atoms = unheld();
     let before = score(&atoms[..2]);
     let after = score(&atoms);
@@ -230,16 +261,65 @@ fn a_row_appended_leaves_every_earlier_row_its_phases_and_key() {
         4,
         "the annotation and a row per atom"
     );
-    for (ordinal, atom) in atoms.iter().enumerate() {
-        let drawn = |k: usize| TAU * sva_formula::draw_nearest(ordinal as u64, k as f64).unwrap();
-        match &atom.sound {
-            Sound::Partial { phase, .. } => assert_eq!(*phase, drawn(1)),
-            Sound::Harmonic { phases, .. } => {
-                assert_eq!(*phases, (1..=phases.len()).map(drawn).collect::<Vec<_>>());
-            }
-            Sound::Noise { key, .. } => assert_eq!(*key, ordinal as u64),
-        }
+    for (row, atom) in after.lines().skip(1).zip(&atoms) {
+        assert!(row.contains(&format!("\"key\": {}", atom.key)), "{row}");
+        assert!(!row.contains("\"ph"), "no phase is written: {row}");
     }
+    for (_, text) in nodes(&atoms, &CLIP) {
+        assert!(!text.contains("ph"), "{text}");
+    }
+}
+
+/// The first birth is 0, each later one past the largest living, so a gap a removal left
+/// stays one.
+#[test]
+fn a_birth_takes_one_past_the_largest_living_ordinal() {
+    assert_eq!(birth(&[]), 0);
+    let mut atoms = unheld();
+    assert_eq!(birth(&atoms), 3);
+    atoms.remove(2);
+    atoms.remove(0);
+    assert_eq!(birth(&atoms), 2);
+}
+
+/// Keys out of order and with gaps, harmonics of one line and of many, read back as written.
+#[test]
+fn ordinals_and_offsets_read_back_from_the_written_rows() {
+    let mut atoms = unheld();
+    atoms.remove(1);
+    atoms.insert(
+        0,
+        Atom::harmonic(
+            7,
+            0.01,
+            Trajectory::steady(110.0),
+            Vec::new(),
+            knots(-30.0, &[(0.2, 0.0)]),
+        ),
+    );
+    atoms.push(Atom::harmonic(
+        4,
+        0.125,
+        knots(220.0, &[(0.25, -0.5)]),
+        vec![0.1 + 0.2, -6.0, 1e-17],
+        knots(-12.5, &[(0.3, -3.25), (0.45, 1.0 / 3.0)]),
+    ));
+    let text = score(&atoms);
+    let mut born = atoms.clone();
+    born.sort_by_key(|a| a.key);
+    assert_eq!(read(&text), Some(born), "{text}");
+    let harmonic = text
+        .lines()
+        .find(|r| r.contains("\"key\": 4"))
+        .expect("a row");
+    assert!(
+        harmonic.contains("\"o3\"") && !harmonic.contains("\"o4\""),
+        "{harmonic}"
+    );
+    assert_eq!(
+        read("{\"at\": \"0s\", \"node\": \"@../atoms/partial_f0_l1\"}\n"),
+        None
+    );
 }
 
 #[test]
@@ -256,7 +336,7 @@ fn each_kind_and_knot_count_plays_one_node() {
     assert_eq!(
         names,
         [
-            "atoms/harmonic_h3_f1_l3",
+            "atoms/harmonic_h4_f1_l3",
             "atoms/noise_l1",
             "atoms/partial_f3_l2"
         ]
