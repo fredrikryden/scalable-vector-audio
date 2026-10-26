@@ -3,7 +3,9 @@
 pub mod modulation;
 mod rate;
 
+use std::collections::HashMap;
 use std::f64::consts::{LN_10, PI};
+use std::sync::{Arc, Mutex};
 
 use super::hearing::{
     self, CAM_FIRST, CAM_LAST, CAM_SPACING, HOP_SECS, WINDOW_SECS, WINDOW_SPLITS_HZ,
@@ -63,6 +65,8 @@ pub struct Ear {
     hz: Vec<f64>,
     around: Vec<(usize, Vec<f64>)>,
     channels: Vec<Channel>,
+    /// Windows kept where asked.
+    windows: Option<Mutex<Windows>>,
 }
 
 /// One Glasberg and Moore (2002) range: its window, its transform's bins and the bins of
@@ -161,44 +165,44 @@ impl Range {
         c * c
     }
 
-    /// The window of the frame centred at `t`.
-    fn frame(&self, rate: f64, t: f64) -> Frame<'_> {
+    /// The window centred at `t`.
+    fn window(&self, rate: f64, t: f64) -> Window {
         let (first, last) = self.span(rate, t);
         let weights: Vec<f64> = (first..=last).map(|s| self.weight(rate, t, s)).collect();
-        Frame {
-            range: self,
+        let energy = weights.iter().map(|w| w * w).sum();
+        Window {
             first,
             weights,
+            energy,
         }
     }
+}
 
-    fn energy(&self, rate: f64, t: f64) -> f64 {
-        let (first, last) = self.span(rate, t);
-        (first..=last)
-            .map(|s| {
-                let w = self.weight(rate, t, s);
-                w * w
-            })
-            .sum()
-    }
+/// Windows by range and frame.
+type Windows = HashMap<(usize, i64), Arc<Window>>;
+
+/// A range's window at a frame: its first sample, weights, energy.
+struct Window {
+    first: i64,
+    weights: Vec<f64>,
+    energy: f64,
 }
 
 /// One range's window at one frame: the samples it weighs and the bins it reads, so samples or
 /// a closed form put their power per bin through the ear alike.
 pub struct Frame<'a> {
     range: &'a Range,
-    first: i64,
-    weights: Vec<f64>,
+    window: Arc<Window>,
 }
 
 impl Frame<'_> {
     /// The first sample the window weighs; `weights()[k]` weighs sample `first() + k`.
     pub fn first(&self) -> i64 {
-        self.first
+        self.window.first
     }
 
     pub fn weights(&self) -> &[f64] {
-        &self.weights
+        &self.window.weights
     }
 
     /// The bins this window supplies, its own range's.
@@ -219,7 +223,7 @@ impl Frame<'_> {
     /// The weighted transform of `x`, sample `first() + k` at `k`.
     pub fn transform(&self, x: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let mut re = vec![0.0; self.range.n];
-        for (k, (w, x)) in self.weights.iter().zip(x).enumerate() {
+        for (k, (w, x)) in self.window.weights.iter().zip(x).enumerate() {
             re[k] = w * x;
         }
         let mut im = vec![0.0; self.range.n];
@@ -229,7 +233,13 @@ impl Frame<'_> {
 
     /// `transform` at `bins()` alone, by direct sums.
     pub fn transform_bins(&self, x: &[f64]) -> (Vec<f64>, Vec<f64>) {
-        let weighted: Vec<f64> = self.weights.iter().zip(x).map(|(w, x)| w * x).collect();
+        let weighted: Vec<f64> = self
+            .window
+            .weights
+            .iter()
+            .zip(x)
+            .map(|(w, x)| w * x)
+            .collect();
         self.range
             .basis
             .iter()
@@ -251,8 +261,8 @@ impl Frame<'_> {
         for pair in planes.chunks(2) {
             re.iter_mut().for_each(|v| *v = 0.0);
             im.iter_mut().for_each(|v| *v = 0.0);
-            for (k, w) in self.weights.iter().enumerate() {
-                let i = self.first + k as i64 - from;
+            for (k, w) in self.window.weights.iter().enumerate() {
+                let i = self.window.first + k as i64 - from;
                 if (0..pair[0].len() as i64).contains(&i) {
                     re[k] = w * pair[0][i as usize];
                     im[k] = pair.get(1).map_or(0.0, |p| w * p[i as usize]);
@@ -431,20 +441,50 @@ impl Ear {
             hz,
             around,
             channels,
+            windows: None,
         }
     }
 
-    fn supplying(&self) -> impl Iterator<Item = &Range> {
-        self.ranges.iter().filter(|r| !r.supplies.is_empty())
+    /// The ear keeping each window it reads.
+    pub fn remembering(mut self) -> Ear {
+        self.windows = Some(Mutex::default());
+        self
+    }
+
+    /// Each range supplying bins, by index.
+    fn supplying(&self) -> impl Iterator<Item = (usize, &Range)> {
+        self.ranges
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !r.supplies.is_empty())
+    }
+
+    /// Range `r`'s window at frame `m`.
+    fn window(&self, r: usize, m: i64) -> Arc<Window> {
+        let read = || Arc::new(self.ranges[r].window(self.rate, m as f64 * self.hop_secs));
+        let Some(windows) = &self.windows else {
+            return read();
+        };
+        if let Some(w) = windows.lock().expect("the windows").get(&(r, m)) {
+            return w.clone();
+        }
+        let w = read();
+        windows
+            .lock()
+            .expect("the windows")
+            .insert((r, m), w.clone());
+        w
     }
 
     /// Frame `m`'s one spectrum, as Glasberg and Moore (2002) compose it: what `per` answers
     /// each range's frame with, one value per bin of its `Frame::hz()`, in the order of `hz()`.
     pub fn compose<T>(&self, m: i64, per: &mut dyn FnMut(&Frame) -> Vec<T>) -> Vec<T> {
-        let t = m as f64 * self.hop_secs;
         let mut out = Vec::with_capacity(self.hz.len());
-        for range in self.supplying() {
-            let bins = per(&range.frame(self.rate, t));
+        for (r, range) in self.supplying() {
+            let bins = per(&Frame {
+                range,
+                window: self.window(r, m),
+            });
             assert_eq!(
                 bins.len(),
                 range.supplies.len(),
@@ -464,11 +504,10 @@ impl Ear {
     /// `compose` answers it; a tangent `N` carries its derivative, the lower skirts' `p` moving
     /// with `X`.
     pub fn excite<N: Num>(&self, m: i64, power: &[N]) -> Vec<N> {
-        let t = m as f64 * self.hop_secs;
-        let gains = self.supplying().flat_map(|range| {
+        let gains = self.supplying().flat_map(|(r, range)| {
             range.gain[range.supplies.clone()]
                 .iter()
-                .zip(std::iter::repeat(range.energy(self.rate, t)))
+                .zip(std::iter::repeat(self.window(r, m).energy))
         });
         let eardrum: Vec<N> = power
             .iter()
@@ -498,11 +537,10 @@ impl Ear {
     /// `excite`'s slopes along each move of `power`, as a tangent `N` reads them, the skirts
     /// read once.
     pub fn excite_along(&self, m: i64, power: &[f64], along: &[Vec<f64>]) -> Vec<Vec<f64>> {
-        let t = m as f64 * self.hop_secs;
         let gains: Vec<f64> = self
             .supplying()
-            .flat_map(|range| {
-                let energy = range.energy(self.rate, t);
+            .flat_map(|(r, range)| {
+                let energy = self.window(r, m).energy;
                 range.gain[range.supplies.clone()]
                     .iter()
                     .map(move |g| match energy > 0.0 {
@@ -638,7 +676,7 @@ impl Ear {
     pub fn reach(&self, m: i64) -> (i64, i64) {
         let t = m as f64 * self.hop_secs;
         self.supplying()
-            .map(|r| r.span(self.rate, t))
+            .map(|(_, r)| r.span(self.rate, t))
             .fold((i64::MAX, i64::MIN), |(a, b), (f, l)| (a.min(f), b.max(l)))
     }
 

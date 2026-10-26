@@ -127,6 +127,7 @@ fn a_solve_answers_and_writes_a_stage_per_level() {
         }
     }
     for (k, stage) in stages.iter().enumerate() {
+        assert!(stage["rate_hz"].is_u64(), "a stage names its rate: {stage}");
         let level = root.join(format!("fit/level-{}", k + 1));
         assert_eq!(
             stage["directory"].as_str(),
@@ -168,6 +169,30 @@ fn a_solve_answers_and_writes_a_stage_per_level() {
         "destination.already_exists",
         4,
     );
+    let coarse = json(&sva(
+        &root,
+        &[
+            "solve",
+            &wav,
+            "--levels",
+            "2",
+            "--coarsest",
+            "1",
+            "--out",
+            "coarse",
+            "--cache",
+            &n0,
+        ],
+    ));
+    let labels: Vec<&str> = items(&coarse["data"]["stages"])
+        .iter()
+        .filter_map(|s| s["label"].as_str())
+        .collect();
+    assert_eq!(
+        labels,
+        ["level 1 of 2"],
+        "the coarsest level alone: {coarse}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -175,9 +200,14 @@ fn a_solve_answers_and_writes_a_stage_per_level() {
 #[test]
 fn a_solve_refuses_each_mistake_under_its_code() {
     let root = scratch("solve-refusals");
-    let cases: [(&[&str], &str, i32); 5] = [
+    let cases: [(&[&str], &str, i32); 6] = [
         (&["solve"], "cli.missing_argument", 3),
         (&["solve", "clip.wav", "--levels", "0"], "cli.bad_value", 3),
+        (
+            &["solve", "clip.wav", "--levels", "2", "--coarsest", "3"],
+            "cli.bad_value",
+            3,
+        ),
         (&["solve", "clip.wav", "--spl", "loud"], "cli.bad_value", 3),
         (
             &["solve", "clip.wav", "--vary", "gain=0..1"],

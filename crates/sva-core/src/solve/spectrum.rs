@@ -256,7 +256,8 @@ impl<'a> Model<'a> {
                     .entry((lo.to_bits(), hi.to_bits(), frame.n()))
                     .or_insert_with(|| Rc::new(correlation(&self.clip, (lo, hi), frame.n())))
                     .clone();
-                out = out.add(expected(atom, &self.clip, frame, &correlation));
+                let twiddles = (self.twiddles(2 * frame.n()), self.twiddles(frame.n()));
+                out = out.add(expected(atom, &self.clip, frame, (&correlation, twiddles)));
             }
         }
         out
@@ -981,8 +982,14 @@ fn envelope<N: Num>(atom: &Atom<N>, clip: &Clip, frame: &Frame) -> Option<Envelo
 }
 
 /// A noise's expected power per bin, `sum_d R(d) C(d) e^(-2 pi i j d/n)`, `R` the band's
-/// autocorrelation and `C` the weighted envelope's; its sampling as `MODEL` derives it.
-fn expected(atom: &Atom, clip: &Clip, frame: &Frame, correlation: &Correlation) -> Bins {
+/// autocorrelation and `C` the weighted envelope's, by transforms at `2n` and `n` with their
+/// twiddles; its sampling as `MODEL` derives it.
+fn expected(
+    atom: &Atom,
+    clip: &Clip,
+    frame: &Frame,
+    (correlation, (twiddles, narrow)): (&Correlation, (Rc<Twiddles>, Rc<Twiddles>)),
+) -> Bins {
     let n = frame.n();
     let bins = frame.hz().len();
     let silent = Bins::silent(bins);
@@ -1013,7 +1020,6 @@ fn expected(atom: &Atom, clip: &Clip, frame: &Frame, correlation: &Correlation) 
     let (wide_root, root) = ((wide as f64).sqrt(), (n as f64).sqrt());
     let held_input = norm(y_bound.iter().copied());
     let mut im = vec![0.0; wide];
-    let twiddles = fft::twiddles(wide);
     let y_norm = norm(y.iter().copied());
     fft::fft_with(&mut y, &mut im, &twiddles);
     let spread = wide_root * held_input + fft_bound(wide) * wide_root * (y_norm + held_input);
@@ -1057,7 +1063,7 @@ fn expected(atom: &Atom, clip: &Clip, frame: &Frame, correlation: &Correlation) 
     let folded_bound = SQRT_2 * ((r_most + r_bound) * window_bound + r_bound * window_norm)
         + 3.0 * U * SQRT_2 * folded_norm;
     let mut im = vec![0.0; n];
-    fft::fft_with(&mut folded, &mut im, &fft::twiddles(n));
+    fft::fft_with(&mut folded, &mut im, &narrow);
     let err = root * folded_bound + fft_bound(n) * root * (folded_norm + folded_bound);
     let power = folded[frame.bins()].to_vec();
     let sampling = power

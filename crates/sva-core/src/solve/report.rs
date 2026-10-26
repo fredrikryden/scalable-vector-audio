@@ -7,6 +7,16 @@ fn text(s: &str) -> String {
     format!("\"{}\"", escape(s))
 }
 
+/// The rate a stage read the clip at and the energy that cut in dB under the clip's, `null`
+/// where nothing was cut.
+fn read(stage: &Stage) -> String {
+    let cut = match stage.cut > 0.0 {
+        true => num(10.0 * libm::log10(stage.cut)),
+        false => NONE.to_string(),
+    };
+    format!("\"rate_hz\": {}, \"cut_db\": {cut}", stage.rate)
+}
+
 fn files(stage: &Stage) -> String {
     list(&stage.files, |(path, body)| {
         format!("{{ \"path\": {}, \"text\": {} }}", text(path), text(body))
@@ -59,7 +69,7 @@ pub fn progress(event: &Event) -> String {
         Event::Finished(stage) => format!(
             "{{ \"stage\": {}, \"finished\": true, \"stopped\": {}, \"length_bits\": {}, \
              \"residual_bits\": {}, \"bits\": {}, \"numbers\": {}, \"predicted_at_cap\": {NONE}, \
-             \"least\": {}, \"seconds\": {}, \"files\": {} }}",
+             \"least\": {}, \"seconds\": {}, {}, \"files\": {} }}",
             text(&stage.label),
             stage.stopped,
             num(stage.length_bits),
@@ -68,6 +78,7 @@ pub fn progress(event: &Event) -> String {
             stage.numbers(),
             stage.least,
             num(stage.seconds),
+            read(stage),
             files(stage)
         ),
     }
@@ -81,7 +92,7 @@ pub fn stage(stage: &Stage, wrote: Option<&(String, String)>) -> String {
     format!(
         "{{ \"label\": {}, \"scale\": {}, \"stopped\": {}, \"atoms\": {}, \"numbers\": {}, \
          \"bits\": {}, \"residual_bits\": {}, \"length_bits\": {}, \"least\": {}, \"seconds\": \
-         {}, \"edits\": {}, \"descents\": {}, \"files\": {}{wrote} }}",
+         {}, {}, \"edits\": {}, \"descents\": {}, \"files\": {}{wrote} }}",
         text(&stage.label),
         num(stage.scale),
         stage.stopped,
@@ -92,6 +103,7 @@ pub fn stage(stage: &Stage, wrote: Option<&(String, String)>) -> String {
         num(stage.length_bits),
         stage.least,
         num(stage.seconds),
+        read(stage),
         list(&stage.edits, |e| text(e)),
         list(&stage.descents, |(steps, ended)| format!(
             "{{ \"steps\": {steps}, \"ended\": \"{}\" }}",

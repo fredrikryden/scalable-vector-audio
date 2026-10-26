@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use sva_core::solve::atoms::Clip;
 use sva_core::solve::calibrate::rendered;
-use sva_core::solve::pyramid::{Asked, Event, Stage, mono, pyramid, scales};
+use sva_core::solve::pyramid::{Asked, Event, Stage, mono, pyramid, read_at};
 use sva_core::solve::report::{answer, progress};
 use sva_core::{Abandon, CliError, success_envelope};
 
@@ -69,8 +69,8 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
     let mut wrote = Vec::new();
     let mut failed = None;
     let mut warnings = Vec::new();
-    let levels = scales(args.levels);
-    let key = (rate, levels.as_slice(), args.spl_db);
+    let levels = read_at(rate, args.levels, args.coarsest);
+    let key = (levels.as_slice(), args.spl_db);
     let kept = calibrations::held(&args.cache, key, &mut warnings);
     let broke = Cell::new(false);
     let stages = wait(pyramid(
@@ -78,6 +78,7 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
         rate,
         &Asked {
             levels: args.levels,
+            coarsest: args.coarsest,
             spl_db: args.spl_db,
             threads: sva_engine::default_threads(),
             every_level: args.every_level,

@@ -1,10 +1,12 @@
-// Concern: states the pyramid fits a sine from silence: one partial, Hz and levels within precision, a stage per level | Non-concern: the descent alone (solve_lm.rs) | IO: (a sine) -> asserts
+// Concern: states the pyramid fits a sine from silence: one partial within precision, a stage per level, a level's rate | Non-concern: the descent alone (solve_lm.rs) | IO: (a sine) -> asserts
 
 use sva_core::solve::add::priced;
 use sva_core::solve::atoms::{Atom, Clip, Quantity, Sound, Trajectory};
 use sva_core::solve::calibrate::{n0, rendered};
 use sva_core::solve::objective::Objective;
-use sva_core::solve::pyramid::{Asked, Event, LEVELS, SPL_DB, chosen, label, pyramid};
+use sva_core::solve::pyramid::{
+    Asked, Event, LEVELS, SPL_DB, chosen, decimated, label, pyramid, read_at,
+};
 use sva_engine::Never;
 
 fn now<F: Future>(future: F) -> F::Output {
@@ -48,6 +50,7 @@ fn a_sine_from_silence_is_one_partial_within_its_precisions() {
     let threads = std::thread::available_parallelism().expect("a thread count");
     let asked = Asked {
         levels: LEVELS,
+        coarsest: LEVELS,
         spl_db: SPL_DB,
         threads,
         every_level: false,
@@ -93,4 +96,34 @@ fn a_sine_from_silence_is_one_partial_within_its_precisions() {
             ),
         }
     }
+}
+
+#[test]
+fn a_level_reads_the_clip_below_its_nyquist_at_its_rate() {
+    let rates = |rate: u32| -> Vec<u32> { read_at(rate, 4, 4).iter().map(|(r, _)| *r).collect() };
+    assert_eq!(rates(48_000), [24_000, 24_000, 48_000, 48_000]);
+    assert_eq!(rates(44_100), [22_050, 22_050, 44_100, 44_100]);
+    assert_eq!(rates(11_025), [11_025; 4], "no whole factor of 2");
+    let tone = |hz: f64, rate: f64, n: usize| -> Vec<f64> {
+        (0..n)
+            .map(|k| libm::sin(std::f64::consts::TAU * hz * k as f64 / rate))
+            .collect()
+    };
+    let (low, high) = (tone(1000.0, 48_000.0, 4800), tone(15_000.0, 48_000.0, 4800));
+    let both: Vec<f64> = low.iter().zip(&high).map(|(a, b)| a + b).collect();
+    let (read, cut) = decimated(&both, 48_000, 24_000);
+    assert!(
+        (cut - 0.5).abs() < 1e-9,
+        "the 15 kHz tone held half the energy: {cut}"
+    );
+    let want = tone(1000.0, 24_000.0, 2400);
+    assert_eq!(read.len(), want.len(), "every second sample");
+    let off = read
+        .iter()
+        .zip(&want)
+        .fold(0.0f64, |m, (a, b)| m.max((a - b).abs()));
+    assert!(
+        off < 1e-9,
+        "the tone below 12 kHz kept, the one above dropped: {off}"
+    );
 }

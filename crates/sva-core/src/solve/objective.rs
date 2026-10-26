@@ -36,7 +36,7 @@ pub type Elements = Vec<Vec<Vec<f64>>>;
 
 impl Objective {
     pub fn new(samples: &[f64], clip: Clip, spl_db: f64, scale: f64, n0: f64) -> Objective {
-        let ear = Ear::of(f64::from(clip.rate), spl_db, scale);
+        let ear = Ear::of(f64::from(clip.rate), spl_db, scale).remembering();
         let heard = ear.read(&[samples], 0.0);
         Objective {
             ear,

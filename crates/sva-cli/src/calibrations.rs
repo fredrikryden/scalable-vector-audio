@@ -1,4 +1,4 @@
-// Concern: keeps N0's calibrations on disk per build, rate, scale and spl, so each is fitted once | Non-concern: fitting one (calibrate.rs), the render store | IO: (CacheAt, rate, scales) -> warnings
+// Concern: keeps N0's calibrations on disk per build, rate, scale and spl, so each is fitted once | Non-concern: fitting one (calibrate.rs), the render store | IO: (CacheAt, rates, scales) -> warnings
 
 use std::hash::{DefaultHasher, Hasher};
 
@@ -20,10 +20,11 @@ fn warning(message: String) -> Diagnostic {
         .helped("pass `--cache <path>` elsewhere, or `--cache none` to fit N0 afresh")
 }
 
-/// This build's directory, keyed by the executable's bytes, and the scales read from it.
+/// This build's directory, keyed by the executable's bytes, and the rates and scales read
+/// from it.
 pub struct Kept {
     medium: Directory,
-    read: Vec<u64>,
+    read: Vec<(u32, u64)>,
 }
 
 fn name(rate: u32, scale: f64, spl_db: f64) -> String {
@@ -78,11 +79,12 @@ fn parsed(text: &str) -> Option<Calibration> {
     })
 }
 
-/// Holds each calibration this build kept under `at` at `rate`, `scales` and `spl_db`, where
-/// it reads as one a fit makes at the key its name holds; `None` where `at` keeps none.
+/// Holds each calibration this build kept under `at` at each of `levels`' rate and scale and
+/// at `spl_db`, where it reads as one a fit makes at the key its name holds; `None` where `at`
+/// keeps none.
 pub fn held(
     at: &CacheAt,
-    (rate, scales, spl_db): (u32, &[f64], f64),
+    (levels, spl_db): (&[(u32, f64)], f64),
     warnings: &mut Vec<Diagnostic>,
 ) -> Option<Kept> {
     let root = match at {
@@ -104,8 +106,8 @@ pub fn held(
     hasher.write(&bytes);
     let medium = Directory::at(root.join(FORMAT).join(format!("{:016x}", hasher.finish())));
     let mut read = Vec::new();
-    for scale in scales {
-        let Ok(Some(bytes)) = wait(medium.get(&name(rate, *scale, spl_db))) else {
+    for (rate, scale) in levels.iter().copied() {
+        let Ok(Some(bytes)) = wait(medium.get(&name(rate, scale, spl_db))) else {
             continue;
         };
         let keyed = |c: &Calibration| {
@@ -114,7 +116,7 @@ pub fn held(
         };
         let calibration = String::from_utf8(bytes).ok().and_then(|t| parsed(&t));
         if calibration.filter(keyed).is_some_and(keep) {
-            read.push(scale.to_bits());
+            read.push((rate, scale.to_bits()));
         }
     }
     Some(Kept { medium, read })
@@ -122,18 +124,18 @@ pub fn held(
 
 impl Kept {
     /// Writes each calibration held and not read, over a bad file, whole or not at all.
-    pub fn keep_all(
-        &self,
-        (rate, scales, spl_db): (u32, &[f64], f64),
-        warnings: &mut Vec<Diagnostic>,
-    ) {
-        for scale in scales.iter().filter(|s| !self.read.contains(&s.to_bits())) {
-            let Some(c) = kept(rate, *scale, spl_db) else {
+    pub fn keep_all(&self, (levels, spl_db): (&[(u32, f64)], f64), warnings: &mut Vec<Diagnostic>) {
+        let unread = levels
+            .iter()
+            .copied()
+            .filter(|(rate, s)| !self.read.contains(&(*rate, s.to_bits())));
+        for (rate, scale) in unread {
+            let Some(c) = kept(rate, scale, spl_db) else {
                 continue;
             };
             if let Err(why) = wait(
                 self.medium
-                    .put(&name(rate, *scale, spl_db), text(&c).as_bytes()),
+                    .put(&name(rate, scale, spl_db), text(&c).as_bytes()),
             ) {
                 warnings.push(warning(format!("a calibration was not kept: {why}")));
             }

@@ -227,10 +227,10 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                 held.limit = Limit(Some(cap))
             }
             "until" => held.until = Some(text(&key, &value)?),
-            "levels" => {
+            "levels" | "coarsest" => {
                 if whole::<usize>(&key, &value)? == 0 {
                     return Err(refuse(
-                        "`levels` is 0".into(),
+                        format!("`{key}` is 0"),
                         "pass 1 or more, or leave it out",
                     ));
                 }
@@ -523,7 +523,14 @@ impl Composition {
     ) -> Result<JsValue, JsValue> {
         options_of(
             &options,
-            &["levels", "spl", "everyLevel", "signal", "progress"],
+            &[
+                "levels",
+                "coarsest",
+                "spl",
+                "everyLevel",
+                "signal",
+                "progress",
+            ],
         )?;
         solve::solved(&clip, &options).await
     }

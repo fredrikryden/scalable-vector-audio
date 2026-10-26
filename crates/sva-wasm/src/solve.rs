@@ -19,13 +19,15 @@ export interface SolveClip {
     channels: Float32Array[];
 }
 /**
- * `levels` (default 4), `spl`, a full-scale sine's dB SPL (default 103.95), and `everyLevel`,
- * as `sva-cli solve` takes `--levels`, `--spl` and `--every-level`; `progress` hears each line the CLI prints on stderr;
+ * `levels` (default 4), `coarsest` (default all), `spl`, a full-scale sine's dB SPL (default
+ * 103.95), and `everyLevel`, as `sva-cli solve` takes `--levels`, `--coarsest`, `--spl` and
+ * `--every-level`; `progress` hears each line the CLI prints on stderr;
  * `signal`, read before each descent's step once the page has had its turn: aborted, the run
  * ends with the stage it interrupts, measured as one that finished.
  */
 export interface SolveOptions {
     levels?: number;
+    coarsest?: number;
     spl?: number;
     everyLevel?: boolean;
     progress?: (line: SolveProgress) => void;
@@ -140,6 +142,13 @@ pub(crate) async fn solved(clip: &JsValue, options: &JsValue) -> Result<JsValue,
             ));
         }
     };
+    let coarsest = number(options, "coarsest").map_or(levels, |k| k as usize);
+    if coarsest > levels {
+        return Err(refuse(
+            format!("`coarsest` {coarsest} is more than the {levels} levels"),
+            "pass at most `levels`, or leave it out",
+        ));
+    }
     let spl = js_sys::Reflect::get(options, &"spl".into()).unwrap_or(JsValue::UNDEFINED);
     let spl_db = match spl.is_undefined() {
         true => SPL_DB,
@@ -161,6 +170,7 @@ pub(crate) async fn solved(clip: &JsValue, options: &JsValue) -> Result<JsValue,
         rate,
         &Asked {
             levels,
+            coarsest,
             spl_db,
             threads: sva_engine::default_threads(),
             every_level: js_sys::Reflect::get(options, &"everyLevel".into())

@@ -14,6 +14,8 @@ pub const OUT: &str = "fit";
 pub struct SolveArgs {
     pub path: PathBuf,
     pub levels: usize,
+    /// The coarsest levels run, at most `levels`.
+    pub coarsest: usize,
     pub spl_db: f64,
     pub out: PathBuf,
     /// A directory that holds files may be written over.
@@ -26,6 +28,7 @@ pub struct SolveArgs {
 
 pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
     let mut it = rest.iter();
+    let mut coarsest = None;
     let path = it.next().filter(|a| !a.starts_with("--")).ok_or_else(|| {
         CliError::usage(
             "cli.missing_argument",
@@ -35,6 +38,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
     let mut args = SolveArgs {
         path: PathBuf::from(path),
         levels: LEVELS,
+        coarsest: 0,
         spl_db: SPL_DB,
         out: PathBuf::from(OUT),
         confirm: false,
@@ -45,6 +49,10 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
         match flag.as_str() {
             "--levels" => {
                 args.levels = count(&value(&mut it, "--levels")?, "--levels", "levels")?.get();
+            }
+            "--coarsest" => {
+                coarsest =
+                    Some(count(&value(&mut it, "--coarsest")?, "--coarsest", "levels")?.get());
             }
             "--spl" => {
                 let raw = value(&mut it, "--spl")?;
@@ -75,6 +83,16 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
                 ));
             }
         }
+    }
+    args.coarsest = coarsest.unwrap_or(args.levels);
+    if args.coarsest > args.levels {
+        return Err(CliError::usage(
+            "cli.bad_value",
+            format!(
+                "--coarsest {} runs more than the {} levels; pass at most --levels",
+                args.coarsest, args.levels
+            ),
+        ));
     }
     Ok(Command::Solve(Box::new(args)))
 }

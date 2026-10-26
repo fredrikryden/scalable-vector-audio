@@ -212,6 +212,25 @@ pub async fn descend(
     })
 }
 
+/// `a . b` in four interleaved partial sums, so it vectorises; only its rounding is the
+/// order's.
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    let (whole_a, whole_b) = (a.chunks_exact(4), b.chunks_exact(4));
+    let tail: f64 = whole_a
+        .remainder()
+        .iter()
+        .zip(whole_b.remainder())
+        .map(|(x, y)| x * y)
+        .sum();
+    let mut lanes = [0.0; 4];
+    for (x, y) in whole_a.zip(whole_b) {
+        for k in 0..4 {
+            lanes[k] += x[k] * y[k];
+        }
+    }
+    (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]) + tail
+}
+
 /// Each number marked as its group is.
 fn numbered(sizes: &[usize], marks: &[bool]) -> Vec<bool> {
     sizes
@@ -291,14 +310,10 @@ impl Path {
             for j in *first..i {
                 let (fj, lj) = (self.rows[j].0, &factor[j]);
                 let lo = fj.max(*first);
-                let dot: f64 = l[lo - first..j - first]
-                    .iter()
-                    .zip(&lj[lo - fj..j - fj])
-                    .map(|(a, b)| a * b)
-                    .sum();
+                let dot = dot(&l[lo - first..j - first], &lj[lo - fj..j - fj]);
                 l[j - first] = (row[j - first] - dot) / lj[j - fj];
             }
-            let sum: f64 = l[..i - first].iter().map(|v| v * v).sum();
+            let sum = dot(&l[..i - first], &l[..i - first]);
             let pivot = row[i - first] + mu - sum;
             if pivot.is_nan() || pivot <= 0.0 {
                 return None;
@@ -310,12 +325,7 @@ impl Path {
             let mut y = vec![0.0; m];
             for i in 0..m {
                 let (first, l) = (self.rows[i].0, &factor[i]);
-                let dot: f64 = l[..i - first]
-                    .iter()
-                    .zip(&y[first..i])
-                    .map(|(a, b)| a * b)
-                    .sum();
-                y[i] = (b[i] - dot) / l[i - first];
+                y[i] = (b[i] - dot(&l[..i - first], &y[first..i])) / l[i - first];
             }
             y
         };

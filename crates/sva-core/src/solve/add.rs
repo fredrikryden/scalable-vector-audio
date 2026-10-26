@@ -17,7 +17,7 @@ use super::lm::{Limits, Problem, descend};
 use super::objective::{NoisePower, Objective, excited, framed, reach};
 use super::pyramid::{Action, Run};
 
-pub const MODEL: &str = "ADD from the residual's spectrogram at full resolution: a periodic \
+pub const MODEL: &str = "ADD from the residual's spectrogram at the level's rate: a periodic \
      Hann window as long as the ear's longest at s = 1 (64 ms), its DFT zero-padded to the next \
      power of two, a frame every 1 ms (the ear's hop at s = 1); the residual's power per bin \
      max(0, |X_clip|^2 - |X_model|^2), the model rendered by the engine from its own nodes, as \
