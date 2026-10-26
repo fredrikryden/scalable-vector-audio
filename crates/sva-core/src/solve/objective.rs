@@ -3,6 +3,7 @@
 use std::f64::consts::LN_2;
 
 use sva_engine::internal::{Ear, Internal};
+use sva_engine::{default_threads, each};
 use sva_formula::C64;
 
 use super::atoms::{Atom, Clip};
@@ -55,13 +56,32 @@ impl Objective {
         self.n0
     }
 
+    /// The elements one evaluation compares.
+    pub fn count(&self) -> u64 {
+        self.heard
+            .channels
+            .iter()
+            .flat_map(|c| &c.bands)
+            .map(|b| b.elements.len() as u64)
+            .sum()
+    }
+
     /// Partials and harmonics summed in samples where `coherent`.
     pub fn expect(&self, atoms: &[Atom], coherent: bool) -> Elements {
-        let model = Model::new(atoms, self.clip, coherent);
-        let outputs = self.ear.elements(self.clip.len, &mut |m| {
-            let power = self.ear.compose(m, &mut |frame| model.bins(frame).power);
-            self.ear.excite(m, &power)
-        });
+        let (first, _) = self.ear.frames(self.clip.len);
+        let each = framed(
+            atoms,
+            self.clip,
+            coherent,
+            self.ear.frames(self.clip.len),
+            &|model, m| {
+                let power = self.ear.compose(m, &mut |frame| model.bins(frame).power);
+                excited(&self.ear, m, &power)
+            },
+        );
+        let outputs = self
+            .ear
+            .elements(self.clip.len, &mut |m| each[(m - first) as usize].clone());
         self.elements(&outputs)
     }
 
@@ -98,6 +118,40 @@ impl Objective {
     pub fn bits(&self, atoms: &[Atom], coherent: bool) -> f64 {
         self.residual_bits(&self.expect(atoms, coherent))
     }
+}
+
+/// E per channel at frame `m`, 0 unsummed where every bin is.
+pub fn excited(ear: &Ear, m: i64, power: &[f64]) -> Vec<f64> {
+    match power.iter().all(|p| *p == 0.0) {
+        true => vec![0.0; ear.thresholds().len()],
+        false => ear.excite(m, power),
+    }
+}
+
+/// `per` at each frame in order, one run of frames per thread, each its own `Model`.
+pub fn framed<R: Send>(
+    atoms: &[Atom],
+    clip: Clip,
+    coherent: bool,
+    (first, last): (i64, i64),
+    per: &(dyn Fn(&Model, i64) -> R + Sync),
+) -> Vec<R> {
+    let threads = default_threads();
+    let frames = (last - first + 1).max(0) as usize;
+    let runs = threads.get().min(frames).max(1);
+    let spans: Vec<(i64, i64)> = (0..runs)
+        .map(|r| {
+            let at = |r: usize| first + (r * frames / runs) as i64;
+            (at(r), at(r + 1))
+        })
+        .collect();
+    each(threads, spans, |(from, to)| {
+        let model = Model::new(atoms, clip, coherent);
+        (from..to).map(|m| per(&model, m)).collect::<Vec<R>>()
+    })
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 pub fn total(residual_bits: f64, atoms: &[Atom], priced: &[Priced]) -> f64 {

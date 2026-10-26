@@ -8,7 +8,7 @@ use sva_engine::hearing::{JESTEADT_TONE_SECS, level_jnd_db};
 use sva_engine::internal::{Ear, Internal};
 use sva_engine::{PSYCHOACOUSTIC_V1, Tier, each};
 
-use super::atoms::{Atom, Clip, FULL_SCALE_DBFS, Trajectory, nodes, score};
+use super::atoms::{Atom, Clip, FULL_SCALE_DBFS, Trajectory, files};
 use super::spectrum::floor_db;
 use crate::{Job, Output, Representation, asked, call, execute};
 
@@ -111,15 +111,9 @@ pub fn clip(rate: u32) -> Clip {
 /// The clip `atoms` write, rendered by the engine from their own nodes and score.
 pub fn rendered(atoms: &[Atom], clip: &Clip) -> Vec<f64> {
     let mut held = Composition::new();
-    for (path, text) in nodes(atoms, clip) {
+    for (path, text) in files(atoms, clip) {
         held.insert(path, text);
     }
-    held.insert("score/clip.jsonl", score(atoms));
-    held.insert(
-        "master",
-        "; Models: the clip | Neglects: nothing | IO: (t) -> amplitude | Tags: master\n\
-         @score/clip(t)\n",
-    );
     let samples = [asked(&call("samples").expect("a call")).expect("a reading")];
     let target = format!("@master([0, {}s])", clip.secs());
     let job = Job {

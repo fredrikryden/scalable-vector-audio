@@ -1,2 +1,0 @@
-; Models: a quarter second of a sine at the level variables/gain holds | Neglects: everything but level | IO: (t) -> amplitude | Tags: fixture
-crop(@variables/gain*sin(2*pi*220*t), 0s, 0.25s)

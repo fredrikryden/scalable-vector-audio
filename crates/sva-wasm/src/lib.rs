@@ -111,7 +111,7 @@ impl Abandon for Signal {
     }
 }
 
-fn aborted(signal: &JsValue) -> bool {
+pub(crate) fn aborted(signal: &JsValue) -> bool {
     js_sys::Reflect::get(signal, &JsValue::from_str("aborted"))
         .ok()
         .and_then(|aborted| aborted.as_bool())
@@ -227,41 +227,22 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                 held.limit = Limit(Some(cap))
             }
             "until" => held.until = Some(text(&key, &value)?),
-            "max_renders" | "steps" | "draws" => {
-                whole::<usize>(&key, &value)?;
+            "levels" => {
+                if whole::<usize>(&key, &value)? == 0 {
+                    return Err(refuse(
+                        "`levels` is 0".into(),
+                        "pass 1 or more, or leave it out",
+                    ));
+                }
             }
-            "step_tol" | "cost_tol" | "heartbeat" => {
-                value
-                    .as_f64()
-                    .filter(|v| v.is_finite() && *v >= 0.0)
-                    .ok_or_else(|| {
-                        refuse(
-                            format!("`{key}` is no number at or above 0"),
-                            "pass a number",
-                        )
-                    })?;
+            "spl" => {
+                value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| {
+                    refuse(
+                        "`spl` is no finite number".into(),
+                        "pass a full-scale sine's dB SPL, or leave it out",
+                    )
+                })?;
             }
-            "method" if !matches!(value.as_string().as_deref(), Some("prox" | "compass")) => {
-                return Err(refuse(
-                    "`method` is neither \"compass\" nor \"prox\"".into(),
-                    "pass \"prox\" for the priced fit, or leave it out",
-                ));
-            }
-            "method" => {}
-            "continuation" | "recordings" if !value.is_object() => {
-                return Err(refuse(
-                    format!("`{key}` is not an object"),
-                    "pass an object",
-                ));
-            }
-            "continuation" | "recordings" => {}
-            "write" if value.as_bool().is_none() => {
-                return Err(refuse(
-                    "`write` is not a boolean".into(),
-                    "pass true or false",
-                ));
-            }
-            "write" => {}
             "progress" if !value.is_function() => {
                 return Err(refuse(
                     "`progress` is no function".into(),
@@ -528,35 +509,15 @@ impl Composition {
         self.inner.0.borrow_mut().insert(path, text);
     }
 
-    /// `sva-cli solve`'s envelope: `cost` its cost text or a `SolveCost` tree, `vary` its
-    /// `--vary`s, `options` its flags beside `signal`, `progress` and `recordings`. This build
-    /// checks them and throws `solve.unbuilt`.
+    /// `sva-cli solve`'s envelope over `clip`: `options` its flags as `SolveOptions` names
+    /// them. It reads no node of this composition.
     pub async fn solve(
         &self,
-        #[wasm_bindgen(unchecked_param_type = "string | SolveCost")] cost: JsValue,
-        #[wasm_bindgen(unchecked_param_type = "SolveVary[]")] vary: js_sys::Array,
-        options: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "SolveClip")] clip: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "SolveOptions")] options: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let keys = [
-            "max_renders",
-            "step_tol",
-            "cost_tol",
-            "set",
-            "rate",
-            "threads",
-            "signal",
-            "progress",
-            "method",
-            "continuation",
-            "steps",
-            "draws",
-            "heartbeat",
-            "write",
-            "recordings",
-        ];
-        options_of(&options, &keys)?;
-        let _ = (cost, vary);
-        Err(thrown(&sva_core::solve::unbuilt()))
+        options_of(&options, &["levels", "spl", "signal", "progress"])?;
+        solve::solved(&clip, &options)
     }
 
     /// `target` and `representations` as `sva-cli render` takes them. `options`: `rate`,

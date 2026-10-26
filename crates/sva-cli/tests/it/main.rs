@@ -9,7 +9,6 @@ mod lint;
 mod lint_verdict;
 mod panics;
 mod pinned;
-mod prox;
 mod render_integration;
 mod score;
 mod score_rows;

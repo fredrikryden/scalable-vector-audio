@@ -27,6 +27,11 @@ pub fn help_text() -> String {
         .map(|e| format!("`.{e}`"))
         .join(", ");
     let unreadable = crate::recording::UNREADABLE;
+    let (levels, spl, out) = (
+        sva_core::solve::pyramid::LEVELS,
+        sva_core::solve::pyramid::SPL_DB,
+        crate::args::OUT,
+    );
     format!(
         r#"USAGE:
   sva-cli (render | analyze | solve | lint | trace | builtins | outline | new) [arguments]
@@ -36,7 +41,7 @@ DESCRIPTION:
   `t` or `f` on one line, or a score placing notes in time. sva-cli reads that
   composition and prints what it is and what it sounds like, as JSON on stdout.
   `render`, `lint` and `trace` read the current directory; `new` writes beside
-  it and `analyze` reads a file. `solve` is being rebuilt.
+  it and `analyze` reads a file. `solve` fits a recording, coarse to fine.
 
 SCORES:
   A score is a `.jsonl` file: JSON Lines, one object per line, sorted by `at`;
@@ -368,18 +373,22 @@ REPRESENTATIONS:
 {representations}
 
 SOLVE:
-  sva-cli solve ('<cost>' | @fits/<name>) --vary <name>=<lo>..<hi>[/<step>][,log]...
-                [--max-renders <n>] [--step-tol <x>] [--cost-tol <x>]
-                [--set <name>=<text>]... [--rate <hz>] [--threads <n>]
-                [--cache <path|none>] [--write [--confirm]]
-                [--method prox [--steps <n>] [--draws <n>] [--heartbeat <s>]
-                  [--continuation <scheme> [--rounds <n>]]]
+  sva-cli solve <recording> [--levels <n>] [--spl <dB>] [--out <dir>] [--confirm]
 
-  The solver is being rebuilt from scratch. This build checks a solve's argv
-  and refuses every solve as `solve.unbuilt`, fitting nothing and writing no
-  file. In a node, `repr` and `load_json` are names the language does not know
-  and refuse as any such name does, with a help naming `solve`. No node lives
-  under `fits/`, and `lint` reads nothing there.
+  Fits atoms (partials and noise bands) to a recording, read in the formats
+  ANALYZE reads, its channels averaged, from silence and coarse to fine: level
+  k of n reads the clip through the ear at s = sqrt(2)^(n - k) (default
+  {levels} levels, s = 2.83, 2, 1.41, 1), refines the last level's atoms, then
+  adds partials at the residual's spectral peaks and noise bands, each kept
+  only where the description length falls. Frequencies move only where s <= 2.
+  `--spl` is a full-scale sine's level in dB SPL (default {spl}). Each level is
+  a stage, written as it finishes: its composition under
+  `<out>/level-<k>/` and its render as `<out>/level-<k>.wav` (default out
+  `{out}`); an out directory already holding files refuses as a conflict
+  unless `--confirm`. Stderr carries one JSON progress line per activity, per
+  descent and per finished stage; stdout answers every stage and the chosen
+  one, the last shorter than every earlier. SIGINT ends the run after the
+  stage it interrupts.
 
 ANALYZE:
   sva-cli analyze <file> --representation <list> [--confirm]
@@ -491,7 +500,7 @@ NEW:
 
   Writes a starter composition at ./<name>, and refuses if that directory
   exists. `--from <recording>`, a starter of a recording, refuses as
-  `seed.unbuilt` while the solver is rebuilt. `--idempotency-key <key>` records
+  `seed.unbuilt`: `solve <recording>` fits one from silence. `--idempotency-key <key>` records
   the key beside the composition, so a retry under the same key succeeds
   identically while the tree still holds what was written. Any other key, or an
   edited tree, refuses.

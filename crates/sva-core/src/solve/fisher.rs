@@ -9,8 +9,7 @@ use super::atoms::{Atom, Clip};
 use super::bits::Priced;
 use super::dual::Dual;
 use super::lm::{Linear, Problem};
-use super::objective::Objective;
-use super::spectrum::Model;
+use super::objective::{Objective, excited, framed};
 
 pub const MODEL: &str = "the residual in nats f = sum_i d_i^2/2, d_i = (m_i - e_i)/sigma_i, \
      sigma_i^2 = N0 rho (objective.rs), differentiated in forward mode, one seed per number: \
@@ -24,7 +23,8 @@ pub const MODEL: &str = "the residual in nats f = sum_i d_i^2/2, d_i = (m_i - e_
      117-119, doi 10.1093/imamat/13.1.117; intervals coloured greedily by first frame, which is \
      optimal), and the seeds are the passes, one per colour and number slot, each frame's \
      tangents those of the one atom of that colour reaching it, split by atom before the \
-     stage, whose memory reaches every later frame; the tangents carry no bound: they propose \
+     stage, whose memory reaches every later frame; held atoms sound and seed nothing, a pinned \
+     number's gradient entry and Fisher row and column are 0; the tangents carry no bound: they propose \
      steps and curvatures, and every step is taken on the true cost";
 
 /// Each atom's reach `(first, last)` in frames (empty where `first > last`), its colour, and
@@ -120,13 +120,17 @@ fn composed(
     out
 }
 
-/// `atoms`' cost and its linearisation, partials and harmonics summed in samples where
-/// `coherent`.
-pub fn linearise(objective: &Objective, atoms: &[Atom], coherent: bool) -> Linearised {
+/// `atoms`' cost and its linearisation in the numbers of the first `moving`, the rest held,
+/// partials and harmonics summed in samples where `coherent`.
+pub fn linearise(
+    objective: &Objective,
+    atoms: &[Atom],
+    moving: usize,
+    coherent: bool,
+) -> Linearised {
     let (ear, clip) = (objective.ear(), objective.clip());
-    let model = Model::new(atoms, clip, coherent);
-    let colouring = colouring(ear, &clip, atoms);
-    let numbers: Vec<usize> = atoms.iter().map(|a| a.values().len()).collect();
+    let colouring = colouring(ear, &clip, &atoms[..moving]);
+    let numbers: Vec<usize> = atoms[..moving].iter().map(|a| a.values().len()).collect();
     let offsets: Vec<usize> = numbers
         .iter()
         .scan(0, |at, n| {
@@ -139,37 +143,37 @@ pub fn linearise(objective: &Objective, atoms: &[Atom], coherent: bool) -> Linea
     let (first, last) = ear.frames(clip.len);
     let frames = (last - first + 1) as usize;
     let channels = ear.thresholds().len();
-    let mut levels = vec![vec![0.0; frames]; channels];
-    let mut d_levels = vec![vec![vec![0.0; frames]; channels]; columns];
-    let colours = colouring.colours.iter().max().map_or(0, |c| c + 1);
-    for m in first..=last {
-        let at = (m - first) as usize;
+    let per = framed(atoms, clip, coherent, (first, last), &|model, m| {
         let power = ear.compose(m, &mut |frame| model.bins(frame).power);
-        for (c, v) in ear.levels(&ear.excite(m, &power)).into_iter().enumerate() {
-            levels[c][at] = v;
-        }
-        for colour in 0..colours {
-            let reaching: Vec<usize> = (0..atoms.len())
-                .filter(|a| {
-                    let (f, t) = colouring.reach[*a];
-                    colouring.colours[*a] == colour && f <= m && m <= t
-                })
-                .collect();
-            assert!(reaching.len() <= 1, "a colour's atoms share no frame");
-            let Some(&a) = reaching.first() else {
+        let levels = ear.levels(&excited(ear, m, &power));
+        let mut moved = Vec::new();
+        for (a, (f, t)) in colouring.reach.iter().enumerate() {
+            if m < *f || m > *t {
                 continue;
-            };
+            }
             let d_power = composed(ear, m, numbers[a], &mut |frame| model.tangents(frame, a));
             for (j, d) in d_power.iter().enumerate() {
-                let moved: Vec<Dual> = power
+                let tangent: Vec<Dual> = power
                     .iter()
                     .zip(d)
                     .map(|(v, d)| Dual::new(*v, *d))
                     .collect();
-                let moved = ear.excite(m, &moved);
-                for (c, v) in ear.levels(&moved).into_iter().enumerate() {
-                    d_levels[offsets[a] + j][c][at] = v.tangent;
-                }
+                let excited = ear.excite(m, &tangent);
+                let slopes: Vec<f64> = ear.levels(&excited).iter().map(|v| v.tangent).collect();
+                moved.push((offsets[a] + j, slopes));
+            }
+        }
+        (levels, moved)
+    });
+    let mut levels = vec![vec![0.0; frames]; channels];
+    let mut d_levels = vec![vec![vec![0.0; frames]; channels]; columns];
+    for (at, (held, moved)) in per.into_iter().enumerate() {
+        for (c, v) in held.into_iter().enumerate() {
+            levels[c][at] = v;
+        }
+        for (column, slopes) in moved {
+            for (c, v) in slopes.into_iter().enumerate() {
+                d_levels[column][c][at] = v;
             }
         }
     }
@@ -209,13 +213,16 @@ pub fn linearise(objective: &Objective, atoms: &[Atom], coherent: bool) -> Linea
     }
 }
 
-/// A fixed structure's numbers as one vector in `values()`' order atom by atom: its cost in
-/// nats, its linearisation, its projection atom by atom (atoms.rs).
+/// A fixed structure's numbers as one vector in `values()`' order atom by atom, beside atoms
+/// it holds as they are: its cost in nats, its linearisation, its projection atom by atom
+/// (atoms.rs), each pinned number kept where it started.
 pub struct Fit<'a> {
     objective: &'a Objective,
     atoms: Vec<Atom>,
+    held: Vec<Atom>,
     priced: Vec<Priced>,
     coherent: bool,
+    pinned: Vec<Option<f64>>,
 }
 
 impl<'a> Fit<'a> {
@@ -226,12 +233,32 @@ impl<'a> Fit<'a> {
         coherent: bool,
     ) -> Fit<'a> {
         assert_eq!(atoms.len(), priced.len(), "one pricing per atom");
+        let numbers = atoms.iter().map(|a| a.values().len()).sum();
         Fit {
             objective,
             atoms,
+            held: Vec::new(),
             priced,
             coherent,
+            pinned: vec![None; numbers],
         }
+    }
+
+    /// The same fit with `held` sounding beside its atoms, none of their numbers moving.
+    pub fn holding(mut self, held: Vec<Atom>) -> Fit<'a> {
+        self.held = held;
+        self
+    }
+
+    /// The same fit with each number `pinned` marks, in `numbers()`' order, kept where it is.
+    pub fn pinning(mut self, pinned: &[bool]) -> Fit<'a> {
+        self.pinned = self
+            .numbers()
+            .into_iter()
+            .zip(pinned)
+            .map(|(v, pin)| pin.then_some(v))
+            .collect();
+        self
     }
 
     pub fn numbers(&self) -> Vec<f64> {
@@ -258,14 +285,36 @@ impl<'a> Fit<'a> {
             .collect()
     }
 
+    /// The moving atoms at `x`, then the held.
+    fn sounding(&self, x: &[f64]) -> Vec<Atom> {
+        let mut all = self.atoms_at(x);
+        all.extend(self.held.iter().cloned());
+        all
+    }
+
     pub fn linearise(&self, x: &[f64]) -> Linearised {
-        linearise(self.objective, &self.atoms_at(x), self.coherent)
+        let mut out = linearise(
+            self.objective,
+            &self.sounding(x),
+            self.atoms.len(),
+            self.coherent,
+        );
+        for (i, pin) in self.pinned.iter().enumerate() {
+            if pin.is_some() {
+                out.linear.gradient[i] = 0.0;
+                for row in out.linear.fisher.iter_mut() {
+                    row[i] = 0.0;
+                }
+                out.linear.fisher[i].fill(0.0);
+            }
+        }
+        out
     }
 }
 
 impl Problem for Fit<'_> {
     fn cost(&self, x: &[f64]) -> f64 {
-        self.objective.bits(&self.atoms_at(x), self.coherent) * LN_2
+        self.objective.bits(&self.sounding(x), self.coherent) * LN_2
     }
 
     fn linear(&self, x: &[f64]) -> Linear {
@@ -273,9 +322,14 @@ impl Problem for Fit<'_> {
     }
 
     fn project(&self, x: &[f64], weights: &[f64]) -> Option<Vec<f64>> {
+        let kept: Vec<f64> = x
+            .iter()
+            .zip(&self.pinned)
+            .map(|(v, pin)| pin.unwrap_or(*v))
+            .collect();
         let mut at = 0;
         let mut out = Vec::with_capacity(x.len());
-        for (atom, priced) in self.atoms_at(x).iter().zip(&self.priced) {
+        for (atom, priced) in self.atoms_at(&kept).iter().zip(&self.priced) {
             let n = atom.values().len();
             let held = priced.feasible.project(atom, &weights[at..at + n])?;
             out.extend(held.values());

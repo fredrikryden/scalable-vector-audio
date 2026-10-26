@@ -1,137 +1,162 @@
-// Concern: a solve's JS shapes, and the `seed` export refused while the solver is rebuilt | Non-concern: the solve method (lib.rs), decoding audio | IO: (rate, planes, name, limits) -> a refusal
+// Concern: a solve's JS shapes and its run over a clip a page holds; `seed` refused while rebuilt | Non-concern: the method's binding (lib.rs) | IO: (clip, options) -> `data`
 
-use wasm_bindgen::JsValue;
+use sva_core::solve::pyramid::{Asked, LEVELS, SPL_DB, mono, pyramid};
+use sva_core::solve::report::{answer, progress};
+use sva_core::success_envelope;
 use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::{JsCast, JsValue};
 
 use crate::analyze::planes_of;
-use crate::{refuse, thrown};
+use crate::{aborted, parse, refuse, thrown};
 
 #[wasm_bindgen(typescript_custom_section)]
-const SOLVE_COST: &str = r#"
+const SOLVE_CLIP: &str = r#"
 /** A recording passed whole: one Float32Array per channel, at `rate` Hz. */
-export interface Samples {
-    samples: { rate: number; channels: Float32Array[] };
+export interface SolveClip {
+    rate: number;
+    channels: Float32Array[];
 }
 /**
- * One node of a solve's cost; each node holds one key. A number, or a weight vector `[1, 0.5]`;
- * a leaf `{ repr: "envelope(frame=10ms)", target: "@lead([0, 5s])" }`, the reading as `render`'s
- * representations spell it and its target a render expression or a recording passed whole;
- * `{ value }`, a number, a list of numbers or a reading's `data` as `analyze` answers it,
- * checked against the leaf it subtracts from; `add`, `sub`, `mul` and `div` over two or more,
- * left to right; `neg`; the reducers `norm`, `sum`, `max`, `abs`, and `dot: [weights, v]`.
- * `{ repr: "numbers", target: "@master" }` is the bits a composition writes, which
- * `method: "prox"` prices.
+ * `levels` (default 4) and `spl`, a full-scale sine's dB SPL (default 103.95), as `sva-cli
+ * solve` takes `--levels` and `--spl`; `progress` hears each line the CLI prints on stderr;
+ * `signal`, read between activities: aborted, the run ends after the stage it interrupts.
  */
-export type SolveCost =
-    | number
-    | number[]
-    | { repr: string; target: string | Samples }
-    | { value: unknown }
-    | { add: SolveCost[] } | { sub: SolveCost[] } | { mul: SolveCost[] } | { div: SolveCost[] }
-    | { neg: SolveCost }
-    | { norm: SolveCost } | { sum: SolveCost } | { max: SolveCost } | { abs: SolveCost }
-    | { dot: [number[], SolveCost] };
-/**
- * The recording each `sample("<path>")` of a cost's text reads, under that path:
- * `{ "clip.wav": { rate: 48000, channels: [plane] } }`, as the CLI reads the file there.
- */
-export type SolveRecordings = Record<string, Samples["samples"]>;
-/** One variable a solve moves, as `--vary <name>=<lo>..<hi>[/<step>][,log]`, or that text. */
-export type SolveVary = string | SolveVaryFields;
-export interface SolveVaryFields {
-    name: string;
-    lo: string | number;
-    hi: string | number;
-    step?: string | number;
-    log?: boolean;
+export interface SolveOptions {
+    levels?: number;
+    spl?: number;
+    progress?: (line: SolveProgress) => void;
+    signal?: AbortSignal;
 }
 "#;
 
 #[wasm_bindgen(typescript_custom_section)]
 const SOLVE_PROGRESS: &str = r#"
-/**
- * A priced solve's `progress` line: a step, an activity, a stage as it finishes, or the activity
- * a refusal stopped, heard before the solve throws.
- */
-export type SolveProgress = SolveStep | SolveActivity | SolveStageFinished | SolveFailed;
-/**
- * Every 50th step and the step a phase converges or reaches its cap at, `ended` why it did,
- * null otherwise. A trial's `stage` is `<stage> trial <edit>`.
- */
+/** A solve's `progress` line: a descent's last step, an activity, or a stage as it finishes. */
+export type SolveProgress = SolveStep | SolveActivity | SolveStageFinished;
+/** The step a descent ends at, `ended` why it did; `step` its steps. */
 export interface SolveStep {
     stage: string;
-    phase: string;
+    phase: "solve";
     price: number;
     step: number;
     draws: number;
     residual_bits: number;
     numbers: number;
     bits: number;
-    ended: "converged" | "cap" | "signal" | null;
+    ended: "converged" | "cap" | "signal";
 }
-/** What a priced solve is doing. */
-export type SolveAction =
-    | "seeding"
-    | "reading_reference"
-    | "rendering_noise"
-    | "descending"
-    | "debiasing"
-    | "ranking_proposals"
-    | "trying_proposal"
-    | "evaluating_at_cap"
-    | "measuring";
+/** What a solve is doing. */
+export type SolveAction = "reading_reference" | "ranking_proposals" | "descending" | "measuring";
 /**
- * Heard as an activity starts, as the one it ran inside resumes, and between its units once
- * `heartbeat` seconds (default 1) have passed since the last line; 0 hears one between every
- * unit. `edit` is the structure edit a trial tries. `count` is the activity's own, `of` at most
- * that many steps or trials. `part` is the stage's place in the scheme, `of` at most that many.
- * `work.comparisons`: cell comparisons since the solve began, a counted cell of the reference's
- * `internal` reading against the same cell of one draw's reading of the model, an evaluation
- * making cells times its draws and measuring the same off its renders; `per_second` its rate
- * over the last window at least `heartbeat` long, null before one.
+ * Heard as an activity starts. `stage` is `level k of n`; `edit` the atom a proposal or a
+ * descent concerns; `count` the activity's own, `of` null as nothing bounds it; `part` the
+ * level's place, `of` the levels. `work.comparisons`: elements of the clip's `internal`
+ * reading compared with the model's since the solve began, `per_second` null.
  */
 export interface SolveActivity {
     action: SolveAction;
-    stage: string | null;
+    stage: string;
     edit: string | null;
-    count: { done: number; of: number; unit: "render" | "step" | "proposal" | "trial" | "draw" } | null;
-    part: { at: number; of: number } | null;
-    work: { comparisons: number; per_second: number | null };
+    count: { done: number; of: null; unit: "atom" | "proposal" | "evaluation" } | null;
+    part: { at: number; of: number };
+    work: { comparisons: number; per_second: null };
     seconds: number;
 }
-/** A residual as `data.stages` lists it. */
-export interface SolveResidual {
-    residual_bits: number;
-    standard_error: number;
-    d_prime: number;
-    per_cell: number;
-}
 /**
- * A stage as `data.stages` will list it, heard as it finishes, with its terms: `length_bits` is
- * `predicted_at_cap.residual_bits` plus `bits`, null where stopped; `residual_bits` the residual
- * at the draws it was solved at. `files` the `{ path, text }`s `write` would insert for it,
- * `least` true where its `length_bits` is below every earlier stage's, so the last such is
- * `data.chosen`. Writing them loads the stage's composition once and renders nothing, cheap
- * next to its solve.
+ * A level as `data.stages` will list it, heard as it finishes: `length_bits` its residual bits
+ * at s = 1 plus `bits`, `residual_bits` at its own scale; `files` its composition, `least`
+ * true where its `length_bits` is below every earlier level's, so the last such is
+ * `data.chosen`.
  */
 export interface SolveStageFinished {
     stage: string;
     finished: true;
     stopped: boolean;
-    length_bits: number | null;
+    length_bits: number;
     residual_bits: number;
     bits: number;
     numbers: number;
-    predicted_at_cap: SolveResidual | null;
+    predicted_at_cap: null;
     least: boolean;
+    seconds: number;
     files: { items: { path: string; text: string }[] };
 }
-/**
- * The activity a refusal stopped, `action` null where it came before any; `code` the thrown
- * refusal's.
- */
-export type SolveFailed = { failed: true; code: string } & (SolveActivity | { action: null });
 "#;
+
+fn number(options: &JsValue, key: &str) -> Option<f64> {
+    js_sys::Reflect::get(options, &key.into())
+        .ok()
+        .and_then(|v| v.as_f64())
+}
+
+/// `sva-cli solve`'s envelope over `clip`, its channels averaged, under `options`
+/// (`SolveOptions`, already checked by name).
+pub(crate) fn solved(clip: &JsValue, options: &JsValue) -> Result<JsValue, JsValue> {
+    let rate = number(clip, "rate")
+        .filter(|r| r.fract() == 0.0 && *r >= 1.0 && *r <= f64::from(u32::MAX))
+        .ok_or_else(|| {
+            refuse(
+                "`clip.rate` is no whole Hz".into(),
+                "pass { rate: 48000, channels }",
+            )
+        })? as u32;
+    let channels = js_sys::Reflect::get(clip, &"channels".into())
+        .ok()
+        .filter(js_sys::Array::is_array)
+        .map(|v| js_sys::Array::from(&v))
+        .ok_or_else(|| {
+            refuse(
+                "`clip.channels` is no array".into(),
+                "pass one Float32Array per channel",
+            )
+        })?;
+    let planes = planes_of(channels)?;
+    let samples = mono(&planes);
+    let levels = match number(options, "levels") {
+        None => LEVELS,
+        Some(l) if l.fract() == 0.0 && l >= 1.0 => l as usize,
+        Some(_) => {
+            return Err(refuse(
+                "`levels` is no whole number from 1".into(),
+                "pass 4, or leave it out",
+            ));
+        }
+    };
+    let spl = js_sys::Reflect::get(options, &"spl".into()).unwrap_or(JsValue::UNDEFINED);
+    let spl_db = match spl.is_undefined() {
+        true => SPL_DB,
+        false => spl.as_f64().filter(|v| v.is_finite()).ok_or_else(|| {
+            refuse(
+                "`spl` is no finite number".into(),
+                "pass a full-scale sine's dB SPL, or leave it out",
+            )
+        })?,
+    };
+    let hear = js_sys::Reflect::get(options, &"progress".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok());
+    let signal = js_sys::Reflect::get(options, &"signal".into())
+        .ok()
+        .filter(|s| !s.is_undefined());
+    let stages = pyramid(
+        &samples,
+        rate,
+        &Asked {
+            levels,
+            spl_db,
+            threads: sva_engine::default_threads(),
+        },
+        &mut |event| {
+            if let Some(hear) = &hear {
+                let line = parse(&progress(&event)).unwrap_or(JsValue::NULL);
+                let _ = hear.call1(&JsValue::NULL, &line);
+            }
+        },
+        &|| signal.as_ref().is_some_and(aborted),
+        &|| js_sys::Date::now() / 1000.0,
+    );
+    parse(&success_envelope(&answer(&stages, levels, &[]), &[]))
+}
 
 /// `limits`: `{ harmonics, lone }`, each optional, as `new --from` takes `--harmonics` and
 /// `--lone`. This build checks them and throws `seed.unbuilt`.

@@ -9,6 +9,7 @@ mod solve;
 
 use reading::{analyze_args, render_args};
 use solve::solve_args;
+pub use solve::{OUT, SolveArgs};
 
 #[derive(Debug, PartialEq)]
 pub struct RenderArgs {
@@ -51,8 +52,7 @@ pub enum Command {
     Help,
     Render(Box<RenderArgs>),
     Analyze(Box<AnalyzeArgs>),
-    /// Its argv checked; the solver is being rebuilt.
-    Solve,
+    Solve(Box<SolveArgs>),
     /// One expression, as render's target; `None` lints every file under its own rules.
     Lint {
         target: Option<String>,

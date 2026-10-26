@@ -1,5 +1,6 @@
-// Concern: the solve and seed refusals while the solver is rebuilt, its model's modules, `fits/`, a cost leaf's hint outside a cost | Non-concern: argv (sva-cli), JS options | IO: () -> CliError
+// Concern: the seed refusal while the starter is rebuilt, the solver's modules, `fits/`, a cost leaf's hint outside a cost | Non-concern: argv (sva-cli), JS options | IO: () -> CliError
 
+pub mod add;
 pub mod atoms;
 pub mod bits;
 pub mod calibrate;
@@ -7,6 +8,8 @@ pub mod dual;
 pub mod fisher;
 pub mod lm;
 pub mod objective;
+pub mod pyramid;
+pub mod report;
 pub mod spectrum;
 
 use sva_ast::Source;
@@ -18,13 +21,6 @@ pub const LOAD_JSON: &str = "load_json";
 /// No node lives in it.
 pub const FITS: &str = "fits";
 
-pub fn unbuilt() -> CliError {
-    CliError::usage(
-        "solve.unbuilt",
-        "the solver is being rebuilt from scratch, so `solve` fits nothing in this build",
-    )
-}
-
 pub fn seed_unbuilt() -> CliError {
     CliError::usage(
         "seed.unbuilt",
@@ -33,10 +29,9 @@ pub fn seed_unbuilt() -> CliError {
     )
 }
 
-pub const SOLVE_ONLY: &str = "`repr.<reading>(...)` and `load_json(...)` are leaves of a \
-     `sva-cli solve` cost, and only a cost takes them: write the cost on solve's command line \
-     or in `fits/<name>`, as `sva-cli solve @fits/<name> --vary ...`; a node renders, and \
-     `render --representation` reads it";
+pub const SOLVE_ONLY: &str = "`repr.<reading>(...)` and `load_json(...)` were leaves of a \
+     retired `sva-cli solve` cost, and nothing takes them now: `sva-cli solve <recording>` \
+     fits a recording, and `render --representation` reads a node";
 
 fn loads_at(text: &str, byte: usize) -> bool {
     let before = text[..byte.min(text.len())].trim_end();

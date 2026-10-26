@@ -7,7 +7,7 @@ use sva_core::Diagnostic;
 use sva_cli::{
     CliError, Command, Finding, Format, NAME, VERSION, analyze, builtins, builtins_data, caught,
     colored, composition, cwd, diagnostics_text, error_envelope, help_data, help_text,
-    lint_bounded, lint_data, located, new_data, parse_args, render, scaffold, stopped,
+    lint_bounded, lint_data, located, new_data, parse_args, render, scaffold, solve, stopped,
     success_envelope, trace, trace_data, version_data,
 };
 
@@ -58,7 +58,7 @@ fn run() -> ExitCode {
         Ok(Command::Help) => Ok(success_envelope(&help_data(&help_text()), &[])),
         Ok(Command::Render(args)) => render(&args),
         Ok(Command::Analyze(args)) => analyze(&args),
-        Ok(Command::Solve) => Err(sva_core::solve::unbuilt()),
+        Ok(Command::Solve(args)) => solve(&args),
         Ok(Command::Lint {
             target,
             format,

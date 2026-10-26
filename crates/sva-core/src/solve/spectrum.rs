@@ -118,7 +118,12 @@ impl<'a> Model<'a> {
                 for (b, m) in sum.bound.iter_mut().zip(&magnitude) {
                     *b += 2.0 * terms * U * m;
                 }
-                out = out.add(transformed(frame, &sum));
+                let silent = [&sum.x, &sum.bound, &sum.sampling]
+                    .iter()
+                    .all(|v| v.iter().all(|x| *x == 0.0));
+                if !silent {
+                    out = out.add(transformed(frame, &sum));
+                }
             }
             _ => {
                 for w in &windows {

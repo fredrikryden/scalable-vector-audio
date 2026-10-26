@@ -16,13 +16,14 @@ mod panic;
 mod rates;
 mod recording;
 mod render;
+mod solve;
 mod store;
 mod terminal;
 mod trace;
 mod variables;
 mod wav;
 
-pub use args::{AnalyzeArgs, CacheAt, Command, Format, RenderArgs, parse_args};
+pub use args::{AnalyzeArgs, CacheAt, Command, Format, RenderArgs, SolveArgs, parse_args};
 pub use composition::{composition, located};
 pub use destination::{Framing, refuse_inside, write as write_destination};
 pub use help::help_text;
@@ -37,6 +38,7 @@ pub use output::{help_data, lint_data, new_data, trace_data, version_data};
 pub use panic::{Stopped, caught, stopped};
 pub use recording::{READS, read_recording};
 pub use render::{analyze, render};
+pub use solve::solve;
 pub use sva_core::{
     Builtins, Callable, CliError, builtins, builtins_data, cwd, error_envelope, success_envelope,
 };

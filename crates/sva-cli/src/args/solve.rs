@@ -1,110 +1,60 @@
-// Concern: parses a solve's argv, each flag's shape and the flags it may not mix, while the solver is rebuilt | Non-concern: what a cost or a variable means | IO: (argv tail) -> Command or CliError
+// Concern: parses a solve's argv: the recording, its levels, its loudness and where its levels are written | Non-concern: running the pyramid (solve.rs) | IO: (argv tail) -> Command or CliError
 
-use super::reading::{count, hertz};
+use std::path::PathBuf;
+
+use super::reading::count;
 use super::{Command, value};
 use sva_core::CliError;
+use sva_core::solve::pyramid::{LEVELS, SPL_DB};
 
-fn number(raw: &str, flag: &str, fits: impl Fn(f64) -> bool, says: &str) -> Result<(), CliError> {
-    match raw.parse::<f64>() {
-        Ok(v) if v.is_finite() && fits(v) => Ok(()),
-        _ => Err(CliError::usage(
-            "cli.bad_value",
-            format!("{flag} takes {says}, not `{raw}`"),
-        )),
-    }
+/// Where a solve writes its levels unless told.
+pub const OUT: &str = "fit";
+
+#[derive(Debug, PartialEq)]
+pub struct SolveArgs {
+    pub path: PathBuf,
+    pub levels: usize,
+    pub spl_db: f64,
+    pub out: PathBuf,
+    /// The caller said a directory that already holds files may be written over.
+    pub confirm: bool,
 }
 
 pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
     let mut it = rest.iter();
-    it.next().filter(|a| !a.starts_with("--")).ok_or_else(|| {
+    let path = it.next().filter(|a| !a.starts_with("--")).ok_or_else(|| {
         CliError::usage(
             "cli.missing_argument",
-            "solve needs a cost, as `sva-cli solve 'norm(repr.bands(@master) - \
-             repr.bands(sample(\"../ref.wav\")))' --vary gain=0..2`, or a cost file, as \
-             `sva-cli solve @fits/lead --vary gain=0..2`",
+            "solve needs a recording to fit, as `sva-cli solve clip.wav`",
         )
     })?;
-    let (mut varies, mut write, mut confirm) = (false, false, false);
-    let (mut prox, mut prox_flag, mut compass_flag) = (false, None, None);
-    let (mut continuation, mut rounds) = (false, false);
+    let mut args = SolveArgs {
+        path: PathBuf::from(path),
+        levels: LEVELS,
+        spl_db: SPL_DB,
+        out: PathBuf::from(OUT),
+        confirm: false,
+    };
     while let Some(flag) = it.next() {
         match flag.as_str() {
-            "--method" => match value(&mut it, "--method")?.as_str() {
-                "compass" => prox = false,
-                "prox" => prox = true,
-                other => {
-                    return Err(CliError::usage(
-                        "cli.bad_value",
-                        format!("--method takes `compass` or `prox`, not `{other}`"),
-                    ));
-                }
-            },
-            "--continuation" => {
-                value(&mut it, "--continuation")?;
-                continuation = true;
-                prox_flag = Some("--continuation");
+            "--levels" => {
+                args.levels = count(&value(&mut it, "--levels")?, "--levels", "levels")?.get();
             }
-            "--rounds" => {
-                count(&value(&mut it, "--rounds")?, "--rounds", "rounds")?;
-                rounds = true;
-                prox_flag = Some("--rounds");
+            "--spl" => {
+                let raw = value(&mut it, "--spl")?;
+                args.spl_db = raw
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| {
+                        CliError::usage(
+                            "cli.bad_value",
+                            format!("--spl takes a full-scale sine's dB SPL, not `{raw}`"),
+                        )
+                    })?;
             }
-            "--steps" => {
-                let raw = value(&mut it, "--steps")?;
-                raw.parse::<usize>().map_err(|_| {
-                    CliError::usage(
-                        "cli.bad_value",
-                        format!("--steps needs a whole number of steps, got `{raw}`"),
-                    )
-                })?;
-                prox_flag = Some("--steps");
-            }
-            "--draws" => {
-                count(&value(&mut it, "--draws")?, "--draws", "draws")?;
-                prox_flag = Some("--draws");
-            }
-            "--heartbeat" => {
-                let raw = value(&mut it, "--heartbeat")?;
-                number(&raw, "--heartbeat", |v| v >= 0.0, "seconds at or above 0")?;
-                prox_flag = Some("--heartbeat");
-            }
-            "--vary" => {
-                value(&mut it, "--vary")?;
-                varies = true;
-            }
-            "--set" => {
-                sva_core::set(&value(&mut it, "--set")?)?;
-            }
-            "--max-renders" => {
-                compass_flag = Some("--max-renders");
-                count(
-                    &value(&mut it, "--max-renders")?,
-                    "--max-renders",
-                    "renders",
-                )?;
-            }
-            "--step-tol" => {
-                compass_flag = Some("--step-tol");
-                let raw = value(&mut it, "--step-tol")?;
-                let says = "a fraction of each variable's first step above 0 and at most 1";
-                number(&raw, "--step-tol", |v| v > 0.0 && v <= 1.0, says)?;
-            }
-            "--cost-tol" => {
-                compass_flag = Some("--cost-tol");
-                let raw = value(&mut it, "--cost-tol")?;
-                number(&raw, "--cost-tol", |v| v >= 0.0, "a cost at or above 0")?;
-            }
-            "--rate" => {
-                hertz(&value(&mut it, "--rate")?)?;
-            }
-            "--threads" => {
-                count(&value(&mut it, "--threads")?, "--threads", "threads")?;
-            }
-            "--cache" => {
-                value(&mut it, "--cache")?;
-            }
-            "--write" => write = true,
-            "--confirm" => confirm = true,
+            "--out" => args.out = PathBuf::from(value(&mut it, "--out")?),
+            "--confirm" => args.confirm = true,
             other => {
                 return Err(CliError::usage(
                     "cli.unknown_argument",
@@ -113,36 +63,5 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
             }
         }
     }
-    if !varies {
-        return Err(CliError::usage(
-            "solve.no_vary",
-            "solve needs at least one `--vary <name>=<lo>..<hi>`, a variable under \
-             `variables/` it fits",
-        ));
-    }
-    if let (true, Some(flag)) = (prox, compass_flag) {
-        return Err(CliError::usage(
-            "cli.compass_flag",
-            format!("`{flag}` stops the compass search, which `--method prox` does not run"),
-        ));
-    }
-    if let (false, Some(flag)) = (prox, prox_flag) {
-        return Err(CliError::usage(
-            "cli.prox_flag",
-            format!("`{flag}` sets the priced fit, which only `--method prox` takes"),
-        ));
-    }
-    if rounds && !continuation {
-        return Err(CliError::usage(
-            "cli.prox_flag",
-            "`--rounds` sets a continuation's rounds, which only `--continuation` runs",
-        ));
-    }
-    if confirm && !write {
-        return Err(CliError::usage(
-            "cli.confirm_without_write",
-            "`--confirm` lets `--write` replace a variable's file; write both, or neither",
-        ));
-    }
-    Ok(Command::Solve)
+    Ok(Command::Solve(Box::new(args)))
 }

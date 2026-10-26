@@ -473,6 +473,19 @@ pub fn read(text: &str) -> Option<Vec<Atom>> {
     Some(out)
 }
 
+/// The score every composition of atoms plays, and the master that plays it.
+pub const SCORE: &str = "score/clip.jsonl";
+pub const MASTER: &str = "; Models: the clip | Neglects: nothing | IO: (t) -> amplitude | \
+     Tags: master\n@score/clip(t)\n";
+
+/// Every file a composition of `atoms` holds: its nodes, its score and its master.
+pub fn files(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
+    let mut out = nodes(atoms, clip);
+    out.push((SCORE.to_string(), score(atoms)));
+    out.push(("master".to_string(), MASTER.to_string()));
+    out
+}
+
 pub fn nodes(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = atoms
         .iter()
