@@ -1,13 +1,15 @@
 // Concern: a solve's JS shapes and its run over a clip a page holds; `seed` refused while rebuilt | Non-concern: the method's binding (lib.rs) | IO: (clip, options) -> `data`
 
+use std::pin::Pin;
+
 use sva_core::solve::pyramid::{Asked, LEVELS, SPL_DB, mono, pyramid};
 use sva_core::solve::report::{answer, progress};
-use sva_core::success_envelope;
+use sva_core::{Abandon, success_envelope};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::analyze::planes_of;
-use crate::{aborted, parse, refuse, thrown};
+use crate::{aborted, parse, refuse, thrown, yielded};
 
 #[wasm_bindgen(typescript_custom_section)]
 const SOLVE_CLIP: &str = r#"
@@ -19,7 +21,8 @@ export interface SolveClip {
 /**
  * `levels` (default 4) and `spl`, a full-scale sine's dB SPL (default 103.95), as `sva-cli
  * solve` takes `--levels` and `--spl`; `progress` hears each line the CLI prints on stderr;
- * `signal`, read between activities: aborted, the run ends after the stage it interrupts.
+ * `signal`, read before each descent's step once the page has had its turn: aborted, the run
+ * ends with the stage it interrupts, measured as one that finished.
  */
 export interface SolveOptions {
     levels?: number;
@@ -63,10 +66,11 @@ export interface SolveActivity {
     seconds: number;
 }
 /**
- * A level as `data.stages` will list it, heard as it finishes: `length_bits` its residual bits
- * at s = 1 plus `bits`, `residual_bits` at its own scale; `files` its composition, `least`
- * true where its `length_bits` is below every earlier level's, so the last such is
- * `data.chosen`.
+ * A level heard as it finishes: `length_bits` its residual bits at s = 1 plus its B(x) at the
+ * precisions s = 1 reads for this level's atoms, which price every level so far alike;
+ * `residual_bits` and `bits` at its own scale; `files` its composition, `least` true where its
+ * `length_bits` is at most every earlier level's so priced. `data.stages` prices every level
+ * at the last one's, so the last `least` there is `data.chosen`.
  */
 export interface SolveStageFinished {
     stage: string;
@@ -83,6 +87,19 @@ export interface SolveStageFinished {
 }
 "#;
 
+/// A solve's `signal`, asked before each descent's step once the page has had its turn, so the
+/// page paints its progress and an abort it queued arrives mid-level.
+struct Paced(Option<JsValue>);
+
+impl Abandon for Paced {
+    fn abandoned(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
+        Box::pin(async move {
+            yielded().await;
+            self.0.as_ref().is_some_and(aborted)
+        })
+    }
+}
+
 fn number(options: &JsValue, key: &str) -> Option<f64> {
     js_sys::Reflect::get(options, &key.into())
         .ok()
@@ -91,7 +108,7 @@ fn number(options: &JsValue, key: &str) -> Option<f64> {
 
 /// `sva-cli solve`'s envelope over `clip`, its channels averaged, under `options`
 /// (`SolveOptions`, already checked by name).
-pub(crate) fn solved(clip: &JsValue, options: &JsValue) -> Result<JsValue, JsValue> {
+pub(crate) async fn solved(clip: &JsValue, options: &JsValue) -> Result<JsValue, JsValue> {
     let rate = number(clip, "rate")
         .filter(|r| r.fract() == 0.0 && *r >= 1.0 && *r <= f64::from(u32::MAX))
         .ok_or_else(|| {
@@ -152,9 +169,10 @@ pub(crate) fn solved(clip: &JsValue, options: &JsValue) -> Result<JsValue, JsVal
                 let _ = hear.call1(&JsValue::NULL, &line);
             }
         },
-        &|| signal.as_ref().is_some_and(aborted),
+        &Paced(signal),
         &|| js_sys::Date::now() / 1000.0,
-    );
+    )
+    .await;
     parse(&success_envelope(&answer(&stages, levels, &[]), &[]))
 }
 

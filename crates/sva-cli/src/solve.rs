@@ -1,18 +1,22 @@
-// Concern: runs a solve on a recording: progress on stderr, each level's composition and wav written as it ends | Non-concern: argv, the pyramid (sva-core) | IO: (SolveArgs) -> JSON or CliError
+// Concern: runs a solve on a recording: progress on stderr, each level's files and wav written as it ends, N0 kept | Non-concern: argv, the pyramid (sva-core) | IO: (SolveArgs) -> JSON or CliError
 
+use std::cell::Cell;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use sva_core::solve::atoms::Clip;
 use sva_core::solve::calibrate::rendered;
-use sva_core::solve::pyramid::{Asked, Event, Stage, mono, pyramid};
+use sva_core::solve::pyramid::{Asked, Event, Stage, mono, pyramid, scales};
 use sva_core::solve::report::{answer, progress};
-use sva_core::{CliError, success_envelope};
+use sva_core::{Abandon, CliError, success_envelope};
 
 use crate::args::SolveArgs;
+use crate::calibrations;
 use crate::recording::read_recording;
+use crate::store::wait;
 use crate::wav::{SampleEncoding, write_wav};
 
 fn io(path: &Path, e: std::io::Error) -> CliError {
@@ -64,8 +68,12 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
     let started = Instant::now();
     let mut wrote = Vec::new();
     let mut failed = None;
-    let broke = std::cell::Cell::new(false);
-    let stages = pyramid(
+    let mut warnings = Vec::new();
+    let levels = scales(args.levels);
+    let key = (rate, levels.as_slice(), args.spl_db);
+    let kept = calibrations::held(&args.cache, key, &mut warnings);
+    let broke = Cell::new(false);
+    let stages = wait(pyramid(
         &samples,
         rate,
         &Asked {
@@ -85,11 +93,34 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
                 }
             }
         },
-        &|| broke.get() || stop.load(Ordering::Relaxed),
+        &Stop {
+            broke: &broke,
+            signal: &stop,
+        },
         &|| started.elapsed().as_secs_f64(),
-    );
+    ));
+    if let Some(kept) = &kept {
+        kept.keep_all(key, &mut warnings);
+    }
     if let Some(e) = failed {
         return Err(e);
     }
-    Ok(success_envelope(&answer(&stages, args.levels, &wrote), &[]))
+    Ok(success_envelope(
+        &answer(&stages, args.levels, &wrote),
+        &warnings,
+    ))
+}
+
+/// A solve's stop: a level that could not be written, or a signal.
+struct Stop<'a> {
+    broke: &'a Cell<bool>,
+    signal: &'a AtomicBool,
+}
+
+impl Abandon for Stop<'_> {
+    fn abandoned(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
+        Box::pin(std::future::ready(
+            self.broke.get() || self.signal.load(Ordering::Relaxed),
+        ))
+    }
 }

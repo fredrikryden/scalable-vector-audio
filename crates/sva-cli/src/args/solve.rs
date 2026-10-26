@@ -1,9 +1,9 @@
-// Concern: parses a solve's argv: the recording, its levels, its loudness and where its levels are written | Non-concern: running the pyramid (solve.rs) | IO: (argv tail) -> Command or CliError
+// Concern: parses a solve's argv: the recording, its levels, its loudness, where its levels are written and N0 kept | Non-concern: running the pyramid (solve.rs) | IO: (argv tail) -> Command or CliError
 
 use std::path::PathBuf;
 
 use super::reading::count;
-use super::{Command, value};
+use super::{CacheAt, Command, value};
 use sva_core::CliError;
 use sva_core::solve::pyramid::{LEVELS, SPL_DB};
 
@@ -18,6 +18,8 @@ pub struct SolveArgs {
     pub out: PathBuf,
     /// The caller said a directory that already holds files may be written over.
     pub confirm: bool,
+    /// Where N0's calibrations are kept between runs.
+    pub cache: CacheAt,
 }
 
 pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
@@ -34,6 +36,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
         spl_db: SPL_DB,
         out: PathBuf::from(OUT),
         confirm: false,
+        cache: CacheAt::Platform,
     };
     while let Some(flag) = it.next() {
         match flag.as_str() {
@@ -55,6 +58,12 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
             }
             "--out" => args.out = PathBuf::from(value(&mut it, "--out")?),
             "--confirm" => args.confirm = true,
+            "--cache" => {
+                args.cache = match value(&mut it, "--cache")?.as_str() {
+                    "none" => CacheAt::Off,
+                    path => CacheAt::Path(PathBuf::from(path)),
+                };
+            }
             other => {
                 return Err(CliError::usage(
                     "cli.unknown_argument",

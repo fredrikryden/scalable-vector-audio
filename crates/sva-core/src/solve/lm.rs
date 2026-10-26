@@ -1,5 +1,7 @@
 // Concern: SOLVE: projected Levenberg-Marquardt in precision units, its step halved till the cost falls | Non-concern: a number's meaning, schedules | IO: (Problem, start, precisions) -> Descent
 
+use sva_engine::Abandon;
+
 pub const MODEL: &str = "projected Levenberg-Marquardt with the Fisher information as its \
      curvature (Fisher scoring), in precision units y_i = x_i/delta_i, where D = I is \
      Marquardt's scaling: g the cost's gradient and A its Fisher matrix in y, A = Q diag(l) Q^T \
@@ -70,19 +72,20 @@ pub struct Descent {
     pub steps: Vec<Step>,
 }
 
-/// A cap on steps where the caller sets one, and whether a signal has come.
+/// A cap on steps where the caller sets one, and whether a signal has come, asked before each
+/// step, where a caller that answers later lets its page have its turn.
 pub struct Limits<'a> {
     pub steps: Option<usize>,
-    pub stopped: &'a dyn Fn() -> bool,
+    pub stopped: &'a dyn Abandon,
 }
 
 /// `start` projected, then steps until the stop rule, a cap or a signal; `None` where nothing
 /// is feasible. `deltas` are the numbers' precisions, each finite and positive.
-pub fn descend(
+pub async fn descend(
     problem: &dyn Problem,
     start: &[f64],
     deltas: &[f64],
-    limits: &Limits,
+    limits: &Limits<'_>,
 ) -> Option<Descent> {
     assert_eq!(start.len(), deltas.len(), "one precision per number");
     assert!(
@@ -98,7 +101,7 @@ pub fn descend(
         if limits.steps.is_some_and(|cap| steps.len() >= cap) {
             break Ended::Cap;
         }
-        if (limits.stopped)() {
+        if limits.stopped.abandoned().await {
             break Ended::Signal;
         }
         let path = Path::of(&problem.linear(&x), deltas);

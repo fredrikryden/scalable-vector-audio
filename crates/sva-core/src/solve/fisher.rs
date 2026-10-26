@@ -1,6 +1,7 @@
 // Concern: the objective's gradient and Fisher matrix at a state by forward tangents through the ear and the stage; seeds shared by colouring | Non-concern: the search (lm.rs) | IO: (atoms) -> Linear
 
 use std::f64::consts::LN_2;
+use std::rc::Rc;
 
 use sva_engine::internal::{Ear, Frame};
 use sva_formula::C64;
@@ -9,7 +10,7 @@ use super::atoms::{Atom, Clip};
 use super::bits::Priced;
 use super::dual::Dual;
 use super::lm::{Linear, Problem};
-use super::objective::{Objective, excited, framed};
+use super::objective::{Held, Objective, excited, framed_beside, reach};
 
 pub const MODEL: &str = "the residual in nats f = sum_i d_i^2/2, d_i = (m_i - e_i)/sigma_i, \
      sigma_i^2 = N0 rho (objective.rs), differentiated in forward mode, one seed per number: \
@@ -23,8 +24,9 @@ pub const MODEL: &str = "the residual in nats f = sum_i d_i^2/2, d_i = (m_i - e_
      117-119, doi 10.1093/imamat/13.1.117; intervals coloured greedily by first frame, which is \
      optimal), and the seeds are the passes, one per colour and number slot, each frame's \
      tangents those of the one atom of that colour reaching it, split by atom before the \
-     stage, whose memory reaches every later frame; held atoms sound and seed nothing, a pinned \
-     number's gradient entry and Fisher row and column are 0; the tangents carry no bound: they propose \
+     stage, whose memory reaches every later frame; held atoms sound and seed nothing, read \
+     once (objective.rs), so a frame no moving atom reaches takes their excitation, a pinned \
+     number seeds nothing, its gradient entry and Fisher row and column 0; the tangents carry no bound: they propose \
      steps and curvatures, and every step is taken on the true cost";
 
 /// Each atom's reach `(first, last)` in frames (empty where `first > last`), its colour, and
@@ -37,25 +39,7 @@ pub struct Colouring {
 }
 
 pub fn colouring(ear: &Ear, clip: &Clip, atoms: &[Atom]) -> Colouring {
-    let rate = f64::from(clip.rate);
-    let (first, last) = ear.frames(clip.len);
-    let reach: Vec<(i64, i64)> = atoms
-        .iter()
-        .map(|a| {
-            let lo = libm::floor(a.on * rate - 0.5) as i64;
-            let hi = libm::ceil(a.end() * rate + 0.5) as i64;
-            let met = |m: i64| {
-                let (f, l) = ear.reach(m);
-                f <= hi && l >= lo
-            };
-            let from = (first..=last).find(|m| met(*m));
-            let to = (first..=last).rev().find(|m| met(*m));
-            match (from, to) {
-                (Some(f), Some(t)) => (f, t),
-                _ => (1, 0),
-            }
-        })
-        .collect();
+    let reach: Vec<(i64, i64)> = atoms.iter().map(|a| reach(ear, clip, a)).collect();
     let mut order: Vec<usize> = (0..atoms.len()).collect();
     order.sort_by_key(|a| (reach[*a].0, *a));
     let mut ends: Vec<i64> = Vec::new();
@@ -128,6 +112,26 @@ pub fn linearise(
     moving: usize,
     coherent: bool,
 ) -> Linearised {
+    let numbers = atoms[..moving].iter().map(|a| a.values().len()).sum();
+    linearise_beside(
+        objective,
+        atoms,
+        moving,
+        coherent,
+        (None, &vec![false; numbers]),
+    )
+}
+
+/// `linearise` beside the atoms `held` read (objective.rs), partials summed in samples: a frame
+/// no moving atom reaches takes their excitation as it is and seeds nothing; a number `still`
+/// marks is seeded nowhere, its column 0.
+pub fn linearise_beside(
+    objective: &Objective,
+    atoms: &[Atom],
+    moving: usize,
+    coherent: bool,
+    (held, still): (Option<&Held>, &[bool]),
+) -> Linearised {
     let (ear, clip) = (objective.ear(), objective.clip());
     let colouring = colouring(ear, &clip, &atoms[..moving]);
     let numbers: Vec<usize> = atoms[..moving].iter().map(|a| a.values().len()).collect();
@@ -140,19 +144,34 @@ pub fn linearise(
         })
         .collect();
     let columns: usize = numbers.iter().sum();
+    assert_eq!(still.len(), columns, "one mark per number");
     let (first, last) = ear.frames(clip.len);
     let frames = (last - first + 1) as usize;
     let channels = ear.thresholds().len();
-    let per = framed(atoms, clip, coherent, (first, last), &|model, m| {
-        let power = ear.compose(m, &mut |frame| model.bins(frame).power);
+    let summed = held.map(|h| &h.summed);
+    let per = framed_beside(atoms, clip, coherent, (first, last), summed, &|model, m| {
+        let reached = colouring.reach.iter().any(|(f, t)| *f <= m && m <= *t);
+        if let Some(h) = held.filter(|_| !reached) {
+            return (ear.levels(&h.excitation[(m - first) as usize]), Vec::new());
+        }
+        let mut power = ear.compose(m, &mut |frame| model.bins(frame).power);
+        if let Some(h) = held {
+            h.add_noise(m - first, &mut power);
+        }
         let levels = ear.levels(&excited(ear, m, &power));
         let mut moved = Vec::new();
         for (a, (f, t)) in colouring.reach.iter().enumerate() {
             if m < *f || m > *t {
                 continue;
             }
-            let d_power = composed(ear, m, numbers[a], &mut |frame| model.tangents(frame, a));
+            let own = &still[offsets[a]..offsets[a] + numbers[a]];
+            let d_power = composed(ear, m, numbers[a], &mut |frame| {
+                model.tangents_of(frame, a, own)
+            });
             for (j, d) in d_power.iter().enumerate() {
+                if own[j] {
+                    continue;
+                }
                 let tangent: Vec<Dual> = power
                     .iter()
                     .zip(d)
@@ -180,7 +199,12 @@ pub fn linearise(
     let outputs = ear.filtered(&levels);
     let expected = objective.elements(&outputs);
     let cost = objective.residual_bits(&expected) * LN_2;
-    let d_outputs: Vec<Vec<Vec<Vec<C64>>>> = d_levels.iter().map(|d| ear.filtered(d)).collect();
+    let d_outputs: Vec<(usize, Vec<Vec<Vec<C64>>>)> = d_levels
+        .iter()
+        .enumerate()
+        .filter(|(p, _)| !still[*p])
+        .map(|(p, d)| (p, ear.filtered(d)))
+        .collect();
     let mut gradient = vec![0.0; columns];
     let mut fisher = vec![vec![0.0; columns]; columns];
     let mut rows: Vec<(usize, f64)> = Vec::with_capacity(columns);
@@ -191,7 +215,8 @@ pub fn linearise(
                 let y = outputs[c][k][e];
                 let d = (expected[c][k][e] - clipped) / sd;
                 rows.clear();
-                for (p, column) in d_outputs.iter().enumerate() {
+                for (p, column) in &d_outputs {
+                    let p = *p;
                     let r = band.band.element_slope(y, column[c][k][e]) / sd;
                     if r != 0.0 {
                         gradient[p] += d * r;
@@ -220,6 +245,7 @@ pub struct Fit<'a> {
     objective: &'a Objective,
     atoms: Vec<Atom>,
     held: Vec<Atom>,
+    read: Option<Rc<Held>>,
     priced: Vec<Priced>,
     coherent: bool,
     pinned: Vec<Option<f64>>,
@@ -238,15 +264,28 @@ impl<'a> Fit<'a> {
             objective,
             atoms,
             held: Vec::new(),
+            read: None,
             priced,
             coherent,
             pinned: vec![None; numbers],
         }
     }
 
-    /// The same fit with `held` sounding beside its atoms, none of their numbers moving.
+    /// The same fit with `held` sounding beside its atoms, none of their numbers moving: read
+    /// once where partials are summed in samples (objective.rs), else sounded at each call.
     pub fn holding(mut self, held: Vec<Atom>) -> Fit<'a> {
+        self.read = self
+            .coherent
+            .then(|| Rc::new(Held::of(self.objective, &held)));
         self.held = held;
+        self
+    }
+
+    /// `holding` the atoms `read` holds, as `Held::of` read them (partials summed in samples).
+    pub fn holding_read(mut self, read: Rc<Held>) -> Fit<'a> {
+        assert!(self.coherent, "held partials are summed in samples");
+        self.read = Some(read);
+        self.held = Vec::new();
         self
     }
 
@@ -285,19 +324,23 @@ impl<'a> Fit<'a> {
             .collect()
     }
 
-    /// The moving atoms at `x`, then the held.
+    /// The moving atoms at `x`, then the held unless they were read once.
     fn sounding(&self, x: &[f64]) -> Vec<Atom> {
         let mut all = self.atoms_at(x);
-        all.extend(self.held.iter().cloned());
+        if self.read.is_none() {
+            all.extend(self.held.iter().cloned());
+        }
         all
     }
 
     pub fn linearise(&self, x: &[f64]) -> Linearised {
-        let mut out = linearise(
+        let still: Vec<bool> = self.pinned.iter().map(Option::is_some).collect();
+        let mut out = linearise_beside(
             self.objective,
             &self.sounding(x),
             self.atoms.len(),
             self.coherent,
+            (self.read.as_deref(), &still),
         );
         for (i, pin) in self.pinned.iter().enumerate() {
             if pin.is_some() {
@@ -314,7 +357,10 @@ impl<'a> Fit<'a> {
 
 impl Problem for Fit<'_> {
     fn cost(&self, x: &[f64]) -> f64 {
-        self.objective.bits(&self.sounding(x), self.coherent) * LN_2
+        let expected =
+            self.objective
+                .expect_beside(&self.sounding(x), self.coherent, self.read.as_deref());
+        self.objective.residual_bits(&expected) * LN_2
     }
 
     fn linear(&self, x: &[f64]) -> Linear {

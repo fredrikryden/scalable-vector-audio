@@ -1,7 +1,11 @@
 // Concern: PYRAMID: levels coarse to fine, each refining the last level's atoms then growing them; stages, progress | Non-concern: births, JSON (report.rs) | IO: (samples, rate, levels) -> stages
 
+use std::cell::Cell;
 use std::f64::consts::{FRAC_1_SQRT_2, LN_2};
 use std::num::NonZeroUsize;
+use std::pin::Pin;
+
+use sva_engine::Abandon;
 
 use super::add::{self, COHERENT, Spectrogram, State, edit, length, priced, priced_and_pinned};
 use super::atoms::{Atom, Clip, files};
@@ -20,9 +24,13 @@ pub const MODEL: &str = "levels at scales s = r^-(L-1-k), k = 0 the coarsest, up
      descent: each call lowers the cost, so a sweep does), then grows the state by ADD \
      (add.rs); numbers are Hz, s and dB, so a \
      level's state starts the next unchanged; each level is a stage whose length is its \
-     residual bits plus B(x) at s = 1, every atom priced there (or at its level where s = 1 \
-     hears it nowhere), so the stages share one measure, the last stage no longer than every \
-     earlier the one chosen";
+     residual bits plus B(x) at s = 1, every stage's atoms priced at one precision set, the \
+     latest stage's: an atom at the precisions s = 1 reads for the latest stage's atom of its \
+     key, else at its own stage's (at its level where s = 1 hears it nowhere), so precisions \
+     read again per stage move no stage's length and the stages share one measure, priced \
+     again as each finishes; the last stage no longer than every earlier the one chosen; a \
+     signal, asked before every descent's step, ends the run with the stage it interrupts, \
+     measured as one that finished";
 
 /// The ratio between levels' scales, exempt from the no-tuning rule.
 pub const RATIO: f64 = FRAC_1_SQRT_2;
@@ -130,10 +138,27 @@ impl Stage {
     }
 }
 
+/// A caller's signal, kept once it has come, so a stage knows it was stopped.
+pub struct Latch<'a> {
+    signal: &'a dyn Abandon,
+    came: Cell<bool>,
+}
+
+impl Abandon for Latch<'_> {
+    fn abandoned(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
+        Box::pin(async move {
+            if !self.came.get() && self.signal.abandoned().await {
+                self.came.set(true);
+            }
+            self.came.get()
+        })
+    }
+}
+
 /// What a run reports through, how it is stopped, and its clock in seconds.
 pub struct Run<'a> {
     pub spl_db: f64,
-    pub stopped: &'a dyn Fn() -> bool,
+    pub stopped: Latch<'a>,
     hear: &'a mut dyn FnMut(Event),
     now: &'a dyn Fn() -> f64,
     started: f64,
@@ -188,9 +213,9 @@ pub struct Asked {
 }
 
 /// Each atom refined in birth order with every other held.
-fn refine(objective: &Objective, mut state: State, run: &mut Run) -> State {
+async fn refine(objective: &Objective, mut state: State, run: &mut Run<'_>) -> State {
     for i in 0..state.atoms.len() {
-        if (run.stopped)() {
+        if run.stopped.abandoned().await {
             break;
         }
         run.activity(
@@ -209,16 +234,11 @@ fn refine(objective: &Objective, mut state: State, run: &mut Run) -> State {
         .holding(others)
         .pinning(&state.pinned[i]);
         let start = fit.numbers();
-        let stopped = run.stopped;
-        let Some(descent) = descend(
-            &fit,
-            &start,
-            &fit.deltas(),
-            &Limits {
-                steps: None,
-                stopped,
-            },
-        ) else {
+        let limits = Limits {
+            steps: None,
+            stopped: &run.stopped,
+        };
+        let Some(descent) = descend(&fit, &start, &fit.deltas(), &limits).await else {
             continue;
         };
         run.descended(objective, &descent, bits::bits(&state.atoms, &state.priced));
@@ -228,14 +248,52 @@ fn refine(objective: &Objective, mut state: State, run: &mut Run) -> State {
     state
 }
 
+/// One finished level as the stages compare it: its residual bits at s = 1 and each atom's
+/// prices there.
+struct Measured {
+    residual_bits: f64,
+    priced: Vec<bits::Priced>,
+}
+
+/// Every stage's `length_bits` and `least` again, each atom priced as `last`'s atom of its key
+/// is where `last` holds one of its numbers, else as its own stage priced it.
+fn repriced(stages: &mut [Stage], measured: &[Measured]) {
+    let Some((last, _)) = stages.split_last() else {
+        return;
+    };
+    let finest = measured.last().expect("one measure per stage");
+    let held: Vec<(u64, usize, bits::Priced)> = last
+        .atoms
+        .iter()
+        .zip(&finest.priced)
+        .map(|(a, p)| (a.key, a.values().len(), p.clone()))
+        .collect();
+    let mut least = f64::INFINITY;
+    for (stage, own) in stages.iter_mut().zip(measured) {
+        let priced: Vec<bits::Priced> = stage
+            .atoms
+            .iter()
+            .zip(&own.priced)
+            .map(|(a, p)| {
+                held.iter()
+                    .find(|(key, numbers, _)| *key == a.key && *numbers == a.values().len())
+                    .map_or_else(|| p.clone(), |(_, _, p)| p.clone())
+            })
+            .collect();
+        stage.length_bits = own.residual_bits + bits::bits(&stage.atoms, &priced);
+        stage.least = stage.length_bits <= least;
+        least = least.min(stage.length_bits);
+    }
+}
+
 /// The pyramid over `samples` at `rate`: one stage per level, each heard as it finishes; a
-/// stop ends it after the stage it interrupts.
-pub fn pyramid(
+/// signal, asked before each descent's step, ends it with the stage it interrupts.
+pub async fn pyramid(
     samples: &[f64],
     rate: u32,
     asked: &Asked,
     hear: &mut dyn FnMut(Event),
-    stopped: &dyn Fn() -> bool,
+    stopped: &dyn Abandon,
     now: &dyn Fn() -> f64,
 ) -> Vec<Stage> {
     let clip = Clip {
@@ -246,7 +304,10 @@ pub fn pyramid(
     let spl = asked.spl_db;
     let mut run = Run {
         spl_db: spl,
-        stopped,
+        stopped: Latch {
+            signal: stopped,
+            came: Cell::new(false),
+        },
         hear,
         now,
         started: now(),
@@ -267,7 +328,7 @@ pub fn pyramid(
         length: f64::INFINITY,
     };
     let mut stages: Vec<Stage> = Vec::new();
-    let mut least = f64::INFINITY;
+    let mut measured: Vec<Measured> = Vec::new();
     for (k, s) in scales(levels).into_iter().enumerate() {
         let began = now();
         run.stage = label(k + 1, levels);
@@ -291,8 +352,8 @@ pub fn pyramid(
             priced: prices,
             pinned,
         };
-        state = refine(objective, state, &mut run);
-        state = add::add(objective, &heard, state, &mut run);
+        state = refine(objective, state, &mut run).await;
+        state = add::add(objective, &heard, state, &mut run).await;
         run.activity(Action::Measuring, None, Some((1, "evaluation")));
         let residual_bits = objective.bits(&state.atoms, COHERENT);
         let bits = bits::bits(&state.atoms, &state.priced);
@@ -302,28 +363,30 @@ pub fn pyramid(
             .zip(&state.priced)
             .map(|(a, p)| priced(&finest, a, spl).unwrap_or_else(|| p.clone()))
             .collect();
-        let length_bits = length(&finest, &state.atoms, &common);
+        measured.push(Measured {
+            residual_bits: finest.bits(&state.atoms, COHERENT),
+            priced: common,
+        });
         run.evaluated(objective, 1);
         run.evaluated(&finest, 1);
-        let is_least = length_bits <= least;
-        least = least.min(length_bits);
-        let stage = Stage {
+        let stopped = run.stopped.abandoned().await;
+        stages.push(Stage {
             label: run.stage.clone(),
             scale: s,
             atoms: state.atoms.clone(),
             residual_bits,
             bits,
-            length_bits,
-            least: is_least,
-            stopped: stopped(),
+            length_bits: f64::INFINITY,
+            least: false,
+            stopped,
             seconds: now() - began,
             edits: run.edits.clone(),
             descents: run.descents.clone(),
             files: files(&state.atoms, &clip),
-        };
-        (run.hear)(Event::Finished(&stage));
-        stages.push(stage);
-        if stopped() {
+        });
+        repriced(&mut stages, &measured);
+        (run.hear)(Event::Finished(stages.last().expect("a stage")));
+        if stopped {
             break;
         }
     }

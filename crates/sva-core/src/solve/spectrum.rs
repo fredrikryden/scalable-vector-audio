@@ -16,8 +16,12 @@ pub const MODEL: &str = "each atom's samples are its node's formula evaluated as
      point-samples it, the instant n/rate, phase and level read off the same knot tables, sin \
      and exp as the engine calls them, then gated: sample n weighs its share of [on, end) over \
      its cell [(2n - 1)/(2 rate), (2n + 1)/(2 rate)), the atom held at its base level and \
-     turning at its base frequency before on, and at its last level and frequency past end; \
-     partials and harmonics are summed sample by sample where `coherent`, else each \
+     turning at its base frequency before on, and at its last level and frequency from end, \
+     its phase there the integral to end plus the last frequency times the time since, so a \
+     read on that knot moves with end as a read past it does; \
+     partials and harmonics are summed sample by sample where `coherent` (a held state's \
+     summed once over the clip and sliced per frame, the same sum in another order, so the \
+     same bound), else each \
      transformed alone and added in power; a noise is read in expectation over its lines' \
      phases, independent and uniform, as the window's autocorrelation times the band's \
      continuous autocorrelation, (1/2) int_lo^hi' cos(2 pi f tau) df, hi' = min(hi, the \
@@ -76,7 +80,65 @@ pub struct Model<'a> {
     atoms: &'a [Atom],
     clip: Clip,
     coherent: bool,
+    beside: Option<&'a Summed>,
     correlations: RefCell<HashMap<(u64, u64, usize), Rc<Correlation>>>,
+}
+
+/// Partials summed over the whole clip, read once and sliced per frame, as `MODEL` states.
+pub struct Summed {
+    x: Vec<f64>,
+    bound: Vec<f64>,
+    sampling: Vec<f64>,
+    magnitude: Vec<f64>,
+    terms: usize,
+}
+
+impl Summed {
+    pub fn of(atoms: &[Atom], clip: Clip) -> Summed {
+        let mut out = Summed {
+            x: vec![0.0; clip.len],
+            bound: vec![0.0; clip.len],
+            sampling: vec![0.0; clip.len],
+            magnitude: vec![0.0; clip.len],
+            terms: 0,
+        };
+        for atom in atoms
+            .iter()
+            .filter(|a| !matches!(a.sound, Sound::Noise { .. }))
+        {
+            let w = samples(atom, &clip, 0, clip.len);
+            for k in 0..clip.len {
+                out.x[k] += w.x[k];
+                out.bound[k] += w.bound[k];
+                out.sampling[k] += w.sampling[k];
+                out.magnitude[k] += w.x[k].abs();
+            }
+            out.terms += 1;
+        }
+        out
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.terms == 0
+    }
+
+    /// Samples `from..from + count` beside their magnitudes.
+    fn window(&self, from: i64, count: usize) -> (Window<f64>, Vec<f64>) {
+        let mut out = Window::silent(count);
+        let mut magnitude = vec![0.0; count];
+        for (k, m) in magnitude.iter_mut().enumerate() {
+            let Ok(n) = usize::try_from(from + k as i64) else {
+                continue;
+            };
+            if n < self.x.len() {
+                out.x[k] = self.x[n];
+                out.bound[k] = self.bound[n];
+                out.sampling[k] = self.sampling[n];
+                *m = self.magnitude[n];
+            }
+        }
+        (out, magnitude)
+    }
 }
 
 impl<'a> Model<'a> {
@@ -85,8 +147,16 @@ impl<'a> Model<'a> {
             atoms,
             clip,
             coherent,
+            beside: None,
             correlations: RefCell::default(),
         }
+    }
+
+    /// The model with `summed` sounding beside it.
+    pub fn beside(mut self, summed: &'a Summed) -> Model<'a> {
+        assert!(self.coherent, "held partials are summed in samples");
+        self.beside = Some(summed);
+        self
     }
 
     fn tonal(&self) -> impl Iterator<Item = &Atom> {
@@ -102,10 +172,13 @@ impl<'a> Model<'a> {
             .tonal()
             .map(|a| samples(a, &self.clip, frame.first(), count))
             .collect();
+        let beside = self.beside.filter(|b| !b.is_empty());
         match self.coherent {
-            true if !windows.is_empty() => {
-                let mut sum = Window::silent(count);
-                let mut magnitude = vec![0.0; count];
+            true if !windows.is_empty() || beside.is_some() => {
+                let (mut sum, mut magnitude) = match beside {
+                    Some(b) => b.window(frame.first(), count),
+                    None => (Window::silent(count), vec![0.0; count]),
+                };
                 for w in &windows {
                     for (k, m) in magnitude.iter_mut().enumerate() {
                         sum.x[k] += w.x[k];
@@ -114,7 +187,7 @@ impl<'a> Model<'a> {
                         *m += w.x[k].abs();
                     }
                 }
-                let terms = windows.len() as f64;
+                let terms = (windows.len() + beside.map_or(0, |b| b.terms)) as f64;
                 for (b, m) in sum.bound.iter_mut().zip(&magnitude) {
                     *b += 2.0 * terms * U * m;
                 }
@@ -148,15 +221,29 @@ impl<'a> Model<'a> {
     /// Each bin's `d|X|^2/dx` for every number `x` of `atoms[i]` in `values()`' order, by forward
     /// mode: `2 Re(conj(X) dX)`, a noise's through its expected power.
     pub fn tangents(&self, frame: &Frame, i: usize) -> Vec<Vec<f64>> {
+        let numbers = self.atoms[i].values().len();
+        self.tangents_of(frame, i, &vec![false; numbers])
+    }
+
+    /// `tangents`, none (an empty row) for a number `still` marks.
+    pub fn tangents_of(&self, frame: &Frame, i: usize, still: &[bool]) -> Vec<Vec<f64>> {
         let atom = &self.atoms[i];
         let numbers = atom.values().len();
+        assert_eq!(still.len(), numbers, "one mark per number");
+        let seeded = |j: usize| !still[j];
         if let Sound::Noise { .. } = atom.sound {
             return (0..numbers)
-                .map(|j| expected_tangent(&atom.seeded(j), &self.clip, frame))
+                .map(|j| match seeded(j) {
+                    true => expected_tangent(&atom.seeded(j), &self.clip, frame),
+                    false => Vec::new(),
+                })
                 .collect();
         }
         let count = frame.weights().len();
-        let mut sum = vec![0.0; count];
+        let mut sum = match (self.coherent, self.beside) {
+            (true, Some(b)) => b.window(frame.first(), count).0.x,
+            _ => vec![0.0; count],
+        };
         let heard: Vec<&Atom> = match self.coherent {
             true => self.tonal().collect(),
             false => vec![atom],
@@ -172,6 +259,9 @@ impl<'a> Model<'a> {
         let (re, im) = transform(frame, &sum);
         (0..numbers)
             .map(|j| {
+                if !seeded(j) {
+                    return Vec::new();
+                }
                 let moved = samples(&atom.seeded(j), &self.clip, frame.first(), count);
                 let dx: Vec<f64> = moved.x.iter().map(|x| x.tangent).collect();
                 let (d_re, d_im) = transform(frame, &dx);
@@ -306,14 +396,13 @@ fn level_at<N: Num>(level: &Knots<N>, t: f64, hint: &mut usize) -> N {
     }
 }
 
-/// The running integral, continued at its first value before its first knot and its last
-/// past its last; whether `t` lies outside.
+/// The running integral, continued past its ends as `MODEL` states; whether `t` lies there.
 fn turned_at<N: Num>(hz: &Knots<N>, t: f64, hint: &mut usize) -> (N, bool) {
     let (times, values) = (hz.times(), hz.values());
     let last = times.len() - 1;
     match () {
         () if t < hz.first() => ((N::of(t) - times[0]) * values[0], true),
-        () if t > hz.last() => (hz.held() + (N::of(t) - times[last]) * values[last], true),
+        () if t >= hz.last() => (hz.held() + (N::of(t) - times[last]) * values[last], true),
         () => (hz.read(N::of(t), false, hint), false),
     }
 }

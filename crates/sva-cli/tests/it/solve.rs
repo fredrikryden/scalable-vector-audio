@@ -76,11 +76,16 @@ fn refuses(dir: &Path, argv: &[&str], code: &str, exit: i32) -> Value {
 
 /// A solve answers one stage per level, coarsest first, each heard on stderr as it finishes
 /// with its terms, and writes each level's composition and wav as it does; every activity is
-/// named, its comparisons never falling, and each level's composition renders.
+/// named, its comparisons never falling, each level's composition renders, and N0 is kept
+/// under `--cache`.
 #[test]
 fn a_solve_answers_and_writes_a_stage_per_level() {
     let (root, wav) = clip("solve-levels", TONE);
-    let out = sva(&root, &["solve", &wav, "--levels", "2", "--out", "fit"]);
+    let n0 = root.join("n0").display().to_string();
+    let argv = [
+        "solve", &wav, "--levels", "2", "--out", "fit", "--cache", &n0,
+    ];
+    let out = sva(&root, &argv);
     let answer = json(&out);
     assert_eq!(answer["status"], "success", "{answer}");
     let data = &answer["data"];
@@ -141,9 +146,25 @@ fn a_solve_answers_and_writes_a_stage_per_level() {
         ));
         assert_eq!(rendered["status"], "success", "{rendered}");
     }
+    let kept = |dir: &Path| {
+        let mut files = Vec::new();
+        let mut open = vec![dir.to_path_buf()];
+        while let Some(d) = open.pop() {
+            for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                match entry.path().is_dir() {
+                    true => open.push(entry.path()),
+                    false => files.push(entry.path()),
+                }
+            }
+        }
+        files
+    };
+    assert_eq!(kept(&root.join("n0")).len(), 2, "N0 kept per level's scale");
     refuses(
         &root,
-        &["solve", &wav, "--levels", "1", "--out", "fit"],
+        &[
+            "solve", &wav, "--levels", "1", "--out", "fit", "--cache", &n0,
+        ],
         "destination.already_exists",
         4,
     );

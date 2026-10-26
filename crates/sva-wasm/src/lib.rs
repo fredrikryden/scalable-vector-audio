@@ -81,7 +81,7 @@ extern "C" {
 }
 
 /// Resolves once the page's queued tasks ran, a message an abort sends among them.
-async fn yielded() {
+pub(crate) async fn yielded() {
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         let channel = MessageChannel::new();
         let (port, other) = (channel.port1(), channel.port2());
@@ -517,7 +517,7 @@ impl Composition {
         #[wasm_bindgen(unchecked_param_type = "SolveOptions")] options: JsValue,
     ) -> Result<JsValue, JsValue> {
         options_of(&options, &["levels", "spl", "signal", "progress"])?;
-        solve::solved(&clip, &options)
+        solve::solved(&clip, &options).await
     }
 
     /// `target` and `representations` as `sva-cli render` takes them. `options`: `rate`,

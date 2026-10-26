@@ -374,6 +374,7 @@ REPRESENTATIONS:
 
 SOLVE:
   sva-cli solve <recording> [--levels <n>] [--spl <dB>] [--out <dir>] [--confirm]
+                [--cache <path|none>]
 
   Fits atoms (partials and noise bands) to a recording, read in the formats
   ANALYZE reads, its channels averaged, from silence and coarse to fine: level
@@ -387,8 +388,11 @@ SOLVE:
   `{out}`); an out directory already holding files refuses as a conflict
   unless `--confirm`. Stderr carries one JSON progress line per activity, per
   descent and per finished stage; stdout answers every stage and the chosen
-  one, the last shorter than every earlier. SIGINT ends the run after the
-  stage it interrupts.
+  one, the last shorter than every earlier, each priced at the last stage's
+  precisions. SIGINT ends the run with the stage it interrupts. N0, fitted
+  per rate, scale and spl, is kept for the same build under
+  `$XDG_CACHE_HOME/sva-n0`, else `~/.cache/sva-n0`; `--cache <path>` moves
+  it and `--cache none` fits it afresh.
 
 ANALYZE:
   sva-cli analyze <file> --representation <list> [--confirm]

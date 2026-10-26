@@ -9,6 +9,19 @@ use sva_core::solve::fisher::Fit;
 use sva_core::solve::lm::{Ended, Limits, curvatures, descend};
 use sva_core::solve::objective::Objective;
 use sva_core::solve::spectrum::Model;
+use sva_engine::Never;
+
+fn now<F: Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let waker = std::task::Waker::noop();
+    match future
+        .as_mut()
+        .poll(&mut std::task::Context::from_waker(waker))
+    {
+        std::task::Poll::Ready(out) => out,
+        std::task::Poll::Pending => panic!("nothing to wait on with no signal"),
+    }
+}
 
 const SPL: f64 = 100.0;
 /// The coarsest scale both recover at: at 4 and 8 the partial ends 8 frequency units off.
@@ -114,16 +127,15 @@ fn recover(truth: Atom, moved: &[usize]) -> (Ended, Vec<f64>) {
         })
         .collect();
     let fit = Fit::new(&objective, vec![truth.lifted(&start)], vec![priced], true);
-    let never = || false;
-    let out = descend(
+    let out = now(descend(
         &fit,
         &start,
         &deltas,
         &Limits {
             steps: None,
-            stopped: &never,
+            stopped: &Never,
         },
-    )
+    ))
     .expect("feasible");
     let off: Vec<f64> = out
         .x

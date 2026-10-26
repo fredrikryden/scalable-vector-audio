@@ -1,11 +1,12 @@
 // Concern: ADD: births off the residual's spectrogram, partials at QIFFT peaks then noise bands, kept where the length falls | Non-concern: the schedule, the search | IO: (clip, atoms, level) -> atoms
 
 use std::f64::consts::{LN_2, TAU};
+use std::rc::Rc;
 
 use sva_engine::hearing::{
     CAM_FIRST, CAM_LAST, HOP_SECS, WINDOW_SECS, cam, cam_hz, ear_gain_db, threshold_excitation_db,
 };
-use sva_engine::{default_threads, each, fft};
+use sva_engine::{Abandon, default_threads, each, fft};
 
 use super::atoms::{Atom, Clip, Feasible, Quantity, Sound, Trajectory, birth};
 use super::bits::{
@@ -14,7 +15,7 @@ use super::bits::{
 use super::calibrate::rendered;
 use super::fisher::Fit;
 use super::lm::{Limits, curvatures, descend};
-use super::objective::{Objective, excited, framed};
+use super::objective::{Held, Objective, excited, framed};
 use super::pyramid::{Action, Run};
 
 pub const MODEL: &str = "ADD from the residual's spectrogram at full resolution: a periodic \
@@ -23,21 +24,31 @@ pub const MODEL: &str = "ADD from the residual's spectrogram at full resolution:
      max(0, |X_clip|^2 - |X_model|^2), the model rendered by the engine from its own nodes, as \
      the phases it draws are not the clip's; a bin is audible where its sine's level, spl + \
      20 log10(2|X|/sum w) dB SPL, plus the ear's gain reaches the threshold excitation at its \
-     frequency (hearing.rs), and that level is also the atom's floor; partials first: the \
-     residual bin furthest over its floor that is a local maximum in frequency over every frame, its \
-     frequency and level by quadratic interpolation of its dB and its neighbours' (QIFFT; \
-     Smith and Serra 1987, PARSHL, ICMC), tracked to each next and earlier frame through the \
-     largest local maximum within one bin while it stays audible, a partial from the first \
-     frame's time to the last's, each moved in by half the window, which reaches that far, but at the clip's ends, its base level the peak's and its one knot's deviation the \
-     level half a window inside its last frame less it; then noise bands a Cam wide on whole Cam numbers, each band's \
-     power 2 sum |X_k|^2/(n sum w^2) over its bins of the residual (Parseval), their gains the \
+     frequency (hearing.rs), and that level is also the atom's floor; partials first: each \
+     residual bin over its floor that is a local maximum in frequency, furthest over first, \
+     starts a partial where no earlier one claimed it and no earlier one this round lies in its \
+     whole-Cam band from Cam 1.8 (the critical band, a partial a band from another heard \
+     apart; Plomp 1964, JASA 36(9) 1628-1636), its frequency and level by quadratic \
+     interpolation of its dB and its neighbours' (QIFFT; Smith and Serra 1987, PARSHL, ICMC), \
+     tracked to each next and earlier frame through the largest unclaimed local maximum within \
+     one bin while it stays audible, claiming each cell it passes with the bins a Hann main \
+     lobe covers, 2 bins of the window's own length either side; a partial from the first \
+     frame's time to the last's, each moved in by half the window, which reaches that far, \
+     but at the clip's ends, none where that leaves nothing (a run shorter than the window, \
+     which no sound makes, as every frame whose window reaches it hears it); its base level \
+     the peak's and its one knot's deviation the level half a window inside its last frame \
+     less it; then noise bands a Cam wide on whole Cam numbers, each band's power 2 sum \
+     |X_k|^2/(n sum w^2) over its bins of the residual (Parseval), their gains the \
      non-negative least squares fit of those powers, which with disjoint bands is each band's \
-     power clipped at 0 (Lawson and Hanson 1974), the band and frame furthest over the floor at the band's centre tracked \
-     through its audible run as a partial is; a candidate's numbers are solved by lm.rs with \
-     every other atom held, at precisions priced at its start (bits.rs: levels and \
-     frequencies by looks, the rest by the Fisher diagonal), its frequencies and edges pinned where their Fisher precision sqrt(12/A_ii) at the level is no \
-     finer than the analysis bin, rate/n, and it is kept iff the residual bits plus B(x) fall; the first that does \
-     not ends that kind (matching pursuit's stop: the best atom does not pay)";
+     power clipped at 0 (Lawson and Hanson 1974), each band's frame furthest over the floor at \
+     its centre tracked through its audible run as a partial is, one per band; a candidate's \
+     numbers are solved by lm.rs with every other atom held, at precisions priced at its start \
+     (bits.rs: levels and frequencies by looks, the rest by the Fisher diagonal), its \
+     frequencies and edges pinned where their Fisher precision sqrt(12/A_ii) at the level is \
+     no finer than the analysis bin, rate/n, and it is kept iff the residual bits plus B(x) \
+     fall; a round tries every candidate one residual proposes, partials, then noise from the \
+     residual of what the partials kept, and rounds go on from the residual of what was kept \
+     until a whole round keeps none";
 
 /// Partials and harmonics summed in samples, as the engine renders them.
 pub const COHERENT: bool = true;
@@ -97,28 +108,25 @@ impl Spectrogram {
         (frame * self.hop) as f64 / self.rate
     }
 
-    /// The times a sound heard from frame `first` to `last`, loudest at `peak`, starts and
-    /// ends: each frame's window reaches half its length either side, so the run is that much
-    /// shorter at each end, and at least the peak's own frame.
-    fn span(&self, first: usize, peak: usize, last: usize) -> (f64, f64) {
+    /// The times a sound heard from frame `first` to `last` starts and ends, as `MODEL` states.
+    fn span(&self, first: usize, last: usize) -> Option<(f64, f64)> {
         let half = self.long as f64 / 2.0 / self.rate;
         let inward = |frame: usize, by: f64| match frame == 0 || frame + 1 == self.power.len() {
             true => self.secs(frame),
             false => self.secs(frame) + by,
         };
         let (on, end) = (inward(first, half), inward(last, -half));
-        match on < end {
-            true => (on, end),
-            false => (
-                self.secs(peak),
-                self.secs(peak) + self.hop as f64 / self.rate,
-            ),
-        }
+        (on < end).then_some((on, end))
     }
 
     /// The Hz between bins.
     pub fn bin_hz(&self) -> f64 {
         self.rate / self.n as f64
+    }
+
+    /// The padded bins a Hann main lobe covers either side of its peak.
+    fn lobe_bins(&self) -> usize {
+        (2 * self.n).div_ceil(self.long)
     }
 
     /// The frames half a window spans.
@@ -155,6 +163,11 @@ pub fn floor_db(hz: f64, spl_db: f64) -> f64 {
 
 fn audible(hz: f64, db: f64, spl_db: f64) -> bool {
     db > floor_db(hz, spl_db)
+}
+
+/// The whole-Cam band holding `hz`.
+fn critical_band(hz: f64) -> usize {
+    libm::floor(cam(hz) - CAM_FIRST).max(0.0) as usize
 }
 
 /// The Hz the feasible set spans at `rate`.
@@ -247,29 +260,24 @@ pub struct State {
     pub length: f64,
 }
 
-/// `atom` solved with `state` held; the state with it where that shortens it.
-fn tried(
+/// `atom` solved with `state` held (`read` once); the state with it where that shortens it.
+async fn tried(
     objective: &Objective,
-    state: &State,
+    (state, read): (&State, &Rc<Held>),
     atom: Atom,
     analysis_hz: f64,
-    run: &mut Run,
+    run: &mut Run<'_>,
 ) -> Option<State> {
     let (price, pins) = priced_and_pinned(objective, &atom, run.spl_db, analysis_hz)?;
     let fit = Fit::new(objective, vec![atom], vec![price.clone()], COHERENT)
-        .holding(state.atoms.clone())
+        .holding_read(read.clone())
         .pinning(&pins);
     let start = fit.numbers();
-    let stopped = run.stopped;
-    let descent = descend(
-        &fit,
-        &start,
-        &fit.deltas(),
-        &Limits {
-            steps: None,
-            stopped,
-        },
-    )?;
+    let limits = Limits {
+        steps: None,
+        stopped: &run.stopped,
+    };
+    let descent = descend(&fit, &start, &fit.deltas(), &limits).await?;
     let born = fit.atoms_at(&descent.x).remove(0);
     let mut atoms = state.atoms.clone();
     atoms.push(born);
@@ -288,13 +296,13 @@ fn tried(
     })
 }
 
-/// The partial the residual's peak furthest over its floor starts.
-fn partial(residual: &Spectrogram, clip: &Clip, key: u64, spl: f64) -> Option<Atom> {
+/// Every partial the residual proposes, as `MODEL` states.
+fn partials(residual: &Spectrogram, clip: &Clip, spl: f64) -> Vec<Atom> {
     let (lo, hi) = span_hz(residual.rate);
     let peak_at = |frame: &[f64], b: usize| {
         b > 0 && b + 1 < frame.len() && frame[b] > frame[b - 1] && frame[b] >= frame[b + 1]
     };
-    let mut best: Option<(usize, usize, f64)> = None;
+    let mut peaks: Vec<(usize, usize, f64)> = Vec::new();
     for (m, frame) in residual.power.iter().enumerate() {
         for b in 1..frame.len() - 1 {
             let hz = residual.hz(b as f64);
@@ -302,57 +310,80 @@ fn partial(residual: &Spectrogram, clip: &Clip, key: u64, spl: f64) -> Option<At
                 continue;
             }
             let heard = residual.sine_db(frame[b]) - floor_db(hz, spl);
-            if heard > 0.0 && best.is_none_or(|(_, _, h)| heard > h) {
-                best = Some((m, b, heard));
+            if heard > 0.0 {
+                peaks.push((m, b, heard));
             }
         }
     }
-    let (m, b, _) = best?;
-    let frame = &residual.power[m];
-    let db = |p: f64| 10.0 * libm::log10(p.max(f64::MIN_POSITIVE));
-    let (a, c, e) = (db(frame[b - 1]), db(frame[b]), db(frame[b + 1]));
-    let curve = a - 2.0 * c + e;
-    let p = match curve < 0.0 {
-        true => 0.5 * (a - e) / curve,
-        false => 0.0,
-    };
-    let hz = residual.hz(b as f64 + p).clamp(lo, hi);
-    let peak = libm::pow(10.0, (c - 0.25 * (a - e) * p) / 10.0);
-    let track = |step: i64| {
-        let (mut at, mut bin) = (m as i64, b);
-        let mut levels = vec![residual.sine_db(frame[b])];
-        loop {
-            let next = at + step;
-            let Some(f) = usize::try_from(next)
-                .ok()
-                .and_then(|n| residual.power.get(n))
-            else {
-                break;
-            };
-            let found = (bin.saturating_sub(1)..=bin + 1)
-                .filter(|j| peak_at(f, *j))
-                .max_by(|x, y| f[*x].total_cmp(&f[*y]));
-            let Some(j) = found else { break };
-            let level = residual.sine_db(f[j]);
-            if !audible(residual.hz(j as f64), level, spl) {
-                break;
-            }
-            (at, bin) = (next, j);
-            levels.push(level);
+    peaks.sort_by(|x, y| y.2.total_cmp(&x.2).then((x.0, x.1).cmp(&(y.0, y.1))));
+    let bins = residual.n / 2 + 1;
+    let lobe = residual.lobe_bins();
+    let mut claimed = vec![vec![false; bins]; residual.power.len()];
+    let mut out = Vec::new();
+    let mut proposed: Vec<usize> = Vec::new();
+    for (m, b, _) in peaks {
+        let band = critical_band(residual.hz(b as f64));
+        if claimed[m][b] || proposed.contains(&band) {
+            continue;
         }
-        (at as usize, levels)
-    };
-    let (first, _) = track(-1);
-    let (end, levels) = track(1);
-    let inside = levels.len().saturating_sub(residual.half_frames() + 1);
-    Some(born(
-        clip,
-        Atom::partial,
-        key,
-        residual.span(first, m, end),
-        Trajectory::steady(hz),
-        (residual.sine_db(peak), levels[inside]),
-    ))
+        let frame = &residual.power[m];
+        let db = |p: f64| 10.0 * libm::log10(p.max(f64::MIN_POSITIVE));
+        let (a, c, e) = (db(frame[b - 1]), db(frame[b]), db(frame[b + 1]));
+        let curve = a - 2.0 * c + e;
+        let p = match curve < 0.0 {
+            true => 0.5 * (a - e) / curve,
+            false => 0.0,
+        };
+        let hz = residual.hz(b as f64 + p).clamp(lo, hi);
+        let peak = libm::pow(10.0, (c - 0.25 * (a - e) * p) / 10.0);
+        let track = |step: i64| {
+            let (mut at, mut bin) = (m as i64, b);
+            let mut cells = vec![(m, b)];
+            let mut levels = vec![residual.sine_db(frame[b])];
+            loop {
+                let next = at + step;
+                let Some((n, f)) = usize::try_from(next)
+                    .ok()
+                    .and_then(|n| residual.power.get(n).map(|f| (n, f)))
+                else {
+                    break;
+                };
+                let found = (bin.saturating_sub(1)..=bin + 1)
+                    .filter(|j| peak_at(f, *j) && !claimed[n][*j])
+                    .max_by(|x, y| f[*x].total_cmp(&f[*y]));
+                let Some(j) = found else { break };
+                let level = residual.sine_db(f[j]);
+                if !audible(residual.hz(j as f64), level, spl) {
+                    break;
+                }
+                (at, bin) = (next, j);
+                cells.push((n, j));
+                levels.push(level);
+            }
+            (at as usize, levels, cells)
+        };
+        let (first, _, before) = track(-1);
+        let (end, levels, after) = track(1);
+        for (n, j) in before.into_iter().chain(after) {
+            for cell in &mut claimed[n][j.saturating_sub(lobe)..(j + lobe + 1).min(bins)] {
+                *cell = true;
+            }
+        }
+        let Some(span) = residual.span(first, end) else {
+            continue;
+        };
+        proposed.push(band);
+        let inside = levels.len().saturating_sub(residual.half_frames() + 1);
+        out.push(born(
+            clip,
+            Atom::partial,
+            0,
+            span,
+            Trajectory::steady(hz),
+            (residual.sine_db(peak), levels[inside]),
+        ));
+    }
+    out
 }
 
 /// A sound from `on` to `end` in the clip, at least a sample long, its level from `base` to
@@ -379,8 +410,8 @@ fn born<S>(
     )
 }
 
-/// The noise band the residual's band power furthest over its floor starts.
-fn noise(residual: &Spectrogram, clip: &Clip, key: u64, spl: f64) -> Option<Atom> {
+/// Every noise band the residual proposes, as `MODEL` states.
+fn noises(residual: &Spectrogram, clip: &Clip, spl: f64) -> Vec<Atom> {
     let (lo, hi) = span_hz(residual.rate);
     let edges: Vec<f64> = (0..)
         .map(|z| cam_hz(CAM_FIRST + f64::from(z)))
@@ -406,66 +437,95 @@ fn noise(residual: &Spectrogram, clip: &Clip, key: u64, spl: f64) -> Option<Atom
         .collect();
     let centre = |k: usize| cam_hz((cam(bands[k].0) + cam(bands[k].1)) / 2.0);
     let over = |m: usize, k: usize| residual.noise_db(powers[m][k]) - floor_db(centre(k), spl);
-    let heard = |m: usize, k: usize| over(m, k) > 0.0;
-    let mut best: Option<(usize, usize, f64)> = None;
+    let mut heard: Vec<(usize, usize, f64)> = Vec::new();
     for m in 0..powers.len() {
         for k in 0..bands.len() {
             let h = over(m, k);
-            if h > 0.0 && best.is_none_or(|(_, _, b)| h > b) {
-                best = Some((m, k, h));
+            if h > 0.0 {
+                heard.push((m, k, h));
             }
         }
     }
-    let (m, k, _) = best?;
-    let first = (0..=m).rev().take_while(|f| heard(*f, k)).last()?;
-    let end = (m..powers.len()).take_while(|f| heard(*f, k)).last()?;
-    Some(born(
-        clip,
-        Atom::noise,
-        key,
-        residual.span(first, m, end),
-        (bands[k].0, bands[k].1),
-        (
-            residual.noise_db(powers[m][k]),
-            residual.noise_db(powers[end.saturating_sub(residual.half_frames()).max(m)][k]),
-        ),
-    ))
+    heard.sort_by(|x, y| y.2.total_cmp(&x.2).then((x.0, x.1).cmp(&(y.0, y.1))));
+    let mut claimed = vec![vec![false; bands.len()]; powers.len()];
+    let mut out = Vec::new();
+    let mut proposed = vec![false; bands.len()];
+    for (m, k, _) in heard {
+        if claimed[m][k] || proposed[k] {
+            continue;
+        }
+        let open = |f: &usize| over(*f, k) > 0.0 && !claimed[*f][k];
+        let first = (0..=m).rev().take_while(open).last().unwrap_or(m);
+        let end = (m..powers.len()).take_while(open).last().unwrap_or(m);
+        for row in &mut claimed[first..=end] {
+            row[k] = true;
+        }
+        let Some(span) = residual.span(first, end) else {
+            continue;
+        };
+        proposed[k] = true;
+        out.push(born(
+            clip,
+            Atom::noise,
+            0,
+            span,
+            (bands[k].0, bands[k].1),
+            (
+                residual.noise_db(powers[m][k]),
+                residual.noise_db(powers[end.saturating_sub(residual.half_frames()).max(m)][k]),
+            ),
+        ));
+    }
+    out
 }
 
-/// Where a kind's next birth starts, from the residual.
-type Finder = fn(&Spectrogram, &Clip, u64, f64) -> Option<Atom>;
+/// What a kind proposes from the residual, furthest over its floor first.
+type Proposer = fn(&Spectrogram, &Clip, f64) -> Vec<Atom>;
 
-/// Births until the best of a kind does not pay, partials then noise, from `state`.
-pub fn add(objective: &Objective, clip: &Spectrogram, mut state: State, run: &mut Run) -> State {
-    let found: [Finder; 2] = [partial, noise];
+/// Rounds of candidates from `state` until one keeps none, as `MODEL` states.
+pub async fn add(
+    objective: &Objective,
+    clip: &Spectrogram,
+    mut state: State,
+    run: &mut Run<'_>,
+) -> State {
+    let kinds: [Proposer; 2] = [partials, noises];
     let at = objective.clip();
     let mut tried_count = 0;
-    for find in found {
-        loop {
-            if (run.stopped)() {
+    loop {
+        let mut kept = false;
+        for propose in kinds {
+            if run.stopped.abandoned().await {
                 return state;
             }
             let model = Spectrogram::of(&rendered(&state.atoms, &at), at.rate);
             let residual = clip.less(&model);
-            let Some(atom) = find(&residual, &at, birth(&state.atoms), run.spl_db) else {
-                break;
-            };
-            tried_count += 1;
-            run.activity(
-                Action::Ranking,
-                Some(&edit(&atom)),
-                Some((tried_count, "proposal")),
-            );
-            match tried(objective, &state, atom, clip.bin_hz(), run) {
-                Some(grown) => {
+            let mut read = Rc::new(Held::of(objective, &state.atoms));
+            for mut atom in propose(&residual, &at, run.spl_db) {
+                if run.stopped.abandoned().await {
+                    return state;
+                }
+                atom.key = birth(&state.atoms);
+                tried_count += 1;
+                run.activity(
+                    Action::Ranking,
+                    Some(&edit(&atom)),
+                    Some((tried_count, "proposal")),
+                );
+                if let Some(grown) =
+                    tried(objective, (&state, &read), atom, clip.bin_hz(), run).await
+                {
                     run.edits.push(edit(grown.atoms.last().expect("a birth")));
                     state = grown;
+                    read = Rc::new(Held::of(objective, &state.atoms));
+                    kept = true;
                 }
-                None => break,
             }
         }
+        if !kept {
+            return state;
+        }
     }
-    state
 }
 
 /// An edit as the page names it: the kind, where and at what Hz.

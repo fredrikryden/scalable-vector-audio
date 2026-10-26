@@ -5,6 +5,19 @@ use sva_core::solve::atoms::{Atom, Clip, Quantity, Sound, Trajectory};
 use sva_core::solve::calibrate::{n0, rendered};
 use sva_core::solve::objective::Objective;
 use sva_core::solve::pyramid::{Asked, Event, LEVELS, SPL_DB, chosen, label, pyramid};
+use sva_engine::Never;
+
+fn now<F: Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let waker = std::task::Waker::noop();
+    match future
+        .as_mut()
+        .poll(&mut std::task::Context::from_waker(waker))
+    {
+        std::task::Poll::Ready(out) => out,
+        std::task::Poll::Pending => panic!("nothing to wait on with no signal"),
+    }
+}
 
 const CLIP: Clip = Clip {
     rate: 8_000,
@@ -39,9 +52,8 @@ fn a_sine_from_silence_is_one_partial_within_its_precisions() {
         threads,
     };
     let mut finished = Vec::new();
-    let never = || false;
     let clock = || 0.0;
-    let stages = pyramid(
+    let stages = now(pyramid(
         &samples,
         CLIP.rate,
         &asked,
@@ -50,9 +62,9 @@ fn a_sine_from_silence_is_one_partial_within_its_precisions() {
                 finished.push(stage.label.clone());
             }
         },
-        &never,
+        &Never,
         &clock,
-    );
+    ));
     let labels: Vec<String> = (1..=LEVELS).map(|k| label(k, LEVELS)).collect();
     assert_eq!(finished, labels, "each stage heard as it finishes");
     let last = stages.last().expect("a stage");

@@ -1608,10 +1608,10 @@ fn seed_throws_unbuilt_and_solve_refuses_an_unknown_option() {
 }
 
 /// A clip solves through two levels: a stage per level, each heard by `progress` as it
-/// finishes with its terms, its files rendering in a fresh composition, the last least one's
-/// the answer's `files`.
+/// finishes with its terms, its files rendering in a fresh composition, the last least
+/// stage's the answer's `files`.
 #[wasm_bindgen_test]
-fn a_clip_solves_through_its_levels() {
+async fn a_clip_solves_through_its_levels() {
     let (rate, channels) = sine_clip();
     let clip = object(&[("rate", JsValue::from(rate)), ("channels", channels.into())]);
     let heard = js_sys::Array::new();
@@ -1620,7 +1620,9 @@ fn a_clip_solves_through_its_levels() {
         ("levels", JsValue::from(2)),
         ("progress", push.bind0(&heard).into()),
     ]);
-    let answered = now(page().solve(clip.into(), asked.into()))
+    let answered = page()
+        .solve(clip.into(), asked.into())
+        .await
         .unwrap_or_else(|e| unreachable!("the solve answers: {}", as_text(&field(&e, "refusal"))));
     let data = field(&answered, "data");
     assert_eq!(
@@ -1672,13 +1674,40 @@ fn a_clip_solves_through_its_levels() {
             as_text(line)
         );
     }
-    let least = finished
+    let least = items(&data, "stages")
         .iter()
         .rfind(|l| field(l, "least").as_bool() == Some(true))
         .unwrap_or_else(|| unreachable!("a stage is least"));
     assert_eq!(
-        as_text(&field(least, "files")),
+        as_text(&field(&least, "files")),
         as_text(&field(&data, "files")),
         "its files are the answer's"
     );
+}
+
+/// A `signal` the page aborts while a level runs ends the solve with that level, stopped.
+#[wasm_bindgen_test]
+async fn an_aborted_signal_ends_a_solve_mid_level() {
+    let controller = js_sys::Reflect::get(&js_sys::global(), &"AbortController".into())
+        .unwrap_or_else(|_| unreachable!("a global AbortController"));
+    let controller = js_sys::Reflect::construct(&controller.into(), &js_sys::Array::new())
+        .unwrap_or_else(|_| unreachable!("a controller"));
+    let abort = js_sys::Function::new_with_args(
+        "line",
+        "if (line.action === 'ranking_proposals') setTimeout(() => this.abort(), 0);",
+    );
+    let (rate, channels) = sine_clip();
+    let clip = object(&[("rate", JsValue::from(rate)), ("channels", channels.into())]);
+    let asked = object(&[
+        ("levels", JsValue::from(2)),
+        ("signal", field(&controller, "signal")),
+        ("progress", abort.bind0(&controller).into()),
+    ]);
+    let answered = page()
+        .solve(clip.into(), asked.into())
+        .await
+        .unwrap_or_else(|e| unreachable!("the solve answers: {}", as_text(&field(&e, "refusal"))));
+    let stages = items(&field(&answered, "data"), "stages");
+    assert_eq!(stages.length(), 1, "{}", as_text(&stages));
+    assert_eq!(field(&stages.get(0), "stopped").as_bool(), Some(true));
 }

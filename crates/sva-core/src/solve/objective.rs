@@ -6,9 +6,9 @@ use sva_engine::internal::{Ear, Internal};
 use sva_engine::{default_threads, each};
 use sva_formula::C64;
 
-use super::atoms::{Atom, Clip};
+use super::atoms::{Atom, Clip, Sound};
 use super::bits::{self, Priced};
-use super::spectrum::Model;
+use super::spectrum::{Model, Summed};
 
 pub const MODEL: &str = "residual bits = sum_i d_i^2 log2(e)/2, the Gaussian code length of \
      the clip's elements given the model's over the noise-free code, channels summed, place \
@@ -16,7 +16,11 @@ pub const MODEL: &str = "residual bits = sum_i d_i^2 log2(e)/2, the Gaussian cod
      noise density in every band (calibrate.rs); the model's elements are the reading of each \
      frame's expected excitation, partials and harmonics as written and noise in expectation \
      over its lines' phases (spectrum.rs), so a noise is compared by its expected excitation \
-     alone; the total is the residual bits plus B(x) (bits.rs) at the caller's precisions";
+     alone; the total is the residual bits plus B(x) (bits.rs) at the caller's precisions; \
+     atoms held while others move are read once: their partials summed in samples over the \
+     clip (spectrum.rs), their noise's expected power per frame, and their excitation alone \
+     per frame, which a frame no moving atom reaches takes as it is (an atom reaches a frame \
+     when any window of the frame weighs a sample whose cell meets [on, end))";
 
 pub struct Objective {
     ear: Ear,
@@ -68,15 +72,33 @@ impl Objective {
 
     /// Partials and harmonics summed in samples where `coherent`.
     pub fn expect(&self, atoms: &[Atom], coherent: bool) -> Elements {
+        self.expect_beside(atoms, coherent, None)
+    }
+
+    /// `expect` beside `held`.
+    pub fn expect_beside(&self, atoms: &[Atom], coherent: bool, held: Option<&Held>) -> Elements {
         let (first, _) = self.ear.frames(self.clip.len);
-        let each = framed(
+        let reach: Vec<(i64, i64)> = atoms
+            .iter()
+            .map(|a| reach(&self.ear, &self.clip, a))
+            .collect();
+        let each = framed_beside(
             atoms,
             self.clip,
             coherent,
             self.ear.frames(self.clip.len),
-            &|model, m| {
-                let power = self.ear.compose(m, &mut |frame| model.bins(frame).power);
-                excited(&self.ear, m, &power)
+            held.map(|h| &h.summed),
+            &|model, m| match held {
+                Some(h) if !reach.iter().any(|(f, l)| *f <= m && m <= *l) => {
+                    h.excitation[(m - first) as usize].clone()
+                }
+                _ => {
+                    let mut power = self.ear.compose(m, &mut |frame| model.bins(frame).power);
+                    if let Some(h) = held {
+                        h.add_noise(m - first, &mut power);
+                    }
+                    excited(&self.ear, m, &power)
+                }
             },
         );
         let outputs = self
@@ -120,6 +142,72 @@ impl Objective {
     }
 }
 
+/// Atoms held while others move, read once as `MODEL` states.
+pub struct Held {
+    pub summed: Summed,
+    noise: Vec<Option<Vec<f64>>>,
+    pub excitation: Vec<Vec<f64>>,
+}
+
+impl Held {
+    pub fn of(objective: &Objective, atoms: &[Atom]) -> Held {
+        let (ear, clip) = (objective.ear(), objective.clip());
+        let summed = Summed::of(atoms, clip);
+        let noises: Vec<Atom> = atoms
+            .iter()
+            .filter(|a| matches!(a.sound, Sound::Noise { .. }))
+            .cloned()
+            .collect();
+        let frames = ear.frames(clip.len);
+        let noise: Vec<Option<Vec<f64>>> = framed(&noises, clip, true, frames, &|model, m| {
+            let power = ear.compose(m, &mut |frame| model.bins(frame).power);
+            power.iter().any(|p| *p != 0.0).then_some(power)
+        });
+        let none: [Atom; 0] = [];
+        let excitation = framed_beside(&none, clip, true, frames, Some(&summed), &|tonal, m| {
+            let mut power = ear.compose(m, &mut |frame| tonal.bins(frame).power);
+            if let Some(n) = &noise[(m - frames.0) as usize] {
+                for (p, n) in power.iter_mut().zip(n) {
+                    *p += n;
+                }
+            }
+            excited(ear, m, &power)
+        });
+        Held {
+            summed,
+            noise,
+            excitation,
+        }
+    }
+
+    /// Adds the `at`-th frame's held noise power.
+    pub fn add_noise(&self, at: i64, power: &mut [f64]) {
+        if let Some(noise) = &self.noise[at as usize] {
+            for (p, n) in power.iter_mut().zip(noise) {
+                *p += n;
+            }
+        }
+    }
+}
+
+/// The frames `atom` reaches as `MODEL` states, `first > last` where none.
+pub fn reach(ear: &Ear, clip: &Clip, atom: &Atom) -> (i64, i64) {
+    let rate = f64::from(clip.rate);
+    let (first, last) = ear.frames(clip.len);
+    let lo = libm::floor(atom.on * rate - 0.5) as i64;
+    let hi = libm::ceil(atom.end() * rate + 0.5) as i64;
+    let met = |m: i64| {
+        let (f, l) = ear.reach(m);
+        f <= hi && l >= lo
+    };
+    let from = (first..=last).find(|m| met(*m));
+    let to = (first..=last).rev().find(|m| met(*m));
+    match (from, to) {
+        (Some(f), Some(t)) => (f, t),
+        _ => (1, 0),
+    }
+}
+
 /// E per channel at frame `m`, 0 unsummed where every bin is.
 pub fn excited(ear: &Ear, m: i64, power: &[f64]) -> Vec<f64> {
     match power.iter().all(|p| *p == 0.0) {
@@ -128,30 +216,45 @@ pub fn excited(ear: &Ear, m: i64, power: &[f64]) -> Vec<f64> {
     }
 }
 
-/// `per` at each frame in order, one run of frames per thread, each its own `Model`.
+/// `per` at each frame in order, every `threads`-th frame on one thread with its own `Model`,
+/// so the frames an atom reaches spread over every thread.
 pub fn framed<R: Send>(
     atoms: &[Atom],
     clip: Clip,
     coherent: bool,
+    frames: (i64, i64),
+    per: &(dyn Fn(&Model, i64) -> R + Sync),
+) -> Vec<R> {
+    framed_beside(atoms, clip, coherent, frames, None, per)
+}
+
+/// `framed` with `summed` beside.
+pub fn framed_beside<R: Send>(
+    atoms: &[Atom],
+    clip: Clip,
+    coherent: bool,
     (first, last): (i64, i64),
+    summed: Option<&Summed>,
     per: &(dyn Fn(&Model, i64) -> R + Sync),
 ) -> Vec<R> {
     let threads = default_threads();
     let frames = (last - first + 1).max(0) as usize;
     let runs = threads.get().min(frames).max(1);
-    let spans: Vec<(i64, i64)> = (0..runs)
-        .map(|r| {
-            let at = |r: usize| first + (r * frames / runs) as i64;
-            (at(r), at(r + 1))
-        })
-        .collect();
-    each(threads, spans, |(from, to)| {
+    let mut each_run = each(threads, (0..runs).collect(), |r| {
         let model = Model::new(atoms, clip, coherent);
-        (from..to).map(|m| per(&model, m)).collect::<Vec<R>>()
-    })
-    .into_iter()
-    .flatten()
-    .collect()
+        let model = match summed {
+            Some(s) => model.beside(s),
+            None => model,
+        };
+        (r..frames)
+            .step_by(runs)
+            .map(|k| per(&model, first + k as i64))
+            .collect::<Vec<R>>()
+            .into_iter()
+    });
+    (0..frames)
+        .map(|k| each_run[k % runs].next().expect("one answer per frame"))
+        .collect()
 }
 
 pub fn total(residual_bits: f64, atoms: &[Atom], priced: &[Priced]) -> f64 {

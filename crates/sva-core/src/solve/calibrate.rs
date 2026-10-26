@@ -225,19 +225,24 @@ pub fn root(f: &mut dyn FnMut(f64) -> f64, target: f64, start: f64) -> f64 {
 fn fitted(rate: u32, scale: f64, spl_db: f64, threads: NonZeroUsize) -> Calibration {
     let ear = Ear::of(f64::from(rate), spl_db, scale);
     let clip = clip(rate);
-    let ceiling = PSYCHOACOUSTIC_V1.ceiling(rate);
-    let heard: Vec<f64> = FREQUENCIES_HZ
+    let conditions = grid(rate);
+    let heard: Vec<f64> = conditions
         .iter()
-        .copied()
-        .filter(|hz| *hz < ceiling)
+        .step_by(SENSATION_LEVELS_DB.len())
+        .map(|(hz, _)| *hz)
         .collect();
     let floors = each(threads, heard.clone(), |hz| {
         floor_db(&tone(hz, FULL_SCALE_DBFS), &clip, &ear).db
     });
-    let grid: Vec<(f64, f64, f64)> = heard
+    let grid: Vec<(f64, f64, f64)> = conditions
         .iter()
-        .zip(&floors)
-        .flat_map(|(hz, floor)| SENSATION_LEVELS_DB.map(|sl| (*hz, sl, *floor)))
+        .map(|(hz, sl)| {
+            let k = heard
+                .iter()
+                .position(|h| h == hz)
+                .expect("a heard frequency");
+            (*hz, *sl, floors[k])
+        })
         .collect();
     let conditions = each(threads, grid, |(hz, sl_db, floor_db)| {
         let mut d = level_step(&ear, &clip, &tone(hz, floor_db + sl_db));
@@ -267,23 +272,62 @@ type Kept = Vec<((u32, u64, u64), Arc<OnceLock<Calibration>>)>;
 
 static KEPT: Mutex<Kept> = Mutex::new(Vec::new());
 
+fn cell(rate: u32, scale: f64, spl_db: f64) -> Arc<OnceLock<Calibration>> {
+    let key = (rate, scale.to_bits(), spl_db.to_bits());
+    let mut kept = KEPT.lock().expect("nothing panics holding it");
+    match kept.iter().find(|(k, _)| *k == key) {
+        Some((_, cell)) => cell.clone(),
+        None => {
+            let cell = Arc::new(OnceLock::new());
+            kept.push((key, cell.clone()));
+            cell
+        }
+    }
+}
+
 /// The calibration at `rate`, scale `scale` and `spl_db`, fitted once per process on up to
 /// `threads`, which move no bit; a caller asking while another fits it waits for that fit.
 pub fn calibration(rate: u32, scale: f64, spl_db: f64, threads: NonZeroUsize) -> Calibration {
-    let key = (rate, scale.to_bits(), spl_db.to_bits());
-    let cell = {
-        let mut kept = KEPT.lock().expect("nothing panics holding it");
-        match kept.iter().find(|(k, _)| *k == key) {
-            Some((_, cell)) => cell.clone(),
-            None => {
-                let cell = Arc::new(OnceLock::new());
-                kept.push((key, cell.clone()));
-                cell
-            }
-        }
-    };
-    cell.get_or_init(|| fitted(rate, scale, spl_db, threads))
+    cell(rate, scale, spl_db)
+        .get_or_init(|| fitted(rate, scale, spl_db, threads))
         .clone()
+}
+
+/// The calibration held, none fitted.
+pub fn kept(rate: u32, scale: f64, spl_db: f64) -> Option<Calibration> {
+    cell(rate, scale, spl_db).get().cloned()
+}
+
+/// The grid's conditions a fit at `rate` holds, in the order it fits them.
+fn grid(rate: u32) -> Vec<(f64, f64)> {
+    let ceiling = PSYCHOACOUSTIC_V1.ceiling(rate);
+    FREQUENCIES_HZ
+        .iter()
+        .filter(|hz| **hz < ceiling)
+        .flat_map(|hz| SENSATION_LEVELS_DB.map(|sl| (*hz, sl)))
+        .collect()
+}
+
+/// Holds `calibration`, fitted earlier by this build, as this process's own, where it is one
+/// a fit makes: its grid's conditions in order, each number and N0 finite, N0 positive.
+pub fn keep(calibration: Calibration) -> bool {
+    let conditions: Vec<(f64, f64)> = calibration
+        .conditions
+        .iter()
+        .map(|c| (c.hz, c.sl_db))
+        .collect();
+    let finite = calibration
+        .conditions
+        .iter()
+        .all(|c| c.floor_db.is_finite() && c.unit_dl_db.is_finite() && c.unit_dl_db > 0.0);
+    let held = conditions == grid(calibration.rate)
+        && finite
+        && calibration.n0.is_finite()
+        && calibration.n0 > 0.0;
+    if held {
+        let _ = cell(calibration.rate, calibration.scale, calibration.spl_db).set(calibration);
+    }
+    held
 }
 
 pub fn n0(rate: u32, scale: f64, spl_db: f64, threads: NonZeroUsize) -> f64 {

@@ -37,6 +37,11 @@ static OPEN: OnceLock<Tier<Directory>> = OnceLock::new();
 const MEMORY_BYTES: u64 = 256 << 20;
 
 fn platform() -> Result<PathBuf, CliError> {
+    platform_dir("sva")
+}
+
+/// `name` under the platform's cache directory, `$XDG_CACHE_HOME`, else `~/.cache`.
+pub fn platform_dir(name: &str) -> Result<PathBuf, CliError> {
     let set = |name| {
         std::env::var_os(name)
             .filter(|v| !v.is_empty())
@@ -44,7 +49,7 @@ fn platform() -> Result<PathBuf, CliError> {
     };
     set("XDG_CACHE_HOME")
         .or_else(|| set("HOME").map(|home| home.join(".cache")))
-        .map(|dir| dir.join("sva"))
+        .map(|dir| dir.join(name))
         .ok_or_else(|| {
             CliError::usage(
                 "cache.no_default_directory",
