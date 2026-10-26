@@ -41,14 +41,16 @@ pub const MODEL: &str = "ADD from the residual's spectrogram at full resolution:
      trial's in time its member at harmonic n = round(hz/f0) where it lies in the analysis \
      bin centred on n f0, the resolution the analysis placed it to, the nearest per n, the \
      trial scoring the numbers it saves, its members' as partials less its own as born, \
-     where positive, the \
-     fundamental the members' least squares one, sum n hz/sum n^2, the highest scoring, ties to \
+     where positive and its members outnumber the harmonics up to its highest it lacks (a \
+     series heard more than not, so a subharmonic of a few tracks is not one), the \
+     fundamental its strongest member's Hz over its harmonic number, the most exact the \
+     analysis holds, the highest scoring, ties to \
      the higher fundamental, taken from the pool with its members, until none is found; a \
      harmonic spans its strongest member, each harmonic at its member's level or, lacking one, \
-     its floor, its level their mean with the strongest member's fall; of the tracks no \
-     harmonic took the strongest in each whole-Cam band from Cam 1.8 is a partial (the \
+     its floor, its level their mean with the strongest member's fall; beside the harmonics, \
+     the strongest track in each whole-Cam band from Cam 1.8 is a partial (the \
      critical band, a partial a band from another heard apart; Plomp 1964, JASA 36(9) \
-     1628-1636); noise is proposed from the residual of the atoms the tonal births leave: \
+     1628-1636), so pruning picks between a harmonic and its members; noise is proposed from the residual of the atoms the tonal births leave: \
      bands a Cam wide on whole Cam numbers, each band's power 2 sum |X_k|^2/(n sum w^2) over \
      its bins (Parseval), their gains the non-negative least squares fit of those powers, \
      which with disjoint bands is each band's power clipped at 0 (Lawson and Hanson 1974), \
@@ -71,8 +73,8 @@ pub const MODEL: &str = "ADD from the residual's spectrogram at full resolution:
      birth pruning drops is refused for the rest of the level: a partial's frequency (within \
      half the analysis bin) to partials, a band's Cam band to noise, a harmonic's frequencies \
      to the sieve and a joined band's Cam bands to joining, which opens their alternative, \
-     free partials and narrow bands; rounds go on until one keeps no birth and opens no \
-     alternative";
+     narrow bands, proposed at once, before the next round; rounds go on until one keeps no \
+     birth";
 
 /// Partials and harmonics summed in samples, as the engine renders them.
 pub const COHERENT: bool = true;
@@ -482,15 +484,12 @@ fn sieved(
                 .filter_map(|(i, m)| m.map(|(q, _)| (q, i + 1)))
                 .collect();
             let (saved, own) = (members.len() * written(1), written(by_number.len()));
-            if saved <= own {
+            if saved <= own || 2 * members.len() <= by_number.len() {
                 continue;
             }
             let score = saved - own;
-            let (moment, weight) = members.iter().fold((0.0, 0.0), |(m, w), (q, n)| {
-                let n = *n as f64;
-                (m + n * tracks[*q].hz, w + n * n)
-            });
-            let f0 = moment / weight;
+            let &(lead, n) = members.iter().min().expect("a member");
+            let f0 = tracks[lead].hz / n as f64;
             if f0 < lo || f0 * by_number.len() as f64 > hi {
                 continue;
             }
@@ -505,8 +504,8 @@ fn sieved(
     best.map(|(_, f0, members)| (f0, members))
 }
 
-/// Every tonal atom the residual proposes, as `MODEL` states: harmonics the sieve groups, then
-/// a partial per track left, none from a track within half the analysis bin of a frequency
+/// Every tonal atom the residual proposes, as `MODEL` states: harmonics the sieve groups, and
+/// beside them partials, none from a track within half the analysis bin of a frequency
 /// `refused` holds, as a harmonic's to the sieve, as a partial's to a partial.
 fn tonal(
     residual: &Spectrogram,
@@ -519,8 +518,9 @@ fn tonal(
     let analysis_hz = residual.bin_hz();
     let feasible = span_hz(residual.rate);
     let near = |hz: f64, held: &[f64]| held.iter().any(|r| 2.0 * (hz - r).abs() <= analysis_hz);
-    let (mut pool, mut free): (Vec<usize>, Vec<usize>) =
-        (0..tracks.len()).partition(|t| !near(tracks[*t].hz, &refused.hz));
+    let mut pool: Vec<usize> = (0..tracks.len())
+        .filter(|t| !near(tracks[*t].hz, &refused.hz))
+        .collect();
     let mut out = Vec::new();
     while let Some((f0, members)) = sieved(&tracks, &pool, analysis_hz, feasible) {
         let count = members.iter().map(|(_, n)| *n).max().expect("a member");
@@ -542,11 +542,8 @@ fn tonal(
         }));
         pool.retain(|t| members.iter().all(|(q, _)| q != t));
     }
-    free.extend(pool);
-    free.sort_unstable();
     let mut proposed: Vec<usize> = Vec::new();
-    for t in free {
-        let track = &tracks[t];
+    for track in &tracks {
         let band = critical_band(track.hz);
         if proposed.contains(&band) || near(track.hz, &refused.partials) {
             continue;
@@ -921,10 +918,7 @@ async fn grown(
             None => match joined {
                 Joined::Partial(hz) => refused.partials.push(*hz),
                 Joined::Band(band) => refused.bands.push(*band),
-                Joined::Harmonic(hz) => {
-                    refused.hz.extend(hz);
-                    opened = true;
-                }
+                Joined::Harmonic(hz) => refused.hz.extend(hz),
                 Joined::Bands(bands) => {
                     refused.joined.extend(bands);
                     opened = true;
@@ -946,13 +940,18 @@ pub async fn add(objective: &Objective, heard: &Heard, state: State, run: &mut R
     loop {
         let mut going = false;
         for kind in [Kind::Tonal, Kind::Noise] {
-            if run.stopped.abandoned().await {
-                return state;
+            loop {
+                if run.stopped.abandoned().await {
+                    return state;
+                }
+                let (next, survived, opened) =
+                    grown(objective, heard, state, (kind, &mut refused), run).await;
+                state = next;
+                going |= survived;
+                if !opened {
+                    break;
+                }
             }
-            let (next, survived, opened) =
-                grown(objective, heard, state, (kind, &mut refused), run).await;
-            state = next;
-            going |= survived || opened;
         }
         if !going {
             return state;
