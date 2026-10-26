@@ -19,10 +19,10 @@ pub const MODEL: &str = "levels at scales s = r^-(L-1-k), k = 0 the coarsest, up
      calibrated there (calibrate.rs), prices each atom again there and drops one heard \
      nowhere, pins its frequencies and edges where they are when their Fisher precision there \
      is no finer than ADD's analysis bin (add.rs), so a level too coarse to resolve one leaves \
-     it where the analysis put it, then refines and grows the state by ADD (add.rs), whose \
-     every round solves the kept atoms beside its births in one descent; numbers are Hz, s and \
-     dB, so a \
-     level's state starts the next unchanged; each level is a stage whose length is its \
+     it where the analysis put it, then refines the state's atoms by LM and grows them by ADD \
+     (add.rs): in rounds until one keeps no birth at the coarsest level, by one round at each \
+     finer unless the caller asks rounds at every level, every atom unfrozen at a level's \
+     start; numbers are Hz, s and dB, so a level's state starts the next unchanged; each level is a stage whose length is its \
      residual bits plus B(x) at s = 1, every stage's atoms priced at one precision set, the \
      latest stage's: an atom at the precisions s = 1 reads for the latest stage's atom of its \
      key, else at its own stage's (at its level where s = 1 hears it nowhere), so precisions \
@@ -204,11 +204,12 @@ impl Run<'_> {
 }
 
 /// What a run is asked: its levels, the clip's full-scale sine in dB SPL, the threads N0 is
-/// fitted on.
+/// fitted on, whether every level grows in rounds (else the coarsest alone, a cost limit).
 pub struct Asked {
     pub levels: usize,
     pub spl_db: f64,
     pub threads: NonZeroUsize,
+    pub every_level: bool,
 }
 
 /// One finished level as the stages compare it: its residual bits at s = 1 and each atom's
@@ -288,6 +289,7 @@ pub async fn pyramid(
         atoms: Vec::new(),
         priced: Vec::new(),
         pinned: Vec::new(),
+        frozen: Vec::new(),
         length: f64::INFINITY,
     };
     let mut stages: Vec<Stage> = Vec::new();
@@ -312,11 +314,19 @@ pub async fn pyramid(
         }
         state = State {
             length: length(objective, &atoms, &prices),
+            frozen: vec![false; atoms.len()],
             atoms,
             priced: prices,
             pinned,
         };
-        state = add::add(objective, &heard, state, &mut run).await;
+        state = add::add(
+            objective,
+            &heard,
+            state,
+            k == 0 || asked.every_level,
+            &mut run,
+        )
+        .await;
         run.activity(Action::Measuring, None, Some((1, "evaluation")));
         let residual_bits = objective.bits(&state.atoms, COHERENT);
         let bits = bits::bits(&state.atoms, &state.priced);

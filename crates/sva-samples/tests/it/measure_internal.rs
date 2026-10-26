@@ -1,4 +1,4 @@
-// Concern: what `internal` owes silence, a tone, a wider ear, two channels, element rates, composed bins, a known ripple | Non-concern: the curves (measure_hearing.rs) | IO: (samples, s) -> asserts
+// Concern: what `internal` owes silence, a tone, wider ears, two channels, rates, composed bins, a ripple, the adjoint | Non-concern: the curves (measure_hearing.rs) | IO: (samples, s) -> asserts
 
 use std::f64::consts::PI;
 
@@ -256,4 +256,57 @@ fn elements_are_the_readings_outputs() {
             }
         }
     }
+}
+
+/// A V series `frames` long, silent outside `at..at + len`, varied inside.
+fn varied(frames: usize, (at, len): (usize, usize)) -> Vec<f64> {
+    (0..frames)
+        .map(|m| match (at..at + len).contains(&m) {
+            true => libm::sin(0.37 * m as f64) + 0.5,
+            false => 0.0,
+        })
+        .collect()
+}
+
+#[test]
+fn pulled_weights_are_the_stages_adjoint() {
+    let ear = Ear::of(8_000.0, SPL, 1.0);
+    let (first, last) = ear.frames(2_000);
+    let frames = (last - first + 1) as usize;
+    let dv = varied(frames, (10, frames - 10));
+    let channels = ear.thresholds().len();
+    let outputs = ear.filtered(&vec![dv.clone(); channels]);
+    let z: Vec<Vec<Vec<sva_formula::C64>>> = outputs
+        .iter()
+        .map(|bands| {
+            bands
+                .iter()
+                .enumerate()
+                .map(|(k, ys)| {
+                    (0..ys.len())
+                        .map(|j| {
+                            let t = (j + 3 * k) as f64;
+                            sva_formula::C64::new(libm::cos(0.11 * t), libm::sin(0.07 * t))
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect();
+    let forward: f64 = outputs
+        .iter()
+        .zip(&z)
+        .flat_map(|(b, z)| b.iter().zip(z))
+        .flat_map(|(ys, zs)| ys.iter().zip(zs))
+        .map(|(y, z)| z.re * y.re + z.im * y.im)
+        .sum();
+    let pulled = ear.pulled(&z, frames);
+    let back: f64 = pulled
+        .iter()
+        .map(|w| w.iter().zip(&dv).map(|(w, v)| w * v).sum::<f64>())
+        .sum();
+    assert!(
+        (forward - back).abs() <= 1e-9 * forward.abs(),
+        "{forward} {back}"
+    );
 }

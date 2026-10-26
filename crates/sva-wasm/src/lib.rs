@@ -250,6 +250,11 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                 ));
             }
             "progress" => {}
+            "everyLevel" => {
+                value.as_bool().ok_or_else(|| {
+                    refuse("`everyLevel` is not a boolean".into(), "pass true or false")
+                })?;
+            }
             "live" => {
                 held.live = value
                     .as_bool()
@@ -516,7 +521,10 @@ impl Composition {
         #[wasm_bindgen(unchecked_param_type = "SolveClip")] clip: JsValue,
         #[wasm_bindgen(unchecked_param_type = "SolveOptions")] options: JsValue,
     ) -> Result<JsValue, JsValue> {
-        options_of(&options, &["levels", "spl", "signal", "progress"])?;
+        options_of(
+            &options,
+            &["levels", "spl", "everyLevel", "signal", "progress"],
+        )?;
         solve::solved(&clip, &options).await
     }
 

@@ -6,7 +6,7 @@ use sva_core::solve::bits::{
 };
 use sva_core::solve::calibrate::{n0, rendered};
 use sva_core::solve::fisher::Fit;
-use sva_core::solve::lm::{Ended, Limits, curvatures, descend};
+use sva_core::solve::lm::{Ended, Limits, Problem, descend};
 use sva_core::solve::objective::Objective;
 use sva_core::solve::spectrum::Model;
 use sva_engine::Never;
@@ -86,7 +86,7 @@ fn priced(objective: &Objective, truth: &Atom) -> Priced {
         deltas: vec![1.0; truth.values().len()],
     };
     let probe = Fit::new(objective, vec![truth.clone()], vec![ones], true);
-    let a = curvatures(&probe, &probe.numbers());
+    let a = probe.curvatures(&probe.numbers());
     let hop = objective.heard().hop_secs;
     let l = looks(objective, truth);
     let deltas = truth

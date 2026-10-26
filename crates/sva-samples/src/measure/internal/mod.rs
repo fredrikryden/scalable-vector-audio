@@ -71,6 +71,8 @@ struct Range {
     window_secs: f64,
     n: usize,
     twiddles: Vec<(f64, f64)>,
+    /// `e^(-2 pi i j k/n)` per supplied bin `j`.
+    basis: Vec<Vec<(f64, f64)>>,
     hz: Vec<f64>,
     gain: Vec<f64>,
     supplies: std::ops::Range<usize>,
@@ -123,10 +125,23 @@ impl Range {
             .collect();
         let supplies =
             hz.partition_point(|f| range_of(*f) < r)..hz.partition_point(|f| range_of(*f) <= r);
+        let basis = supplies
+            .clone()
+            .map(|j| {
+                (0..n)
+                    .map(|k| {
+                        let turn = 2.0 * PI * ((j * k) % n) as f64 / n as f64;
+                        let (s, c) = libm::sincos(turn);
+                        (c, -s)
+                    })
+                    .collect()
+            })
+            .collect();
         Range {
             window_secs,
             n,
             twiddles: fft::twiddles(n),
+            basis,
             hz,
             gain,
             supplies,
@@ -201,6 +216,32 @@ impl Frame<'_> {
         self.range.n
     }
 
+    /// The weighted transform of `x`, sample `first() + k` at `k`.
+    pub fn transform(&self, x: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let mut re = vec![0.0; self.range.n];
+        for (k, (w, x)) in self.weights.iter().zip(x).enumerate() {
+            re[k] = w * x;
+        }
+        let mut im = vec![0.0; self.range.n];
+        fft::fft_with(&mut re, &mut im, &self.range.twiddles);
+        (re, im)
+    }
+
+    /// `transform` at `bins()` alone, by direct sums.
+    pub fn transform_bins(&self, x: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let weighted: Vec<f64> = self.weights.iter().zip(x).map(|(w, x)| w * x).collect();
+        self.range
+            .basis
+            .iter()
+            .map(|basis| {
+                weighted
+                    .iter()
+                    .zip(basis)
+                    .fold((0.0, 0.0), |(re, im), (v, (c, s))| (re + v * c, im + v * s))
+            })
+            .unzip()
+    }
+
     /// `|X|^2` per bin of `bins()` of the weighted samples, averaged over `planes`, each
     /// holding sample `from + i` at `i`; a sample a plane does not hold is silence.
     pub fn power(&self, planes: &[&[f64]], from: i64) -> Vec<f64> {
@@ -241,6 +282,45 @@ impl Channel {
             self.below[i],
             self.hz,
         )
+    }
+
+    /// `excitation`'s slopes along each eardrum move, `slopes` its levels'.
+    fn excitation_along(
+        &self,
+        scale: f64,
+        (power, levels): (&[f64], &[f64]),
+        along: &[Vec<f64>],
+        slopes: &[Vec<f64>],
+    ) -> Vec<f64> {
+        let (p51, slope) = self.lower_slope;
+        let skirts: Vec<(f64, f64)> = (0..self.lower)
+            .map(|i| match power[i] > 0.0 {
+                true => {
+                    let p = hearing::lower_p(p51, slope, levels[i]);
+                    let (v, dp) = hearing::roex_apart_slope(p / scale, self.below[i], self.hz);
+                    (
+                        v,
+                        dp / scale * hearing::lower_p_slope(p51, slope, levels[i]),
+                    )
+                }
+                false => (0.0, 0.0),
+            })
+            .collect();
+        let (from, weights) = &self.upper;
+        along
+            .iter()
+            .zip(slopes)
+            .map(|(d, dx)| {
+                let mut below = 0.0;
+                for (i, (v, dv)) in skirts.iter().enumerate() {
+                    if power[i] > 0.0 {
+                        below += v * d[i] + dv * dx[i] * power[i];
+                    }
+                }
+                let above: f64 = weights.iter().zip(&d[*from..]).map(|(w, p)| p * w).sum();
+                below + above
+            })
+            .collect()
     }
 
     fn excitation<N: Num>(&self, scale: f64, power: &[N], levels: &[N]) -> N {
@@ -415,6 +495,69 @@ impl Ear {
             .collect()
     }
 
+    /// `excite`'s slopes along each move of `power`, as a tangent `N` reads them, the skirts
+    /// read once.
+    pub fn excite_along(&self, m: i64, power: &[f64], along: &[Vec<f64>]) -> Vec<Vec<f64>> {
+        let t = m as f64 * self.hop_secs;
+        let gains: Vec<f64> = self
+            .supplying()
+            .flat_map(|range| {
+                let energy = range.energy(self.rate, t);
+                range.gain[range.supplies.clone()]
+                    .iter()
+                    .map(move |g| match energy > 0.0 {
+                        true => g / energy,
+                        false => 0.0,
+                    })
+            })
+            .collect();
+        let eardrum: Vec<f64> = power.iter().zip(&gains).map(|(p, g)| p * g).collect();
+        let sums: Vec<f64> = self
+            .around
+            .iter()
+            .map(|(from, row)| {
+                row.iter()
+                    .zip(&eardrum[*from..])
+                    .fold(0.0, |s, (w, p)| s + p * w)
+            })
+            .collect();
+        let levels: Vec<f64> = sums.iter().map(|s| 10.0 * libm::log10(*s)).collect();
+        let moved: Vec<Vec<f64>> = along
+            .iter()
+            .map(|d| d.iter().zip(&gains).map(|(d, g)| d * g).collect())
+            .collect();
+        let slopes: Vec<Vec<f64>> = moved
+            .iter()
+            .map(|d: &Vec<f64>| {
+                self.around
+                    .iter()
+                    .zip(&sums)
+                    .map(|((from, row), s)| {
+                        let ds = row.iter().zip(&d[*from..]).fold(0.0, |a, (w, p)| a + p * w);
+                        10.0 / LN_10 * ds / s
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut out = vec![vec![0.0; self.channels.len()]; along.len()];
+        for (c, channel) in self.channels.iter().enumerate() {
+            let each = channel.excitation_along(self.scale, (&eardrum, &levels), &moved, &slopes);
+            for (o, v) in out.iter_mut().zip(each) {
+                o[c] = v;
+            }
+        }
+        out
+    }
+
+    /// `levels`' slopes along `d`: `10 log10(e)/(E_T + E)`.
+    pub fn levels_along(&self, excitation: &[f64], d: &[f64]) -> Vec<f64> {
+        self.channels
+            .iter()
+            .zip(excitation.iter().zip(d))
+            .map(|(c, (e, d))| 10.0 / LN_10 * (d / c.threshold) / (e / c.threshold + 1.0))
+            .collect()
+    }
+
     /// The first frame any window reaches a clip of `len` samples from, and its last frame.
     pub fn frames(&self, len: usize) -> (i64, i64) {
         let longest = self
@@ -465,6 +608,29 @@ impl Ear {
             .iter()
             .zip(levels)
             .map(|(c, v)| modulation::outputs(v, from, self.hop_secs, &c.bands))
+            .collect()
+    }
+
+    /// Channel `c`'s outputs of a V silent but at `at..at + levels.len()`, read there: per band,
+    /// its first element there and the outputs on.
+    pub fn filtered_within(
+        &self,
+        c: usize,
+        levels: &[f64],
+        (at, frames): (usize, usize),
+    ) -> Vec<(usize, Vec<C64>)> {
+        let from = (-self.frames(0).0) as usize;
+        let channel = &self.channels[c];
+        modulation::outputs_within(levels, (at, frames), from, self.hop_secs, &channel.bands)
+    }
+
+    /// `filtered`'s adjoint: `w` per frame with `sum Re(conj(z) dy) = sum w dV`.
+    pub fn pulled(&self, z: &[Vec<Vec<C64>>], frames: usize) -> Vec<Vec<f64>> {
+        let from = (-self.frames(0).0) as usize;
+        self.channels
+            .iter()
+            .zip(z)
+            .map(|(c, z)| modulation::pulled(z, frames, from, self.hop_secs, &c.bands))
             .collect()
     }
 

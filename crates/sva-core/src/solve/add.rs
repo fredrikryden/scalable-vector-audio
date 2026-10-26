@@ -1,5 +1,6 @@
 // Concern: ADD: births off the residual's spectrogram (harmonics, partials, joined noise, onsets at strikes), solved together, then pruned | Non-concern: the schedule | IO: (clip, atoms, level) -> atoms
 
+use std::collections::HashMap;
 use std::f64::consts::{LN_2, TAU};
 use sva_engine::hearing::{
     CAM_FIRST, CAM_LAST, HOP_SECS, WINDOW_SECS, cam, cam_hz, ear_gain_db, threshold_excitation_db,
@@ -12,8 +13,8 @@ use super::bits::{
 };
 use super::calibrate::rendered;
 use super::fisher::Fit;
-use super::lm::{Limits, curvatures, descend};
-use super::objective::{Objective, excited, framed, reach};
+use super::lm::{Limits, Problem, descend};
+use super::objective::{NoisePower, Objective, excited, framed, reach};
 use super::pyramid::{Action, Run};
 
 pub const MODEL: &str = "ADD from the residual's spectrogram at full resolution: a periodic \
@@ -26,6 +27,8 @@ pub const MODEL: &str = "ADD from the residual's spectrogram at full resolution:
      residual bin over its floor that is a local maximum in frequency, furthest over first, \
      starts a track where no earlier one claimed it, its frequency and level by quadratic \
      interpolation of its dB and its neighbours' (QIFFT; Smith and Serra 1987, PARSHL, ICMC), \
+     its power at most the residual's over the bins its main lobe covers, as a sine's peak \
+     holds no more than its lobe, \
      tracked to each next and earlier frame through the largest unclaimed local maximum within \
      one bin while it stays audible, claiming each cell it passes with the bins a Hann main \
      lobe covers, 2 bins of the window's own length either side; none where moving the first \
@@ -34,8 +37,9 @@ pub const MODEL: &str = "ADD from the residual's spectrogram at full resolution:
      frame whose window reaches it hears it); it starts at the latest strike the hits reading \
      places (superflux; Boeck and Widmer 2013, DAFx) within its first frame's window, else at \
      that moved time, and ends at the first later strike within its last frame's window, else \
-     at that moved time; its base level the peak's and its one knot's deviation the level half \
-     a window inside its last frame less it; tracks group into harmonics by a harmonic sieve \
+     at that moved time; its base level the peak's and its one knot's deviation the level at \
+     the last frame whose window lies whole before its end (the peak's where that is \
+     earlier) less it; tracks group into harmonics by a harmonic sieve \
      (Duifhuis, Willems and Sluyter 1982, JASA 71(6) 1568-1580): each track's Hz over k = 1, \
      2, ... down to the feasible set's lowest is a trial fundamental, a track overlapping the \
      trial's in time its member at harmonic n = round(hz/f0) where it lies in the analysis \
@@ -58,24 +62,27 @@ pub const MODEL: &str = "ADD from the residual's spectrogram at full resolution:
      each unclaimed band's frame furthest over its floor joined by the adjacent bands audible \
      and unclaimed there and in no band proposed this round (a wide band, its floor at its \
      centre), tracked through the frames its joined power is audible as a track is, its edges \
-     and level its joined power's; each level first solves its atoms in one descent (lm.rs), \
+     and levels its joined power's as a track's are; a solve moves the atoms not frozen \
+     (lm.rs), one descent per connected component of atoms sharing a frame, its atoms by \
+     their last frame, the rest held; each level first solves its atoms, \
      then goes in rounds, each the tonal births and then the noise births: a kind's births are \
      added at once, priced at their start (bits.rs: levels and frequencies by looks, the rest \
      by the Fisher diagonal), their frequencies and edges pinned where their Fisher precision \
      sqrt(12/A_ii) at the level is no finer than the analysis bin, rate/n, and every \
      frequency held at the analysis' value through the level it is born at, where its other \
-     numbers start furthest off (a later level moves it), every atom kept and born solved in \
-     one descent (lm.rs), then pruned (forward-backward selection; Zhang 2011, IEEE T-IT \
+     numbers start furthest off (a later level moves it), the births and every atom sharing a \
+     frame with one revived and solved, then pruned (forward-backward selection; Zhang 2011, IEEE T-IT \
      57(7) 4689-4708): each sweep reads every atom's removal, tries them shortest first \
      against the state as it stands (a removal reads again only the frames the atom reaches, \
-     the rest as the state read them), and drops each whose removal lowers the residual bits \
-     plus B(x), until a sweep drops none; every atom left is solved again where that dropped \
-     one; the state is kept where shorter than before the births; a \
+     the rest as the state read them, each noise's expected power read once per pruning), and \
+     drops each whose removal lowers the residual bits \
+     plus B(x), until a sweep drops none, each atom sharing a frame with a dropped one revived \
+     and solved again; the state is kept where shorter than before the births; a \
      birth pruning drops is refused for the rest of the level: a partial's frequency (within \
      half the analysis bin) to partials, a band's Cam band to noise, a harmonic's frequencies \
      to the sieve and a joined band's Cam bands to joining, which opens their alternative, \
      narrow bands, proposed at once, before the next round; rounds go on until one keeps no \
-     birth";
+     birth at the coarsest level, and one round at each finer (pyramid.rs)";
 
 /// Partials and harmonics summed in samples, as the engine renders them.
 pub const COHERENT: bool = true;
@@ -172,9 +179,10 @@ impl Spectrogram {
         (2 * self.n).div_ceil(self.long)
     }
 
-    /// The frames half a window spans.
-    fn half_frames(&self) -> usize {
-        self.long / 2 / self.hop
+    /// The last frame whose whole window lies before `end` seconds, `None` where none does.
+    fn covered(&self, end: f64) -> Option<usize> {
+        let reach = end * self.rate - (self.long / 2) as f64;
+        (reach >= 0.0).then(|| libm::floor(reach / self.hop as f64) as usize)
     }
 
     /// A sine's level in dBFS whose peak bin holds `power`.
@@ -266,7 +274,7 @@ pub fn priced_and_pinned(
         deltas: vec![1.0; atom.values().len()],
     };
     let probe = Fit::new(objective, vec![atom.clone()], vec![ones], COHERENT);
-    let a = curvatures(&probe, &probe.numbers());
+    let a = probe.curvatures(&probe.numbers());
     let ear = objective.ear();
     let thresholds = ear.thresholds();
     let looks = framed(
@@ -316,13 +324,57 @@ pub fn length(objective: &Objective, atoms: &[Atom], priced: &[Priced]) -> f64 {
     objective.bits(atoms, COHERENT) + bits::bits(atoms, priced)
 }
 
-/// The state ADD grows: atoms beside their prices and the numbers this level pins, and its
-/// length in bits.
+/// The state ADD grows: atoms beside their prices, the numbers this level pins and whether each
+/// is frozen (lm.rs), and its length in bits.
 pub struct State {
     pub atoms: Vec<Atom>,
     pub priced: Vec<Priced>,
     pub pinned: Vec<Vec<bool>>,
+    pub frozen: Vec<bool>,
     pub length: f64,
+}
+
+impl State {
+    /// Each atom's reach in frames.
+    fn reach(&self, objective: &Objective) -> Vec<(i64, i64)> {
+        let (ear, clip) = (objective.ear(), objective.clip());
+        self.atoms.iter().map(|a| reach(ear, &clip, a)).collect()
+    }
+
+    /// Revives every atom sharing a frame with `at`, a reach.
+    fn revive(&mut self, objective: &Objective, at: (i64, i64)) {
+        let reach = self.reach(objective);
+        for (frozen, (f, t)) in self.frozen.iter_mut().zip(reach) {
+            if f <= at.1 && at.0 <= t {
+                *frozen = false;
+            }
+        }
+    }
+}
+
+/// The unfrozen atoms of `reach` in connected components of sharing a frame, each in time
+/// order of its first frame, its atoms by their last frame (lm.rs).
+fn components(reach: &[(i64, i64)], frozen: &[bool]) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..reach.len()).filter(|a| !frozen[*a]).collect();
+    order.sort_by_key(|a| (reach[*a].0, *a));
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    let mut end = i64::MIN;
+    for a in order {
+        match out.last_mut() {
+            Some(last) if reach[a].0 <= end => {
+                last.push(a);
+                end = end.max(reach[a].1);
+            }
+            _ => {
+                out.push(vec![a]);
+                end = reach[a].1;
+            }
+        }
+    }
+    for component in &mut out {
+        component.sort_by_key(|a| (reach[*a].1, *a));
+    }
+    out
 }
 
 /// A partial the residual proposes: its Hz, start and end, and its level at the peak and its
@@ -361,6 +413,7 @@ fn tracks(residual: &Spectrogram, spl: f64, strikes: &[f64]) -> Vec<Track> {
     peaks.sort_by(|x, y| y.2.total_cmp(&x.2).then((x.0, x.1).cmp(&(y.0, y.1))));
     let bins = residual.n / 2 + 1;
     let lobe = residual.lobe_bins();
+    let around = |b: usize| b.saturating_sub(lobe)..(b + lobe + 1).min(bins);
     let mut claimed = vec![vec![false; bins]; residual.power.len()];
     let mut out = Vec::new();
     for (m, b, _) in peaks {
@@ -376,7 +429,8 @@ fn tracks(residual: &Spectrogram, spl: f64, strikes: &[f64]) -> Vec<Track> {
             false => 0.0,
         };
         let hz = residual.hz(b as f64 + p).clamp(lo, hi);
-        let peak = libm::pow(10.0, (c - 0.25 * (a - e) * p) / 10.0);
+        let lobe_power: f64 = frame[around(b)].iter().sum();
+        let peak = libm::pow(10.0, (c - 0.25 * (a - e) * p) / 10.0).min(lobe_power);
         let track = |step: i64| {
             let (mut at, mut bin) = (m as i64, b);
             let mut cells = vec![(m, b)];
@@ -406,14 +460,16 @@ fn tracks(residual: &Spectrogram, spl: f64, strikes: &[f64]) -> Vec<Track> {
         let (first, _, before) = track(-1);
         let (end, levels, after) = track(1);
         for (n, j) in before.into_iter().chain(after) {
-            for cell in &mut claimed[n][j.saturating_sub(lobe)..(j + lobe + 1).min(bins)] {
+            for cell in &mut claimed[n][around(j)] {
                 *cell = true;
             }
         }
         let Some(span) = residual.span((first, end), strikes) else {
             continue;
         };
-        let inside = levels.len().saturating_sub(residual.half_frames() + 1);
+        let inside = residual
+            .covered(span.1)
+            .map_or(0, |f| f.saturating_sub(m).min(levels.len() - 1));
         out.push(Track {
             hz,
             span,
@@ -455,8 +511,12 @@ fn sieved(
     analysis_hz: f64,
     (lo, hi): (f64, f64),
 ) -> Option<(f64, Members)> {
-    let mut best: Option<(usize, f64, Members)> = None;
-    for &p in pool {
+    let better = |best: &Option<(usize, f64, Members)>, score: usize, f0: f64| {
+        best.as_ref()
+            .is_none_or(|(s, f, _)| score > *s || (score == *s && f0 > *f))
+    };
+    let each_anchor = each(default_threads(), pool.to_vec(), |p| {
+        let mut best: Option<(usize, f64, Members)> = None;
         let anchor = &tracks[p];
         for k in 1.. {
             let f0 = anchor.hz / f64::from(k);
@@ -494,12 +554,16 @@ fn sieved(
             if f0 < lo || f0 * by_number.len() as f64 > hi {
                 continue;
             }
-            if best
-                .as_ref()
-                .is_none_or(|(s, f, _)| score > *s || (score == *s && f0 > *f))
-            {
+            if better(&best, score, f0) {
                 best = Some((score, f0, members));
             }
+        }
+        best
+    });
+    let mut best: Option<(usize, f64, Members)> = None;
+    for (score, f0, members) in each_anchor.into_iter().flatten() {
+        if better(&best, score, f0) {
+            best = Some((score, f0, members));
         }
     }
     best.map(|(_, f0, members)| (f0, members))
@@ -665,7 +729,7 @@ fn noises(
         for p in &mut proposed[a..=b] {
             *p = true;
         }
-        let inside = end.saturating_sub(residual.half_frames()).max(m);
+        let inside = residual.covered(span.1).map_or(m, |f| f.clamp(m, end));
         let atom = born(
             clip,
             span,
@@ -745,36 +809,52 @@ fn proposed(
     }
 }
 
-/// Every atom of `state` moved at once by one descent, each held number pinned.
-async fn solved(objective: &Objective, state: State, run: &mut Run<'_>) -> State {
-    if state.atoms.is_empty() || run.stopped.abandoned().await {
-        return state;
+/// The unfrozen atoms of `state` moved by one descent per component, the rest held, each
+/// pinned number held, each atom frozen as its descent left it.
+async fn solved(objective: &Objective, mut state: State, run: &mut Run<'_>) -> State {
+    let reach = state.reach(objective);
+    for component in components(&reach, &state.frozen) {
+        if run.stopped.abandoned().await {
+            return state;
+        }
+        run.activity(Action::Descending, None, Some((component.len(), "atom")));
+        let pins: Vec<bool> = component
+            .iter()
+            .flat_map(|a| state.pinned[*a].iter().copied())
+            .collect();
+        let others: Vec<Atom> = (0..state.atoms.len())
+            .filter(|a| !component.contains(a))
+            .map(|a| state.atoms[a].clone())
+            .collect();
+        let fit = Fit::new(
+            objective,
+            component.iter().map(|a| state.atoms[*a].clone()).collect(),
+            component.iter().map(|a| state.priced[*a].clone()).collect(),
+            COHERENT,
+        )
+        .pinning(&pins)
+        .holding(others);
+        let start = fit.numbers();
+        let limits = Limits {
+            steps: None,
+            stopped: &run.stopped,
+        };
+        let Some(descent) = descend(&fit, &start, &fit.deltas(), &limits).await else {
+            continue;
+        };
+        for ((a, atom), frozen) in component
+            .iter()
+            .zip(fit.atoms_at(&descent.x))
+            .zip(&descent.frozen)
+        {
+            state.atoms[*a] = atom;
+            state.frozen[*a] = *frozen;
+        }
+        let bits = bits::bits(&state.atoms, &state.priced);
+        run.descended(objective, &descent, bits);
+        state.length = descent.cost / LN_2 + bits;
     }
-    run.activity(Action::Descending, None, Some((state.atoms.len(), "atom")));
-    let pins: Vec<bool> = state.pinned.iter().flatten().copied().collect();
-    let fit = Fit::new(
-        objective,
-        state.atoms.clone(),
-        state.priced.clone(),
-        COHERENT,
-    )
-    .pinning(&pins);
-    let start = fit.numbers();
-    let limits = Limits {
-        steps: None,
-        stopped: &run.stopped,
-    };
-    let Some(descent) = descend(&fit, &start, &fit.deltas(), &limits).await else {
-        return state;
-    };
-    let atoms = fit.atoms_at(&descent.x);
-    let bits = bits::bits(&atoms, &state.priced);
-    run.descended(objective, &descent, bits);
-    State {
-        length: descent.cost / LN_2 + bits,
-        atoms,
-        ..state
-    }
+    state
 }
 
 /// `v` without its `i`-th.
@@ -784,25 +864,55 @@ fn but<T: Clone>(v: &[T], i: usize) -> Vec<T> {
     out
 }
 
-/// `state` without atom `i`, `length` long.
-fn without(state: &State, i: usize, length: f64) -> State {
-    State {
+/// `state` without atom `i`, `length` long, every atom sharing a frame with it revived.
+fn without(objective: &Objective, state: &State, i: usize, length: f64) -> State {
+    let at = state.reach(objective)[i];
+    let mut out = State {
         atoms: but(&state.atoms, i),
         priced: but(&state.priced, i),
         pinned: but(&state.pinned, i),
+        frozen: but(&state.frozen, i),
         length,
-    }
+    };
+    out.revive(objective, at);
+    out
+}
+
+/// Each noise's composed power per frame, by key, read once while pruning.
+type Noises = HashMap<u64, NoisePower>;
+
+/// `atoms`' excitation per frame over `frames`, their partials and harmonics summed in samples
+/// beside each noise's power as `noises` holds it.
+fn excitations(
+    objective: &Objective,
+    atoms: &[Atom],
+    noises: &Noises,
+    frames: (i64, i64),
+) -> Vec<Vec<f64>> {
+    let tonal: Vec<Atom> = atoms
+        .iter()
+        .filter(|a| !matches!(a.sound, Sound::Noise { .. }))
+        .cloned()
+        .collect();
+    let noise: Vec<&NoisePower> = atoms.iter().filter_map(|a| noises.get(&a.key)).collect();
+    objective.excitations_beside(&tonal, &noise, frames)
 }
 
 /// `state`'s length without atom `i`, `full` its excitation per frame: only the frames atom
-/// `i` reaches are read again.
-fn removed(objective: &Objective, state: &State, full: &[Vec<f64>], i: usize) -> f64 {
+/// `i` reaches are read again, its partials and harmonics summed in samples beside each
+/// noise's power as `noises` holds it.
+fn removed(
+    objective: &Objective,
+    state: &State,
+    (full, noises): (&[Vec<f64>], &Noises),
+    i: usize,
+) -> f64 {
     let (ear, clip) = (objective.ear(), objective.clip());
     let (first, _) = ear.frames(clip.len);
     let (from, to) = reach(ear, &clip, &state.atoms[i]);
     let others = but(&state.atoms, i);
     let local = match from <= to {
-        true => objective.excitations(&others, COHERENT, (from, to)),
+        true => excitations(objective, &others, noises, (from, to)),
         false => Vec::new(),
     };
     let residual = objective.bits_of(&mut |m| match from <= m && m <= to {
@@ -818,8 +928,14 @@ fn removed(objective: &Objective, state: &State, full: &[Vec<f64>], i: usize) ->
 async fn pruned(objective: &Objective, mut state: State, run: &mut Run<'_>) -> (State, bool) {
     let frames = objective.ear().frames(objective.clip().len);
     let mut dropped = false;
+    let noises: Noises = state
+        .atoms
+        .iter()
+        .filter(|a| matches!(a.sound, Sound::Noise { .. }))
+        .map(|a| (a.key, objective.noise_power(a)))
+        .collect();
     loop {
-        let mut full = objective.excitations(&state.atoms, COHERENT, frames);
+        let mut full = excitations(objective, &state.atoms, &noises, frames);
         run.evaluated(objective, 1);
         let mut read: Vec<(u64, f64)> = Vec::new();
         for i in 0..state.atoms.len() {
@@ -832,7 +948,10 @@ async fn pruned(objective: &Objective, mut state: State, run: &mut Run<'_>) -> (
                 Some((i + 1, "removal")),
             );
             run.evaluated(objective, 1);
-            read.push((state.atoms[i].key, removed(objective, &state, &full, i)));
+            read.push((
+                state.atoms[i].key,
+                removed(objective, &state, (&full, &noises), i),
+            ));
         }
         read.sort_by(|x, y| x.1.total_cmp(&y.1).then(x.0.cmp(&y.0)));
         let mut swept = false;
@@ -844,12 +963,12 @@ async fn pruned(objective: &Objective, mut state: State, run: &mut Run<'_>) -> (
                 false => stale,
                 true => {
                     run.evaluated(objective, 1);
-                    removed(objective, &state, &full, i)
+                    removed(objective, &state, (&full, &noises), i)
                 }
             };
             if less < state.length {
-                state = without(&state, i, less);
-                full = objective.excitations(&state.atoms, COHERENT, frames);
+                state = without(objective, &state, i, less);
+                full = excitations(objective, &state.atoms, &noises, frames);
                 swept = true;
             }
         }
@@ -874,6 +993,7 @@ async fn grown(
         atoms: state.atoms.clone(),
         priced: state.priced.clone(),
         pinned: state.pinned.clone(),
+        frozen: state.frozen.clone(),
         length: state.length,
     };
     let mut births: Vec<(u64, Joined)> = Vec::new();
@@ -901,9 +1021,11 @@ async fn grown(
             .map(|((q, _), pin)| pin || matches!(q, Quantity::Hz | Quantity::HzDeviation))
             .collect();
         births.push((atom.key, joined));
+        grown.revive(objective, reach(objective.ear(), &at, &atom));
         grown.atoms.push(atom);
         grown.priced.push(price);
         grown.pinned.push(held);
+        grown.frozen.push(false);
     }
     if births.is_empty() {
         return (state, false, false);
@@ -937,9 +1059,15 @@ async fn grown(
     }
 }
 
-/// Rounds from `state`, each solving the kept atoms, then growing them by tonal births and then
-/// by noise births, as `MODEL` states.
-pub async fn add(objective: &Objective, heard: &Heard, state: State, run: &mut Run<'_>) -> State {
+/// From `state`, its unfrozen atoms solved, then rounds of tonal births and then noise
+/// births, as `MODEL` states: until one keeps no birth where `whole`, else one.
+pub async fn add(
+    objective: &Objective,
+    heard: &Heard,
+    state: State,
+    whole: bool,
+    run: &mut Run<'_>,
+) -> State {
     let mut refused = Refused::default();
     let mut state = solved(objective, state, run).await;
     loop {
@@ -958,7 +1086,7 @@ pub async fn add(objective: &Objective, heard: &Heard, state: State, run: &mut R
                 }
             }
         }
-        if !going {
+        if !going || !whole {
             return state;
         }
     }

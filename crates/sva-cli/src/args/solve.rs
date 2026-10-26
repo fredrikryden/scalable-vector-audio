@@ -16,10 +16,12 @@ pub struct SolveArgs {
     pub levels: usize,
     pub spl_db: f64,
     pub out: PathBuf,
-    /// The caller said a directory that already holds files may be written over.
+    /// A directory that holds files may be written over.
     pub confirm: bool,
     /// Where N0's calibrations are kept between runs.
     pub cache: CacheAt,
+    /// Every level grows in rounds.
+    pub every_level: bool,
 }
 
 pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
@@ -37,6 +39,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
         out: PathBuf::from(OUT),
         confirm: false,
         cache: CacheAt::Platform,
+        every_level: false,
     };
     while let Some(flag) = it.next() {
         match flag.as_str() {
@@ -58,6 +61,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
             }
             "--out" => args.out = PathBuf::from(value(&mut it, "--out")?),
             "--confirm" => args.confirm = true,
+            "--every-level" => args.every_level = true,
             "--cache" => {
                 args.cache = match value(&mut it, "--cache")?.as_str() {
                     "none" => CacheAt::Off,

@@ -17,9 +17,11 @@ pub const MODEL: &str = "residual bits = sum_i d_i^2 log2(e)/2, the Gaussian cod
      frame's expected excitation, partials and harmonics as written and noise in expectation \
      over its lines' phases (spectrum.rs), so a noise is compared by its expected excitation \
      alone; the total is the residual bits plus B(x) (bits.rs) at the caller's precisions; \
-     atoms held while others move are read once: their partials summed in samples over the \
-     clip (spectrum.rs), their noise's expected power per frame, and their excitation alone \
-     per frame, which a frame no moving atom reaches takes as it is (an atom reaches a frame \
+     an evaluation sums its partials in samples over the clip once (spectrum.rs), and reads a \
+     noise whose numbers the last evaluation read as it read them, the same sum; atoms held \
+     while others move are read once: their partials so summed, their noise's expected power \
+     per frame, and their excitation alone per frame, which a frame no moving atom reaches \
+     takes as it is (an atom reaches a frame \
      when any window of the frame weighs a sample whose cell meets [on, end))";
 
 pub struct Objective {
@@ -82,12 +84,13 @@ impl Objective {
             .iter()
             .map(|a| reach(&self.ear, &self.clip, a))
             .collect();
+        let summed = coherent.then(|| summed_beside(atoms, self.clip, held));
         let each = framed_beside(
             atoms,
             self.clip,
             coherent,
             self.ear.frames(self.clip.len),
-            held.map(|h| &h.summed),
+            (summed.as_ref().or(held.map(|h| &h.summed)), coherent),
             &|model, m| match held {
                 Some(h) if !reach.iter().any(|(f, l)| *f <= m && m <= *l) => {
                     h.excitation[(m - first) as usize].clone()
@@ -144,10 +147,103 @@ impl Objective {
         coherent: bool,
         (from, to): (i64, i64),
     ) -> Vec<Vec<f64>> {
-        framed(atoms, self.clip, coherent, (from, to), &|model, m| {
-            let power = self.ear.compose(m, &mut |frame| model.bins(frame).power);
-            excited(&self.ear, m, &power)
-        })
+        let summed = coherent.then(|| Summed::of(atoms, self.clip));
+        framed_beside(
+            atoms,
+            self.clip,
+            coherent,
+            (from, to),
+            (summed.as_ref(), coherent),
+            &|model, m| {
+                let power = self.ear.compose(m, &mut |frame| model.bins(frame).power);
+                excited(&self.ear, m, &power)
+            },
+        )
+    }
+
+    /// The noise `atom`'s composed expected power at each frame it reaches.
+    pub fn noise_power(&self, atom: &Atom) -> NoisePower {
+        let (first, _) = self.ear.frames(self.clip.len);
+        let (from, to) = reach(&self.ear, &self.clip, atom);
+        let power = framed(
+            std::slice::from_ref(atom),
+            self.clip,
+            true,
+            (from, to),
+            &|model, m| self.ear.compose(m, &mut |frame| model.bins(frame).power),
+        );
+        NoisePower {
+            at: from - first,
+            power,
+        }
+    }
+
+    /// `expect_beside`, `atoms`' noises' power given in their order.
+    pub fn expect_read(
+        &self,
+        atoms: &[Atom],
+        noise: &[&NoisePower],
+        held: Option<&Held>,
+    ) -> Elements {
+        let tonal: Vec<Atom> = atoms
+            .iter()
+            .filter(|a| !matches!(a.sound, Sound::Noise { .. }))
+            .cloned()
+            .collect();
+        let reach: Vec<(i64, i64)> = atoms
+            .iter()
+            .map(|a| reach(&self.ear, &self.clip, a))
+            .collect();
+        let frames = self.ear.frames(self.clip.len);
+        let each = self.read_beside(&tonal, noise, held, (frames, &reach));
+        let outputs = self.ear.elements(self.clip.len, &mut |m| {
+            each[(m - frames.0) as usize].clone()
+        });
+        self.elements(&outputs)
+    }
+
+    /// Each frame's excitation of `tonal` summed in samples, `noise` and the held added; a frame
+    /// no `reach` holds takes the held's.
+    fn read_beside(
+        &self,
+        tonal: &[Atom],
+        noise: &[&NoisePower],
+        held: Option<&Held>,
+        ((from, to), reach): ((i64, i64), &[(i64, i64)]),
+    ) -> Vec<Vec<f64>> {
+        let (first, _) = self.ear.frames(self.clip.len);
+        let summed = summed_beside(tonal, self.clip, held);
+        let none: [Atom; 0] = [];
+        framed_beside(
+            &none,
+            self.clip,
+            true,
+            (from, to),
+            (Some(&summed), true),
+            &|model, m| {
+                if let Some(h) = held.filter(|_| !reach.iter().any(|(f, l)| *f <= m && m <= *l)) {
+                    return h.excitation[(m - first) as usize].clone();
+                }
+                let mut power = self.ear.compose(m, &mut |frame| model.bins(frame).power);
+                for n in noise {
+                    n.add(m - first, &mut power);
+                }
+                if let Some(h) = held {
+                    h.add_noise(m - first, &mut power);
+                }
+                excited(&self.ear, m, &power)
+            },
+        )
+    }
+
+    /// `excitations` of `tonal` beside `noise`.
+    pub fn excitations_beside(
+        &self,
+        tonal: &[Atom],
+        noise: &[&NoisePower],
+        frames: (i64, i64),
+    ) -> Vec<Vec<f64>> {
+        self.read_beside(tonal, noise, None, (frames, &[]))
     }
 
     /// The residual bits of the elements read off `excitation(m)` at each frame `m`.
@@ -158,6 +254,27 @@ impl Objective {
 
     pub fn bits(&self, atoms: &[Atom], coherent: bool) -> f64 {
         self.residual_bits(&self.expect(atoms, coherent))
+    }
+}
+
+/// A noise's composed expected power per frame it reaches, from frame index `at`.
+pub struct NoisePower {
+    at: i64,
+    power: Vec<Vec<f64>>,
+}
+
+impl NoisePower {
+    /// Adds the `at`-th frame's power.
+    pub fn add(&self, at: i64, power: &mut [f64]) {
+        let Some(own) = usize::try_from(at - self.at)
+            .ok()
+            .and_then(|i| self.power.get(i))
+        else {
+            return;
+        };
+        for (p, n) in power.iter_mut().zip(own) {
+            *p += n;
+        }
     }
 }
 
@@ -183,15 +300,22 @@ impl Held {
             power.iter().any(|p| *p != 0.0).then_some(power)
         });
         let none: [Atom; 0] = [];
-        let excitation = framed_beside(&none, clip, true, frames, Some(&summed), &|tonal, m| {
-            let mut power = ear.compose(m, &mut |frame| tonal.bins(frame).power);
-            if let Some(n) = &noise[(m - frames.0) as usize] {
-                for (p, n) in power.iter_mut().zip(n) {
-                    *p += n;
+        let excitation = framed_beside(
+            &none,
+            clip,
+            true,
+            frames,
+            (Some(&summed), false),
+            &|tonal, m| {
+                let mut power = ear.compose(m, &mut |frame| tonal.bins(frame).power);
+                if let Some(n) = &noise[(m - frames.0) as usize] {
+                    for (p, n) in power.iter_mut().zip(n) {
+                        *p += n;
+                    }
                 }
-            }
-            excited(ear, m, &power)
-        });
+                excited(ear, m, &power)
+            },
+        );
         Held {
             summed,
             noise,
@@ -206,6 +330,15 @@ impl Held {
                 *p += n;
             }
         }
+    }
+}
+
+/// `atoms`' partials and harmonics summed in samples beside the held's.
+pub fn summed_beside(atoms: &[Atom], clip: Clip, held: Option<&Held>) -> Summed {
+    let own = Summed::of(atoms, clip);
+    match held {
+        Some(h) => own.plus(&h.summed),
+        None => own,
     }
 }
 
@@ -244,16 +377,16 @@ pub fn framed<R: Send>(
     frames: (i64, i64),
     per: &(dyn Fn(&Model, i64) -> R + Sync),
 ) -> Vec<R> {
-    framed_beside(atoms, clip, coherent, frames, None, per)
+    framed_beside(atoms, clip, coherent, frames, (None, false), per)
 }
 
-/// `framed` with `summed` beside.
+/// `framed` with `summed` beside, holding `atoms`' partials and harmonics too where `summing`.
 pub fn framed_beside<R: Send>(
     atoms: &[Atom],
     clip: Clip,
     coherent: bool,
     (first, last): (i64, i64),
-    summed: Option<&Summed>,
+    (summed, summing): (Option<&Summed>, bool),
     per: &(dyn Fn(&Model, i64) -> R + Sync),
 ) -> Vec<R> {
     let threads = default_threads();
@@ -261,9 +394,10 @@ pub fn framed_beside<R: Send>(
     let runs = threads.get().min(frames).max(1);
     let mut each_run = each(threads, (0..runs).collect(), |r| {
         let model = Model::new(atoms, clip, coherent);
-        let model = match summed {
-            Some(s) => model.beside(s),
-            None => model,
+        let model = match (summed, summing) {
+            (Some(s), true) => model.summing(s),
+            (Some(s), false) => model.beside(s),
+            (None, _) => model,
         };
         (r..frames)
             .step_by(runs)

@@ -19,14 +19,15 @@ export interface SolveClip {
     channels: Float32Array[];
 }
 /**
- * `levels` (default 4) and `spl`, a full-scale sine's dB SPL (default 103.95), as `sva-cli
- * solve` takes `--levels` and `--spl`; `progress` hears each line the CLI prints on stderr;
+ * `levels` (default 4), `spl`, a full-scale sine's dB SPL (default 103.95), and `everyLevel`,
+ * as `sva-cli solve` takes `--levels`, `--spl` and `--every-level`; `progress` hears each line the CLI prints on stderr;
  * `signal`, read before each descent's step once the page has had its turn: aborted, the run
  * ends with the stage it interrupts, measured as one that finished.
  */
 export interface SolveOptions {
     levels?: number;
     spl?: number;
+    everyLevel?: boolean;
     progress?: (line: SolveProgress) => void;
     signal?: AbortSignal;
 }
@@ -162,6 +163,10 @@ pub(crate) async fn solved(clip: &JsValue, options: &JsValue) -> Result<JsValue,
             levels,
             spl_db,
             threads: sva_engine::default_threads(),
+            every_level: js_sys::Reflect::get(options, &"everyLevel".into())
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
         },
         &mut |event| {
             if let Some(hear) = &hear {

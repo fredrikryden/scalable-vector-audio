@@ -1,10 +1,10 @@
-// Concern: states an atom's model reads as its render within its stated bounds, noise in expectation, its tangents, its floor | Non-concern: rows (solve_atoms.rs) | IO: (atoms, render) -> asserts
+// Concern: states a model reads as its render within its stated bounds, noise in expectation, tangents three ways, its floor | Non-concern: rows (solve_atoms.rs) | IO: (atoms, render) -> asserts
 
 use std::f64::consts::TAU;
 
 use sva_ast::Composition;
 use sva_core::solve::atoms::{Atom, Clip, NEPER_PER_DB, Trajectory, nodes, score};
-use sva_core::solve::spectrum::{Model, floor_db};
+use sva_core::solve::spectrum::{Model, floor_db, series};
 use sva_core::{Job, Output, Representation, asked, call, execute};
 use sva_engine::Tier;
 use sva_engine::fft;
@@ -483,10 +483,12 @@ fn smooth() -> Vec<Vec<Atom>> {
     ]
 }
 
-/// Each number's tangent per bin against the model's own central difference, a check of the
-/// forward mode only; each step a ten-millionth of its number, under any kink's distance.
-#[test]
-fn tangents_agree_with_the_models_central_difference() {
+/// One atom's tangents per number and bin, among `atoms` as `Model` reads them.
+type Read = dyn Fn(&Model, &Frame, &[Atom], usize, &Clip) -> Vec<Vec<f64>>;
+
+/// Each number's tangent per bin, as `read` reads it, against the model's own central
+/// difference; each step a ten-millionth of its number, under any kink's distance.
+fn against_central_difference(read: &Read) {
     let clip = Clip {
         rate: RATE,
         len: 4_800,
@@ -501,7 +503,7 @@ fn tangents_agree_with_the_models_central_difference() {
                 let mut each: Vec<Vec<(f64, f64, f64)>> = vec![Vec::new(); frame.hz().len()];
                 for (i, atom) in atoms.iter().enumerate() {
                     let values = atom.values();
-                    for (j, tangent) in model.tangents(frame, i).iter().enumerate() {
+                    for (j, tangent) in read(&model, frame, &atoms, i, &clip).iter().enumerate() {
                         let step = 1e-7 * values[j].abs().max(1.0);
                         let at = |sign: f64| {
                             let mut moved = values.clone();
@@ -540,5 +542,61 @@ fn tangents_agree_with_the_models_central_difference() {
             "{} atoms: tangent gap over its largest {worst}",
             atoms.len()
         );
+    }
+}
+
+/// Forward mode per window, a check of the forward mode only.
+#[test]
+fn tangents_agree_with_the_models_central_difference() {
+    against_central_difference(&|model, frame, _, i, _| model.tangents(frame, i));
+}
+
+/// Sample tangents read once over the clip, each supplied bin summed directly.
+#[test]
+fn series_read_tangents_agree_with_the_models_central_difference() {
+    against_central_difference(&|model, frame, atoms, i, clip| {
+        let still = vec![false; atoms[i].values().len()];
+        model.tangents_read(frame, i, &series(&atoms[i], clip, &still))
+    });
+}
+
+/// The excitation's slopes along a move, the skirts read once per frame, against its own
+/// central difference.
+#[test]
+fn excitation_slopes_along_moves_agree_with_its_central_difference() {
+    let clip = Clip {
+        rate: RATE,
+        len: 4_800,
+    };
+    let ear = Ear::of(f64::from(clip.rate), SPL, 1.0);
+    let atoms: Vec<Atom> = smooth().into_iter().flatten().take(4).collect();
+    let model = Model::new(&atoms, clip, true);
+    let (first, last) = ear.frames(clip.len);
+    for m in (first..=last).step_by(31) {
+        let power = ear.compose(m, &mut |frame| model.bins(frame).power);
+        if power.iter().all(|p| *p == 0.0) {
+            continue;
+        }
+        let along: Vec<Vec<f64>> = (0..atoms.len())
+            .map(|i| ear.compose(m, &mut |frame| model.tangents(frame, i).swap_remove(0)))
+            .collect();
+        for (d, slopes) in along.iter().zip(ear.excite_along(m, &power, &along)) {
+            let step = 1e-6 * power.iter().fold(0.0f64, |a, p| a.max(*p))
+                / d.iter().fold(f64::MIN_POSITIVE, |a, v| a.max(v.abs()));
+            let at = |sign: f64| {
+                let moved: Vec<f64> = power
+                    .iter()
+                    .zip(d)
+                    .map(|(p, d)| (p + sign * step * d).max(0.0))
+                    .collect();
+                ear.excite(m, &moved)
+            };
+            let (up, down) = (at(1.0), at(-1.0));
+            let scale = slopes.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+            for ((s, u), w) in slopes.iter().zip(&up).zip(&down) {
+                let central = (u - w) / (2.0 * step);
+                assert!((s - central).abs() <= 1e-4 * scale, "{s} against {central}");
+            }
+        }
     }
 }

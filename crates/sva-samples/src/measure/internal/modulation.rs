@@ -80,6 +80,18 @@ impl Band {
         }
     }
 
+    /// `element`'s gradient at `y` as a complex `z`, its slope along `dy` being `Re(conj(z) dy)`:
+    /// `gain y/|y|` (0 at `y = 0`), or 1.
+    pub fn pull(&self, y: C64) -> C64 {
+        match self.element {
+            Element::Magnitude => match y.abs() > 0.0 {
+                true => C64::new(self.gain() * y.re / y.abs(), self.gain() * y.im / y.abs()),
+                false => C64::new(0.0, 0.0),
+            },
+            _ => C64::new(1.0, 0.0),
+        }
+    }
+
     /// `element`'s slope along `dy` at `y`: `gain Re(conj(y) dy)/|y|` (0 at `y = 0`), or `Re dy`.
     pub fn element_slope(&self, y: C64, dy: C64) -> f64 {
         match self.element {
@@ -150,6 +162,102 @@ pub(super) fn outputs(
                 .collect()
         })
         .collect()
+}
+
+/// The frame index element `j` of a band at `per_frame` reads, past `from`.
+fn frame_of(j: usize, per_frame: f64, from: usize) -> usize {
+    from + (j as f64 / per_frame).round_ties_even() as usize
+}
+
+/// `outputs` of a series `frames` long, `v` at `at..` and silent elsewhere, read there: per
+/// band, its first element there and the outputs on.
+pub(super) fn outputs_within(
+    v: &[f64],
+    (at, frames): (usize, usize),
+    from: usize,
+    hop_secs: f64,
+    bands: &[(Band, Rate)],
+) -> Vec<(usize, Vec<C64>)> {
+    let a = one_pole(PRE_LOWPASS_HZ, hop_secs);
+    let mut y = 0.0;
+    let pre: Vec<f64> = v
+        .iter()
+        .map(|x| {
+            y = a * y + (1.0 - a) * x;
+            y
+        })
+        .collect();
+    bands
+        .iter()
+        .map(|(band, rate)| {
+            let per_frame = rate.per_frame;
+            let out = filtered(&pre, band, hop_secs);
+            let mut j =
+                libm::floor((at.saturating_sub(from) as f64 - 1.0).max(0.0) * per_frame) as usize;
+            while frame_of(j, per_frame, from) < at {
+                j += 1;
+            }
+            let first = j;
+            let count = libm::floor((frames - from - 1) as f64 * per_frame) as usize + 1;
+            let mut read = Vec::new();
+            while j < count && frame_of(j, per_frame, from) < at + v.len() {
+                read.push(out[frame_of(j, per_frame, from) - at]);
+                j += 1;
+            }
+            (first, read)
+        })
+        .collect()
+}
+
+/// `outputs`' adjoint: `w` with `sum Re(conj(z) dy) = sum w dv`, each recursion run back.
+pub(super) fn pulled(
+    z: &[Vec<C64>],
+    len: usize,
+    from: usize,
+    hop_secs: f64,
+    bands: &[(Band, Rate)],
+) -> Vec<f64> {
+    let mut alpha = vec![0.0; len];
+    for ((band, rate), z) in bands.iter().zip(z) {
+        let mut at = vec![C64::new(0.0, 0.0); len];
+        for (j, z) in z.iter().enumerate() {
+            let m = frame_of(j, rate.per_frame, from);
+            at[m] = at[m] + C64::new(z.re, -z.im);
+        }
+        match band.element {
+            Element::Lowpass => {
+                let w = TAU * LOWPASS_HZ * hop_secs * FRAC_1_SQRT_2;
+                let r = sva_formula::exp(-w);
+                let (c1, c2) = (2.0 * r * libm::cos(w), -r * r);
+                let g = 1.0 - c1 - c2;
+                let (mut b1, mut b2) = (0.0, 0.0);
+                for (t, a) in at.iter().enumerate().rev() {
+                    let b = a.re + c1 * b1 + c2 * b2;
+                    b2 = b1;
+                    b1 = b;
+                    alpha[t] += g * b;
+                }
+            }
+            _ => {
+                let r = sva_formula::exp(-PI * band.bandwidth_hz * hop_secs);
+                let (s, c) = libm::sincos(TAU * band.hz * hop_secs);
+                let pole = C64::new(r * c, r * s);
+                let mut b = C64::new(0.0, 0.0);
+                for (t, a) in at.iter().enumerate().rev() {
+                    b = *a + pole * b;
+                    alpha[t] += (1.0 - r) * b.re;
+                }
+            }
+        }
+    }
+    let a = one_pole(PRE_LOWPASS_HZ, hop_secs);
+    let mut b = 0.0;
+    let mut out = vec![0.0; len];
+    for t in (0..len).rev() {
+        b = alpha[t] + a * b;
+        out[t] = (1.0 - a) * b;
+    }
+    out
 }
 
 fn filtered(x: &[f64], band: &Band, hop_secs: f64) -> Vec<C64> {

@@ -374,15 +374,17 @@ REPRESENTATIONS:
 
 SOLVE:
   sva-cli solve <recording> [--levels <n>] [--spl <dB>] [--out <dir>] [--confirm]
-                [--cache <path|none>]
+                [--cache <path|none>] [--every-level]
 
   Fits atoms (harmonics, partials and noise bands) to a recording, read in the
   formats ANALYZE reads, its channels averaged, from silence and coarse to
   fine: level k of n reads the clip through the ear at s = sqrt(2)^(n - k)
-  (default {levels} levels, s = 2.83, 2, 1.41, 1), then in rounds proposes
-  harmonics, partials and noise bands off the residual's spectrum, starting
-  at the clip's hits, adds them all, solves every atom at once and drops each
-  atom whose removal shortens the description length.
+  (default {levels} levels, s = 2.83, 2, 1.41, 1), refines the last level's
+  atoms, then in rounds proposes harmonics, partials and noise bands off the
+  residual's spectrum, starting at the clip's hits, adds them all, solves them
+  with the atoms sharing their frames and drops each atom whose removal
+  shortens the description length: rounds until one keeps none at the
+  coarsest level, one round at each finer unless `--every-level`.
   `--spl` is a full-scale sine's level in dB SPL (default {spl}). Each level is
   a stage, written as it finishes: its composition under
   `<out>/level-<k>/` and its render as `<out>/level-<k>.wav` (default out

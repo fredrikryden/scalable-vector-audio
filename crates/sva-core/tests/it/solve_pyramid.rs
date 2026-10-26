@@ -50,6 +50,7 @@ fn a_sine_from_silence_is_one_partial_within_its_precisions() {
         levels: LEVELS,
         spl_db: SPL_DB,
         threads,
+        every_level: false,
     };
     let mut finished = Vec::new();
     let clock = || 0.0;

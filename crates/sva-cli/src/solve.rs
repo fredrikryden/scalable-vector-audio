@@ -80,6 +80,7 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
             levels: args.levels,
             spl_db: args.spl_db,
             threads: sva_engine::default_threads(),
+            every_level: args.every_level,
         },
         &mut |event| {
             eprintln!("{}", progress(&event));

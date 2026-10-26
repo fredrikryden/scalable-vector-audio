@@ -19,9 +19,9 @@ pub const MODEL: &str = "each atom's samples are its node's formula evaluated as
      turning at its base frequency before on, and at its last level and frequency from end, \
      its phase there the integral to end plus the last frequency times the time since, so a \
      read on that knot moves with end as a read past it does; \
-     partials and harmonics are summed sample by sample where `coherent` (a held state's \
-     summed once over the clip and sliced per frame, the same sum in another order, so the \
-     same bound), else each \
+     partials and harmonics are summed sample by sample where `coherent` (summed once over \
+     the clip per evaluation and sliced per frame, the same sum in another order, so the same \
+     bound), else each \
      transformed alone and added in power; a noise is read in expectation over its lines' \
      phases, independent and uniform, as the window's autocorrelation times the band's \
      continuous autocorrelation, (1/2) int_lo^hi' cos(2 pi f tau) df, hi' = min(hi, the \
@@ -42,7 +42,10 @@ pub const MODEL: &str = "each atom's samples are its node's formula evaluated as
      2/theta), each end within 1/2 of lo T and hi' T, so their gap is at most h(1 + \
      1/sin(theta/2) - 2/theta) for 0 < theta < 2 pi, h at 0, and h(N + T(hi' - lo)), N <= \
      T(hi' - lo) + 1, at any lag, and moves each bin by at most sum_d |dR(d)| |C(d)|, C the \
-     weighted envelope's autocorrelation";
+     weighted envelope's autocorrelation; tangents (forward mode, no bound) read a partial's \
+     or harmonic's sample tangents once over the clip and each supplied bin by its direct sum, \
+     and a noise's through its expectation's autocorrelations, the parts no seed moves read \
+     once per window";
 
 const U: f64 = f64::EPSILON / 2.0;
 
@@ -81,10 +84,19 @@ pub struct Model<'a> {
     clip: Clip,
     coherent: bool,
     beside: Option<&'a Summed>,
+    /// Whether `beside` already holds the partials and harmonics of `atoms`.
+    summing: bool,
     correlations: RefCell<HashMap<(u64, u64, usize), Rc<Correlation>>>,
     /// The tonal sum's transform per window since `forget`.
     sums: RefCell<Vec<(Window3, Rc<Transform>)>>,
+    twiddles: RefCell<HashMap<usize, Rc<Twiddles>>>,
 }
+
+/// A noise's seeded envelope tangents, beside its edges where the seed is one.
+type Seed = (Vec<f64>, Option<(Dual, Dual)>);
+
+/// A transform's twiddles.
+type Twiddles = Vec<(f64, f64)>;
 
 /// First sample, length, size.
 type Window3 = (i64, usize, usize);
@@ -113,16 +125,30 @@ impl Summed {
             .iter()
             .filter(|a| !matches!(a.sound, Sound::Noise { .. }))
         {
-            let w = samples(atom, &clip, 0, clip.len);
-            for k in 0..clip.len {
-                out.x[k] += w.x[k];
-                out.bound[k] += w.bound[k];
-                out.sampling[k] += w.sampling[k];
-                out.magnitude[k] += w.x[k].abs();
+            let (lo, hi) = support(atom, &clip);
+            let (lo, hi) = (lo as usize, hi as usize);
+            let w = samples(atom, &clip, lo as i64, hi - lo);
+            for (i, k) in (lo..hi).enumerate() {
+                out.x[k] += w.x[i];
+                out.bound[k] += w.bound[i];
+                out.sampling[k] += w.sampling[i];
+                out.magnitude[k] += w.x[i].abs();
             }
             out.terms += 1;
         }
         out
+    }
+
+    /// Both sums, sample by sample.
+    pub fn plus(mut self, other: &Summed) -> Summed {
+        for k in 0..self.x.len() {
+            self.x[k] += other.x[k];
+            self.bound[k] += other.bound[k];
+            self.sampling[k] += other.sampling[k];
+            self.magnitude[k] += other.magnitude[k];
+        }
+        self.terms += other.terms;
+        self
     }
 
     pub fn is_empty(&self) -> bool {
@@ -155,8 +181,10 @@ impl<'a> Model<'a> {
             clip,
             coherent,
             beside: None,
+            summing: false,
             correlations: RefCell::default(),
             sums: RefCell::default(),
+            twiddles: RefCell::default(),
         }
     }
 
@@ -167,10 +195,18 @@ impl<'a> Model<'a> {
         self
     }
 
+    /// The model with `summed` sounding beside it, already holding its partials and harmonics.
+    pub fn summing(mut self, summed: &'a Summed) -> Model<'a> {
+        self = self.beside(summed);
+        self.summing = true;
+        self
+    }
+
+    /// The partials and harmonics read per window: none where `beside` holds them.
     fn tonal(&self) -> impl Iterator<Item = &Atom> {
         self.atoms
             .iter()
-            .filter(|a| !matches!(a.sound, Sound::Noise { .. }))
+            .filter(|a| !self.summing && !matches!(a.sound, Sound::Noise { .. }))
     }
 
     pub fn bins(&self, frame: &Frame) -> Bins {
@@ -242,12 +278,7 @@ impl<'a> Model<'a> {
         assert_eq!(still.len(), numbers, "one mark per number");
         let seeded = |j: usize| !still[j];
         if let Sound::Noise { .. } = atom.sound {
-            return (0..numbers)
-                .map(|j| match seeded(j) {
-                    true => expected_tangent(&atom.seeded(j), &self.clip, frame),
-                    false => Vec::new(),
-                })
-                .collect();
+            return self.expected_tangents(atom, still, frame);
         }
         let count = frame.weights().len();
         let summed = self.summed(frame, atom);
@@ -266,6 +297,187 @@ impl<'a> Model<'a> {
                     .collect()
             })
             .collect()
+    }
+
+    /// `tangents_of` with a partial's or harmonic's sample tangents read once over the clip
+    /// (`series`), sliced per window; a number with none is seeded nowhere.
+    pub fn tangents_read(
+        &self,
+        frame: &Frame,
+        i: usize,
+        series: &[Option<Series>],
+    ) -> Vec<Vec<f64>> {
+        let atom = &self.atoms[i];
+        if let Sound::Noise { .. } = atom.sound {
+            let still: Vec<bool> = series.iter().map(Option::is_none).collect();
+            return self.tangents_of(frame, i, &still);
+        }
+        let count = frame.weights().len();
+        let summed = self.summed(frame, atom);
+        let (re, im) = &*summed;
+        let windows: Vec<Option<Vec<f64>>> = series
+            .iter()
+            .map(|one| {
+                let (start, d) = one.as_ref()?;
+                let mut dx = vec![0.0; count];
+                let mut touched = false;
+                for (k, v) in dx.iter_mut().enumerate() {
+                    let n = frame.first() + k as i64 - start;
+                    if let Some(x) = usize::try_from(n).ok().and_then(|n| d.get(n)) {
+                        *v = *x;
+                        touched |= *x != 0.0;
+                    }
+                }
+                Some(if touched { dx } else { Vec::new() })
+            })
+            .collect();
+        windows
+            .iter()
+            .map(|w| match w {
+                None => Vec::new(),
+                Some(dx) if dx.is_empty() => vec![0.0; frame.hz().len()],
+                Some(dx) => {
+                    let (d_re, d_im) = frame.transform_bins(dx);
+                    frame
+                        .bins()
+                        .zip(d_re.iter().zip(&d_im))
+                        .map(|(b, (d_re, d_im))| 2.0 * (re[b] * d_re + im[b] * d_im))
+                        .collect()
+                }
+            })
+            .collect()
+    }
+
+    /// The transform's twiddles at `n`, read once per model.
+    fn twiddles(&self, n: usize) -> Rc<Twiddles> {
+        self.twiddles
+            .borrow_mut()
+            .entry(n)
+            .or_insert_with(|| Rc::new(fft::twiddles(n)))
+            .clone()
+    }
+
+    /// A noise's tangents, two seeds to a transform: `sum_d (dR C + R dC) e^(-2 pi i j d/n)`.
+    fn expected_tangents(&self, atom: &Atom, still: &[bool], frame: &Frame) -> Vec<Vec<f64>> {
+        let n = frame.n();
+        let bins = frame.hz().len();
+        let Sound::Noise { lo, hi } = atom.sound else {
+            unreachable!("a noise")
+        };
+        let rate = f64::from(self.clip.rate);
+        let top = hi.min(PSYCHOACOUSTIC_V1.ceiling(self.clip.rate));
+        let held = envelope(atom, &self.clip, frame).filter(|_| top > lo);
+        let Some(Envelope { y, .. }) = held else {
+            return still
+                .iter()
+                .map(|s| match s {
+                    true => Vec::new(),
+                    false => vec![0.0; bins],
+                })
+                .collect();
+        };
+        let wide = 2 * n;
+        let (twiddles, narrow) = (self.twiddles(wide), self.twiddles(n));
+        let (mut re, mut im) = (vec![0.0; wide], vec![0.0; wide]);
+        re[..y.len()].copy_from_slice(&y);
+        fft::fft_with(&mut re, &mut im, &twiddles);
+        let (mut window, mut zero) = (
+            re.iter()
+                .zip(&im)
+                .map(|(r, i)| r * r + i * i)
+                .collect::<Vec<f64>>(),
+            vec![0.0; wide],
+        );
+        fft::ifft_with(&mut window, &mut zero, &twiddles);
+        let count = y.len();
+        let band: Vec<f64> = (0..n)
+            .map(|d| band_correlation(lo, top, d as f64 / rate))
+            .collect();
+        let numbers = atom.numbers();
+        let ceiling = Dual::of(PSYCHOACOUSTIC_V1.ceiling(self.clip.rate));
+        let seeds: Vec<Option<Seed>> = (0..still.len())
+            .map(|j| {
+                if still[j] {
+                    return None;
+                }
+                let seeded = atom.seeded(j);
+                let dy = envelope(&seeded, &self.clip, frame)
+                    .map_or_else(Vec::new, |e| e.y.iter().map(|v| v.tangent).collect());
+                let Sound::Noise { lo: d_lo, hi: d_hi } = seeded.sound else {
+                    unreachable!("a noise")
+                };
+                let edge = numbers[j].0 == super::atoms::Quantity::Edge;
+                Some((dy, edge.then(|| (d_lo, d_hi.min(ceiling)))))
+            })
+            .collect();
+        let mut out: Vec<Vec<f64>> = seeds
+            .iter()
+            .map(|s| match s {
+                None => Vec::new(),
+                Some(_) => vec![0.0; bins],
+            })
+            .collect();
+        let read: Vec<usize> = (0..seeds.len())
+            .filter(|j| seeds[*j].as_ref().is_some_and(|(dy, _)| !dy.is_empty()))
+            .collect();
+        let unpack = |re: &[f64], im: &[f64], k: usize, size: usize| {
+            let o = (size - k) % size;
+            (
+                ((re[k] + re[o]) / 2.0, (im[k] - im[o]) / 2.0),
+                ((im[k] + im[o]) / 2.0, (re[o] - re[k]) / 2.0),
+            )
+        };
+        for pair in read.chunks(2) {
+            let mut z_re = vec![0.0; wide];
+            let mut z_im = vec![0.0; wide];
+            let (a, b) = (pair[0], pair.get(1).copied());
+            let dy = |j: usize| &seeds[j].as_ref().expect("read").0;
+            z_re[..dy(a).len()].copy_from_slice(dy(a));
+            if let Some(b) = b {
+                z_im[..dy(b).len()].copy_from_slice(dy(b));
+            }
+            fft::fft_with(&mut z_re, &mut z_im, &twiddles);
+            let (mut p_re, mut p_im) = (vec![0.0; wide], vec![0.0; wide]);
+            for k in 0..wide {
+                let ((ar, ai), (br, bi)) = unpack(&z_re, &z_im, k, wide);
+                p_re[k] = 2.0 * (re[k] * ar + im[k] * ai);
+                p_im[k] = 2.0 * (re[k] * br + im[k] * bi);
+            }
+            fft::ifft_with(&mut p_re, &mut p_im, &twiddles);
+            let fold = |j: usize, d_window: &[f64]| {
+                let edges = seeds[j].as_ref().expect("read").1;
+                let mut folded = vec![0.0; n];
+                for (i, g) in folded.iter_mut().enumerate() {
+                    for d in [i, n - i] {
+                        if d < count && (d == i || i > 0) {
+                            let (value, slope) = match edges {
+                                Some((d_lo, d_top)) => {
+                                    let r = band_correlation(d_lo, d_top, d as f64 / rate);
+                                    (r.value, r.tangent)
+                                }
+                                None => (band[d], 0.0),
+                            };
+                            *g += slope * window[d] + value * d_window[d];
+                        }
+                    }
+                }
+                folded
+            };
+            let mut f_re = fold(a, &p_re);
+            let mut f_im = match b {
+                Some(b) => fold(b, &p_im),
+                None => vec![0.0; n],
+            };
+            fft::fft_with(&mut f_re, &mut f_im, &narrow);
+            for (at, k) in frame.bins().enumerate() {
+                let ((ar, _), (br, _)) = unpack(&f_re, &f_im, k, n);
+                out[a][at] = ar;
+                if let Some(b) = b {
+                    out[b][at] = br;
+                }
+            }
+        }
+        out
     }
 
     /// What sounds in `frame` beside `atom`, transformed: every tonal atom and the held where
@@ -321,6 +533,94 @@ impl<'a> Model<'a> {
             render_most,
         }
     }
+}
+
+/// The samples `lo..hi` a partial or harmonic can sound on: every cell meeting `[on, end)`.
+fn support(atom: &Atom, clip: &Clip) -> (i64, i64) {
+    let rate = f64::from(clip.rate);
+    let lo = (libm::floor(atom.on * rate) as i64 - 1).clamp(0, clip.len as i64);
+    let hi = (libm::ceil(atom.end() * rate) as i64 + 2).clamp(lo, clip.len as i64);
+    (lo, hi)
+}
+
+/// A number's sample tangents from sample `.0` on.
+pub type Series = (i64, Vec<f64>);
+
+/// Each unstill number's sample tangents where a partial or harmonic sounds; an offset's in
+/// closed form: `NEPER g_k sin` on its line, `-NEPER g_last sin` on the last.
+pub fn series(atom: &Atom, clip: &Clip, still: &[bool]) -> Vec<Option<Series>> {
+    let (lo, hi) = support(atom, clip);
+    let count = (hi - lo) as usize;
+    let offsets = match &atom.sound {
+        Sound::Harmonic { offsets, .. } => offsets.len(),
+        _ => 0,
+    };
+    let first_offset = atom
+        .numbers()
+        .iter()
+        .position(|(q, _)| *q == super::atoms::Quantity::Offset)
+        .unwrap_or(usize::MAX);
+    let is_offset = |j: usize| j >= first_offset && j < first_offset + offsets;
+    let terms = (0..still.len())
+        .any(|j| !still[j] && is_offset(j))
+        .then(|| line_terms(atom, clip, lo, count));
+    (0..still.len())
+        .map(|j| {
+            if still[j] {
+                return None;
+            }
+            let d = match (&terms, is_offset(j)) {
+                (Some((scale, terms)), true) => {
+                    let (own, last) = (&terms[j - first_offset], &terms[offsets]);
+                    scale
+                        .iter()
+                        .zip(own.iter().zip(last))
+                        .map(|(s, (o, l))| s * NEPER_PER_DB * (o - l))
+                        .collect()
+                }
+                _ => samples(&atom.seeded(j), clip, lo, count)
+                    .x
+                    .iter()
+                    .map(|x| x.tangent)
+                    .collect(),
+            };
+            Some((lo, d))
+        })
+        .collect()
+}
+
+/// Per sample `from..from + count` of a harmonic, its share times its amplitude, and each line's
+/// term `g_k sin`, as `samples` reads them.
+fn line_terms(atom: &Atom, clip: &Clip, from: i64, count: usize) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let lines = lines(atom);
+    let mut scale = vec![0.0; count];
+    let mut terms = vec![vec![0.0; count]; lines.len()];
+    let Some((level, Some(hz))) = tables(atom) else {
+        return (scale, terms);
+    };
+    let steep = steepest(&atom.level, atom.on);
+    let (grid, rate) = (Grid::of(clip.rate), f64::from(clip.rate));
+    let (on, end) = (atom.on, atom.end());
+    let (mut at_level, mut at_hz) = (0, 0);
+    for k in 0..count {
+        let n = from + k as i64;
+        if n < 0 || n >= clip.len as i64 {
+            continue;
+        }
+        let (share, _) = gate(n, rate, on, end);
+        if share == 0.0 && !inside(&grid, n, (on, end)) {
+            continue;
+        }
+        let t = grid.instant(n);
+        let (a, _) = amplitude(&level, steep, t, &mut at_level);
+        let (turned, _) = turned_at(&hz, t, &mut at_hz);
+        scale[k] = share * a;
+        for ((k_tau, ph, gain, _), term) in lines.iter().zip(&mut terms) {
+            let s = libm::sin(turned * *k_tau + *ph);
+            term[k] = gain.map_or(s, |g| g * s);
+        }
+    }
+    (scale, terms)
 }
 
 /// Frame `m`'s bins composed into the ear's one spectrum, each with its bound and sampling.
@@ -591,14 +891,7 @@ fn norm(xs: impl Iterator<Item = f64>) -> f64 {
 
 /// The frame's transform of weighted samples, real and imaginary parts.
 fn transform(frame: &Frame, x: &[f64]) -> (Vec<f64>, Vec<f64>) {
-    let n = frame.n();
-    let mut re = vec![0.0; n];
-    for (k, (w, x)) in frame.weights().iter().zip(x).enumerate() {
-        re[k] = w * x;
-    }
-    let mut im = vec![0.0; n];
-    fft::fft_with(&mut re, &mut im, &fft::twiddles(n));
-    (re, im)
+    frame.transform(x)
 }
 
 /// Sampling as `MODEL` derives it, `|X|` under `sqrt(power + bound)`.
@@ -776,57 +1069,6 @@ fn expected(atom: &Atom, clip: &Clip, frame: &Frame, correlation: &Correlation) 
         bound: vec![err; bins],
         sampling,
     }
-}
-
-/// `d E|X_j|^2` along a seeded noise's one direction: `C`'s from the envelope's transform,
-/// `d|Y|^2 = 2 Re(conj(Y) dY)`, then `sum_d (dR C + R dC) e^(-2 pi i j d/n)`.
-fn expected_tangent(atom: &Atom<Dual>, clip: &Clip, frame: &Frame) -> Vec<f64> {
-    let n = frame.n();
-    let bins = frame.hz().len();
-    let Sound::Noise { lo, hi } = atom.sound else {
-        unreachable!("a noise")
-    };
-    let top = hi.min(Dual::of(PSYCHOACOUSTIC_V1.ceiling(clip.rate)));
-    let Some(Envelope { y, .. }) = envelope(atom, clip, frame).filter(|_| top.v() > lo.v()) else {
-        return vec![0.0; bins];
-    };
-    let wide = 2 * n;
-    let twiddles = fft::twiddles(wide);
-    let transformed = |part: &dyn Fn(&Dual) -> f64| {
-        let mut re = vec![0.0; wide];
-        for (r, v) in re.iter_mut().zip(&y) {
-            *r = part(v);
-        }
-        let mut im = vec![0.0; wide];
-        fft::fft_with(&mut re, &mut im, &twiddles);
-        (re, im)
-    };
-    let ((re, im), (d_re, d_im)) = (transformed(&|v| v.value), transformed(&|v| v.tangent));
-    let correlate = |power: Vec<f64>| {
-        let (mut power, mut im) = (power, vec![0.0; wide]);
-        fft::ifft_with(&mut power, &mut im, &twiddles);
-        power
-    };
-    let window = correlate(re.iter().zip(&im).map(|(r, i)| r * r + i * i).collect());
-    let d_window = correlate(
-        (0..wide)
-            .map(|j| 2.0 * (re[j] * d_re[j] + im[j] * d_im[j]))
-            .collect(),
-    );
-    let rate = f64::from(clip.rate);
-    let count = y.len();
-    let mut folded = vec![0.0; n];
-    for (i, g) in folded.iter_mut().enumerate() {
-        for d in [i, n - i] {
-            if d < count && (d == i || i > 0) {
-                let r = band_correlation(lo, top, d as f64 / rate);
-                *g += r.tangent * window[d] + r.value * d_window[d];
-            }
-        }
-    }
-    let mut im = vec![0.0; n];
-    fft::fft_with(&mut folded, &mut im, &fft::twiddles(n));
-    folded[frame.bins()].to_vec()
 }
 
 /// `(1/2) int_lo^top cos(2 pi f tau) df`, as `cos(pi (top + lo) tau) sin(pi (top - lo) tau) /

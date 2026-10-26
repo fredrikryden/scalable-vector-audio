@@ -131,6 +131,15 @@ pub fn lower_p<N: Num>(p51: f64, slope: f64, x_db: N) -> N {
     (N::of(p51) - (x_db - LOWER_SLOPE_ANCHOR_DB) * slope).max(N::of(P_FLOOR))
 }
 
+/// `lower_p`'s slope in `x_db`: `-slope` where the line holds it (a tie to the line, as `max`
+/// keeps its first), 0 at the floor.
+pub fn lower_p_slope(p51: f64, slope: f64, x_db: f64) -> f64 {
+    match p51 - (x_db - LOWER_SLOPE_ANCHOR_DB) * slope >= P_FLOOR {
+        true => -slope,
+        false => 0.0,
+    }
+}
+
 pub fn roex_p(centre_hz: f64, component_hz: f64, x_db: f64) -> f64 {
     let p = p51(centre_hz);
     match component_hz < centre_hz {
@@ -141,6 +150,14 @@ pub fn roex_p(centre_hz: f64, component_hz: f64, x_db: f64) -> f64 {
 
 fn roex_of<N: Num>(pg: N) -> N {
     (pg + 1.0) * (-pg).exp()
+}
+
+/// `roex_apart` beside its slope in `p`: `d/dp (1 + pg) e^(-pg) = -pg e^(-pg) g`.
+pub fn roex_apart_slope(p: f64, apart_hz: f64, centre_hz: f64) -> (f64, f64) {
+    let g = apart_hz / centre_hz;
+    let pg = p * g;
+    let e = sva_formula::exp(-pg);
+    ((pg + 1.0) * e, -pg * e * g)
 }
 
 /// The roex at `apart_hz` from `centre_hz`.
