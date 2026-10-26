@@ -47,7 +47,8 @@ pub const MODEL: &str = "ADD from the residual's spectrogram at full resolution:
      analysis holds, the highest scoring, ties to \
      the higher fundamental, taken from the pool with its members, until none is found; a \
      harmonic spans its strongest member, each harmonic at its member's level or, lacking one, \
-     its floor, its level their mean with the strongest member's fall; beside the harmonics, \
+     its floor, its level their mean with the strongest member's fall, none whose node the \
+     parser refuses (too many harmonics to nest), its members partials still; beside the harmonics, \
      the strongest track in each whole-Cam band from Cam 1.8 is a partial (the \
      critical band, a partial a band from another heard apart; Plomp 1964, JASA 36(9) \
      1628-1636), so pruning picks between a harmonic and its members; noise is proposed from the residual of the atoms the tonal births leave: \
@@ -537,9 +538,13 @@ fn tonal(
         let mean = levels.iter().sum::<f64>() / count as f64;
         let offsets: Vec<f64> = levels[..count - 1].iter().map(|l| l - mean).collect();
         let fall = lead.levels.1 - lead.levels.0;
-        out.push(born(clip, lead.span, (mean, mean + fall), |on, level| {
+        let harmonic = born(clip, lead.span, (mean, mean + fall), |on, level| {
             Atom::harmonic(0, on, Trajectory::steady(f0), offsets, level)
-        }));
+        });
+        if harmonic.writes(clip) {
+            out.push(harmonic);
+        }
+        // Every track is proposed as a partial below, a refused group's members too.
         pool.retain(|t| members.iter().all(|(q, _)| q != t));
     }
     let mut proposed: Vec<usize> = Vec::new();

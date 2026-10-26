@@ -261,6 +261,12 @@ impl Atom {
         }
     }
 
+    /// Whether the parser reads this atom's node: a harmonic of many harmonics nests past its
+    /// bound, a correctness limit, not a cost one.
+    pub fn writes(&self, clip: &Clip) -> bool {
+        sva_ast::parse_file(&self.node_text(clip)).is_ok()
+    }
+
     pub fn node_text(&self, clip: &Clip) -> String {
         let l = self.level.knots.len();
         let end = format!("lt{l}");

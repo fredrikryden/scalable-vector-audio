@@ -350,3 +350,18 @@ fn each_kind_and_knot_count_plays_one_node() {
         "a knot more is the next count's node"
     );
 }
+
+#[test]
+fn a_harmonic_writes_until_its_node_nests_past_the_parser() {
+    let harmonic = |count: usize| {
+        Atom::harmonic(
+            0,
+            0.1,
+            Trajectory::steady(30.0),
+            vec![0.0; count - 1],
+            knots(-20.0, &[(0.5, 0.0)]),
+        )
+    };
+    assert!(harmonic(4).writes(&CLIP));
+    assert!(!harmonic(400).writes(&CLIP));
+}
