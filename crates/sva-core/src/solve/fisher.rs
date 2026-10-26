@@ -150,6 +150,7 @@ pub fn linearise_beside(
     let channels = ear.thresholds().len();
     let summed = held.map(|h| &h.summed);
     let per = framed_beside(atoms, clip, coherent, (first, last), summed, &|model, m| {
+        model.forget();
         let reached = colouring.reach.iter().any(|(f, t)| *f <= m && m <= *t);
         if let Some(h) = held.filter(|_| !reached) {
             return (ear.levels(&h.excitation[(m - first) as usize]), Vec::new());

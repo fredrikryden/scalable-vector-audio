@@ -82,7 +82,14 @@ pub struct Model<'a> {
     coherent: bool,
     beside: Option<&'a Summed>,
     correlations: RefCell<HashMap<(u64, u64, usize), Rc<Correlation>>>,
+    /// The tonal sum's transform per window since `forget`.
+    sums: RefCell<Vec<(Window3, Rc<Transform>)>>,
 }
+
+/// First sample, length, size.
+type Window3 = (i64, usize, usize);
+
+type Transform = (Vec<f64>, Vec<f64>);
 
 /// Partials summed over the whole clip, read once and sliced per frame, as `MODEL` states.
 pub struct Summed {
@@ -149,6 +156,7 @@ impl<'a> Model<'a> {
             coherent,
             beside: None,
             correlations: RefCell::default(),
+            sums: RefCell::default(),
         }
     }
 
@@ -222,7 +230,9 @@ impl<'a> Model<'a> {
     /// mode: `2 Re(conj(X) dX)`, a noise's through its expected power.
     pub fn tangents(&self, frame: &Frame, i: usize) -> Vec<Vec<f64>> {
         let numbers = self.atoms[i].values().len();
-        self.tangents_of(frame, i, &vec![false; numbers])
+        let out = self.tangents_of(frame, i, &vec![false; numbers]);
+        self.forget();
+        out
     }
 
     /// `tangents`, none (an empty row) for a number `still` marks.
@@ -240,6 +250,34 @@ impl<'a> Model<'a> {
                 .collect();
         }
         let count = frame.weights().len();
+        let summed = self.summed(frame, atom);
+        let (re, im) = &*summed;
+        (0..numbers)
+            .map(|j| {
+                if !seeded(j) {
+                    return Vec::new();
+                }
+                let moved = samples(&atom.seeded(j), &self.clip, frame.first(), count);
+                let dx: Vec<f64> = moved.x.iter().map(|x| x.tangent).collect();
+                let (d_re, d_im) = transform(frame, &dx);
+                frame
+                    .bins()
+                    .map(|b| 2.0 * (re[b] * d_re[b] + im[b] * d_im[b]))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// What sounds in `frame` beside `atom`, transformed: every tonal atom and the held where
+    /// coherent, read once per window, else `atom`.
+    fn summed(&self, frame: &Frame, atom: &Atom) -> Rc<Transform> {
+        let count = frame.weights().len();
+        let key = (frame.first(), count, frame.n());
+        if self.coherent
+            && let Some((_, t)) = self.sums.borrow().iter().find(|(k, _)| *k == key)
+        {
+            return t.clone();
+        }
         let mut sum = match (self.coherent, self.beside) {
             (true, Some(b)) => b.window(frame.first(), count).0.x,
             _ => vec![0.0; count],
@@ -256,21 +294,16 @@ impl<'a> Model<'a> {
                 *s += x;
             }
         }
-        let (re, im) = transform(frame, &sum);
-        (0..numbers)
-            .map(|j| {
-                if !seeded(j) {
-                    return Vec::new();
-                }
-                let moved = samples(&atom.seeded(j), &self.clip, frame.first(), count);
-                let dx: Vec<f64> = moved.x.iter().map(|x| x.tangent).collect();
-                let (d_re, d_im) = transform(frame, &dx);
-                frame
-                    .bins()
-                    .map(|b| 2.0 * (re[b] * d_re[b] + im[b] * d_im[b]))
-                    .collect()
-            })
-            .collect()
+        let out = Rc::new(transform(frame, &sum));
+        if self.coherent {
+            self.sums.borrow_mut().push((key, out.clone()));
+        }
+        out
+    }
+
+    /// Forgets `summed`'s windows, as at a new frame.
+    pub fn forget(&self) {
+        self.sums.borrow_mut().clear();
     }
 
     /// E per channel at frame `m`, bracketed for the model's exact formula and for the render.

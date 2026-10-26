@@ -7,12 +7,11 @@ use std::pin::Pin;
 
 use sva_engine::Abandon;
 
-use super::add::{self, COHERENT, Spectrogram, State, edit, length, priced, priced_and_pinned};
+use super::add::{self, COHERENT, Heard, State, length, priced, priced_and_pinned};
 use super::atoms::{Atom, Clip, files};
 use super::bits;
 use super::calibrate::n0;
-use super::fisher::Fit;
-use super::lm::{Descent, Ended, Limits, descend};
+use super::lm::{Descent, Ended};
 use super::objective::Objective;
 
 pub const MODEL: &str = "levels at scales s = r^-(L-1-k), k = 0 the coarsest, up to s = 1, r = \
@@ -20,9 +19,9 @@ pub const MODEL: &str = "levels at scales s = r^-(L-1-k), k = 0 the coarsest, up
      calibrated there (calibrate.rs), prices each atom again there and drops one heard \
      nowhere, pins its frequencies and edges where they are when their Fisher precision there \
      is no finer than ADD's analysis bin (add.rs), so a level too coarse to resolve one leaves \
-     it where the analysis put it, refines each atom in birth order with every other held (block coordinate \
-     descent: each call lowers the cost, so a sweep does), then grows the state by ADD \
-     (add.rs); numbers are Hz, s and dB, so a \
+     it where the analysis put it, then refines and grows the state by ADD (add.rs), whose \
+     every round solves the kept atoms beside its births in one descent; numbers are Hz, s and \
+     dB, so a \
      level's state starts the next unchanged; each level is a stage whose length is its \
      residual bits plus B(x) at s = 1, every stage's atoms priced at one precision set, the \
      latest stage's: an atom at the precisions s = 1 reads for the latest stage's atom of its \
@@ -35,8 +34,7 @@ pub const MODEL: &str = "levels at scales s = r^-(L-1-k), k = 0 the coarsest, up
 /// The ratio between levels' scales, exempt from the no-tuning rule.
 pub const RATIO: f64 = FRAC_1_SQRT_2;
 
-/// Levels by default, exempt: s = 2.83, 2, 1.41 and 1; solve_lm.rs recovers a frequency at s = 2
-/// but not at 4.
+/// Levels by default, exempt: s = 2.83, 2, 1.41 and 1.
 pub const LEVELS: usize = 4;
 
 /// A full-scale sine at 103.95 dB SPL by default (SMPTE RP 200: -20 dBFS pink noise at 83 dB
@@ -167,6 +165,7 @@ pub struct Run<'a> {
     part: (usize, usize),
     pub edits: Vec<String>,
     descents: Vec<(usize, Ended)>,
+    pub proposed: usize,
 }
 
 impl Run<'_> {
@@ -212,42 +211,6 @@ pub struct Asked {
     pub threads: NonZeroUsize,
 }
 
-/// Each atom refined in birth order with every other held.
-async fn refine(objective: &Objective, mut state: State, run: &mut Run<'_>) -> State {
-    for i in 0..state.atoms.len() {
-        if run.stopped.abandoned().await {
-            break;
-        }
-        run.activity(
-            Action::Descending,
-            Some(&edit(&state.atoms[i])),
-            Some((i + 1, "atom")),
-        );
-        let mut others = state.atoms.clone();
-        let atom = others.remove(i);
-        let fit = Fit::new(
-            objective,
-            vec![atom],
-            vec![state.priced[i].clone()],
-            COHERENT,
-        )
-        .holding(others)
-        .pinning(&state.pinned[i]);
-        let start = fit.numbers();
-        let limits = Limits {
-            steps: None,
-            stopped: &run.stopped,
-        };
-        let Some(descent) = descend(&fit, &start, &fit.deltas(), &limits).await else {
-            continue;
-        };
-        run.descended(objective, &descent, bits::bits(&state.atoms, &state.priced));
-        state.atoms[i] = fit.atoms_at(&descent.x).remove(0);
-    }
-    state.length = length(objective, &state.atoms, &state.priced);
-    state
-}
-
 /// One finished level as the stages compare it: its residual bits at s = 1 and each atom's
 /// prices there.
 struct Measured {
@@ -286,8 +249,7 @@ fn repriced(stages: &mut [Stage], measured: &[Measured]) {
     }
 }
 
-/// The pyramid over `samples` at `rate`: one stage per level, each heard as it finishes; a
-/// signal, asked before each descent's step, ends it with the stage it interrupts.
+/// One stage per level, each heard as it finishes, as `MODEL` states.
 pub async fn pyramid(
     samples: &[f64],
     rate: u32,
@@ -316,11 +278,12 @@ pub async fn pyramid(
         part: (0, levels),
         edits: Vec::new(),
         descents: Vec::new(),
+        proposed: 0,
     };
     run.activity(Action::Reading, None, None);
     let at = |s: f64| Objective::new(samples, clip, spl, s, n0(rate, s, spl, asked.threads));
     let finest = at(1.0);
-    let heard = Spectrogram::of(samples, rate);
+    let heard = Heard::of(samples, rate);
     let mut state = State {
         atoms: Vec::new(),
         priced: Vec::new(),
@@ -334,6 +297,7 @@ pub async fn pyramid(
         run.stage = label(k + 1, levels);
         run.part = (k, levels);
         run.edits.clear();
+        run.proposed = 0;
         run.descents.clear();
         run.activity(Action::Reading, None, None);
         let level = (s != 1.0).then(|| at(s));
@@ -352,7 +316,6 @@ pub async fn pyramid(
             priced: prices,
             pinned,
         };
-        state = refine(objective, state, &mut run).await;
         state = add::add(objective, &heard, state, &mut run).await;
         run.activity(Action::Measuring, None, Some((1, "evaluation")));
         let residual_bits = objective.bits(&state.atoms, COHERENT);

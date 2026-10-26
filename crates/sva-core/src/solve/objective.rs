@@ -137,6 +137,25 @@ impl Objective {
         nats / LN_2
     }
 
+    /// Each frame's excitation of `atoms` from frame `from` to `to`, as `expect` reads it.
+    pub fn excitations(
+        &self,
+        atoms: &[Atom],
+        coherent: bool,
+        (from, to): (i64, i64),
+    ) -> Vec<Vec<f64>> {
+        framed(atoms, self.clip, coherent, (from, to), &|model, m| {
+            let power = self.ear.compose(m, &mut |frame| model.bins(frame).power);
+            excited(&self.ear, m, &power)
+        })
+    }
+
+    /// The residual bits of the elements read off `excitation(m)` at each frame `m`.
+    pub fn bits_of(&self, excitation: &mut dyn FnMut(i64) -> Vec<f64>) -> f64 {
+        let outputs = self.ear.elements(self.clip.len, excitation);
+        self.residual_bits(&self.elements(&outputs))
+    }
+
     pub fn bits(&self, atoms: &[Atom], coherent: bool) -> f64 {
         self.residual_bits(&self.expect(atoms, coherent))
     }
