@@ -18,7 +18,7 @@ git agent-verdict "$1" standards --model sonnet \
   --rule "No test asserts on wall-clock time." \
   --rule "Every limit whose reason is cost (compute, memory, time, size) has a caller override, and its refusal names that override; a default may stay. A limit whose reason is correctness says so in its code; it is not required to have an override." \
   --rule "An analysis that follows refs is a per-node fold over the node graph, stored per node; never a recursion per path." \
-  --rule "The solve verb has no tuning constants." \
+  --rule $'The solve verb has no tuning constants.\nThe following tuning variables are exempt:\n- the stopping threshold on the relative improvement of the cost per pass' \
   --rule "State that can disagree is refactored to one canonical owner and derived, never kept in sync; a cache is still compliant with this rule if every source change evicts it." \
   --path .
 
