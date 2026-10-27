@@ -395,6 +395,18 @@ impl Problem {
             .sum()
     }
 
+    /// `(sum_b w t^2, sum_b w t r)` in frame `f`, in one pass.
+    fn moments(&self, f: usize, t: &[f64], r: &[f64]) -> (f64, f64) {
+        self.weight[f]
+            .iter()
+            .zip(t)
+            .zip(r)
+            .fold((0.0, 0.0), |(e, c), ((w, t), r)| {
+                let wt = w * t;
+                (e + wt * t, c + wt * r)
+            })
+    }
+
     /// The frames' looks at a level `level` over `floor` at `hz`.
     fn looks(&self, level: &[f64], floor: f64, hz: f64) -> Vec<Look> {
         level
@@ -591,16 +603,15 @@ fn refined(p: &Problem, state: &State, residual: &[Vec<f64>], kind: Kind, key: u
         }
         Kind::Voice { count, .. } => {
             let hzs = kind.hzs();
-            let points: Vec<(usize, f64, f64)> = (0..count)
-                .filter_map(|c| {
-                    let held = score(&Kind::Partial { hz: hzs[c] });
-                    let (to, _, sigma) = partial(c, hzs[c], held);
-                    let k = (c + 1) as f64;
-                    let deviation = 2.0 * to * sigma / (k * k);
-                    (deviation.is_finite() && deviation > 0.0)
-                        .then(|| (c + 1, to, 1.0 / (deviation * deviation)))
-                })
-                .collect();
+            let refined = each(default_threads(), (0..count).collect(), |c| {
+                let held = score(&Kind::Partial { hz: hzs[c] });
+                let (to, _, sigma) = partial(c, hzs[c], held);
+                let k = (c + 1) as f64;
+                let deviation = 2.0 * to * sigma / (k * k);
+                (deviation.is_finite() && deviation > 0.0)
+                    .then(|| (c + 1, to, 1.0 / (deviation * deviation)))
+            });
+            let points: Vec<(usize, f64, f64)> = refined.into_iter().flatten().collect();
             if points.len() < 2 {
                 return (kind, best);
             }
@@ -1144,36 +1155,50 @@ fn scored(
     key: u64,
 ) -> (f64, Written) {
     let templates = p.templates(kind);
-    let fitted: Vec<Vec<f64>> = templates
+    // Each column's weighted energy and correlation with the residual, frame by frame.
+    let moments: Vec<Vec<(f64, f64)>> = templates
         .iter()
         .map(|t| {
             (0..p.frames())
-                .map(|f| {
-                    let energy = p.dot(f, t, t);
-                    match energy > 0.0 {
-                        true => (p.dot(f, t, &residual[f]) / energy).max(0.0),
-                        false => 0.0,
-                    }
+                .map(|f| p.moments(f, t, &residual[f]))
+                .collect()
+        })
+        .collect();
+    let fitted: Vec<Vec<f64>> = moments
+        .iter()
+        .map(|m| {
+            m.iter()
+                .map(|(energy, pull)| match *energy > 0.0 {
+                    true => (pull / energy).max(0.0),
+                    false => 0.0,
                 })
                 .collect()
         })
         .collect();
     let written = write(p, kind, key, &fitted);
-    let drop: f64 = (0..p.frames())
-        .map(|f| {
-            let mut u = vec![0.0; p.range.len()];
-            for (t, g) in templates.iter().zip(&written.gains) {
-                for (u, t) in u.iter_mut().zip(t) {
-                    *u += g[f] * t;
+    // One column's drop in closed form, sum w (2 r g t - g^2 t^2) = 2 g pull - g^2 energy.
+    let drop: f64 = match &moments[..] {
+        [m] => m
+            .iter()
+            .zip(&written.gains[0])
+            .map(|((energy, pull), g)| 2.0 * g * pull - g * g * energy)
+            .sum(),
+        _ => (0..p.frames())
+            .map(|f| {
+                let mut u = vec![0.0; p.range.len()];
+                for (t, g) in templates.iter().zip(&written.gains) {
+                    for (u, t) in u.iter_mut().zip(t) {
+                        *u += g[f] * t;
+                    }
                 }
-            }
-            u.iter()
-                .zip(&residual[f])
-                .zip(&p.weight[f])
-                .map(|((u, r), w)| w * (2.0 * r * u - u * u))
-                .sum::<f64>()
-        })
-        .sum();
+                u.iter()
+                    .zip(&residual[f])
+                    .zip(&p.weight[f])
+                    .map(|((u, r), w)| w * (2.0 * r * u - u * u))
+                    .sum::<f64>()
+            })
+            .sum(),
+    };
     let n = state.kinds.len();
     let change = written.bits + bits::count(n + 1) - bits::count(n) - 0.5 * LOG2_E * drop;
     (change, written)
