@@ -1027,7 +1027,8 @@ fn thinned((on, end): (f64, f64), times: &[f64], levels: &[f64], tolerance: f64)
     }
 }
 
-/// `level_at` from 0 at each of the ascending `times`, its knots walked once.
+/// The level in dB `level` holds at each of the ascending `times`, its knots' times from 0:
+/// straight lines from `base` through each knot, held after the last, its knots walked once.
 fn levels_at(level: &Trajectory, times: &[f64]) -> Vec<f64> {
     let mut from = (0.0, level.base);
     let mut knots = level
@@ -1051,22 +1052,6 @@ fn levels_at(level: &Trajectory, times: &[f64]) -> Vec<f64> {
             from.1
         })
         .collect()
-}
-
-/// The level in dB `level` holds at `t`, its knots' times from `on`.
-pub fn level_at(level: &Trajectory, on: f64, t: f64) -> f64 {
-    let mut from = (on, level.base);
-    for (at, d) in &level.knots {
-        let to = (on + at, level.base + d);
-        if t <= to.0 {
-            return match to.0 > from.0 {
-                true => from.1 + (to.1 - from.1) * (t - from.0) / (to.0 - from.0),
-                false => to.1,
-            };
-        }
-        from = to;
-    }
-    from.1
 }
 
 /// A kept atom: its kind, each column's template, and the atom as written.
