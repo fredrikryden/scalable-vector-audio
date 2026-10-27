@@ -1,7 +1,7 @@
 // Concern: a fit's progress lines and its answer as JSON, the shapes sva-portal's page reads | Non-concern: running it (fit.rs), where a line goes | IO: (Line | Fit) -> JSON
 
 use super::atoms::{Atom, Sound};
-use super::fit::{Fit, Line, Tweak};
+use super::fit::{Action, End, Fit, Line, Tweak};
 use crate::json::{NONE, escape, list, num, strings};
 
 fn text(s: &str) -> String {
@@ -57,8 +57,19 @@ fn atom(atom: &Atom) -> String {
     )
 }
 
+/// A pass's move in words: `start`, `add <kind>`, or `<adjust> <kind>`.
+fn moved(line: &Line) -> String {
+    let kind = line.atom.as_ref().map_or("", |a| a.kind());
+    match (line.action, line.tweak) {
+        (Action::Start, _) => "start".to_string(),
+        (_, Some(tweak)) => format!("{} {kind}", tweak.name()),
+        (_, None) => format!("{} {kind}", line.action.name()),
+    }
+}
+
 /// One progress line per pass, its move beside it and the moves it skipped, their nodes
-/// refused, the first (pass 0) with the grid's shape.
+/// refused, the first (the start, or the pass a fit resumes from) with the grid's shape; its
+/// drop, the drop from the empty fit's DL so far, and the share of that this pass's is.
 pub fn progress(line: &Line) -> String {
     let rows: Vec<String> = line
         .residual_db
@@ -88,19 +99,29 @@ pub fn progress(line: &Line) -> String {
             num(g.gain_db)
         )
     });
+    let dl = line.atom_bits + line.residual_bits;
+    let total = line.start_bits - dl;
+    let share = match total > 0.0 {
+        true => num((0.0 - line.delta_bits) / total),
+        false => NONE.to_string(),
+    };
     format!(
-        "{{ \"pass\": {}, \"action\": \"{}\", \"adjust\": {}, \"atom\": {}, \"from_db\": {}, \"to_db\": {}, \
-         \"delta_dl_bits\": {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \
-         \"residual_db\": [{}], \"envelopes\": {}, \"skipped\": {}, \"seconds\": {}{geometry} }}",
+        "{{ \"pass\": {}, \"action\": \"{}\", \"adjust\": {}, \"move\": {}, \"atom\": {}, \"from_db\": {}, \"to_db\": {}, \
+         \"delta_dl_bits\": {}, \"drop_bits\": {}, \"total_drop_bits\": {}, \"share\": {share}, \
+         \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \
+         \"residual_db\": [{}], \"envelopes\": {}, \"skipped\": {}, \"seconds\": {}, \"pass_secs\": {}{geometry} }}",
         line.pass,
         line.action.name(),
         line.tweak
             .map_or_else(|| NONE.to_string(), |t| text(t.name())),
+        text(&moved(line)),
         line.atom.as_ref().map_or_else(|| NONE.to_string(), atom),
         line.from_db.map_or_else(|| NONE.to_string(), num),
         line.to_db.map_or_else(|| NONE.to_string(), num),
         num(line.delta_bits),
-        num(line.atom_bits + line.residual_bits),
+        num(0.0 - line.delta_bits),
+        num(total),
+        num(dl),
         num(line.atom_bits),
         num(line.residual_bits),
         rows.join(", "),
@@ -109,8 +130,16 @@ pub fn progress(line: &Line) -> String {
             format!("{{ \"key\": {key}, \"db\": [{}] }}", rows.join(", "))
         }),
         list(&line.skipped, atom),
-        num(line.seconds)
+        num(line.seconds),
+        num(line.pass_secs)
     )
+}
+
+/// A composition's files as a list of `{ path, text }`.
+pub fn composition(files: &[(String, String)]) -> String {
+    list(files, |(path, body)| {
+        format!("{{ \"path\": {}, \"text\": {} }}", text(path), text(body))
+    })
 }
 
 /// The answer's `data`: the fit's counts, DL, time and atoms, the paths the CLI wrote, and its
@@ -123,19 +152,13 @@ pub fn answer(
 ) -> String {
     let count = |kind: &str| fit.atoms.iter().filter(|a| a.kind() == kind).count();
     let files = files.map_or_else(String::new, |files| {
-        format!(
-            ", \"files\": {}",
-            list(files, |(path, body)| format!(
-                "{{ \"path\": {}, \"text\": {} }}",
-                text(path),
-                text(body)
-            ))
-        )
+        format!(", \"files\": {}", composition(files))
     });
     format!(
         "{{ \"fit\": {{ \"rate_hz\": {}, \"passes\": {}, \"adds\": {}, \"adjusts\": {}, \
          \"adjusts_by\": {{ {} }}, \"partials\": {}, \"harmonics\": {}, \"noises\": {}, \"shaped\": {}, \"dl_bits\": {}, \
-         \"atom_bits\": {}, \"residual_bits\": {}, \"gain_db\": {}, \"stopped\": {}, \"secs\": {}, \
+         \"atom_bits\": {}, \"residual_bits\": {}, \"gain_db\": {}, \"from_pass\": {}, \"tolerance\": {}, \
+         \"ended\": \"{}\", \"stopped\": {}, \"secs\": {}, \
          \"atoms\": {}, \"wrote\": {} }}{files} }}",
         fit.clip.rate,
         fit.passes,
@@ -155,7 +178,10 @@ pub fn answer(
         num(fit.atom_bits),
         num(fit.residual_bits),
         num(fit.gain_db),
-        fit.stopped,
+        fit.from_pass,
+        num(fit.tolerance),
+        fit.ended.name(),
+        fit.ended == End::Stopped,
         num(secs),
         list(&fit.atoms, atom),
         strings(wrote)

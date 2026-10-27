@@ -3,13 +3,14 @@
 use std::f64::consts::LOG2_E;
 use std::ops::Range;
 
-use sva_engine::hearing::{CAM_LAST, cam, cam_hz, erb_hz, level_jnd_db};
+use sva_engine::hearing::{CAM_FIRST, CAM_LAST, cam, cam_hz, erb_hz, level_jnd_db};
 use sva_engine::{Abandon, default_threads, each, fft};
 
 use super::add::{Members, Spectrogram, Track, floor_db, sieved, span_hz};
-use super::atoms::{Atom, Clip, Feasible, Quantity, Trajectory};
+use super::atoms::{Atom, Clip, Feasible, Quantity, Sound, Trajectory, birth};
 use super::bits::{self, Look, Priced, frequency_delta, level_delta};
 use super::grid::Grid;
+use crate::cli_error::CliError;
 
 pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate descent on the atoms' levels and frequencies beside matching pursuit for new atoms (Mallat and Zhang 1993, doi 10.1109/78.258082); \
      DL = B(x) (bits.rs) plus the residual's bits, the one objective; \
@@ -30,15 +31,18 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      a gliding column's template in frame m the periodogram, by one transform, of a unit sine on its path in the window centred on the frame, its sweep across that window held, the frame's other hops left out: that template is the model's prediction, as a fixed sine's lobe is, not an estimate of another one, so its gap from the frame's pooled hops is misfit the residual holds and the DL prices; \
      a gliding column's floor at its Hz at the frames' mean time, its frequency looks at its path's Hz in each frame; \
      each column's gain per frame its power; \
-     each pass scores every move against the residual and makes the one that lowers the DL most, or none, and the fit stops at the first pass with none, so the DL falls at every pass; \
+     each pass scores every move against the residual and makes the one that lowers the DL most, or none, and the fit stops at the first pass with none, so the DL falls at every pass, \
+     or after the first pass whose drop is no more than the stopping threshold times the larger of the DL before and after it and 1, the relative tolerance optimisers' ftol reads (default 1e-3), a resumed fit's default 0; \
+     a fit resumed from a composition holds its atoms as written, each kind and level curve read off its numbers, a glide at the rate floor's precision (its slope's standard error the add's, unwritten), its passes numbered on from those that made it; \
      a move an add or an adjust; \
      the model's power the sum of its atoms' powers, which holds only where no two atoms' tonal lines, a voice's every harmonic a line, lie within the main lobe's half-width (2 window bins) of each other in any frame: inside it two lines beat and their powers do not add; \
      so no add or frequency adjust leaves two atoms' lines within it: a candidate whose lines fall within it of a kept atom's line is no add, that kept atom's own adjusts (its level, frequency or rethin) the moves there, and two voices overlap where any of their lines do; \
-     a move whose atom's node the parser refuses (atoms.rs) skipped for the next best, and named in its pass's line; \
+     a move whose atom's node the parser or the engine refuses (atoms.rs) skipped for the next best, and named in its pass's line; \
      an add a new atom off the residual averaged over the frames, at its best level: \
      a free partial at each local maximum over its floor, its Hz by QIFFT (Smith and Serra 1987); \
      a partial or voice candidate, refined, glides where its columns' peak tracks glide: a column's track in each frame the highest local maximum over its floor, by QIFFT, in the basin of the averaged residual about its Hz, from the local maximum it climbs to down to the local minimum either side; \
      a glide one slope of ln Hz on time by least squares over its columns' tracks, each its own intercept, its precision the coarser of that slope's standard error and the rate moving the first column's Hz by its written precision over the frames, 0 within that of 0; \
+     a glide scored only where it moves some line's Hz over the frames by the main lobe's half-width or more, a narrower sweep staying inside the place two lines there would share; \
      a gliding candidate starts at its tracks' intercepts, is refined as a fixed one is, and is kept where its DL is the lower; \
      a voice at each fundamental the sieve (add.rs) finds among those peaks that are tonal lobes of the averaged residual at K times its frames looks, taken from the pool with its members till none is found; \
      a voice's harmonic k at k f0 sqrt(1 + B k^2) (Fletcher 1964), f0 and B by least squares of (f_k / k)^2 = f0^2 + f0^2 B k^2 over its member peaks, B at least 0; \
@@ -51,7 +55,7 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      an adjust changes one kept atom in its own written numbers, three for each: \
      level, one gain over its whole level curve, 1 + sum w r u / sum w u^2 in closed form (u its expected power), its levels' bases moved by it in dB; or to 0, which removes it, where that gives the lower DL or the gain is not positive; \
      frequency, for a partial or voice: its tracks read off the residual with the atom added back, in each frame the local maximum over its floor nearest its path's Hz in Cam within a main lobe of it, give a glide as an add's do; \
-     at its own glide, at none and at that one, its Hz at the start moved so its path holds at the frames' mean time, a partial's Hz by golden section over half a bin to the finer of its written precision and its standard deviation, a voice refined as an add's against that residual, its levels kept, the lowest DL kept; \
+     at its own glide, at none and at that one where it moves a line so, its Hz at the start moved so its path holds at the frames' mean time, a partial's Hz by golden section over half a bin to the finer of its written precision and its standard deviation, a voice refined as an add's against that residual, its levels kept, the lowest DL kept; \
      rethin, its level curve thinned afresh from each column's written gain per frame plus the residual's weighted correlation with the column over its weighted energy, at least 0; \
      the DL of every move the written state's, in closed form from the residual, its drop exact; the residual derived afresh from the kept atoms at each pass, a move whose repriced DL does not fall, its drop under rounding, no move; \
      ties broken by the move's order: adds in the candidates' order, then adjusts in the atoms', each atom's level, frequency, then rethin; \
@@ -190,17 +194,86 @@ pub struct Line {
     pub residual_db: Vec<Vec<Option<f64>>>,
     pub envelopes: Vec<(u64, Vec<Vec<f64>>)>,
     pub geometry: Option<Geometry>,
+    /// The clock as it ended, and its pass's time.
     pub seconds: f64,
+    pub pass_secs: f64,
+    /// The empty fit's DL.
+    pub start_bits: f64,
     pub atoms: Vec<Atom>,
     pub clip: Clip,
     /// The atoms of the moves better than its own it skipped, their nodes refused.
     pub skipped: Vec<Atom>,
 }
 
+/// The default stopping threshold on a pass's relative drop, as `MODEL` states.
+pub const TOLERANCE: f64 = 1e-3;
+
+/// The atoms a fit resumes from, the passes that made them, and their master gain if written.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Resume {
+    pub atoms: Vec<Atom>,
+    pub passes: usize,
+    pub gain_db: Option<f64>,
+}
+
+impl Resume {
+    /// The atoms a composition's `files` hold after `passes` passes.
+    pub fn of(files: &[(String, String)], passes: usize) -> Result<Resume, CliError> {
+        let atoms = super::atoms::read(files).ok_or_else(|| {
+            CliError::usage(
+                "solve.from_unread",
+                format!(
+                    "the composition to resume holds no `{}` of atoms a fit wrote",
+                    super::atoms::SCORE
+                ),
+            )
+        })?;
+        Ok(Resume {
+            atoms,
+            passes,
+            gain_db: super::atoms::gain_of(files),
+        })
+    }
+}
+
+/// What a fit is asked beside its clip: its stopping threshold, and the fit it resumes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Options {
+    pub tolerance: f64,
+    pub from: Option<Resume>,
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options {
+            tolerance: TOLERANCE,
+            from: None,
+        }
+    }
+}
+
+/// Why a fit ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum End {
+    Converged,
+    Tolerance,
+    Stopped,
+}
+
+impl End {
+    pub fn name(self) -> &'static str {
+        match self {
+            End::Converged => "converged",
+            End::Tolerance => "tolerance",
+            End::Stopped => "stopped",
+        }
+    }
+}
+
 /// A fit: the clip it read, its atoms in unit-RMS space, the master gain bringing them back,
-/// the SPL that space is heard at, its DL's parts, its passes and how many added and adjusted,
-/// the adjusts by `Tweak::ALL`'s order, whether a stop ended it, and the clip's and the fit's
-/// coarse grids, each band's power spread flat over its bins.
+/// the SPL that space is heard at, its DL's parts, the pass it resumed from and its last, this
+/// run's adds and adjusts, these by `Tweak::ALL`, its threshold, why it ended, and both
+/// coarse grids, each band's power spread flat.
 pub struct Fit {
     pub clip: Clip,
     pub atoms: Vec<Atom>,
@@ -208,11 +281,13 @@ pub struct Fit {
     pub spl_db: f64,
     pub atom_bits: f64,
     pub residual_bits: f64,
+    pub from_pass: usize,
     pub passes: usize,
     pub adds: usize,
     pub adjusts: usize,
     pub tweaks: [usize; 4],
-    pub stopped: bool,
+    pub tolerance: f64,
+    pub ended: End,
     pub clip_grid: Grid,
     pub fit_grid: Grid,
 }
@@ -426,9 +501,7 @@ struct Problem {
 impl Problem {
     /// `grid` read as `MODEL` states, its power the target.
     fn of(grid: Grid, clip: Clip, spl_db: f64, gain_db: f64) -> Problem {
-        let (lo, hi) = span_hz(grid.rate);
-        let range = (libm::ceil(grid.bin_of(lo)) as usize).max(1)
-            ..(libm::floor(grid.bin_of(hi)) as usize + 1).min(grid.bins() - 1);
+        let range = feasible(&grid);
         let looks = grid.hop as f64 / (grid.long as f64 / 2.0) * grid.long as f64 / grid.n as f64;
         let floors: Vec<f64> = range
             .clone()
@@ -487,7 +560,16 @@ impl Problem {
     fn frames(&self) -> usize {
         self.power.len()
     }
+}
 
+/// The bins the feasible set's Hz hold, as `MODEL` states.
+fn feasible(grid: &Grid) -> Range<usize> {
+    let (lo, hi) = span_hz(grid.rate);
+    (libm::ceil(grid.bin_of(lo)) as usize).max(1)
+        ..(libm::floor(grid.bin_of(hi)) as usize + 1).min(grid.bins().saturating_sub(1))
+}
+
+impl Problem {
     /// Each column's template over the feasible bins, a gliding one's per frame.
     fn templates(&self, kind: &Kind) -> Vec<Template> {
         match kind {
@@ -507,6 +589,10 @@ impl Problem {
             _ => {
                 let rate = kind.glide().rate;
                 let at = |hz: f64| self.range.clone().map(|b| self.grid.sine(hz, b)).collect();
+                let bent = match rate != 0.0 {
+                    true => self.bent(rate),
+                    false => Vec::new(),
+                };
                 kind.hzs()
                     .iter()
                     .map(|hz| {
@@ -514,7 +600,7 @@ impl Problem {
                             true => self
                                 .times
                                 .iter()
-                                .map(|t| self.swept(*hz, rate, *t))
+                                .map(|t| self.swept(hz * sva_formula::exp(rate * t), &bent))
                                 .collect(),
                             false => vec![at(*hz)],
                         })
@@ -524,15 +610,25 @@ impl Problem {
         }
     }
 
-    /// The power a unit sine at `hz e^(rate t)` puts in each feasible bin of the window
-    /// centred at `centre`: its periodogram, its positive frequencies alone, as `MODEL` states.
-    fn swept(&self, hz: f64, rate: f64, centre: f64) -> Vec<f64> {
-        let (n, long) = (self.grid.n, self.grid.long);
+    /// Radians per Hz at the window's centre a path gliding at `rate` turns by each sample,
+    /// `2 pi (e^(rate s) - 1) / rate`, `s` its time from the centre.
+    fn bent(&self, rate: f64) -> Vec<f64> {
+        let long = self.grid.long;
+        (0..long)
+            .map(|k| {
+                let from = (k as f64 - (long / 2) as f64) / self.grid.rate;
+                std::f64::consts::TAU * libm::expm1(rate * from) / rate
+            })
+            .collect()
+    }
+
+    /// The power a unit sine at `hz` at a window's centre, turning `bent` per Hz there, puts
+    /// in each feasible bin of that window: its periodogram, positive frequencies alone.
+    fn swept(&self, hz: f64, bent: &[f64]) -> Vec<f64> {
+        let n = self.grid.n;
         let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
-        let turns = std::f64::consts::TAU * hz * sva_formula::exp(rate * centre) / rate;
-        for (k, w) in self.window.iter().enumerate() {
-            let from = (k as f64 - (long / 2) as f64) / self.grid.rate;
-            let (sin, cos) = libm::sincos(turns * libm::expm1(rate * from));
+        for (k, (w, turns)) in self.window.iter().zip(bent).enumerate() {
+            let (sin, cos) = libm::sincos(hz * turns);
             (re[k], im[k]) = (0.5 * w * cos, 0.5 * w * sin);
         }
         fft::fft_with(&mut re, &mut im, &self.twiddle);
@@ -639,7 +735,7 @@ fn rewrite(p: &Problem, kind: &Kind, key: u64, trajectories: Vec<Trajectory>) ->
     let glide = kind.glide();
     let levels: Vec<Vec<f64>> = trajectories
         .iter()
-        .map(|t| p.times.iter().map(|at| level_at(t, 0.0, *at)).collect())
+        .map(|t| levels_at(t, &p.times))
         .collect();
     let gains = levels
         .iter()
@@ -729,6 +825,11 @@ fn priced(
     let looks = |k: usize| p.looks(&levels[k], columns.floors[k], &columns.paths[k]);
     let lowest = columns.floors.iter().copied().fold(f64::INFINITY, f64::min);
     let feasible = Feasible::of(&p.clip, (lowest, p.top_db));
+    let level_deltas: Vec<f64> = (0..columns.heard.len())
+        .map(|k| level_delta(hop, &looks(k)))
+        .collect();
+    let mut steps = None;
+    let mut steps = || *steps.get_or_insert_with(|| frequency_steps(p, columns, levels));
     let mut level = 0;
     let mut deltas = Vec::new();
     for (q, _) in atom.numbers() {
@@ -738,9 +839,9 @@ fn priced(
         let member = level % columns.heard.len();
         deltas.push(match q {
             Quantity::Time => hop,
-            Quantity::Db | Quantity::DbDeviation => level_delta(hop, &looks(member)),
-            Quantity::Hz | Quantity::HzDeviation => frequency_steps(p, columns, levels).0,
-            Quantity::Stretch => frequency_steps(p, columns, levels).1,
+            Quantity::Db | Quantity::DbDeviation => level_deltas[member],
+            Quantity::Hz | Quantity::HzDeviation => steps().0,
+            Quantity::Stretch => steps().1,
             Quantity::Glide => glide_step,
             Quantity::Edge => edge_step(p, &feasible),
         });
@@ -924,6 +1025,32 @@ fn thinned((on, end): (f64, f64), times: &[f64], levels: &[f64], tolerance: f64)
         base,
         knots: kept[1..].iter().map(|(t, l)| (t - on, l - base)).collect(),
     }
+}
+
+/// `level_at` from 0 at each of the ascending `times`, its knots walked once.
+fn levels_at(level: &Trajectory, times: &[f64]) -> Vec<f64> {
+    let mut from = (0.0, level.base);
+    let mut knots = level
+        .knots
+        .iter()
+        .map(|(at, d)| (*at, level.base + d))
+        .peekable();
+    times
+        .iter()
+        .map(|t| {
+            while let Some(to) = knots.peek().copied() {
+                if *t <= to.0 {
+                    return match to.0 > from.0 {
+                        true => from.1 + (to.1 - from.1) * (t - from.0) / (to.0 - from.0),
+                        false => to.1,
+                    };
+                }
+                from = to;
+                knots.next();
+            }
+            from.1
+        })
+        .collect()
 }
 
 /// The level in dB `level` holds at `t`, its knots' times from `on`.
@@ -1210,7 +1337,8 @@ fn retuned(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> Optio
     let fitted = slope(&tracks, rate_floor(p, &columns, &held.written.levels));
     let mut glides = vec![current];
     for g in [Glide::default(), fitted] {
-        if !glides.iter().any(|h| h.rate == g.rate) {
+        let heard = g.rate == 0.0 || moves(p, &held.kind.glided(g, p.middle()));
+        if heard && !glides.iter().any(|h| h.rate == g.rate) {
             glides.push(g);
         }
     }
@@ -1347,6 +1475,19 @@ fn lines(p: &Problem, kind: &Kind) -> Vec<Vec<f64>> {
     }
 }
 
+/// Whether some line of `kind` moves over the frames by the main lobe's half-width or more.
+fn moves(p: &Problem, kind: &Kind) -> bool {
+    let lobe = lobe_hz(p);
+    lines(p, kind).iter().any(|path| {
+        let (lo, hi) = path
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), hz| {
+                (lo.min(*hz), hi.max(*hz))
+            });
+        hi - lo >= lobe
+    })
+}
+
 /// Whether any of `a`'s lines lies within the main lobe's half-width of any of `b`'s in some
 /// frame, where their powers do not add, as `MODEL` states.
 fn collide(p: &Problem, a: &[Vec<f64>], b: &[Vec<f64>]) -> bool {
@@ -1438,7 +1579,7 @@ fn gliding(
         .collect();
     let (_, written) = scored(p, n, residual, kind, key);
     let glide = slope(&tracks, rate_floor(p, &p.columns(kind), &written.levels));
-    if glide.rate == 0.0 {
+    if glide.rate == 0.0 || !moves(p, &kind.glided(glide, p.middle())) {
         return None;
     }
     let starts: Vec<(usize, f64, f64)> = tracks
@@ -1474,9 +1615,28 @@ enum Made {
     Adjust(usize, Option<Box<Held>>, Tweak),
 }
 
-/// One pass over `p` from `state`, as `MODEL` states: every move scored against its residual,
-/// the best made where it lowers the DL; the state it makes, its `moved` `None` where none does.
-fn pass(p: &Problem, state: &State) -> State {
+/// `run` over `tasks`, `stop` asked before each turn of a task per thread; `None` if it stops.
+async fn paced<T: Send, R: Send>(
+    stop: &dyn Abandon,
+    tasks: Vec<T>,
+    run: impl Fn(T) -> R + Sync,
+) -> Option<Vec<R>> {
+    let threads = default_threads();
+    let mut tasks = tasks.into_iter().peekable();
+    let mut out = Vec::new();
+    while tasks.peek().is_some() {
+        if stop.abandoned().await {
+            return None;
+        }
+        let turn: Vec<T> = tasks.by_ref().take(threads.get()).collect();
+        out.extend(each(threads, turn, &run));
+    }
+    Some(out)
+}
+
+/// One pass over `p` from `state`, as `MODEL` states; its `moved` `None` where no move lowers
+/// the DL, `None` where `stop` ends it first.
+async fn pass(p: &Problem, state: &State, stop: &dyn Abandon) -> Option<State> {
     let key = state.born;
     let n = state.held.len();
     let residual = state.residual(p);
@@ -1493,15 +1653,35 @@ fn pass(p: &Problem, state: &State) -> State {
         .into_iter()
         .filter(|kind| apart(kind, None))
         .collect();
-    let adds = each(default_threads(), proposed, |kind| {
+    // Fixed candidates, then gliding variants, so each turn's tasks cost alike.
+    let fixed = paced(stop, proposed, |kind| {
         let (fixed, change) = refined(p, n, &residual, kind, key);
-        let glided = gliding(p, n, &residual, &mean, &fixed, key)
-            .map(|kind| refined(p, n, &residual, kind, key))
-            .filter(|(kind, glided)| *glided < change && apart(kind, None));
-        let (kind, change) = glided.unwrap_or((fixed, change));
-        apart(&kind, None).then_some((change, Move::Add(kind)))
-    });
-    let adjusts = each(default_threads(), (0..n).collect(), |a| {
+        let glide = gliding(p, n, &residual, &mean, &fixed, key);
+        (fixed, change, glide)
+    })
+    .await?;
+    let tried: Vec<(usize, Kind)> = fixed
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (_, _, glide))| glide.clone().map(|g| (i, g)))
+        .collect();
+    let mut glided: Vec<Option<(Kind, f64)>> = vec![None; fixed.len()];
+    let refined_glides = paced(stop, tried, |(i, kind)| {
+        (i, refined(p, n, &residual, kind, key))
+    })
+    .await?;
+    for (i, made) in refined_glides {
+        glided[i] = Some(made);
+    }
+    let adds = fixed
+        .into_iter()
+        .zip(glided)
+        .map(|((fixed, change, _), glided)| {
+            let glided = glided.filter(|(kind, glided)| *glided < change && apart(kind, None));
+            let (kind, change) = glided.unwrap_or((fixed, change));
+            apart(&kind, None).then_some((change, Move::Add(kind)))
+        });
+    let adjusts = paced(stop, (0..n).collect(), |a| {
         let (change, tweak, held) = scaled(p, state, &residual, a);
         let mut out = vec![(change, Move::Adjust(a, held.map(Box::new), tweak))];
         let retune = retuned(p, state, &residual, a).filter(|(_, h)| apart(&h.kind, Some(a)));
@@ -1514,9 +1694,9 @@ fn pass(p: &Problem, state: &State) -> State {
         let (change, held) = rethinned(p, state, &residual, a);
         out.push((change, Move::Adjust(a, Some(Box::new(held)), Tweak::Rethin)));
         out
-    });
+    })
+    .await?;
     let mut ranked: Vec<(f64, Move)> = adds
-        .into_iter()
         .flatten()
         .chain(adjusts.into_iter().flatten())
         .filter(|(change, _)| *change < 0.0)
@@ -1550,7 +1730,7 @@ fn pass(p: &Problem, state: &State) -> State {
         }
     }
     let Some(made) = best else {
-        return next;
+        return Some(next);
     };
     let moved = match made {
         Made::Add(kind, written) => {
@@ -1594,10 +1774,10 @@ fn pass(p: &Problem, state: &State) -> State {
         next = state.clone();
         next.moved = None;
         next.skipped = skipped;
-        return next;
+        return Some(next);
     }
     next.moved = Some(moved);
-    next
+    Some(next)
 }
 
 /// The bins `power` peaks at over their floor, each a track spanning the clip beside its bin,
@@ -1890,8 +2070,13 @@ fn scored(p: &Problem, n: usize, residual: &[Vec<f64>], kind: &Kind, key: u64) -
     (change, written)
 }
 
-/// The progress line of `state` at pass `pass`, `before` the DL before it, as `Line` states.
-fn line(p: &Problem, state: &State, pass: usize, before: f64, removed: Option<Atom>) -> Line {
+/// The progress line of `state` at pass `pass`, `before` the DL before it.
+fn line(
+    p: &Problem,
+    state: &State,
+    (pass, before, start_bits): (usize, f64, f64),
+    removed: Option<Atom>,
+) -> Line {
     let grid = &p.grid;
     let residual_db = state
         .residual(p)
@@ -1934,6 +2119,8 @@ fn line(p: &Problem, state: &State, pass: usize, before: f64, removed: Option<At
             .collect(),
         geometry: None,
         seconds: 0.0,
+        pass_secs: 0.0,
+        start_bits,
         atoms,
         clip: p.clip,
         skipped: state.skipped.clone(),
@@ -1951,16 +2138,149 @@ fn full(p: &Problem, model: &[Vec<f64>]) -> Vec<Vec<f64>> {
         .collect()
 }
 
-/// One sound's fit of `samples`, its start and each pass heard by `hear` as they end, `stop`
-/// asked before each pass, as `MODEL` states.
+/// The state `from` leaves on `p`, or why it is no fit of this clip.
+fn resumed(p: &Problem, from: &Resume, gain_db: f64) -> Result<State, CliError> {
+    let unread = |why: &str| {
+        CliError::usage(
+            "solve.from_unread",
+            format!("the composition to resume holds {why}, which no fit writes"),
+        )
+    };
+    let mismatch = |why: String| {
+        CliError::usage(
+            "solve.from_mismatch",
+            format!("the composition to resume was fitted to another clip: {why}"),
+        )
+    };
+    if let Some(written) = from.gain_db.filter(|g| *g != gain_db) {
+        return Err(mismatch(format!(
+            "its master gain is {written} dB, this clip's {gain_db} dB"
+        )));
+    }
+    let secs = p.clip.secs();
+    let mut held = Vec::new();
+    for atom in &from.atoms {
+        if atom.on != 0.0 || atom.end() != secs {
+            return Err(mismatch(format!(
+                "atom {} spans {}s to {}s, this clip 0s to {secs}s",
+                atom.key,
+                atom.on,
+                atom.end()
+            )));
+        }
+        if from.atoms.iter().filter(|a| a.key == atom.key).count() > 1 {
+            return Err(unread("two atoms of one key"));
+        }
+        if !atom.values().iter().all(|v| v.is_finite()) {
+            return Err(unread("a number that is not finite"));
+        }
+        let kind = kind_of(atom).ok_or_else(|| unread("an atom of a shape"))?;
+        let trajectories: Vec<Trajectory> = atom.levels().into_iter().cloned().collect();
+        let kind = match kind.glide().rate != 0.0 {
+            true => {
+                let levels: Vec<Vec<f64>> = trajectories
+                    .iter()
+                    .map(|t| levels_at(t, &p.times))
+                    .collect();
+                let step = rate_floor(p, &p.columns(&kind), &levels);
+                kind.glided(
+                    Glide {
+                        rate: kind.glide().rate,
+                        step,
+                    },
+                    0.0,
+                )
+            }
+            false => kind,
+        };
+        let written = rewrite(p, &kind, atom.key, trajectories);
+        held.push(Held {
+            templates: p.templates(&kind),
+            kind,
+            written,
+        });
+    }
+    let mut state = State {
+        held,
+        born: birth(&from.atoms),
+        atom_bits: 0.0,
+        residual_bits: 0.0,
+        moved: None,
+        skipped: Vec::new(),
+    };
+    state.price(p);
+    Ok(state)
+}
+
+/// The kind `atom` is written from, `None` for a shape no fit writes.
+fn kind_of(atom: &Atom) -> Option<Kind> {
+    let kind = match &atom.sound {
+        Sound::Partial { hz, glide } => Kind::Partial {
+            hz: hz.base,
+            glide: Glide {
+                rate: *glide,
+                step: 0.0,
+            },
+        },
+        Sound::Harmonic {
+            hz, stretch, glide, ..
+        } => Kind::Voice {
+            f0: hz.base,
+            stretch: *stretch,
+            count: atom.harmonics(),
+            glide: Glide {
+                rate: *glide,
+                step: 0.0,
+            },
+        },
+        Sound::Noise { lo, hi } => Kind::Noise { band: (*lo, *hi) },
+        Sound::Shaped { bands } => Kind::Shaped {
+            bands: bands
+                .iter()
+                .map(|(lo, hi, g)| ((*lo, *hi), libm::pow(10.0, g / 10.0)))
+                .collect(),
+        },
+    };
+    let steady = atom.hz().is_none_or(|hz| hz.knots.is_empty());
+    let positive = match &kind {
+        Kind::Partial { hz, .. } => *hz > 0.0,
+        Kind::Voice { f0, stretch, .. } => *f0 > 0.0 && *stretch >= 0.0,
+        Kind::Noise { band } => 0.0 < band.0 && band.0 < band.1,
+        Kind::Shaped { bands } => {
+            !bands.is_empty() && bands.iter().all(|((lo, hi), _)| 0.0 < *lo && lo < hi)
+        }
+    };
+    (steady && positive).then_some(kind)
+}
+
+fn refused(clip: &[f64]) -> Option<CliError> {
+    match (clip.is_empty(), clip.iter().all(|s| s.is_finite())) {
+        (true, _) => Some(CliError::usage(
+            "solve.empty_clip",
+            "the recording holds no sample, so there is nothing to fit",
+        )),
+        (_, false) => Some(CliError::usage(
+            "solve.not_finite",
+            "the recording holds a sample that is not a finite number",
+        )),
+        _ => None,
+    }
+}
+
+/// One sound's fit of `samples` under `options`, its start and each pass heard by `hear` as
+/// they end, `stop` asked before each pass and between its moves, as `MODEL` states.
 pub async fn fit(
     samples: &[f64],
     rate: u32,
     spl_db: f64,
+    options: &Options,
     hear: &mut dyn FnMut(&Line),
     stop: &dyn Abandon,
     clock: &dyn Fn() -> f64,
-) -> Fit {
+) -> Result<Fit, CliError> {
+    if let Some(refused) = refused(samples) {
+        return Err(refused);
+    }
     let to = rate_for(rate);
     let samples = decimated(samples, rate, to);
     let clip = Clip {
@@ -1976,9 +2296,24 @@ pub async fn fit(
     let gain_db = 20.0 * libm::log10(rms);
     let heard_at = spl_db + gain_db;
     let grid = Grid::of(&Spectrogram::of(&unit, clip.rate), unit.len());
+    if feasible(&grid).is_empty() {
+        return Err(CliError::usage(
+            "solve.rate_too_low",
+            format!(
+                "at {rate} Hz no analysis bin lies inside the feasible set from {} Hz (Cam {}), \
+                 so the clip holds nothing a fit hears; a correctness limit, with no override",
+                cam_hz(CAM_FIRST),
+                CAM_FIRST
+            ),
+        ));
+    }
     let p = Problem::of(grid, clip, heard_at, gain_db);
-    let mut state = State::empty(&p);
-    let mut first = line(&p, &state, 0, state.dl(), None);
+    let start_bits = State::empty(&p).dl();
+    let (mut state, from_pass) = match &options.from {
+        Some(from) => (resumed(&p, from, gain_db)?, from.passes),
+        None => (State::empty(&p), 0),
+    };
+    let mut first = line(&p, &state, (from_pass, state.dl(), start_bits), None);
     first.geometry = Some(Geometry {
         rate_hz: to,
         frame_secs: p.grid.frame_secs(),
@@ -1994,16 +2329,18 @@ pub async fn fit(
     });
     first.seconds = clock();
     hear(&first);
-    let (mut passes, mut adds, mut adjusts, mut stopped) = (0, 0, 0, false);
+    let (mut passes, mut adds, mut adjusts) = (from_pass, 0, 0);
     let mut tweaks = [0; 4];
-    loop {
+    let ended = loop {
         if stop.abandoned().await {
-            stopped = true;
-            break;
+            break End::Stopped;
         }
-        let next = pass(&p, &state);
+        let began = clock();
+        let Some(next) = pass(&p, &state, stop).await else {
+            break End::Stopped;
+        };
         let Some(moved) = &next.moved else {
-            break;
+            break End::Converged;
         };
         passes += 1;
         match moved.action {
@@ -2020,25 +2357,33 @@ pub async fn fit(
             .atoms()
             .into_iter()
             .find(|a| a.key == moved.key && moved.to_db.is_none());
-        let mut heard = line(&p, &next, passes, state.dl(), removed);
+        let (before, after) = (state.dl(), next.dl());
+        let mut heard = line(&p, &next, (passes, before, start_bits), removed);
         heard.seconds = clock();
+        heard.pass_secs = heard.seconds - began;
         hear(&heard);
         state = next;
-    }
+        // Optimisers' `ftol` (scipy.optimize's L-BFGS-B).
+        if before - after <= options.tolerance * before.abs().max(after.abs()).max(1.0) {
+            break End::Tolerance;
+        }
+    };
     let model = full(&p, &state.model(&p));
-    Fit {
+    Ok(Fit {
         clip,
         atoms: state.atoms(),
         gain_db,
         spl_db: heard_at,
         atom_bits: state.atom_bits,
         residual_bits: state.residual_bits,
+        from_pass,
         passes,
         adds,
         adjusts,
         tweaks,
-        stopped,
+        tolerance: options.tolerance,
+        ended,
         clip_grid: p.grid.broad(),
         fit_grid: p.grid.with(model).broad(),
-    }
+    })
 }

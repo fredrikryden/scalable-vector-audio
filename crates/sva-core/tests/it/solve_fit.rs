@@ -1,9 +1,12 @@
-// Concern: states what the fit owes sines, glides, voices, noise bands, a burst; a DL falling every pass; adjusts; determinism | Non-concern: the text | IO: (a clip) -> asserts
+// Concern: states what the fit owes sines, glides, voices, noise bands, a burst; a DL falling every pass; adjusts; determinism; its threshold; a resume | Non-concern: the text | IO: (a clip) -> asserts
 
 use std::f64::consts::TAU;
 
-use sva_core::solve::atoms::{Atom, Sound};
-use sva_core::solve::fit::{Action, Fit, Line, SPL_DB, Tweak, fit};
+use sva_core::CliError;
+use sva_core::solve::atoms::{Atom, Sound, files_at};
+use sva_core::solve::fit::{
+    Action, End, Fit, Line, Options, Resume, SPL_DB, TOLERANCE, Tweak, fit,
+};
 use sva_core::solve::report::progress;
 use sva_engine::Never;
 
@@ -24,17 +27,30 @@ fn now<F: Future>(future: F) -> F::Output {
     }
 }
 
-fn fitted(samples: &[f64]) -> (Fit, Vec<Line>) {
+/// `samples` fitted under `options`, each line it hears.
+fn fitted_with(samples: &[f64], options: &Options) -> (Fit, Vec<Line>) {
     let mut lines = Vec::new();
     let fit = now(fit(
         samples,
         RATE,
         SPL_DB,
+        options,
         &mut |line| lines.push(line.clone()),
         &Never,
         &|| 0.0,
-    ));
+    ))
+    .unwrap_or_else(|e| panic!("the clip fits: {e:?}"));
     (fit, lines)
+}
+
+fn fitted(samples: &[f64]) -> (Fit, Vec<Line>) {
+    fitted_with(
+        samples,
+        &Options {
+            tolerance: 0.0,
+            from: None,
+        },
+    )
 }
 
 fn t(n: usize) -> f64 {
@@ -503,4 +519,128 @@ fn a_decaying_stiff_string_is_adjusted_after_it_is_added() {
     );
     let dl = dls(&lines);
     assert!(dl.windows(2).all(|w| w[1] < w[0]), "{dl:?}");
+}
+
+/// A piano's C4 decaying harmonic by harmonic, as above.
+fn piano() -> Vec<f64> {
+    let parts: Vec<(f64, f64, f64)> = voice(261.63, 4e-4, 12, 0.3)
+        .into_iter()
+        .enumerate()
+        .map(|(k, (hz, a))| (hz, a, 1.0 + 0.25 * (k + 1) as f64))
+        .collect();
+    decaying(&parts)
+}
+
+/// At the default threshold each pass but the last drops the DL by more than its share; at
+/// none the fit runs on, its first passes the same.
+#[test]
+fn the_threshold_ends_a_fit_at_the_first_pass_dropping_under_its_share() {
+    let samples = piano();
+    let (cut, lines) = fitted_with(&samples, &Options::default());
+    let (whole, all) = fitted(&samples);
+    assert_eq!(whole.ended, End::Converged);
+    let dl = dls(&lines);
+    let under = |w: &[f64]| w[0] - w[1] <= TOLERANCE * w[0].abs().max(w[1].abs()).max(1.0);
+    let passes = &dl[1..];
+    assert!(
+        passes[..passes.len() - 1].windows(2).all(|w| !under(w)),
+        "{dl:?}"
+    );
+    assert_eq!(
+        cut.ended == End::Tolerance,
+        under(&dl[dl.len() - 2..]),
+        "{dl:?}"
+    );
+    assert!(cut.passes <= whole.passes);
+    let text = |lines: &[Line]| lines.iter().map(progress).collect::<Vec<_>>();
+    assert_eq!(text(&lines), text(&all[..lines.len()]));
+}
+
+/// A fit resumed from an earlier one's composition starts at its atoms and DL, numbering on.
+#[test]
+fn a_resumed_fit_goes_on_from_the_composition_it_reads() {
+    let samples = piano();
+    let (cut, lines) = fitted_with(&samples, &Options::default());
+    let (whole, _) = fitted(&samples);
+    let files = files_at(&cut.atoms, &cut.clip, cut.gain_db);
+    let from = Resume::of(&files, cut.passes).expect("the composition reads back");
+    assert_eq!(from.atoms, cut.atoms);
+    let (resumed, heard) = fitted_with(
+        &samples,
+        &Options {
+            tolerance: 0.0,
+            from: Some(from),
+        },
+    );
+    let last = |l: &Line| l.atom_bits + l.residual_bits;
+    let before = last(lines.last().expect("a line"));
+    assert!(
+        (last(&heard[0]) - before).abs() <= 1e-9 * before,
+        "{} {before}",
+        last(&heard[0])
+    );
+    assert_eq!(heard[0].pass, cut.passes);
+    assert!(
+        heard
+            .iter()
+            .skip(1)
+            .zip(cut.passes + 1..)
+            .all(|(l, k)| l.pass == k)
+    );
+    assert_eq!(resumed.from_pass, cut.passes);
+    assert_eq!(resumed.passes, cut.passes + resumed.adds + resumed.adjusts);
+    assert_eq!(resumed.ended, End::Converged);
+    assert!(
+        (resumed.atom_bits + resumed.residual_bits)
+            <= whole.atom_bits + whole.residual_bits + 1e-6 * before,
+        "{} {}",
+        resumed.atom_bits + resumed.residual_bits,
+        whole.atom_bits + whole.residual_bits
+    );
+}
+
+/// The code a usage refusal names.
+fn usage(e: &CliError) -> String {
+    match e {
+        CliError::Usage { code, .. } => code.to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+/// A composition of another clip's length or gain, or of no score, refuses by name.
+#[test]
+fn a_resume_from_another_clip_refuses_by_name() {
+    let samples = piano();
+    let (cut, _) = fitted_with(&samples, &Options::default());
+    let refused = |samples: &[f64], from: Resume| {
+        let options = Options {
+            tolerance: 0.0,
+            from: Some(from),
+        };
+        match now(fit(
+            samples,
+            RATE,
+            SPL_DB,
+            &options,
+            &mut |_| {},
+            &Never,
+            &|| 0.0,
+        )) {
+            Ok(_) => panic!("a resume from another clip refuses"),
+            Err(e) => usage(&e),
+        }
+    };
+    let files = files_at(&cut.atoms, &cut.clip, cut.gain_db);
+    let from = Resume::of(&files, cut.passes).expect("the composition reads back");
+    assert_eq!(
+        refused(&samples[..samples.len() / 2], from.clone()),
+        "solve.from_mismatch"
+    );
+    let louder: Vec<f64> = samples.iter().map(|s| 2.0 * s).collect();
+    assert_eq!(refused(&louder, from), "solve.from_mismatch");
+    let held: Vec<(String, String)> = files.into_iter().filter(|(p, _)| p == "master").collect();
+    assert_eq!(
+        Resume::of(&held, 0).map(|_| ()).map_err(|e| usage(&e)),
+        Err("solve.from_unread".to_string())
+    );
 }

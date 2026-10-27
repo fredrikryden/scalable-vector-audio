@@ -242,6 +242,7 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                 ));
             }
             "progress" => {}
+            "tolerance" | "from" => {}
             "live" => {
                 held.live = value
                     .as_bool()
@@ -508,7 +509,10 @@ impl Composition {
         #[wasm_bindgen(unchecked_param_type = "SolveClip")] clip: JsValue,
         #[wasm_bindgen(unchecked_param_type = "SolveOptions")] options: JsValue,
     ) -> Result<JsValue, JsValue> {
-        options_of(&options, &["spl", "signal", "progress"])?;
+        options_of(
+            &options,
+            &["spl", "tolerance", "from", "signal", "progress"],
+        )?;
         solve::solved(&clip, &options).await
     }
 

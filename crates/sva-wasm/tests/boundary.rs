@@ -1609,9 +1609,10 @@ fn seed_throws_unbuilt_and_solve_refuses_an_unknown_option() {
     assert!(code(refused).contains("seed.unbuilt"));
 }
 
-/// A clip solves step by step: a start line holding the grid's shape, then one line per step
-/// heard by `progress`, the description length falling at each, the answer's files rendering
-/// in a fresh composition.
+/// A clip solves pass by pass: a start line holding the grid's shape, then one line per pass
+/// heard by `progress`, the description length falling at each, each line beside its drop, its
+/// share, its time and the composition it leaves, the answer's files rendering in a fresh
+/// composition.
 #[wasm_bindgen_test]
 async fn a_clip_solves_with_a_line_per_step() {
     let (rate, channels) = sine_clip();
@@ -1626,11 +1627,38 @@ async fn a_clip_solves_with_a_line_per_step() {
     let data = field(&answered, "data");
     let fit = field(&data, "fit");
     assert_eq!(
-        field(&fit, "steps").as_f64(),
+        field(&fit, "passes").as_f64(),
         Some(f64::from(heard.length() - 1)),
         "{}",
         as_text(&fit)
     );
+    assert_eq!(field(&fit, "from_pass").as_f64(), Some(0.0));
+    for line in heard.iter().skip(1) {
+        for key in ["drop_bits", "share", "total_drop_bits", "pass_secs"] {
+            assert!(
+                field(&line, key).as_f64().is_some(),
+                "`{key}`: {}",
+                as_text(&line)
+            );
+        }
+        assert!(
+            field(&line, "move").as_string().is_some(),
+            "{}",
+            as_text(&line)
+        );
+        let mut pass = Composition::new(Some("a-pass".to_string()));
+        for file in items(&line, "files").iter() {
+            pass.insert(
+                &field(&file, "path").as_string().unwrap_or_default(),
+                &field(&file, "text").as_string().unwrap_or_default(),
+            );
+        }
+        assert!(
+            pass.rendered("@master([0, 0.1s])", None, options(&[]))
+                .is_ok(),
+            "each pass's files render"
+        );
+    }
     let first = heard.get(0);
     assert_eq!(
         field(&first, "action").as_string().as_deref(),
@@ -1697,5 +1725,99 @@ async fn an_aborted_signal_ends_a_solve_before_its_next_step() {
         .unwrap_or_else(|e| unreachable!("the solve answers: {}", as_text(&field(&e, "refusal"))));
     let fit = field(&field(&answered, "data"), "fit");
     assert_eq!(field(&fit, "stopped").as_bool(), Some(true));
-    assert_eq!(field(&fit, "steps").as_f64(), Some(0.0));
+    assert_eq!(field(&fit, "ended").as_string().as_deref(), Some("stopped"));
+    assert_eq!(field(&fit, "passes").as_f64(), Some(0.0));
+}
+
+/// A signal aborted while a pass is under way ends the solve there, before the move between
+/// whose scorings it was read, the pass dropped: here one reading `aborted` true from its third
+/// look, the first before the pass and the second before its first move.
+#[wasm_bindgen_test]
+async fn a_signal_aborted_mid_pass_drops_that_pass() {
+    let signal = js_sys::Function::new_no_args(
+        "let n = 0; return { get aborted() { n += 1; return n >= 3; } };",
+    )
+    .call0(&JsValue::NULL)
+    .unwrap_or_else(|_| unreachable!("a signal"));
+    let heard = js_sys::Array::new();
+    let push = js_sys::Function::new_with_args("line", "this.push(line)");
+    let (rate, channels) = sine_clip();
+    let clip = object(&[("rate", JsValue::from(rate)), ("channels", channels.into())]);
+    let asked = object(&[("signal", signal), ("progress", push.bind0(&heard).into())]);
+    let answered = page()
+        .solve(clip.into(), asked.into())
+        .await
+        .unwrap_or_else(|e| unreachable!("the solve answers: {}", as_text(&field(&e, "refusal"))));
+    let fit = field(&field(&answered, "data"), "fit");
+    assert_eq!(field(&fit, "ended").as_string().as_deref(), Some("stopped"));
+    assert_eq!(
+        field(&fit, "passes").as_f64(),
+        Some(0.0),
+        "{}",
+        as_text(&fit)
+    );
+    assert_eq!(heard.length(), 1, "the start line alone");
+}
+
+/// A solve continued `from` an answer starts from its atoms and description length, numbers its
+/// passes on from that answer's, and passes on past the threshold till no move lowers it.
+#[wasm_bindgen_test]
+async fn a_solve_continues_from_an_answer() {
+    let (rate, channels) = sine_clip();
+    let clip = object(&[("rate", JsValue::from(rate)), ("channels", channels.into())]);
+    let first = page()
+        .solve(clip.clone().into(), JsValue::UNDEFINED)
+        .await
+        .unwrap_or_else(|e| unreachable!("the solve answers: {}", as_text(&field(&e, "refusal"))));
+    let data = field(&first, "data");
+    let made = field(&field(&data, "fit"), "passes")
+        .as_f64()
+        .unwrap_or(-1.0);
+    let heard = js_sys::Array::new();
+    let push = js_sys::Function::new_with_args("line", "this.push(line)");
+    let asked = object(&[
+        ("from", data.clone()),
+        ("progress", push.bind0(&heard).into()),
+    ]);
+    let answered = page()
+        .solve(clip.into(), asked.into())
+        .await
+        .unwrap_or_else(|e| unreachable!("the solve answers: {}", as_text(&field(&e, "refusal"))));
+    let fit = field(&field(&answered, "data"), "fit");
+    assert_eq!(
+        field(&fit, "from_pass").as_f64(),
+        Some(made),
+        "{}",
+        as_text(&fit)
+    );
+    assert_eq!(field(&fit, "tolerance").as_f64(), Some(0.0));
+    assert_eq!(
+        field(&fit, "ended").as_string().as_deref(),
+        Some("converged")
+    );
+    let start = heard.get(0);
+    assert_eq!(field(&start, "pass").as_f64(), Some(made));
+    let before = field(&field(&data, "fit"), "dl_bits")
+        .as_f64()
+        .unwrap_or(0.0);
+    let after = field(&start, "dl_bits").as_f64().unwrap_or(f64::NAN);
+    assert!(
+        (after - before).abs() <= 1e-9 * before.abs(),
+        "{after} {before}"
+    );
+    for (k, line) in heard.iter().enumerate().skip(1) {
+        assert_eq!(field(&line, "pass").as_f64(), Some(made + k as f64));
+    }
+    let unread = object(&[(
+        "from",
+        object(&[("files", js_sys::Array::new().into())]).into(),
+    )]);
+    let (rate, channels) = sine_clip();
+    let clip = object(&[("rate", JsValue::from(rate)), ("channels", channels.into())]);
+    let refused = page()
+        .solve(clip.into(), unread.into())
+        .await
+        .err()
+        .unwrap_or_else(|| unreachable!("an empty composition refuses"));
+    assert!(as_text(&field(&refused, "refusal")).contains("solve.from_unread"));
 }

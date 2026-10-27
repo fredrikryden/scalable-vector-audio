@@ -1,4 +1,4 @@
-// Concern: freezes `solve`'s refusals, its progress lines, the files it writes, `new --from`'s stub | Non-concern: the atoms found (sva-core's solve_fit) | IO: (argv, a clip) -> envelope, stderr, files
+// Concern: freezes `solve`'s refusals, progress lines, files written, a resume, `new --from`'s stub | Non-concern: the atoms found (sva-core's solve_fit) | IO: (argv, a clip) -> envelope, stderr, files
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -86,9 +86,21 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_pass() {
     assert_eq!(answer["status"], "success", "{answer}");
     let fit = &answer["data"]["fit"];
     assert!(fit["partials"].as_u64().is_some_and(|n| n >= 1), "{fit}");
-    for key in ["dl_bits", "atom_bits", "residual_bits", "gain_db", "secs"] {
+    for key in [
+        "dl_bits",
+        "atom_bits",
+        "residual_bits",
+        "gain_db",
+        "secs",
+        "tolerance",
+    ] {
         assert!(fit[key].is_number(), "`{key}`: {fit}");
     }
+    assert_eq!(fit["from_pass"], 0, "{fit}");
+    assert!(
+        ["converged", "tolerance"].contains(&fit["ended"].as_str().unwrap_or("")),
+        "{fit}"
+    );
     let heard: Vec<Value> = String::from_utf8_lossy(&out.stderr)
         .lines()
         .map(|l| serde_json::from_str(l).expect("each progress line is JSON"))
@@ -131,6 +143,22 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_pass() {
             let delta = line["delta_dl_bits"].as_f64().expect("a change");
             assert!((delta - (total - dl)).abs() <= 1e-6 * dl.abs(), "{line}");
             assert!(total < dl, "the description length falls: {line}");
+            assert_eq!(line["drop_bits"].as_f64(), Some(-delta), "{line}");
+            let start = lines[0]["dl_bits"].as_f64().expect("a total");
+            let so_far = line["total_drop_bits"].as_f64().expect("a drop");
+            assert!(
+                (start - so_far - total).abs() <= 1e-9 * start.abs(),
+                "{line}"
+            );
+            let share = line["share"].as_f64().expect("a share");
+            assert!(0.0 < share && share <= 1.0, "{line}");
+            assert!(
+                line["move"]
+                    .as_str()
+                    .is_some_and(|m| m.ends_with(line["atom"]["kind"].as_str().unwrap_or("?"))),
+                "{line}"
+            );
+            assert!(line["pass_secs"].is_number(), "{line}");
         }
         dl = total;
         for row in line["residual_db"].as_array().into_iter().flatten() {
@@ -173,9 +201,15 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_pass() {
 #[test]
 fn a_solve_refuses_each_mistake_under_its_code() {
     let root = scratch("solve-refusals");
-    let cases: [(&[&str], &str, i32); 6] = [
+    let cases: [(&[&str], &str, i32); 8] = [
         (&["solve"], "cli.missing_argument", 3),
         (&["solve", "clip.wav", "--spl", "loud"], "cli.bad_value", 3),
+        (
+            &["solve", "clip.wav", "--tolerance", "-1"],
+            "cli.bad_value",
+            3,
+        ),
+        (&["solve", "clip.wav", "--from"], "cli.missing_value", 3),
         (&["solve", "clip.wav", "--out"], "cli.missing_value", 3),
         (
             &["solve", "clip.wav", "--levels", "2"],
@@ -193,6 +227,59 @@ fn a_solve_refuses_each_mistake_under_its_code() {
         refuses(&root, argv, code, exit);
     }
     assert!(!root.join("fit").exists(), "nothing is written");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A solve resumed from the fit it wrote reads that composition, numbers its passes on from
+/// the last render there, keeps those renders, and passes on till no move lowers the DL; a
+/// directory holding no fit refuses as unread.
+#[test]
+fn a_solve_resumes_from_the_fit_it_wrote() {
+    let (root, wav) = clip("solve-resume", TONE);
+    let first = json(&sva(&root, &["solve", &wav, "--out", "fit"]));
+    assert_eq!(first["status"], "success", "{first}");
+    let made = first["data"]["fit"]["passes"].as_u64().expect("a count");
+    let out = sva(
+        &root,
+        &["solve", &wav, "--from", "fit", "--out", "fit", "--confirm"],
+    );
+    let answer = json(&out);
+    assert_eq!(answer["status"], "success", "{answer}");
+    let fit = &answer["data"]["fit"];
+    assert_eq!(fit["from_pass"].as_u64(), Some(made), "{fit}");
+    assert_eq!(fit["tolerance"], 0.0, "{fit}");
+    assert_eq!(fit["ended"], "converged", "{fit}");
+    let lines: Vec<Value> = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("each progress line is JSON"))
+        .collect();
+    assert_eq!(lines[0]["action"], "start", "{}", lines[0]);
+    assert_eq!(lines[0]["pass"].as_u64(), Some(made), "{}", lines[0]);
+    let before = first["data"]["fit"]["dl_bits"].as_f64().expect("a total");
+    let resumed = lines[0]["dl_bits"].as_f64().expect("a total");
+    assert!(
+        (resumed - before).abs() <= 1e-9 * before.abs(),
+        "{resumed} {before}"
+    );
+    for (k, line) in lines.iter().enumerate().skip(1) {
+        assert_eq!(line["pass"].as_u64(), Some(made + k as u64), "{line}");
+    }
+    assert_eq!(
+        fit["passes"].as_u64(),
+        Some(made + lines.len() as u64 - 1),
+        "{fit}"
+    );
+    for k in 1..=made + lines.len() as u64 - 1 {
+        let wav = root.join("fit").join(format!("pass-{k:03}.wav"));
+        assert!(wav.is_file(), "{} kept or written", wav.display());
+    }
+    std::fs::create_dir_all(root.join("empty")).expect("a directory");
+    refuses(
+        &root,
+        &["solve", &wav, "--from", "empty"],
+        "solve.from_unread",
+        3,
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 

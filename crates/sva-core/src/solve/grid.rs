@@ -1,6 +1,6 @@
 // Concern: the coarse grid: octave bands by 48 ms frames, sine and band templates, phaseless resynthesis | Non-concern: the fit (fit.rs) | IO: (Spectrogram) -> Grid, samples
 
-use sva_engine::fft;
+use sva_engine::{default_threads, each, fft};
 
 use super::add::{Spectrogram, span_hz};
 use super::atoms::phase;
@@ -57,21 +57,24 @@ impl Grid {
         let pooled =
             QUARTERS * (libm::round(spectrogram.long as f64 / 4.0 / step as f64) as usize).max(1);
         let half = spectrogram.long / 2;
-        let hops = spectrogram.power.len();
+        let hops = spectrogram.frames();
         let inside = half.div_ceil(step)..(len.saturating_sub(half) / step + 1).min(hops);
         let inside = match inside.is_empty() {
             true => 0..hops,
             false => inside,
         };
         let first = inside.start;
-        let power = spectrogram.power[inside]
-            .chunks(pooled)
-            .map(|hops| {
-                (0..hops[0].len())
-                    .map(|b| hops.iter().map(|h| h[b]).sum::<f64>() / hops.len() as f64)
-                    .collect()
-            })
+        let frames: Vec<std::ops::Range<usize>> = inside
+            .clone()
+            .step_by(pooled)
+            .map(|at| at..(at + pooled).min(inside.end))
             .collect();
+        let power = each(default_threads(), frames, |held| {
+            let hops: Vec<Vec<f64>> = held.map(|m| spectrogram.power(m)).collect();
+            (0..hops[0].len())
+                .map(|b| hops.iter().map(|h| h[b]).sum::<f64>() / hops.len() as f64)
+                .collect()
+        });
         let long = spectrogram.long;
         let window: Vec<f64> = (0..long)
             .map(|k| 0.5 - 0.5 * libm::cos(std::f64::consts::TAU * k as f64 / long as f64))

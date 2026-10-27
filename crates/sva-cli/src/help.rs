@@ -28,6 +28,7 @@ pub fn help_text() -> String {
         .join(", ");
     let unreadable = crate::recording::UNREADABLE;
     let (spl, out) = (sva_core::solve::fit::SPL_DB, crate::args::OUT);
+    let tolerance = sva_core::solve::fit::TOLERANCE;
     format!(
         r#"USAGE:
   sva-cli (render | analyze | solve | lint | trace | builtins | outline | new) [arguments]
@@ -369,7 +370,8 @@ REPRESENTATIONS:
 {representations}
 
 SOLVE:
-  sva-cli solve <recording> [--spl <dB>] [--out <dir>] [--confirm]
+  sva-cli solve <recording> [--spl <dB>] [--tolerance <share>] [--from <dir>]
+    [--out <dir>] [--confirm]
 
   Fits one sound of atoms (partials, harmonic voices, noise bands and shaped
   noises, each spanning the clip, only its level moving) to a recording, read
@@ -382,29 +384,46 @@ SOLVE:
   octave band, and one shaped noise: a gain per octave band times one envelope
   over time), or adjusts a kept atom's level per 48 ms frame by the exact best
   amount for it alone, up or down, to nought removing it. It stops where no
-  move shortens it, so the description length falls at every pass. The
-  description length is the atoms' bits plus the residual's on the coarse
-  grid's frames by its bins.
+  move shortens it, so the description length falls at every pass, or after
+  the first pass whose drop is no more than `--tolerance` (default
+  {tolerance}) times the larger of the description length before and after it
+  (and 1), as optimisers' ftol reads it. The description length is the
+  atoms' bits plus the residual's on the coarse grid's frames by its bins.
+  `--from <dir>` resumes the fit an earlier solve wrote under `<dir>`: its
+  composition's atoms, its passes numbered on from the last `pass-NNN.wav`
+  there, its `--tolerance` 0 unless given, so it passes on till no move
+  shortens it or SIGINT; a composition no fit of this recording wrote refuses
+  as `solve.from_mismatch`, one holding no fit's atoms as `solve.from_unread`.
+  A recording of no sample refuses as `solve.empty_clip`, one holding a
+  sample not finite as `solve.not_finite`, one whose rate puts no bin in the
+  feasible set as `solve.rate_too_low`.
   `--spl` is a full-scale sine's level in dB SPL (default {spl}). Under `<out>`
   (default `{out}`) it writes `pass-001.wav` and on (the atoms each pass
   leaves, rendered as it ends), the composition (its levels thinned at the
   level JND), `final.wav` (its render), and `clip-grid.wav` and
   `fit-grid.wav`, the clip's and the fit's octave bands by 48 ms frames sounded
   alike; an out directory already holding files refuses as a conflict unless
-  `--confirm`. Stderr carries one JSON line per pass: `pass` (0 for the
-  start), `action` (`start`, then `add` or `adjust`), `atom` (`key`, `kind`,
+  `--confirm`; a resumed fit there keeps the pass renders up to its own.
+  Stderr carries one JSON line per pass: `pass` (0 for the start, a resumed
+  start's the pass it resumes from), `action` (`start`, then `add` or
+  `adjust`), `move` (both in words, as `add partial`), `atom` (`key`, `kind`,
   `hz`, `stretch`, `harmonics`, `lo_hz`, `hi_hz`, `bands`, null where none),
   `from_db` and `to_db` (its level before and after, null where it was not or
-  is no more), `delta_dl_bits` (the pass's change), `dl_bits`, `atom_bits` and
+  is no more), `delta_dl_bits` (the pass's change), `drop_bits` (its
+  negation), `total_drop_bits` (the drop from the empty fit's description
+  length so far), `share` (the pass's drop over that), `dl_bits`, `atom_bits` and
   `residual_bits` (the total and its parts), `residual_db` (per frame, each
   octave band's power the fit leaves, in dB, null where none), `envelopes`
   (each kept atom's `key` and written level per frame in dB), `skipped` (the
-  atoms of better moves passed over, their nodes refused) and `seconds`;
+  atoms of better moves passed over, their nodes refused), `seconds` (the
+  clock as it ended) and `pass_secs` (its pass's own time);
   the start line adds `rate_hz`, `frame_secs`, `first_centre_secs`,
   `band_edges_hz`, `band_floor_db` and `gain_db`. Stdout answers `fit` with
   `rate_hz`, `passes`, `adds`, `adjusts`, `partials`, `harmonics`, `noises`,
-  `shaped`, `dl_bits`, `atom_bits`, `residual_bits`, `gain_db`, `stopped`,
-  `secs`, `atoms` and `wrote`. SIGINT ends the fit after its pass, `stopped` true.
+  `shaped`, `dl_bits`, `atom_bits`, `residual_bits`, `gain_db`, `from_pass`
+  (the pass it resumed from), `tolerance`, `ended` (`converged`, `tolerance`
+  or `stopped`), `stopped`, `secs`, `atoms` and `wrote`. SIGINT ends the fit
+  between its moves, the pass under way dropped, `stopped` true.
 
 ANALYZE:
   sva-cli analyze <file> --representation <list> [--confirm]

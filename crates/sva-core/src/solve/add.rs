@@ -21,7 +21,8 @@ pub const MODEL: &str = "the analysis: a periodic Hann window as long as the ear
      fundamental its strongest member's Hz over its harmonic number, the highest scoring, \
      ties to the higher fundamental";
 
-/// Power per bin `0..=n/2` of each frame every `hop` samples, centred on the frame's sample.
+/// Power per bin `0..=n/2` of each frame every `hop` samples, centred on the frame's sample,
+/// each frame computed where it is read, so no clip holds every frame at once.
 pub struct Spectrogram {
     pub(super) rate: f64,
     pub(super) n: usize,
@@ -29,7 +30,9 @@ pub struct Spectrogram {
     pub(super) hop: usize,
     pub(super) sum_w: f64,
     pub(super) sum_w2: f64,
-    pub(super) power: Vec<Vec<f64>>,
+    window: Vec<f64>,
+    twiddle: Vec<(f64, f64)>,
+    samples: Vec<f64>,
 }
 
 impl Spectrogram {
@@ -41,22 +44,6 @@ impl Spectrogram {
             .collect();
         let n = long.next_power_of_two();
         let hop = (libm::round(HOP_SECS * rate_hz) as usize).max(1);
-        let twiddle = fft::twiddles(n);
-        let frames: Vec<usize> = (0..=samples.len() / hop).collect();
-        let power = each(default_threads(), frames, |m| {
-            let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
-            let from = (m * hop) as i64 - (long / 2) as i64;
-            for (k, w) in window.iter().enumerate() {
-                let at = from + k as i64;
-                if at >= 0 && (at as usize) < samples.len() {
-                    re[k] = w * samples[at as usize];
-                }
-            }
-            fft::fft_with(&mut re, &mut im, &twiddle);
-            (0..=n / 2)
-                .map(|b| re[b] * re[b] + im[b] * im[b])
-                .collect::<Vec<f64>>()
-        });
         Spectrogram {
             rate: rate_hz,
             n,
@@ -64,8 +51,30 @@ impl Spectrogram {
             hop,
             sum_w: window.iter().sum(),
             sum_w2: window.iter().map(|w| w * w).sum(),
-            power,
+            twiddle: fft::twiddles(n),
+            window,
+            samples: samples.to_vec(),
         }
+    }
+
+    /// How many frames it holds.
+    pub(super) fn frames(&self) -> usize {
+        self.samples.len() / self.hop + 1
+    }
+
+    /// Frame `m`'s power per bin.
+    pub(super) fn power(&self, m: usize) -> Vec<f64> {
+        let n = self.n;
+        let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
+        let from = (m * self.hop) as i64 - (self.long / 2) as i64;
+        for (k, w) in self.window.iter().enumerate() {
+            let at = from + k as i64;
+            if at >= 0 && (at as usize) < self.samples.len() {
+                re[k] = w * self.samples[at as usize];
+            }
+        }
+        fft::fft_with(&mut re, &mut im, &self.twiddle);
+        (0..=n / 2).map(|b| re[b] * re[b] + im[b] * im[b]).collect()
     }
 }
 

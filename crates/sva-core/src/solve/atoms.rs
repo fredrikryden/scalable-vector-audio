@@ -10,6 +10,7 @@ use sva_engine::hearing::{CAM_FIRST, CAM_LAST, cam_hz};
 
 use sva_engine::Tier;
 
+use crate::cli_error::CliError;
 use crate::json::num;
 use crate::{Job, Output, Representation, asked, call, execute};
 
@@ -357,10 +358,21 @@ impl Atom {
         }
     }
 
-    /// Whether the parser reads this atom's node: a harmonic of many harmonics nests past its
-    /// bound, a correctness limit, not a cost one.
+    /// Whether the parser and engine read this atom's node: a harmonic of many harmonics nests
+    /// past its bound, a band holding no line at k over the clip's length is empty.
     pub fn writes(&self, clip: &Clip) -> bool {
-        sva_ast::parse_file(&self.node_text(clip)).is_ok()
+        let holds = |lo: f64, hi: f64| {
+            matches!(
+                sva_formula::noise::band(clip.secs(), lo, Some(hi)),
+                Some((first, sva_formula::Bound::Finite(last))) if first <= last
+            )
+        };
+        let held = match &self.sound {
+            Sound::Noise { lo, hi } => holds(*lo, *hi),
+            Sound::Shaped { bands } => bands.iter().all(|(lo, hi, _)| holds(*lo, *hi)),
+            Sound::Partial { .. } | Sound::Harmonic { .. } => true,
+        };
+        held && sva_ast::parse_file(&self.node_text(clip)).is_ok()
     }
 
     pub fn node_text(&self, clip: &Clip) -> String {
@@ -748,6 +760,15 @@ pub fn files_at(atoms: &[Atom], clip: &Clip, gain_db: f64) -> Vec<(String, Strin
     out
 }
 
+/// The master gain `files_at` wrote into `files`, if it did.
+pub fn gain_of(files: &[(String, String)]) -> Option<f64> {
+    let (_, master) = files.iter().find(|(path, _)| path == "master")?;
+    master
+        .lines()
+        .find_map(|l| l.strip_prefix("gain = "))
+        .and_then(|v| v.trim().parse().ok())
+}
+
 pub fn nodes(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = atoms
         .iter()
@@ -788,8 +809,8 @@ impl Feasible {
     }
 }
 
-/// The clip `files` write.
-pub fn sounded(files: Vec<(String, String)>, clip: &Clip) -> Vec<f64> {
+/// The clip `files` write, or why the engine refuses them.
+pub fn sounded(files: Vec<(String, String)>, clip: &Clip) -> Result<Vec<f64>, CliError> {
     let mut held = Composition::new();
     for (path, text) in files {
         held.insert(path, text);
@@ -801,14 +822,12 @@ pub fn sounded(files: Vec<(String, String)>, clip: &Clip) -> Vec<f64> {
         rate: Some(clip.rate),
         ..Job::over(&held, &target)
     };
-    let rendered = execute(job, &Tier::default()).expect("atoms' own nodes render");
-    let answer = rendered
-        .answer(&rendered.target, Representation::Samples)
-        .expect("a render answers its samples");
+    let rendered = execute(job, &Tier::default())?;
+    let answer = rendered.answer(&rendered.target, Representation::Samples)?;
     let Output::Samples(buffer) = answer.value else {
         unreachable!("samples answer samples")
     };
-    buffer.plane(0).to_vec()
+    Ok(buffer.plane(0).to_vec())
 }
 
 /// FNV-1a, the same on every platform.

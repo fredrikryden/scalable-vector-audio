@@ -198,7 +198,7 @@ fn a_long_envelope_voice_writes_and_sounds() {
     assert!(voice.writes(&CLIP), "{}", voice.node_text(&CLIP));
     let written = files(std::slice::from_ref(&voice), &CLIP);
     assert_eq!(read(&written), Some(vec![voice.clone()]));
-    let heard = sounded(written, &CLIP);
+    let heard = sounded(written, &CLIP).expect("the atoms render");
     let power = heard.iter().map(|s| s * s).sum::<f64>() / heard.len() as f64;
     assert!(power > 0.0 && power.is_finite(), "{power}");
 }
@@ -216,7 +216,7 @@ fn a_shaped_noise_reads_back_and_sounds() {
     assert!(shaped.writes(&CLIP));
     let written = files(std::slice::from_ref(&shaped), &CLIP);
     assert_eq!(read(&written), Some(vec![shaped.clone()]), "{written:?}");
-    let heard = sounded(files(&[shaped], &CLIP), &CLIP);
+    let heard = sounded(files(&[shaped], &CLIP), &CLIP).expect("the atom renders");
     let power = heard.iter().map(|s| s * s).sum::<f64>() / heard.len() as f64;
     assert!(power > 0.0, "{power}");
 }
@@ -249,7 +249,8 @@ fn a_glide_reads_back_and_sounds_its_closed_form() {
     let both = vec![partial.clone(), harmonic];
     let written = files(&both, &CLIP);
     assert_eq!(read(&written), Some(both), "{written:?}");
-    let heard = sounded(files(std::slice::from_ref(&partial), &CLIP), &CLIP);
+    let heard =
+        sounded(files(std::slice::from_ref(&partial), &CLIP), &CLIP).expect("the atom renders");
     let rate = f64::from(CLIP.rate);
     let worst = heard
         .iter()
