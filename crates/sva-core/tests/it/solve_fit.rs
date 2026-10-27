@@ -3,7 +3,7 @@
 use std::f64::consts::TAU;
 
 use sva_core::solve::atoms::{Atom, Sound};
-use sva_core::solve::fit::{Fit, Line, SPL_DB, fit};
+use sva_core::solve::fit::{Action, Fit, Line, SPL_DB, fit};
 use sva_core::solve::report::progress;
 use sva_engine::Never;
 
@@ -167,6 +167,7 @@ fn the_dl_never_rises_from_line_to_line() {
         .map(|(a, b)| a + b)
         .collect();
     let (fit, lines) = fitted(&samples);
+    let lines: Vec<Line> = lines.into_iter().filter(|l| l.pass == 1).collect();
     assert_eq!(lines.len(), fit.steps + 1, "a line per step and the start");
     let dl: Vec<f64> = lines
         .iter()
@@ -177,6 +178,45 @@ fn the_dl_never_rises_from_line_to_line() {
         let drop = (next.atom_bits + next.residual_bits) - (line.atom_bits + line.residual_bits);
         assert!((next.delta_bits - drop).abs() <= 1e-9 * drop.abs().max(1.0));
     }
+}
+
+#[test]
+fn the_second_pass_reports_its_steps_its_dl_never_rising_within_a_pass() {
+    let samples: Vec<f64> = tones(&voice(220.0, 0.0, 6, 0.2))
+        .iter()
+        .zip(band(1000.0, 2000.0, 0.05))
+        .map(|(a, b)| a + b)
+        .collect();
+    let (fit, lines) = fitted(&samples);
+    for (pass, steps) in [(1, fit.steps), (2, fit.second.steps)] {
+        let held: Vec<&Line> = lines.iter().filter(|l| l.pass == pass).collect();
+        assert_eq!(
+            held.len(),
+            steps + 1,
+            "pass {pass}: a line per step and the start"
+        );
+        assert_eq!(held[0].action, Action::Start, "pass {pass}");
+        assert!(
+            held.iter().enumerate().all(|(k, l)| l.step == k),
+            "pass {pass}"
+        );
+        let dl: Vec<f64> = held.iter().map(|l| l.atom_bits + l.residual_bits).collect();
+        assert!(dl.windows(2).all(|w| w[1] <= w[0]), "pass {pass}: {dl:?}");
+    }
+    assert!(fit.second.steps > 0, "the second pass takes a step");
+    let second = lines
+        .iter()
+        .position(|l| l.pass == 2)
+        .expect("a second pass");
+    assert!(
+        lines[second..].iter().all(|l| l.pass == 2),
+        "the passes in turn"
+    );
+    let start = &lines[second];
+    assert!(
+        (start.atom_bits + start.residual_bits - fit.second.start_bits).abs()
+            <= 1e-9 * fit.second.start_bits.abs()
+    );
 }
 
 #[test]

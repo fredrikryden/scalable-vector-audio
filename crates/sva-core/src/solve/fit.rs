@@ -36,7 +36,7 @@ pub const MODEL: &str = "one sound fitted by forward-backward greedy selection w
      one noise band per octave band holding none; \
      a candidate scored in closed form: each column's gain per frame its weighted correlation with the residual over its weighted energy, at least 0, written, the DL drop those gains give less its bits; \
      each candidate's frequencies refined against the residual: a partial's Hz by golden section (Kiefer 1953) over half an analysis bin of its peak to the finer of the precision it is written at and its standard deviation under the weights, sigma = (sum w (du/dx)^2)^-1/2, u its expected power, du/dx by central difference at the cube root of epsilon; a voice's harmonics each so as a partial, then f0 and B by that least squares weighted by the inverse variance of (f_k / k)^2, (2 f_k sigma_k / k^2)^-2, kept where the voice's score falls; \
-     the best added where that drop is positive, each kept atom's frequencies then refined in turn against the clip less every other atom's model, kept where the re-solved DL falls; \
+     the best added where that drop is positive, then the new atom's frequencies and those of each kept atom whose templates meet its bins refined in turn against the clip less every other atom's model at the re-solved gains, each kept where the re-solved DL falls, an atom's bins each column's main lobe (2 window bins either side of a partial's, a noise band's band widened by as much), the rest left as they stand; \
      every kept column re-solved per frame by non-negative least squares (Lawson and Hanson 1974), warm-started from the last gains; \
      an add kept only where the written state's DL falls; \
      then the best removal taken while one, re-solved, lowers the DL; \
@@ -46,7 +46,8 @@ pub const MODEL: &str = "one sound fitted by forward-backward greedy selection w
      the DL the written atoms': levels at the level JND by looks, frequencies at the frequency JND by looks (bits.rs), every frame a look at its level over its floor; \
      a voice's f0 at the JND at f0, its B where its highest harmonic moves by that harmonic's JND; \
      a time at the frame, a noise band's edge one of the grid's band edges; \
-     then a second pass, a diagnostic of what the first's scoring missed: the same loop from no atom over the first's residual on the grid it scores, the clip's power less the fit's per bin floored at 0, its own weights read off that residual, its atoms keyed after the first's and sounded on top of them";
+     then a second pass, a diagnostic of what the first's scoring missed: the same loop from no atom over the first's residual on the grid it scores, the clip's power less the fit's per bin floored at 0, its own weights read off that residual, its atoms keyed after the first's and sounded on top of them; \
+     each pass's steps reported as it goes, its pass beside each";
 
 /// A full-scale sine at 103.95 dB SPL by default (SMPTE RP 200: -20 dBFS pink noise at 83 dB
 /// SPL, a sine's RMS 3.01 dB under its peak).
@@ -137,6 +138,8 @@ pub struct Geometry {
 /// kept atom's written level per frame, harmonic by harmonic.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Line {
+    /// The pass, 1 or 2.
+    pub pass: u8,
     pub step: usize,
     pub action: Action,
     pub atom: Option<Atom>,
@@ -201,6 +204,25 @@ impl Kind {
             Kind::Noise { band } => vec![libm::sqrt(band.0 * band.1)],
         }
     }
+}
+
+/// The bins `kind`'s columns reach in `p`, each its main lobe as `MODEL` states, in grid bins.
+fn reach(p: &Problem, kind: &Kind) -> Vec<(f64, f64)> {
+    let half = 2.0 * p.grid.n as f64 / p.grid.long as f64;
+    match kind {
+        Kind::Noise { band } => vec![(p.grid.bin_of(band.0) - half, p.grid.bin_of(band.1) + half)],
+        _ => kind
+            .hzs()
+            .iter()
+            .map(|hz| (p.grid.bin_of(*hz) - half, p.grid.bin_of(*hz) + half))
+            .collect(),
+    }
+}
+
+/// Whether any of `a`'s reaches meets any of `b`'s.
+fn meets(a: &[(f64, f64)], b: &[(f64, f64)]) -> bool {
+    a.iter()
+        .any(|(lo, hi)| b.iter().any(|(l, h)| lo < h && l < hi))
 }
 
 /// The local noise floor and the tonal lobes over the feasible bins, as `MODEL` states: each
@@ -1223,6 +1245,7 @@ fn line(p: &Problem, state: &State, step: usize, action: Action, atom: Option<At
         })
         .collect();
     Line {
+        pass: 1,
         step,
         action,
         atom,
@@ -1252,10 +1275,23 @@ fn pruned(p: &Problem, state: &State) -> Option<(usize, State)> {
         .min_by(|x, y| x.1.dl().total_cmp(&y.1.dl()).then(x.0.cmp(&y.0)))
 }
 
-/// `state` with each kept atom's frequencies refined in turn against the clip less every other
-/// atom's model, each kept where the re-solved state's DL falls, as `MODEL` states.
-fn retuned(p: &Problem, mut state: State) -> State {
-    let keys = state.keys.clone();
+/// `state` with the atom keyed `added` and each kept atom whose bins meet its own refined in
+/// turn against the clip less every other atom's model, each kept where the re-solved state's
+/// DL falls, as `MODEL` states.
+fn retuned(p: &Problem, mut state: State, added: u64) -> State {
+    let new = state
+        .keys
+        .iter()
+        .position(|k| *k == added)
+        .expect("the added key");
+    let near = reach(p, &state.kinds[new]);
+    let keys: Vec<u64> = state
+        .keys
+        .iter()
+        .zip(&state.kinds)
+        .filter(|(k, kind)| **k == added || meets(&near, &reach(p, kind)))
+        .map(|(k, _)| *k)
+        .collect();
     for key in keys {
         let a = state
             .keys
@@ -1304,10 +1340,11 @@ struct Pass {
     stopped: bool,
 }
 
-/// The greedy loop over `p` from no atom, keys from `born`, each step heard by `hear`, as
-/// `MODEL` states.
+/// The greedy loop over `p` from no atom, keys from `born`, each step heard by `hear` marked
+/// `pass`, as `MODEL` states.
 async fn greedy(
     p: &Problem,
+    pass: u8,
     born: u64,
     hear: &mut dyn FnMut(&Line),
     stop: &dyn Abandon,
@@ -1319,6 +1356,7 @@ async fn greedy(
     let mut said = |state: &State, before: f64, action: Action, atom: Atom, steps: &mut usize| {
         *steps += 1;
         let mut heard = line(p, state, *steps, action, Some(atom));
+        heard.pass = pass;
         heard.delta_bits = state.dl() - before;
         heard.seconds = clock();
         hear(&heard);
@@ -1347,7 +1385,7 @@ async fn greedy(
         let Some((_, (kind, _))) = best else {
             break;
         };
-        let grown = retuned(p, state.with(p, kind, key));
+        let grown = retuned(p, state.with(p, kind, key), key);
         if grown.dl() >= state.dl() {
             break;
         }
@@ -1381,7 +1419,7 @@ fn full(p: &Problem, model: &[Vec<f64>]) -> Vec<Vec<f64>> {
         .collect()
 }
 
-/// One sound's fit of `samples`, each step of its first pass heard by `hear` as it ends,
+/// One sound's fit of `samples`, each pass's start and steps heard by `hear` as they end,
 /// `stop` asked before each, as `MODEL` states.
 pub async fn fit(
     samples: &[f64],
@@ -1423,7 +1461,7 @@ pub async fn fit(
     });
     first.seconds = clock();
     hear(&first);
-    let one = greedy(&p, 0, hear, stop, clock).await;
+    let one = greedy(&p, 1, 0, hear, stop, clock).await;
     let model = full(&p, &one.state.model(&p));
     let atoms = one.state.atoms();
     let second = match one.stopped {
@@ -1437,7 +1475,11 @@ pub async fn fit(
                 .map(|(y, m)| y.iter().zip(m).map(|(y, m)| (y - m).max(0.0)).collect())
                 .collect();
             let q = Problem::of(p.grid.with(left), clip, heard_at, gain_db);
-            let two = greedy(&q, birth(&atoms), &mut |_| {}, stop, clock).await;
+            let mut start = line(&q, &State::empty(&q), 0, Action::Start, None);
+            start.pass = 2;
+            start.seconds = clock();
+            hear(&start);
+            let two = greedy(&q, 2, birth(&atoms), hear, stop, clock).await;
             Second {
                 atoms: two.state.atoms(),
                 start_bits: State::empty(&q).dl(),

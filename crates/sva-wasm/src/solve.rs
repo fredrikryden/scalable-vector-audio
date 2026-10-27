@@ -33,7 +33,7 @@ export interface SolveOptions {
 
 #[wasm_bindgen(typescript_custom_section)]
 const SOLVE_PROGRESS: &str = r#"
-/** A solve's `progress` line: the start, then one per step. */
+/** A solve's `progress` line: each pass's start, then one per step. */
 export type SolveProgress = SolveStart | SolveStep;
 /** What a step added or removed; `null` where its kind has none. */
 export interface SolveAtom {
@@ -50,9 +50,11 @@ export interface SolveAtom {
  * One step: `delta_dl_bits` its change to the description length, `dl_bits` the total,
  * `atom_bits` plus `residual_bits`; `residual_db[frame][band]` the power the fit leaves in
  * each octave band in dB, null where none; `envelopes` each kept atom's written level per
- * frame in dB.
+ * frame in dB. `pass` 1 for the first pass, 2 for the second over its residual, which opens
+ * with its own `start` (no grid shape) and counts `step` from 0 again.
  */
 export interface SolveStep {
+    pass: 1 | 2;
     step: number;
     action: "start" | "add" | "remove";
     atom: SolveAtom | null;
@@ -66,6 +68,7 @@ export interface SolveStep {
 }
 /** The first line, before any atom: the grid's shape beside the empty fit's step. */
 export interface SolveStart extends SolveStep {
+    pass: 1;
     action: "start";
     rate_hz: number;
     frame_secs: number;

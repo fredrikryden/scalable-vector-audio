@@ -93,10 +93,22 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_step() {
         assert!(fit["second"][key].is_number(), "`second.{key}`: {fit}");
     }
     assert!(fit["second"]["atoms"]["items"].is_array(), "{fit}");
-    let lines: Vec<Value> = String::from_utf8_lossy(&out.stderr)
+    let heard: Vec<Value> = String::from_utf8_lossy(&out.stderr)
         .lines()
         .map(|l| serde_json::from_str(l).expect("each progress line is JSON"))
         .collect();
+    let lines: Vec<Value> = heard.iter().filter(|l| l["pass"] == 1).cloned().collect();
+    let second: Vec<&Value> = heard.iter().filter(|l| l["pass"] == 2).collect();
+    assert_eq!(
+        lines.len() + second.len(),
+        heard.len(),
+        "each line's pass is 1 or 2"
+    );
+    assert_eq!(
+        Some(second.len() as u64),
+        fit["second"]["steps"].as_u64().map(|s| s + 1),
+        "the second pass's start and steps"
+    );
     assert_eq!(Some(lines.len() as u64 - 1), fit["steps"].as_u64(), "{fit}");
     assert_eq!(lines[0]["action"], "start", "{}", lines[0]);
     assert!(lines[0]["atom"].is_null());

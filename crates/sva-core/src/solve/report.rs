@@ -32,7 +32,8 @@ fn atom(atom: &Atom) -> String {
     )
 }
 
-/// One progress line per step, the first with the grid's shape.
+/// One progress line per step of either pass, its pass beside it, the first with the grid's
+/// shape.
 pub fn progress(line: &Line) -> String {
     let rows: Vec<String> = line
         .residual_db
@@ -63,9 +64,10 @@ pub fn progress(line: &Line) -> String {
         )
     });
     format!(
-        "{{ \"step\": {}, \"action\": \"{}\", \"atom\": {}, \"delta_dl_bits\": {}, \"dl_bits\": \
-         {}, \"atom_bits\": {}, \"residual_bits\": {}, \"residual_db\": [{}], \"envelopes\": {}, \
-         \"seconds\": {}{geometry} }}",
+        "{{ \"pass\": {}, \"step\": {}, \"action\": \"{}\", \"atom\": {}, \"delta_dl_bits\": \
+         {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \"residual_db\": [{}], \
+         \"envelopes\": {}, \"seconds\": {}{geometry} }}",
+        line.pass,
         line.step,
         line.action.name(),
         line.atom.as_ref().map_or_else(|| NONE.to_string(), atom),

@@ -390,13 +390,15 @@ SOLVE:
   pass's rendered together), and `clip-grid.wav` and `fit-grid.wav`, the
   clip's and the fit's octave bands by 48 ms frames sounded alike; an out
   directory already holding files refuses as a conflict unless `--confirm`.
-  Stderr carries one JSON line per step: `step`, `action` (`start`, then `add`
-  or `remove`), `atom` (`key`, `kind`, `hz`, `stretch`, `harmonics`, `lo_hz`,
-  `hi_hz`, null where none), `delta_dl_bits` (the step's change), `dl_bits`,
-  `atom_bits` and `residual_bits` (the total and its parts), `residual_db` (per
-  frame, each octave band's power the fit leaves, in dB, null where none),
+  Stderr carries one JSON line per step of each pass: `pass` (1, then 2 for
+  the second pass, which opens with its own `start`), `step` (from 0 in each
+  pass), `action` (`start`, then `add` or `remove`), `atom` (`key`, `kind`,
+  `hz`, `stretch`, `harmonics`, `lo_hz`, `hi_hz`, null where none),
+  `delta_dl_bits` (the step's change), `dl_bits`, `atom_bits` and
+  `residual_bits` (the total and its parts), `residual_db` (per frame, each
+  octave band's power the fit leaves, in dB, null where none),
   `envelopes` (each kept atom's `key` and written level per frame in dB) and
-  `seconds`; the `start` line adds `rate_hz`, `frame_secs`,
+  `seconds`; the first pass's `start` line adds `rate_hz`, `frame_secs`,
   `first_centre_secs`, `band_edges_hz`, `band_floor_db` and `gain_db`. Stdout
   answers `fit` with `rate_hz`, `steps`, `partials`, `harmonics`, `noises`,
   `dl_bits`, `atom_bits`, `residual_bits`, `gain_db`, `stopped`, `secs`,
