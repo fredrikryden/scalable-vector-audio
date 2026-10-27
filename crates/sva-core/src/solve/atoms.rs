@@ -117,6 +117,15 @@ impl Atom {
         }
     }
 
+    /// Its kind by name.
+    pub fn kind(&self) -> &'static str {
+        match self.sound {
+            Sound::Partial { .. } => "partial",
+            Sound::Harmonic { .. } => "harmonic",
+            Sound::Noise { .. } => "noise",
+        }
+    }
+
     pub fn harmonics(&self) -> usize {
         match &self.sound {
             Sound::Harmonic { levels, .. } => levels.len() + 1,

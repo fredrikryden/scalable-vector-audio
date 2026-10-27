@@ -7,7 +7,7 @@ use sva_engine::hearing::{CAM_LAST, cam_hz, level_jnd_db};
 use sva_engine::{Abandon, default_threads, each, fft};
 
 use super::add::{Members, Spectrogram, Track, floor_db, sieved, span_hz};
-use super::atoms::{Atom, Clip, Feasible, Quantity, Sound, Trajectory, birth};
+use super::atoms::{Atom, Clip, Feasible, Quantity, Trajectory, birth};
 use super::bits::{self, Look, Priced, frequency_delta, level_delta};
 use super::grid::Grid;
 
@@ -591,7 +591,7 @@ impl State {
         self.written.iter().map(|w| w.atom.clone()).collect()
     }
 
-    /// This state with `kind` keyed `key` added, its columns unfitted.
+    /// This state with `kind` keyed `key` added, re-solved.
     fn with(&self, p: &Problem, kind: Kind, key: u64) -> State {
         let added = p.templates(&kind);
         let atom = self.kinds.len();
@@ -627,11 +627,11 @@ impl State {
         for (f, (gram, pulls, fitted)) in rows.into_iter().enumerate() {
             (next.gram[f], next.pulls[f], next.fitted[f]) = (gram, pulls, fitted);
         }
-        next
+        next.solved(p)
     }
 
-    /// This state without atom `a`, unfitted.
-    fn without(&self, a: usize) -> State {
+    /// This state without atom `a`, re-solved.
+    fn without(&self, p: &Problem, a: usize) -> State {
         let keep: Vec<usize> = (0..self.templates.len())
             .filter(|c| self.owner[*c] != a)
             .collect();
@@ -639,7 +639,6 @@ impl State {
         let mut next = self.clone();
         next.kinds.remove(a);
         next.keys.remove(a);
-        next.written.remove(a);
         next.templates = keep.iter().map(|c| self.templates[*c].clone()).collect();
         next.owner = keep
             .iter()
@@ -656,7 +655,7 @@ impl State {
             next.pulls[f] = keep.iter().map(|c| self.pulls[f][*c]).collect();
             next.fitted[f] = keep.iter().map(|c| self.fitted[f][*c]).collect();
         }
-        next
+        next.solved(p)
     }
 
     /// This state's columns re-solved jointly per frame and its atoms written, as `MODEL`
@@ -942,7 +941,7 @@ fn line(p: &Problem, state: &State, step: usize, action: Action, atom: Option<At
 /// The best removal's state, where one lowers the DL.
 fn pruned(p: &Problem, state: &State) -> Option<(usize, State)> {
     let trials = each(default_threads(), (0..state.kinds.len()).collect(), |a| {
-        state.without(a).solved(p)
+        state.without(p, a)
     });
     trials
         .into_iter()
@@ -1026,7 +1025,7 @@ pub async fn fit(
         let Some((at, _)) = best else {
             break;
         };
-        let grown = state.with(&p, proposed[at].clone(), key).solved(&p);
+        let grown = state.with(&p, proposed[at].clone(), key);
         if grown.dl() >= state.dl() {
             break;
         }
@@ -1061,14 +1060,5 @@ pub async fn fit(
         stopped,
         clip_grid: p.grid.broad(),
         fit_grid: p.grid.with(fit_power).broad(),
-    }
-}
-
-/// Whether `atom` is a partial, a harmonic or a noise band, by name.
-pub fn kind_name(atom: &Atom) -> &'static str {
-    match atom.sound {
-        Sound::Partial { .. } => "partial",
-        Sound::Harmonic { .. } => "harmonic",
-        Sound::Noise { .. } => "noise",
     }
 }

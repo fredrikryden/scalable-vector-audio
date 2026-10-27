@@ -1,7 +1,7 @@
 // Concern: a fit's progress lines and its answer as JSON, the shapes sva-portal's page reads | Non-concern: running it (fit.rs), where a line goes | IO: (Line | Fit) -> JSON
 
 use super::atoms::{Atom, Sound};
-use super::fit::{Fit, Line, kind_name};
+use super::fit::{Fit, Line};
 use crate::json::{NONE, escape, list, num, strings};
 
 fn text(s: &str) -> String {
@@ -27,7 +27,7 @@ fn atom(atom: &Atom) -> String {
         "{{ \"key\": {}, \"kind\": \"{}\", \"hz\": {hz}, \"stretch\": {stretch}, \"harmonics\": \
          {}, \"lo_hz\": {lo}, \"hi_hz\": {hi} }}",
         atom.key,
-        kind_name(atom),
+        atom.kind(),
         atom.harmonics()
     )
 }
@@ -90,7 +90,7 @@ pub fn answer(
     wrote: &[String],
     files: Option<&[(String, String)]>,
 ) -> String {
-    let count = |kind: &str| fit.atoms.iter().filter(|a| kind_name(a) == kind).count();
+    let count = |kind: &str| fit.atoms.iter().filter(|a| a.kind() == kind).count();
     let files = files.map_or_else(String::new, |files| {
         format!(
             ", \"files\": {}",

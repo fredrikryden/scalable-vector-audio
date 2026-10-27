@@ -227,14 +227,6 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                 held.limit = Limit(Some(cap))
             }
             "until" => held.until = Some(text(&key, &value)?),
-            "levels" | "coarsest" => {
-                if whole::<usize>(&key, &value)? == 0 {
-                    return Err(refuse(
-                        format!("`{key}` is 0"),
-                        "pass 1 or more, or leave it out",
-                    ));
-                }
-            }
             "spl" => {
                 value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| {
                     refuse(
@@ -250,11 +242,6 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                 ));
             }
             "progress" => {}
-            "everyLevel" => {
-                value.as_bool().ok_or_else(|| {
-                    refuse("`everyLevel` is not a boolean".into(), "pass true or false")
-                })?;
-            }
             "live" => {
                 held.live = value
                     .as_bool()
