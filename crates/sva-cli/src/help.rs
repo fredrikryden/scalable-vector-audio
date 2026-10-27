@@ -27,12 +27,7 @@ pub fn help_text() -> String {
         .map(|e| format!("`.{e}`"))
         .join(", ");
     let unreadable = crate::recording::UNREADABLE;
-    let (levels, coarsest, spl, out) = (
-        sva_core::solve::pyramid::LEVELS,
-        crate::args::COARSEST,
-        sva_core::solve::pyramid::SPL_DB,
-        crate::args::OUT,
-    );
+    let (spl, out) = (sva_core::solve::fit::SPL_DB, crate::args::OUT);
     format!(
         r#"USAGE:
   sva-cli (render | analyze | solve | lint | trace | builtins | outline | new) [arguments]
@@ -42,7 +37,7 @@ DESCRIPTION:
   `t` or `f` on one line, or a score placing notes in time. sva-cli reads that
   composition and prints what it is and what it sounds like, as JSON on stdout.
   `render`, `lint` and `trace` read the current directory; `new` writes beside
-  it and `analyze` reads a file. `solve` fits a recording, coarse to fine.
+  it and `analyze` reads a file. `solve` fits a recording.
 
 SCORES:
   A score is a `.jsonl` file: JSON Lines, one object per line, sorted by `at`;
@@ -374,44 +369,35 @@ REPRESENTATIONS:
 {representations}
 
 SOLVE:
-  sva-cli solve <recording> [--levels <n>] [--coarsest <k>] [--spl <dB>]
-                [--out <dir>] [--confirm] [--cache <path|none>] [--every-level]
-                [--first]
+  sva-cli solve <recording> [--spl <dB>] [--out <dir>] [--confirm]
 
-  Fits atoms (harmonics, partials and noise bands) to a recording, read in the
-  formats ANALYZE reads, its channels averaged, from silence and coarse to
-  fine: level k of n reads the clip through the ear at s = sqrt(2)^(n - k)
-  (default {levels} levels, s = 2.83, 2, 1.41, 1), at the rate over its largest
-  whole factor no larger than s (24 kHz at s = 2.83 and 2 for a 48 kHz clip,
-  band-limited there; each stage reports its `rate_hz` and `cut_db`, the energy
-  cut in dB under the clip's, null where none), its atoms rendered at that
-  rate, refines the last level's
-  atoms, then in rounds proposes harmonics, partials and noise bands off the
-  residual's spectrum, starting at the clip's hits, adds them all, solves them
-  with the atoms sharing their frames and drops each atom whose removal
-  shortens the description length: rounds until one keeps none at the
-  coarsest level, one round at each finer unless `--every-level`.
-  `--coarsest <k>` runs levels 1 to k alone (default {coarsest}), the stages
-  measured at level k's scale instead of s = 1, each read by the coarse model:
-  every frame's excitation predicted from the atoms' numbers in expected power,
-  with no samples rendered.
-  `--spl` is a full-scale sine's level in dB SPL (default {spl}). Each level is
-  a stage, written as it finishes: its composition under
-  `<out>/level-<k>/`, its render as `<out>/level-<k>.wav` (default out
-  `{out}`), and beside its composition `clip-coarse.wav` and `fit-coarse.wav`,
-  the clip's excitation and the atoms' at that level sounded by one noise
-  vocoder; an out directory already holding files refuses as a conflict
-  unless `--confirm`. Stderr carries one JSON progress line per activity, per
-  descent and per finished stage; stdout answers every stage and the chosen
-  one, the last shorter than every earlier, each priced at the last stage's
-  precisions. SIGINT ends the run with the stage it interrupts. N0, fitted
-  per rate, scale and spl, is kept for the same build under
-  `$XDG_CACHE_HOME/sva-n0`, else `~/.cache/sva-n0`; `--cache <path>` moves
-  it and `--cache none` fits it afresh.
-  `--first` fits one sound once in place of the levels, refusing the level and
-  N0 flags: its composition, `first.wav`, `clip-grid.wav`, `fit-grid.wav` and
-  `grid.json` under `<out>`; stdout answers `first` with `rate_hz`,
-  `partials`, `harmonics`, `noises`, `mean_abs_db`, `secs` and `wrote`.
+  Fits one sound of atoms (partials, harmonic voices and noise bands, each
+  spanning the clip, only its level moving) to a recording, read in the formats
+  ANALYZE reads, its channels averaged, scaled to unit RMS with one master gain
+  back. Forward-backward greedy selection with an orthogonal re-solve: each step
+  scores every candidate off the residual (a partial at each peak, a voice at
+  each fundamental a harmonic sieve finds, its stretch B fitted, one noise band
+  per octave band) by the drop in description length it gives, adds the best,
+  re-solves every kept atom's level per 48 ms frame by non-negative least
+  squares, then removes each atom whose removal shortens the description
+  length; it stops where no candidate shortens it. The description length is
+  the atoms' bits plus the residual's on the coarse grid's frames by its bins.
+  `--spl` is a full-scale sine's level in dB SPL (default {spl}). Under `<out>`
+  (default `{out}`) it writes the composition (its levels thinned at the level
+  JND), `first.wav` (its render), and `clip-grid.wav` and `fit-grid.wav`, the
+  clip's and the fit's octave bands by 48 ms frames sounded alike; an out
+  directory already holding files refuses as a conflict unless `--confirm`.
+  Stderr carries one JSON line per step: `step`, `action` (`start`, then `add`
+  or `remove`), `atom` (`key`, `kind`, `hz`, `stretch`, `harmonics`, `lo_hz`,
+  `hi_hz`, null where none), `delta_dl_bits` (the step's change), `dl_bits`,
+  `atom_bits` and `residual_bits` (the total and its parts), `residual_db` (per
+  frame, each octave band's power the fit leaves, in dB, null where none),
+  `envelopes` (each kept atom's `key` and written level per frame in dB) and
+  `seconds`; the `start` line adds `rate_hz`, `frame_secs`,
+  `first_centre_secs`, `band_edges_hz`, `band_floor_db` and `gain_db`. Stdout
+  answers `fit` with `rate_hz`, `steps`, `partials`, `harmonics`, `noises`,
+  `dl_bits`, `atom_bits`, `residual_bits`, `gain_db`, `stopped`, `secs` and
+  `wrote`. SIGINT ends the fit after its step, `stopped` true.
 
 ANALYZE:
   sva-cli analyze <file> --representation <list> [--confirm]

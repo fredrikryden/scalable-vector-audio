@@ -1596,110 +1596,98 @@ fn seed_throws_unbuilt_and_solve_refuses_an_unknown_option() {
         ("rate", JsValue::from(rate)),
         ("channels", channels.clone().into()),
     ]);
-    let unknown = object(&[("spiral", JsValue::from(1))]);
-    let refused = now(page().solve(clip.into(), unknown.into()))
-        .err()
-        .unwrap_or_else(|| unreachable!("an unknown option refuses"));
-    assert!(code(refused).contains("wasm.bad_argument"));
+    for retired in ["spiral", "levels"] {
+        let unknown = object(&[(retired, JsValue::from(1))]);
+        let refused = now(page().solve(clip.clone().into(), unknown.into()))
+            .err()
+            .unwrap_or_else(|| unreachable!("an unknown option refuses"));
+        assert!(code(refused).contains("wasm.bad_argument"));
+    }
     let refused = sva_wasm::seed(rate, channels, "clip.wav", None)
         .err()
         .unwrap_or_else(|| unreachable!("seed refuses"));
     assert!(code(refused).contains("seed.unbuilt"));
 }
 
-/// A clip solves through two levels: a stage per level, each heard by `progress` as it
-/// finishes with its terms, its files rendering in a fresh composition, the last least
-/// stage's the answer's `files`.
+/// A clip solves step by step: a start line holding the grid's shape, then one line per step
+/// heard by `progress`, the description length falling at each, the answer's files rendering
+/// in a fresh composition.
 #[wasm_bindgen_test]
-async fn a_clip_solves_through_its_levels() {
+async fn a_clip_solves_with_a_line_per_step() {
     let (rate, channels) = sine_clip();
     let clip = object(&[("rate", JsValue::from(rate)), ("channels", channels.into())]);
     let heard = js_sys::Array::new();
     let push = js_sys::Function::new_with_args("line", "this.push(line)");
-    let asked = object(&[
-        ("levels", JsValue::from(2)),
-        ("progress", push.bind0(&heard).into()),
-    ]);
+    let asked = object(&[("progress", push.bind0(&heard).into())]);
     let answered = page()
         .solve(clip.into(), asked.into())
         .await
         .unwrap_or_else(|e| unreachable!("the solve answers: {}", as_text(&field(&e, "refusal"))));
     let data = field(&answered, "data");
+    let fit = field(&data, "fit");
     assert_eq!(
-        field(&field(&data, "continuation"), "scheme")
-            .as_string()
-            .as_deref(),
-        Some("pyramid")
+        field(&fit, "steps").as_f64(),
+        Some(f64::from(heard.length() - 1)),
+        "{}",
+        as_text(&fit)
     );
-    let labels: Vec<String> = items(&data, "stages")
-        .iter()
-        .filter_map(|s| field(&s, "label").as_string())
-        .collect();
-    assert_eq!(labels, ["level 1 of 2", "level 2 of 2"], "{labels:?}");
-    let finished: Vec<JsValue> = heard
-        .iter()
-        .filter(|l| field(l, "finished").as_bool() == Some(true))
-        .collect();
-    let heard_labels: Vec<String> = finished
-        .iter()
-        .filter_map(|l| field(l, "stage").as_string())
-        .collect();
-    assert_eq!(heard_labels, labels, "a finished line per listed stage");
+    let first = heard.get(0);
+    assert_eq!(
+        field(&first, "action").as_string().as_deref(),
+        Some("start")
+    );
+    assert!(
+        field(&first, "band_edges_hz").is_object(),
+        "{}",
+        as_text(&first)
+    );
+    let mut dl = f64::INFINITY;
+    for line in heard.iter() {
+        let total = field(&line, "dl_bits")
+            .as_f64()
+            .unwrap_or_else(|| unreachable!("a total: {}", as_text(&line)));
+        assert!(
+            total < dl,
+            "the description length falls: {}",
+            as_text(&line)
+        );
+        dl = total;
+    }
     assert!(
         heard
             .iter()
-            .any(|l| field(&l, "action").as_string().as_deref() == Some("reading_reference")),
-        "activities are heard"
+            .any(|l| field(&l, "action").as_string().as_deref() == Some("add")),
+        "an atom is added"
     );
-    for line in &finished {
-        for key in ["residual_bits", "bits", "numbers", "length_bits"] {
-            assert!(
-                field(line, key).as_f64().is_some(),
-                "{key}: {}",
-                as_text(line)
-            );
-        }
-        let mut fresh = Composition::new(Some("a-fit".to_string()));
-        for file in items(line, "files").iter() {
-            fresh.insert(
-                &field(&file, "path").as_string().unwrap_or_default(),
-                &field(&file, "text").as_string().unwrap_or_default(),
-            );
-        }
-        assert!(
-            fresh
-                .rendered("@master([0, 0.1s])", None, options(&[]))
-                .is_ok(),
-            "a stage's files render: {}",
-            as_text(line)
+    let mut fresh = Composition::new(Some("a-fit".to_string()));
+    for file in items(&data, "files").iter() {
+        fresh.insert(
+            &field(&file, "path").as_string().unwrap_or_default(),
+            &field(&file, "text").as_string().unwrap_or_default(),
         );
     }
-    let least = items(&data, "stages")
-        .iter()
-        .rfind(|l| field(l, "least").as_bool() == Some(true))
-        .unwrap_or_else(|| unreachable!("a stage is least"));
-    assert_eq!(
-        as_text(&field(&least, "files")),
-        as_text(&field(&data, "files")),
-        "its files are the answer's"
+    assert!(
+        fresh
+            .rendered("@master([0, 0.1s])", None, options(&[]))
+            .is_ok(),
+        "the fit's files render"
     );
 }
 
-/// A `signal` the page aborts while a level runs ends the solve with that level, stopped.
+/// A `signal` the page aborts as the fit starts ends it before its first step, stopped.
 #[wasm_bindgen_test]
-async fn an_aborted_signal_ends_a_solve_mid_level() {
+async fn an_aborted_signal_ends_a_solve_before_its_next_step() {
     let controller = js_sys::Reflect::get(&js_sys::global(), &"AbortController".into())
         .unwrap_or_else(|_| unreachable!("a global AbortController"));
     let controller = js_sys::Reflect::construct(&controller.into(), &js_sys::Array::new())
         .unwrap_or_else(|_| unreachable!("a controller"));
     let abort = js_sys::Function::new_with_args(
         "line",
-        "if (line.action === 'ranking_proposals') setTimeout(() => this.abort(), 0);",
+        "if (line.action === 'start') setTimeout(() => this.abort(), 0);",
     );
     let (rate, channels) = sine_clip();
     let clip = object(&[("rate", JsValue::from(rate)), ("channels", channels.into())]);
     let asked = object(&[
-        ("levels", JsValue::from(2)),
         ("signal", field(&controller, "signal")),
         ("progress", abort.bind0(&controller).into()),
     ]);
@@ -1707,7 +1695,7 @@ async fn an_aborted_signal_ends_a_solve_mid_level() {
         .solve(clip.into(), asked.into())
         .await
         .unwrap_or_else(|e| unreachable!("the solve answers: {}", as_text(&field(&e, "refusal"))));
-    let stages = items(&field(&answered, "data"), "stages");
-    assert_eq!(stages.length(), 1, "{}", as_text(&stages));
-    assert_eq!(field(&stages.get(0), "stopped").as_bool(), Some(true));
+    let fit = field(&field(&answered, "data"), "fit");
+    assert_eq!(field(&fit, "stopped").as_bool(), Some(true));
+    assert_eq!(field(&fit, "steps").as_f64(), Some(0.0));
 }

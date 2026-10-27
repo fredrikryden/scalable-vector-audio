@@ -1,11 +1,11 @@
-// Concern: states what B(x) owes: complete codes, its normaliser, silence, atoms' and knots' codes, offsets, precisions | Non-concern: the looks and curvatures | IO: (atoms) -> asserts
+// Concern: states what B(x) owes: complete codes, its normaliser, silence, atoms' and knots' codes, precisions by looks | Non-concern: the looks | IO: (atoms) -> asserts
 
 use std::f64::consts::LN_2;
 
 use sva_core::solve::atoms::{Atom, Clip, Feasible, Quantity, Sound, Trajectory};
 use sva_core::solve::bits::{
-    Look, NORMALISER, Precision, Priced, atom, bits, count, curvature_delta, frequency_delta,
-    integer, level_delta, log_star, number, offsets, precision,
+    Look, NORMALISER, Priced, atom, bits, count, frequency_delta, integer, level_delta, log_star,
+    number,
 };
 use sva_engine::hearing::{frequency_jnd_hz, level_jnd_db};
 
@@ -79,16 +79,16 @@ fn knots(base: f64, knots: &[(f64, f64)]) -> Trajectory {
 }
 
 fn feasible() -> Feasible {
-    Feasible::of(&CLIP, FLOOR_DB)
+    Feasible::of(&CLIP, (FLOOR_DB, 0.0))
 }
 
-/// Each number's precision by its quantity, the offsets one.
+/// Each number's precision by its quantity.
 fn priced(atom: &Atom) -> Priced {
     let deltas = atom
         .numbers()
         .iter()
         .map(|(q, _)| match q {
-            Quantity::Offset => 0.7,
+            Quantity::Stretch => 1e-5,
             Quantity::Time => 0.003,
             Quantity::Hz | Quantity::HzDeviation | Quantity::Edge => 2.9,
             Quantity::Db | Quantity::DbDeviation => 0.4,
@@ -111,9 +111,13 @@ fn atoms() -> Vec<Atom> {
         Atom::harmonic(
             1,
             0.2,
-            knots(110.0, &[]),
-            vec![3.0, -2.0, 1.0],
-            knots(-30.0, &[(0.9, -40.0)]),
+            (knots(110.0, &[]), 0.0),
+            vec![
+                knots(-30.0, &[(0.9, -40.0)]),
+                knots(-27.0, &[(0.9, -40.0)]),
+                knots(-32.0, &[(0.4, -6.0), (0.9, -40.0)]),
+                knots(-29.0, &[(0.9, -40.0)]),
+            ],
         ),
         Atom::noise(2, 0.0, (1000.0, 4000.0), knots(-40.0, &[(0.5, 0.0)])),
     ]
@@ -134,8 +138,13 @@ fn written(atom: &Atom, i: usize) -> f64 {
         Quantity::Hz => hz,
         Quantity::HzDeviation => 2.0 * hz,
         Quantity::Db => db,
-        Quantity::DbDeviation | Quantity::Offset => 2.0 * db,
+        Quantity::DbDeviation => 2.0 * db,
         Quantity::Edge => f.hz.1 - f.hz.0,
+        Quantity::Stretch => {
+            let h = atom.harmonics() as f64;
+            let top = f.hz.1 / (h * 110.0);
+            (top * top - 1.0) / (h * h)
+        }
     };
     libm::log2(libm::ceil(range / priced(atom).deltas[i]).max(1.0))
 }
@@ -175,15 +184,6 @@ fn every_code_meets_kraft_and_the_complete_ones_with_equality() {
     }
     let complete = (head(1_000_000) + tail(1_000_000)) / NORMALISER;
     assert!((complete - 1.0).abs() < 1e-14, "integers: {complete}");
-    for h in 2..8usize {
-        let deltas = vec![0.7; h - 1];
-        let states = (h as f64).sqrt() * libm::pow(192.0 / 0.7, (h - 1) as f64);
-        let sum = states * libm::exp2(-offsets(192.0, &deltas));
-        assert!(
-            (sum - 1.0).abs() < 1e-12,
-            "H = {h}: the basis' cells sum to {sum}"
-        );
-    }
 }
 
 #[test]
@@ -198,20 +198,19 @@ fn adding_an_atom_costs_its_stated_code() {
     for n in 0..all.len() {
         let born = &all[n];
         let numbers = (0..born.numbers().len())
-            .filter(|i| born.numbers()[*i].0 != Quantity::Offset)
             .map(|i| written(born, i))
             .sum::<f64>();
-        let level = c + star(born.level.knots.len() as f64);
+        let level: f64 = born
+            .levels()
+            .iter()
+            .map(|l| c + star(l.knots.len() as f64))
+            .sum();
         let stated = match born.hz() {
             None => level,
             Some(hz) => {
                 let shared = match born.harmonics() {
                     1 => 0.0,
-                    h => {
-                        let states =
-                            (h as f64).sqrt() * libm::pow(-2.0 * FLOOR_DB / 0.7, (h - 1) as f64);
-                        c + star(h as f64) + libm::log2(states.max(1.0))
-                    }
+                    h => c + star(h as f64),
                 };
                 level + c + star((hz.knots.len() + 1) as f64) + shared
             }
@@ -243,83 +242,6 @@ fn adding_a_knot_costs_its_count_its_time_and_its_deviation() {
         let stated = counts + written(grown, time) + written(grown, time + 1);
         let grew = at(grown) - at(&c);
         assert!((grew - stated).abs() < 1e-11, "{grew} vs {stated}");
-    }
-}
-
-/// `det(M^T M)` for the written offsets mapped into all `h` with `dependent` at minus the sum.
-fn gram(h: usize, dependent: usize) -> f64 {
-    let column = |k: usize| -> Vec<f64> {
-        let free: Vec<usize> = (0..h).filter(|i| *i != dependent).collect();
-        (0..h)
-            .map(|row| match row == dependent {
-                true => -1.0,
-                false => f64::from(u8::from(row == free[k])),
-            })
-            .collect()
-    };
-    let n = h - 1;
-    let cols: Vec<Vec<f64>> = (0..n).map(column).collect();
-    let mut g: Vec<Vec<f64>> = (0..n)
-        .map(|a| {
-            (0..n)
-                .map(|b| (0..h).map(|r| cols[a][r] * cols[b][r]).sum())
-                .collect()
-        })
-        .collect();
-    let mut det = 1.0;
-    for p in 0..n {
-        det *= g[p][p];
-        let pivot = g[p].clone();
-        for row in &mut g[p + 1..] {
-            let factor = row[p] / pivot[p];
-            for (v, above) in row.iter_mut().zip(&pivot).skip(p) {
-                *v -= factor * above;
-            }
-        }
-    }
-    det
-}
-
-#[test]
-fn the_offsets_cost_the_same_whichever_coordinate_is_dependent() {
-    for h in 2..9usize {
-        let deltas = vec![0.7; h - 1];
-        let cells = (h - 1) as f64 * libm::log2(192.0 / 0.7);
-        let jacobian = offsets(192.0, &deltas) - cells;
-        for dependent in 0..h {
-            let volume = 0.5 * libm::log2(gram(h, dependent));
-            assert!(
-                (jacobian - volume).abs() < 1e-12,
-                "H = {h}, o_{dependent} dependent: {jacobian} vs {volume}"
-            );
-        }
-    }
-    assert_eq!(offsets(192.0, &[]), 0.0, "one harmonic writes no offset");
-}
-
-#[test]
-fn offsets_of_one_state_cost_nothing() {
-    for h in 2..9usize {
-        let wide = 192.0 * (h as f64).sqrt();
-        assert_eq!(offsets(192.0, &vec![wide; h - 1]), 0.0, "H = {h}");
-        assert_eq!(offsets(192.0, &vec![f64::INFINITY; h - 1]), 0.0, "H = {h}");
-    }
-}
-
-#[test]
-fn offsets_of_many_cells_cost_the_ceiled_cells_and_the_basis_volume_within_the_ceil() {
-    for h in 2..9usize {
-        for delta in [0.7, 0.13, 0.031] {
-            let ratio = 192.0 / delta;
-            let ceiled =
-                (h - 1) as f64 * libm::log2(libm::ceil(ratio)) + 0.5 * libm::log2(h as f64);
-            let ceil = (h - 1) as f64 * libm::log2(libm::ceil(ratio) / ratio);
-            let gap = ceiled - offsets(192.0, &vec![delta; h - 1]);
-            assert!(
-                (-1e-12..=ceil + 1e-12).contains(&gap),
-                "H = {h}, delta {delta}: {gap} vs the ceil's {ceil}"
-            );
-        }
     }
 }
 
@@ -412,34 +334,4 @@ fn an_inaudible_frame_changes_no_precision() {
     }];
     assert_eq!(level_delta(0.001, &silent), f64::INFINITY);
     assert_eq!(number(96.0, frequency_delta(0.001, &silent)), 0.0);
-}
-
-#[test]
-fn a_curvatures_precision_minimises_its_cells_and_quantisation() {
-    for a in [0.01, 1.0, 250.0] {
-        let delta = curvature_delta(a);
-        let cost = |d: f64| libm::log(1.0 / d) + a * d * d / 24.0;
-        let (mut lo, mut hi) = (delta / 10.0, delta * 10.0);
-        for _ in 0..200 {
-            let (l, r) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
-            match cost(l) < cost(r) {
-                true => hi = r,
-                false => lo = l,
-            }
-        }
-        assert!(((lo + hi) / 2.0 / delta - 1.0).abs() < 1e-6, "A = {a}");
-    }
-    assert_eq!(curvature_delta(0.0), f64::INFINITY);
-}
-
-#[test]
-fn each_number_reads_its_precision_from_its_cited_jnd_or_its_curvature() {
-    let all = atoms();
-    let read = |a: &Atom| -> Vec<Precision> {
-        a.numbers().iter().map(|(q, _)| precision(a, *q)).collect()
-    };
-    use Precision::{Curvature as C, Frequency as F, Level as L};
-    assert_eq!(read(&all[0]), [C, F, C, F, L, C, L, C, L]);
-    assert_eq!(read(&all[1]), [C, C, L, L, L, L, C, L]);
-    assert_eq!(read(&all[2]), [C, C, C, L, C, L]);
 }

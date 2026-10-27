@@ -1,131 +1,121 @@
-// Concern: a pyramid's progress lines and its answer as JSON, the shapes FIT-UX's page reads | Non-concern: running it (pyramid.rs), where a line goes | IO: (Event | stages) -> JSON
+// Concern: a fit's progress lines and its answer as JSON, the shapes sva-portal's page reads | Non-concern: running it (fit.rs), where a line goes | IO: (Line | Fit) -> JSON
 
-use super::pyramid::{Event, LEVELS, RATIO, Stage, chosen};
-use crate::json::{NONE, escape, list, num};
+use super::atoms::{Atom, Sound};
+use super::fit::{Fit, Line, kind_name};
+use crate::json::{NONE, escape, list, num, strings};
 
 fn text(s: &str) -> String {
     format!("\"{}\"", escape(s))
 }
 
-/// The rate a stage read the clip at and the energy that cut in dB under the clip's, `null`
-/// where nothing was cut.
-fn read(stage: &Stage) -> String {
-    let cut = match stage.cut > 0.0 {
-        true => num(10.0 * libm::log10(stage.cut)),
-        false => NONE.to_string(),
+/// Numbers as a plain JSON array, `null` where one is not finite.
+fn numbers(values: &[f64]) -> String {
+    let each: Vec<String> = values.iter().map(|v| num(*v)).collect();
+    format!("[{}]", each.join(", "))
+}
+
+/// What an atom is: its kind, key, Hz, stretch, harmonics and band, `null` where its kind
+/// has none.
+fn atom(atom: &Atom) -> String {
+    let none = || NONE.to_string();
+    let (hz, stretch, lo, hi) = match &atom.sound {
+        Sound::Partial { hz } => (num(hz.base), none(), none(), none()),
+        Sound::Harmonic { hz, stretch, .. } => (num(hz.base), num(*stretch), none(), none()),
+        Sound::Noise { lo, hi } => (none(), none(), num(*lo), num(*hi)),
     };
-    format!("\"rate_hz\": {}, \"cut_db\": {cut}", stage.rate)
-}
-
-fn files(stage: &Stage) -> String {
-    list(&stage.files, |(path, body)| {
-        format!("{{ \"path\": {}, \"text\": {} }}", text(path), text(body))
-    })
-}
-
-/// One progress line: an activity, a descent's last step, or a stage as it finishes.
-pub fn progress(event: &Event) -> String {
-    match event {
-        Event::Activity {
-            action,
-            stage,
-            edit,
-            count,
-            part,
-            comparisons,
-            seconds,
-        } => format!(
-            "{{ \"action\": \"{}\", \"stage\": {}, \"edit\": {}, \"count\": {}, \"part\": {{ \
-             \"at\": {}, \"of\": {} }}, \"work\": {{ \"comparisons\": {comparisons}, \
-             \"per_second\": {NONE} }}, \"seconds\": {} }}",
-            action.name(),
-            text(stage),
-            edit.map_or_else(|| NONE.to_string(), text),
-            count.map_or_else(
-                || NONE.to_string(),
-                |(done, unit)| format!(
-                    "{{ \"done\": {done}, \"of\": {NONE}, \"unit\": \"{unit}\" }}"
-                )
-            ),
-            part.0,
-            part.1,
-            num(*seconds)
-        ),
-        Event::Step {
-            stage,
-            steps,
-            residual_bits,
-            numbers,
-            bits,
-            ended,
-        } => format!(
-            "{{ \"stage\": {}, \"phase\": \"solve\", \"price\": 1, \"step\": {steps}, \"draws\": \
-             1, \"residual_bits\": {}, \"numbers\": {numbers}, \"bits\": {}, \"ended\": \"{}\" }}",
-            text(stage),
-            num(*residual_bits),
-            num(*bits),
-            ended.name()
-        ),
-        Event::Finished(stage) => format!(
-            "{{ \"stage\": {}, \"finished\": true, \"stopped\": {}, \"length_bits\": {}, \
-             \"residual_bits\": {}, \"bits\": {}, \"numbers\": {}, \"predicted_at_cap\": {NONE}, \
-             \"least\": {}, \"seconds\": {}, {}, \"files\": {} }}",
-            text(&stage.label),
-            stage.stopped,
-            num(stage.length_bits),
-            num(stage.residual_bits),
-            num(stage.bits),
-            stage.numbers(),
-            stage.least,
-            num(stage.seconds),
-            read(stage),
-            files(stage)
-        ),
-    }
-}
-
-/// A stage as `data.stages` lists it; `wrote` the paths the CLI wrote it to, if any.
-pub fn stage(stage: &Stage, wrote: Option<&(String, String)>) -> String {
-    let wrote = wrote.map_or_else(String::new, |(dir, wav)| {
-        format!(", \"directory\": {}, \"wav\": {}", text(dir), text(wav))
-    });
     format!(
-        "{{ \"label\": {}, \"scale\": {}, \"stopped\": {}, \"atoms\": {}, \"numbers\": {}, \
-         \"bits\": {}, \"residual_bits\": {}, \"length_bits\": {}, \"least\": {}, \"seconds\": \
-         {}, {}, \"edits\": {}, \"descents\": {}, \"files\": {}{wrote} }}",
-        text(&stage.label),
-        num(stage.scale),
-        stage.stopped,
-        stage.atoms.len(),
-        stage.numbers(),
-        num(stage.bits),
-        num(stage.residual_bits),
-        num(stage.length_bits),
-        stage.least,
-        num(stage.seconds),
-        read(stage),
-        list(&stage.edits, |e| text(e)),
-        list(&stage.descents, |(steps, ended)| format!(
-            "{{ \"steps\": {steps}, \"ended\": \"{}\" }}",
-            ended.name()
-        )),
-        files(stage)
+        "{{ \"key\": {}, \"kind\": \"{}\", \"hz\": {hz}, \"stretch\": {stretch}, \"harmonics\": \
+         {}, \"lo_hz\": {lo}, \"hi_hz\": {hi} }}",
+        atom.key,
+        kind_name(atom),
+        atom.harmonics()
     )
 }
 
-/// The answer's `data`: the scheme, every stage, the chosen one and its files; `wrote` one
-/// entry per stage where the CLI wrote them.
-pub fn answer(stages: &[Stage], levels: usize, wrote: &[(String, String)]) -> String {
-    let listed: Vec<(usize, &Stage)> = stages.iter().enumerate().collect();
-    let chosen = chosen(stages);
+/// One progress line per step, the first with the grid's shape.
+pub fn progress(line: &Line) -> String {
+    let rows: Vec<String> = line
+        .residual_db
+        .iter()
+        .map(|row| {
+            let each: Vec<String> = row
+                .iter()
+                .map(|v| v.map_or_else(|| NONE.to_string(), num))
+                .collect();
+            format!("[{}]", each.join(", "))
+        })
+        .collect();
+    let geometry = line.geometry.as_ref().map_or_else(String::new, |g| {
+        let edges: Vec<String> = g
+            .band_edges_hz
+            .iter()
+            .map(|(lo, hi)| format!("[{}, {}]", num(*lo), num(*hi)))
+            .collect();
+        format!(
+            ", \"rate_hz\": {}, \"frame_secs\": {}, \"first_centre_secs\": {}, \
+             \"band_edges_hz\": [{}], \"band_floor_db\": {}, \"gain_db\": {}",
+            g.rate_hz,
+            num(g.frame_secs),
+            num(g.first_centre_secs),
+            edges.join(", "),
+            numbers(&g.band_floor_db),
+            num(g.gain_db)
+        )
+    });
     format!(
-        "{{ \"continuation\": {{ \"scheme\": \"pyramid\", \"levels\": {levels}, \"ratio\": {}, \
-         \"default_levels\": {LEVELS} }}, \"stages\": {}, \"chosen\": {}, \"files\": {}, \
-         \"diagnostics\": {} }}",
-        num(RATIO),
-        list(&listed, |(k, s)| stage(s, wrote.get(*k))),
-        chosen.map_or_else(|| NONE.to_string(), |s| stage(s, None)),
-        chosen.map_or_else(|| list::<String>(&[], String::clone), files),
-        list::<String>(&[], String::clone)
+        "{{ \"step\": {}, \"action\": \"{}\", \"atom\": {}, \"delta_dl_bits\": {}, \"dl_bits\": \
+         {}, \"atom_bits\": {}, \"residual_bits\": {}, \"residual_db\": [{}], \"envelopes\": {}, \
+         \"seconds\": {}{geometry} }}",
+        line.step,
+        line.action.name(),
+        line.atom.as_ref().map_or_else(|| NONE.to_string(), atom),
+        num(line.delta_bits),
+        num(line.atom_bits + line.residual_bits),
+        num(line.atom_bits),
+        num(line.residual_bits),
+        rows.join(", "),
+        list(&line.envelopes, |(key, db)| {
+            let rows: Vec<String> = db.iter().map(|row| numbers(row)).collect();
+            format!("{{ \"key\": {key}, \"db\": [{}] }}", rows.join(", "))
+        }),
+        num(line.seconds)
+    )
+}
+
+/// The answer's `data`: the fit's counts, DL and time, the paths the CLI wrote, and its
+/// composition's files where asked.
+pub fn answer(
+    fit: &Fit,
+    secs: f64,
+    wrote: &[String],
+    files: Option<&[(String, String)]>,
+) -> String {
+    let count = |kind: &str| fit.atoms.iter().filter(|a| kind_name(a) == kind).count();
+    let files = files.map_or_else(String::new, |files| {
+        format!(
+            ", \"files\": {}",
+            list(files, |(path, body)| format!(
+                "{{ \"path\": {}, \"text\": {} }}",
+                text(path),
+                text(body)
+            ))
+        )
+    });
+    format!(
+        "{{ \"fit\": {{ \"rate_hz\": {}, \"steps\": {}, \"partials\": {}, \"harmonics\": {}, \
+         \"noises\": {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \"gain_db\": \
+         {}, \"stopped\": {}, \"secs\": {}, \"wrote\": {} }}{files} }}",
+        fit.clip.rate,
+        fit.steps,
+        count("partial"),
+        count("harmonic"),
+        count("noise"),
+        num(fit.atom_bits + fit.residual_bits),
+        num(fit.atom_bits),
+        num(fit.residual_bits),
+        num(fit.gain_db),
+        fit.stopped,
+        num(secs),
+        strings(wrote)
     )
 }

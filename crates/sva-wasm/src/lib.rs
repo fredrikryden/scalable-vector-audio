@@ -521,17 +521,7 @@ impl Composition {
         #[wasm_bindgen(unchecked_param_type = "SolveClip")] clip: JsValue,
         #[wasm_bindgen(unchecked_param_type = "SolveOptions")] options: JsValue,
     ) -> Result<JsValue, JsValue> {
-        options_of(
-            &options,
-            &[
-                "levels",
-                "coarsest",
-                "spl",
-                "everyLevel",
-                "signal",
-                "progress",
-            ],
-        )?;
+        options_of(&options, &["spl", "signal", "progress"])?;
         solve::solved(&clip, &options).await
     }
 

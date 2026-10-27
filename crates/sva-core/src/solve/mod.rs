@@ -3,17 +3,9 @@
 pub mod add;
 pub mod atoms;
 pub mod bits;
-pub mod calibrate;
-pub mod coarse;
-pub mod dual;
-pub mod first;
-pub mod fisher;
+pub mod fit;
 pub mod grid;
-pub mod lm;
-pub mod objective;
-pub mod pyramid;
 pub mod report;
-pub mod spectrum;
 
 use sva_ast::Source;
 

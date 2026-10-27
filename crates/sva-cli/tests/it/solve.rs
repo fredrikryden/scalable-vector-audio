@@ -1,4 +1,4 @@
-// Concern: freezes `solve`'s refusals, stages, progress lines, the levels and first fits it writes, `new --from`'s stub | Non-concern: the atoms found | IO: (argv, a clip) -> envelope, stderr, files
+// Concern: freezes `solve`'s refusals, its progress lines, the files it writes, `new --from`'s stub | Non-concern: the atoms found (sva-core's solve_fit) | IO: (argv, a clip) -> envelope, stderr, files
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -74,131 +74,80 @@ fn refuses(dir: &Path, argv: &[&str], code: &str, exit: i32) -> Value {
     answer
 }
 
-/// A solve answers one stage per level it runs, coarsest first, each heard on stderr as it
-/// finishes with its terms, and writes each level's composition, wav and vocoded clip and fit as
-/// it does; every activity is named, its comparisons never falling, each level's composition
-/// renders, N0 is kept under `--cache`, and the coarsest level alone runs unless told.
+/// A solve fits the clip and writes its composition, its render and both grids sounded under
+/// `--out`; stderr hears a start line with the grid's shape and then one line per step, each an
+/// add or a removal, the description length never rising and each line's change its
+/// difference; the composition renders; a held destination refuses.
 #[test]
-fn a_solve_answers_and_writes_a_stage_per_level() {
-    let (root, wav) = clip("solve-levels", TONE);
-    let n0 = root.join("n0").display().to_string();
-    let argv = [
-        "solve",
-        &wav,
-        "--levels",
-        "2",
-        "--coarsest",
-        "2",
-        "--out",
-        "fit",
-        "--cache",
-        &n0,
-    ];
-    let out = sva(&root, &argv);
+fn a_solve_writes_its_fit_and_hears_a_line_per_step() {
+    let (root, wav) = clip("solve-fit", TONE);
+    let out = sva(&root, &["solve", &wav, "--out", "fit"]);
     let answer = json(&out);
     assert_eq!(answer["status"], "success", "{answer}");
-    let data = &answer["data"];
-    assert_eq!(data["continuation"]["scheme"], "pyramid", "{data}");
-    let stages = items(&data["stages"]);
-    let labels: Vec<&str> = stages.iter().filter_map(|s| s["label"].as_str()).collect();
-    assert_eq!(labels, ["level 1 of 2", "level 2 of 2"], "{data}");
-    assert!(data["chosen"].is_object(), "{data}");
+    let fit = &answer["data"]["fit"];
+    assert!(fit["partials"].as_u64().is_some_and(|n| n >= 1), "{fit}");
+    for key in ["dl_bits", "atom_bits", "residual_bits", "gain_db", "secs"] {
+        assert!(fit[key].is_number(), "`{key}`: {fit}");
+    }
     let lines: Vec<Value> = String::from_utf8_lossy(&out.stderr)
         .lines()
         .map(|l| serde_json::from_str(l).expect("each progress line is JSON"))
         .collect();
-    let names = [
-        "reading_reference",
-        "ranking_proposals",
-        "descending",
-        "measuring",
-    ];
-    let mut done = 0;
-    for line in lines.iter().filter(|l| l.get("action").is_some()) {
-        let action = line["action"].as_str().unwrap_or_default();
-        assert!(names.contains(&action), "an action by name: {line}");
-        let work = line["work"]["comparisons"].as_u64().expect("a count");
-        assert!(work >= done, "the work never falls, from {done}: {line}");
-        done = work;
+    assert_eq!(Some(lines.len() as u64 - 1), fit["steps"].as_u64(), "{fit}");
+    assert_eq!(lines[0]["action"], "start", "{}", lines[0]);
+    assert!(lines[0]["atom"].is_null());
+    for key in ["rate_hz", "frame_secs", "band_edges_hz", "band_floor_db"] {
+        assert!(!lines[0][key].is_null(), "the start line holds `{key}`");
     }
-    let finished: Vec<&Value> = lines.iter().filter(|l| l["finished"] == true).collect();
-    let heard: Vec<&str> = finished
-        .iter()
-        .filter_map(|l| l["stage"].as_str())
-        .collect();
-    assert_eq!(heard, labels, "a finished line per stage");
-    for line in &finished {
-        for key in ["residual_bits", "bits", "numbers", "length_bits"] {
-            assert!(
-                line[key].is_number(),
-                "a finished stage hears `{key}`: {line}"
-            );
-        }
-    }
-    for (k, stage) in stages.iter().enumerate() {
-        assert!(stage["rate_hz"].is_u64(), "a stage names its rate: {stage}");
-        let level = root.join(format!("fit/level-{}", k + 1));
-        assert_eq!(
-            stage["directory"].as_str(),
-            Some(format!("fit/level-{}", k + 1).as_str())
+    let bands = lines[0]["band_edges_hz"].as_array().map_or(0, Vec::len);
+    let mut dl = f64::INFINITY;
+    for (k, line) in lines.iter().enumerate() {
+        assert_eq!(line["step"].as_u64(), Some(k as u64), "{line}");
+        let total = line["dl_bits"].as_f64().expect("a total");
+        let parts = ["atom_bits", "residual_bits"].map(|p| line[p].as_f64().expect("a part"));
+        assert!(
+            (total - parts[0] - parts[1]).abs() <= 1e-6 * total.abs(),
+            "{line}"
         );
-        assert!(root.join(format!("fit/level-{}.wav", k + 1)).is_file());
-        for heard in ["clip-coarse.wav", "fit-coarse.wav"] {
-            assert!(
-                level.join(heard).is_file(),
-                "level {} writes {heard}",
-                k + 1
-            );
+        if k > 0 {
+            assert!(["add", "remove"].contains(&line["action"].as_str().unwrap_or("")));
+            assert!(line["atom"]["kind"].is_string(), "{line}");
+            let delta = line["delta_dl_bits"].as_f64().expect("a change");
+            assert!((delta - (total - dl)).abs() <= 1e-6 * dl.abs(), "{line}");
+            assert!(total < dl, "the description length falls: {line}");
         }
-        let rendered = json(&sva(
-            &level,
-            &[
-                "render",
-                "@master([0, 0.3s])",
-                "--cache",
-                "none",
-                "--representation",
-                "loudness",
-            ],
-        ));
-        assert_eq!(rendered["status"], "success", "{rendered}");
+        dl = total;
+        for row in line["residual_db"].as_array().into_iter().flatten() {
+            assert_eq!(row.as_array().map_or(0, Vec::len), bands, "{line}");
+        }
+        assert!(line["envelopes"]["items"].is_array(), "{line}");
     }
-    let kept = |dir: &Path| {
-        let mut files = Vec::new();
-        let mut open = vec![dir.to_path_buf()];
-        while let Some(d) = open.pop() {
-            for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
-                match entry.path().is_dir() {
-                    true => open.push(entry.path()),
-                    false => files.push(entry.path()),
-                }
-            }
-        }
-        files
-    };
-    assert_eq!(kept(&root.join("n0")).len(), 2, "N0 kept per level's scale");
-    refuses(
-        &root,
+    for name in [
+        "master",
+        "score/clip.jsonl",
+        "first.wav",
+        "clip-grid.wav",
+        "fit-grid.wav",
+    ] {
+        assert!(root.join("fit").join(name).is_file(), "{name} written");
+    }
+    let rendered = json(&sva(
+        &root.join("fit"),
         &[
-            "solve", &wav, "--levels", "1", "--out", "fit", "--cache", &n0,
-        ],
-        "destination.already_exists",
-        4,
-    );
-    let coarse = json(&sva(
-        &root,
-        &[
-            "solve", &wav, "--levels", "2", "--out", "coarse", "--cache", &n0,
+            "render",
+            "@master([0, 0.3s])",
+            "--cache",
+            "none",
+            "--representation",
+            "loudness",
         ],
     ));
-    let labels: Vec<&str> = items(&coarse["data"]["stages"])
-        .iter()
-        .filter_map(|s| s["label"].as_str())
-        .collect();
-    assert_eq!(
-        labels,
-        ["level 1 of 2"],
-        "the coarsest level alone: {coarse}"
+    assert_eq!(rendered["status"], "success", "{rendered}");
+    refuses(
+        &root,
+        &["solve", &wav, "--out", "fit"],
+        "destination.already_exists",
+        4,
     );
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -207,18 +156,13 @@ fn a_solve_answers_and_writes_a_stage_per_level() {
 #[test]
 fn a_solve_refuses_each_mistake_under_its_code() {
     let root = scratch("solve-refusals");
-    let cases: [(&[&str], &str, i32); 7] = [
+    let cases: [(&[&str], &str, i32); 6] = [
         (&["solve"], "cli.missing_argument", 3),
-        (&["solve", "clip.wav", "--levels", "0"], "cli.bad_value", 3),
-        (
-            &["solve", "clip.wav", "--levels", "2", "--coarsest", "3"],
-            "cli.bad_value",
-            3,
-        ),
         (&["solve", "clip.wav", "--spl", "loud"], "cli.bad_value", 3),
+        (&["solve", "clip.wav", "--out"], "cli.missing_value", 3),
         (
-            &["solve", "clip.wav", "--first", "--levels", "2"],
-            "cli.bad_value",
+            &["solve", "clip.wav", "--levels", "2"],
+            "cli.unknown_argument",
             3,
         ),
         (
@@ -274,27 +218,4 @@ fn new_from_refuses_as_unbuilt_and_a_node_reading_repr_is_told_why() {
     });
     assert!(helps, "{answer:?}");
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// `--first` fits the clip once and writes its composition, its render, both grids sounded
-/// and the grids' comparison under `--out`, answering its atom counts and distance.
-#[test]
-fn a_first_fit_writes_its_composition_render_and_grids() {
-    let (root, wav) = clip("solve-first", TONE);
-    let out = sva(&root, &["solve", &wav, "--first", "--out", "first"]);
-    let answer = json(&out);
-    assert_eq!(answer["status"], "success", "{answer}");
-    let first = &answer["data"]["first"];
-    assert_eq!(first["partials"], 1, "{first}");
-    assert!(first["mean_abs_db"].as_f64().is_some(), "{first}");
-    for name in [
-        "master",
-        "score/clip.jsonl",
-        "first.wav",
-        "clip-grid.wav",
-        "fit-grid.wav",
-        "grid.json",
-    ] {
-        assert!(root.join("first").join(name).is_file(), "{name} written");
-    }
 }

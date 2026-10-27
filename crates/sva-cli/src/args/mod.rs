@@ -9,7 +9,7 @@ mod solve;
 
 use reading::{analyze_args, render_args};
 use solve::solve_args;
-pub use solve::{COARSEST, OUT, SolveArgs};
+pub use solve::{OUT, SolveArgs};
 
 #[derive(Debug, PartialEq)]
 pub struct RenderArgs {
