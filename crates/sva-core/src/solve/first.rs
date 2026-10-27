@@ -1,7 +1,6 @@
-// Concern: one sound's coarse fit: kept peaks, one voice, one noise per band, one NNLS per frame, level knots | Non-concern: onsets, the pyramid | IO: (samples, rate, spl) -> First
+// Concern: one sound's coarse fit: kept peaks, one voice, one noise per band, levels read off band envelopes, level knots | Non-concern: onsets, the pyramid | IO: (samples, rate, spl) -> First
 
 use sva_engine::hearing::{CAM_LAST, cam_hz, level_jnd_db};
-use sva_engine::{default_threads, each};
 
 use super::add::{Spectrogram, Track, floor_db, sieved, span_hz};
 use super::atoms::{Atom, Clip, Sound, Trajectory};
@@ -18,34 +17,31 @@ pub const MODEL: &str = "one sound, fitted coarsely, as the smallest thumbnail o
      Hann windows half a window apart being near independent (Welch 1967), so a bin's mean \
      has variance P^2 / K; each local maximum of it over the threshold is a peak, its Hz and \
      level by quadratic interpolation of its dB and its neighbours' (QIFFT; Smith and Serra \
-     1987), its power at most its main lobe's; a peak is kept only where its power in its \
-     band (its amplitude through the window's kernel, sidelobes included) exceeds the band's \
-     noise, the median of the band's averaged bins times their count, by more than its own \
-     standard error, its power over root K, and, louder peaks first, where its bin's power \
-     exceeds the louder kept peaks' kernels there by more than its standard error, so a \
-     sidelobe is no peak; one harmonic voice where the sieve (add.rs) groups \
-     the kept peaks, its members at n f0 for every n up to its highest, each member's power \
-     its peak's, or the averaged power's largest bin within a main lobe of n f0 where no kept \
-     peak is a member, fixed, so the voice is one column whose gain is its level; each kept \
-     peak used once, as a member or a partial; at most one partial per band, its loudest kept \
-     peak not a member, in a band holding no member, as two sines in one band are one column \
-     on the coarse grid; a partial and a noise in one band are one column too, so a band \
-     holding a member or a partial holds no noise, the tone having out-powered the band's \
-     noise; every other band one noise atom exactly its width, kept where the averaged \
-     grid's fit gives it more than its band's averaged power over root K, so a band whose \
-     power the tones' leakage explains holds none; each frame's gains by non-negative least \
-     squares of the frame's band powers on those columns, each band weighted by \
-     1/(P_B + F_B), P_B the band's averaged power and F_B the threshold's band power: a \
-     power's spread grows with its mean, so a quiet band counts for more than in an absolute \
-     fit, yet a band only a tone's leakage fills does not pull the tone's gain as relative \
-     weights would; the columns scaled to unit weighted norm (Jacobi) before the solve, as \
-     the weights span decades; a ridge of one \
-     rounding unit of the largest diagonal makes the normal matrix positive definite, so the \
-     minimiser is unique; Lawson and Hanson's active set (1974, ch. 23) solves it, stopping at \
-     the first step whose cost does not fall, the rounding floor; a gain's level is 10 log10 \
-     of it, held at the threshold where lower (a voice's at its members' mean threshold); an \
-     atom never over its threshold is dropped; each level's frame centres, with its first \
-     held back to the onset and its last on to the end, are thinned by \
+     1987), its power at most its main lobe's; a peak is kept only where its power inside \
+     its main lobe (its amplitude through the window's kernel over the lobe's bins) exceeds \
+     the noise inside that lobe, the median of its band's averaged bins times the lobe's \
+     width in bins, by more than its own standard error, its power over root K, and, louder \
+     peaks first, where its bin's power exceeds the louder kept peaks' kernels there by more \
+     than its standard error, so a sidelobe is no peak; a band may hold several partials, the \
+     lobe test already refusing a band's noise and a sine's sidelobes; one harmonic voice \
+     where the sieve (add.rs) groups the kept peaks, its members at n f0 for every n up to \
+     its highest, each member's shape its peak's level, or the averaged power's largest bin \
+     within a main lobe of n f0 where no kept peak is a member; each kept peak used once, as \
+     a member or a partial; a band holding a member or a partial holds no noise, the tones \
+     having out-powered its noise; no level is fitted, each is read off the clip's band \
+     envelopes, each frame's power in a band over the atom's unit-level power there: a \
+     band's tones, its partials and the voice's harmonics, share its envelope in proportion \
+     to their peaks' powers there, so each frame shifts them all by the dB of the envelope \
+     over their summed power, a partial at its peak's level plus that shift; the voice's \
+     level the mean of that shift over the bands holding its kept members, each such band's \
+     harmonics offset by its time-mean difference from that mean; leakage between bands is \
+     ignored at the coarse level, every band read as its own atoms' alone; every other band, louder first, one noise atom \
+     exactly its width, its level its envelope over its unit power there, kept where its \
+     averaged power exceeds the time-mean leakage of the atoms read before it by more than \
+     its averaged power over root K, so a band whose power the tones' leakage explains holds \
+     none; a level is held at the threshold where lower (a voice's at its members' mean \
+     threshold); an atom never over its threshold is dropped; each level's frame centres, \
+     with its first held back to the onset and its last on to the end, are thinned by \
      Ramer-Douglas-Peucker (1972-73) at the level JND at the atom's peak sensation level \
      (Jesteadt, Wier and Green 1977, hearing.rs), the largest dB gap from a chord; the fit's \
      grid is the written atoms through the same templates, each at its level at the frame's \
@@ -68,13 +64,6 @@ pub fn rate_for(rate: u32) -> u32 {
         .rev()
         .find(|d| rate.is_multiple_of(*d))
         .map_or(rate, |d| rate / d)
-}
-
-/// What one column stands for.
-enum Role {
-    Voice,
-    Partial(f64),
-    Noise(usize),
 }
 
 pub fn fit(samples: &[f64], rate: u32, spl_db: f64) -> First {
@@ -135,12 +124,13 @@ fn peaks(
     looks: f64,
 ) -> Vec<(Track, usize)> {
     let bands = grid.bands();
+    let lobe = grid.lobe();
     let noise: Vec<f64> = bands
         .iter()
         .map(|band| {
             let mut bins = mean[grid.bins_of(*band)].to_vec();
             bins.sort_by(f64::total_cmp);
-            bins[bins.len() / 2] * bins.len() as f64
+            bins[bins.len() / 2] * (2 * lobe + 1) as f64
         })
         .collect();
     let (lo, hi) = span_hz(grid.rate);
@@ -157,7 +147,10 @@ fn peaks(
         let (hz, peak) = qifft(grid, mean, b);
         let level = sine_db(grid, peak);
         let over = level - floor_db(hz, spl_db);
-        let power = libm::pow(10.0, level / 10.0) * grid.sine_bands(hz)[band];
+        let power = libm::pow(10.0, level / 10.0)
+            * (b.saturating_sub(lobe)..(b + lobe + 1).min(mean.len()))
+                .map(|k| grid.sine(hz, k))
+                .sum::<f64>();
         if over <= 0.0 || power - noise[band] <= power * se {
             continue;
         }
@@ -273,6 +266,15 @@ fn voice(grid: &Grid, clip: &Clip, mean: &[f64], tracks: &[(Track, usize)]) -> O
     })
 }
 
+/// One atom read off the clip's band envelopes: its threshold, its level in dB at each frame,
+/// its unit-level power in each band and how it is written.
+struct Read {
+    floor: f64,
+    levels: Vec<f64>,
+    template: Vec<f64>,
+    make: Box<dyn Fn(Trajectory) -> Atom>,
+}
+
 /// The atoms of the one sound `grid` holds, as `MODEL` states.
 fn atoms(grid: &Grid, clip: &Clip, spl_db: f64) -> Vec<Atom> {
     let Some((first, last)) = audible(grid, spl_db) else {
@@ -295,130 +297,150 @@ fn atoms(grid: &Grid, clip: &Clip, spl_db: f64) -> Vec<Atom> {
     let tracks = peaks(grid, &mean, (on, end), spl_db, looks);
     let voice = voice(grid, clip, &mean, &tracks);
     let bands = grid.bands();
+    let observed: Vec<Vec<f64>> = frames.iter().map(|f| grid.pooled(f)).collect();
+    let envelope = |band: usize, gain: f64| -> Vec<f64> {
+        observed
+            .iter()
+            .map(|o| db(o[band].max(f64::MIN_POSITIVE) / gain))
+            .collect()
+    };
+    let used = voice.as_ref().map_or(Vec::new(), |v| v.used.clone());
+    let partials: Vec<&(Track, usize)> = tracks
+        .iter()
+        .enumerate()
+        .filter(|(t, _)| !used.contains(t))
+        .map(|(_, t)| t)
+        .collect();
+    let mut members: Vec<usize> = voice.as_ref().map_or(Vec::new(), |v| v.bands.clone());
+    members.sort_unstable();
+    members.dedup();
     let mut tonal = vec![false; bands.len()];
-    let mut roles: Vec<Role> = Vec::new();
-    let mut columns: Vec<Vec<f64>> = Vec::new();
+    members
+        .iter()
+        .chain(partials.iter().map(|(_, b)| b))
+        .for_each(|b| tonal[*b] = true);
+    let shaped: Vec<f64> = (0..bands.len())
+        .map(|b| {
+            voice.as_ref().map_or(0.0, |v| {
+                v.levels
+                    .iter()
+                    .enumerate()
+                    .map(|(k, s)| {
+                        libm::pow(10.0, s / 10.0) * grid.sine_bands(v.f0 * (k + 1) as f64)[b]
+                    })
+                    .sum()
+            })
+        })
+        .collect();
+    let shift: Vec<Option<Vec<f64>>> = (0..bands.len())
+        .map(|b| {
+            let held = shaped[b]
+                + partials
+                    .iter()
+                    .filter(|(_, at)| *at == b)
+                    .map(|(t, _)| libm::pow(10.0, t.levels.0 / 10.0) * grid.sine_bands(t.hz)[b])
+                    .sum::<f64>();
+            tonal[b].then(|| envelope(b, held))
+        })
+        .collect();
+    let mut reads: Vec<Read> = Vec::new();
     if let Some(Voice {
-        f0,
-        levels,
-        bands: held,
-        ..
+        f0, levels: shape, ..
     }) = &voice
     {
-        let centre = levels.iter().sum::<f64>() / levels.len() as f64;
-        let mut column = vec![0.0; bands.len()];
-        for (k, l) in levels.iter().enumerate() {
-            let gain = libm::pow(10.0, (l - centre) / 10.0);
-            for (c, t) in column.iter_mut().zip(grid.sine_bands(f0 * (k + 1) as f64)) {
-                *c += gain * t;
-            }
-        }
-        held.iter().for_each(|b| tonal[*b] = true);
-        roles.push(Role::Voice);
-        columns.push(column);
-    }
-    let used = voice.as_ref().map_or(Vec::new(), |v| v.used.clone());
-    let voiced = tonal.clone();
-    for (band, held) in voiced.iter().enumerate() {
-        let loudest = tracks
+        let f0 = *f0;
+        let harmonic = |k: usize| f0 * (k + 1) as f64;
+        let shifts: Vec<&Vec<f64>> = members.iter().filter_map(|b| shift[*b].as_ref()).collect();
+        let level: Vec<f64> = (0..observed.len())
+            .map(|f| shifts.iter().map(|s| s[f]).sum::<f64>() / shifts.len() as f64)
+            .collect();
+        let offset: Vec<f64> = shifts
+            .iter()
+            .map(|s| s.iter().zip(&level).map(|(a, v)| a - v).sum::<f64>() / level.len() as f64)
+            .collect();
+        let own: Vec<f64> = shape
             .iter()
             .enumerate()
-            .filter(|(t, (_, b))| *b == band && !used.contains(t))
-            .max_by(|x, y| {
-                x.1.0
-                    .levels
-                    .0
-                    .total_cmp(&y.1.0.levels.0)
-                    .then(y.0.cmp(&x.0))
-            });
-        if let (false, Some((_, (track, _)))) = (*held, loudest) {
-            tonal[band] = true;
-            roles.push(Role::Partial(track.hz));
-            columns.push(grid.sine_bands(track.hz));
+            .map(|(k, s)| {
+                let bin = libm::round(grid.bin_of(harmonic(k))) as usize;
+                let band = band_of(grid, &bands, bin);
+                s + members
+                    .iter()
+                    .position(|m| Some(*m) == band)
+                    .map_or(0.0, |i| offset[i])
+            })
+            .collect();
+        let centre = own.iter().sum::<f64>() / own.len() as f64;
+        let offsets: Vec<f64> = own.iter().map(|o| o - centre).collect();
+        let mut template = vec![0.0; bands.len()];
+        for (k, o) in offsets.iter().enumerate() {
+            for (t, v) in template.iter_mut().zip(grid.sine_bands(harmonic(k))) {
+                *t += libm::pow(10.0, o / 10.0) * v;
+            }
         }
+        let floor = (0..shape.len())
+            .map(|k| floor_db(harmonic(k), spl_db))
+            .sum::<f64>()
+            / shape.len() as f64;
+        let written = offsets[..offsets.len() - 1].to_vec();
+        reads.push(Read {
+            floor,
+            levels: level.iter().map(|l| l + centre).collect(),
+            template,
+            make: Box::new(move |level| {
+                Atom::harmonic(0, on, Trajectory::steady(f0), written.clone(), level)
+            }),
+        });
     }
-    for (band, range) in bands.iter().enumerate().filter(|(b, _)| !tonal[*b]) {
-        roles.push(Role::Noise(band));
-        columns.push(grid.noise_bands(*range));
+    for (track, band) in partials {
+        let hz = track.hz;
+        let shift = shift[*band].as_ref().expect("a partial's band is tonal");
+        reads.push(Read {
+            floor: floor_db(hz, spl_db),
+            levels: shift.iter().map(|r| track.levels.0 + r).collect(),
+            template: grid.sine_bands(hz),
+            make: Box::new(move |level| Atom::partial(0, on, Trajectory::steady(hz), level)),
+        });
     }
-    let observed: Vec<Vec<f64>> = frames.iter().map(|f| grid.pooled(f)).collect();
     let averaged: Vec<f64> = (0..bands.len())
         .map(|b| observed.iter().map(|o| o[b]).sum::<f64>() / observed.len() as f64)
         .collect();
-    let floors: Vec<f64> = grid
-        .band_floors(spl_db)
-        .iter()
-        .map(|f| grid.band_power(*f))
-        .collect();
-    let weight: Vec<f64> = averaged
-        .iter()
-        .zip(&floors)
-        .map(|(p, f)| 1.0 / (p + f))
-        .collect();
-    let projected = |columns: &[Vec<f64>], frame: &[f64]| -> Vec<f64> {
-        columns
+    let mut open: Vec<usize> = (0..bands.len()).filter(|b| !tonal[*b]).collect();
+    open.sort_by(|x, y| averaged[*y].total_cmp(&averaged[*x]).then(x.cmp(y)));
+    for band in open {
+        let leak: f64 = reads
             .iter()
-            .map(|c| (0..frame.len()).map(|b| weight[b] * c[b] * frame[b]).sum())
-            .collect()
-    };
-    let gains = scaled(&normal(&columns, &weight), &projected(&columns, &averaged));
-    let keep: Vec<bool> = roles
-        .iter()
-        .zip(&columns)
-        .zip(&gains)
-        .map(|((role, column), gain)| match role {
-            Role::Noise(b) => gain * column[*b] > averaged[*b] / libm::sqrt(looks),
-            _ => true,
-        })
-        .collect();
-    let (roles, columns): (Vec<Role>, Vec<Vec<f64>>) = roles
-        .into_iter()
-        .zip(columns)
-        .zip(&keep)
-        .filter(|(_, k)| **k)
-        .map(|(rc, _)| rc)
-        .unzip();
-    let normal = normal(&columns, &weight);
-    let gains: Vec<Vec<f64>> = each(default_threads(), observed, |frame| {
-        scaled(&normal, &projected(&columns, &frame))
-    });
-    let times: Vec<f64> = (first..=last).map(|f| grid.centre_secs(f)).collect();
-    let column = |j: usize| -> Vec<f64> { gains.iter().map(|g| g[j]).collect() };
-    let mut out = Vec::new();
-    for (j, role) in roles.iter().enumerate() {
-        let (floor, make): (f64, Box<dyn Fn(Trajectory) -> Atom>) = match role {
-            Role::Voice => {
-                let Voice { f0, levels, .. } = voice.as_ref().expect("a voice");
-                let centre = levels.iter().sum::<f64>() / levels.len() as f64;
-                let offsets: Vec<f64> = levels[..levels.len() - 1]
+            .map(|r| {
+                let power = r
+                    .levels
                     .iter()
-                    .map(|l| l - centre)
-                    .collect();
-                let floor = (1..=levels.len())
-                    .map(|n| floor_db(f0 * n as f64, spl_db))
+                    .map(|l| libm::pow(10.0, l / 10.0))
                     .sum::<f64>()
-                    / levels.len() as f64;
-                let f0 = *f0;
-                (
-                    floor,
-                    Box::new(move |level| {
-                        Atom::harmonic(0, on, Trajectory::steady(f0), offsets.clone(), level)
-                    }),
-                )
-            }
-            Role::Partial(hz) => (
-                floor_db(*hz, spl_db),
-                Box::new(move |level| Atom::partial(0, on, Trajectory::steady(*hz), level)),
-            ),
-            Role::Noise(b) => {
-                let band = bands[*b];
-                (
-                    floor_db(libm::sqrt(band.0 * band.1), spl_db),
-                    Box::new(move |level| Atom::noise(0, on, band, level)),
-                )
-            }
-        };
-        let levels: Vec<f64> = column(j).iter().map(|a| db(*a)).collect();
+                    / r.levels.len() as f64;
+                power * r.template[band]
+            })
+            .sum();
+        if averaged[band] - leak <= averaged[band] / libm::sqrt(looks) {
+            continue;
+        }
+        let range = bands[band];
+        let template = grid.noise_bands(range);
+        reads.push(Read {
+            floor: floor_db(libm::sqrt(range.0 * range.1), spl_db),
+            levels: envelope(band, template[band]),
+            template,
+            make: Box::new(move |level| Atom::noise(0, on, range, level)),
+        });
+    }
+    let times: Vec<f64> = (first..=last).map(|f| grid.centre_secs(f)).collect();
+    let mut out = Vec::new();
+    for Read {
+        floor,
+        levels,
+        make,
+        ..
+    } in reads
+    {
         let peak = levels.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         if peak <= floor {
             continue;
@@ -477,144 +499,6 @@ fn thinned((on, end): (f64, f64), times: &[f64], levels: &[f64], tolerance: f64)
     }
 }
 
-/// `T^T W T` over `columns`.
-fn normal(columns: &[Vec<f64>], weight: &[f64]) -> Vec<Vec<f64>> {
-    let m = columns.len();
-    let mut g = vec![vec![0.0; m]; m];
-    for i in 0..m {
-        for j in i..m {
-            let sum: f64 = (0..weight.len())
-                .map(|k| weight[k] * columns[i][k] * columns[j][k])
-                .sum();
-            (g[i][j], g[j][i]) = (sum, sum);
-        }
-    }
-    g
-}
-
-/// `nnls` of `g` and `h` with each column scaled to unit weighted norm (Jacobi), so bands
-/// whose weights differ by many decades do not leave the normal matrix singular in floating
-/// point, then ridged and scaled back.
-fn scaled(g: &[Vec<f64>], h: &[f64]) -> Vec<f64> {
-    let d: Vec<f64> = (0..h.len())
-        .map(|i| match g[i][i] > 0.0 {
-            true => 1.0 / libm::sqrt(g[i][i]),
-            false => 0.0,
-        })
-        .collect();
-    let unit: Vec<Vec<f64>> = (0..h.len())
-        .map(|i| (0..h.len()).map(|j| d[i] * g[i][j] * d[j]).collect())
-        .collect();
-    let h: Vec<f64> = h.iter().zip(&d).map(|(v, s)| v * s).collect();
-    nnls(&ridged(unit), &h)
-        .iter()
-        .zip(&d)
-        .map(|(x, s)| x * s)
-        .collect()
-}
-
-/// `g` with one rounding unit of its largest diagonal added to its diagonal: no number of the
-/// data's, only the arithmetic's, so every eigenvalue is positive and the minimiser unique,
-/// while each product `g x` already carries a rounding error that large, so the answer moves
-/// no further than rounding moves it.
-fn ridged(mut g: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
-    let ridge = f64::EPSILON * (0..g.len()).map(|i| g[i][i]).fold(0.0, f64::max);
-    for (i, row) in g.iter_mut().enumerate() {
-        row[i] += ridge;
-    }
-    g
-}
-
-/// `argmin 1/2 x^T G x - h^T x` over `x >= 0`, by Lawson and Hanson's active set, as `MODEL`
-/// states.
-fn nnls(g: &[Vec<f64>], h: &[f64]) -> Vec<f64> {
-    let m = h.len();
-    let cost = |x: &[f64]| {
-        (0..m)
-            .map(|i| x[i] * (0.5 * (0..m).map(|j| g[i][j] * x[j]).sum::<f64>() - h[i]))
-            .sum::<f64>()
-    };
-    let mut x = vec![0.0; m];
-    let mut passive = vec![false; m];
-    let mut least = 0.0;
-    loop {
-        let w: Vec<f64> = (0..m)
-            .map(|i| h[i] - (0..m).map(|j| g[i][j] * x[j]).sum::<f64>())
-            .collect();
-        let Some(enter) = (0..m)
-            .filter(|i| !passive[*i] && w[*i] > 0.0)
-            .max_by(|a, b| w[*a].total_cmp(&w[*b]).then(b.cmp(a)))
-        else {
-            break;
-        };
-        let mut next = x.clone();
-        let mut set = passive.clone();
-        set[enter] = true;
-        loop {
-            let p: Vec<usize> = (0..m).filter(|i| set[*i]).collect();
-            let Some(z) = solved(g, h, &p) else {
-                set = passive.clone();
-                next = x.clone();
-                break;
-            };
-            if z.iter().all(|v| *v > 0.0) {
-                for (i, v) in p.iter().zip(&z) {
-                    next[*i] = *v;
-                }
-                break;
-            }
-            let (step, out) = p
-                .iter()
-                .zip(&z)
-                .filter(|(_, v)| **v <= 0.0)
-                .map(|(i, v)| (next[*i] / (next[*i] - v), *i))
-                .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
-                .expect("a non-positive entry");
-            for (i, v) in p.iter().zip(&z) {
-                next[*i] += step * (v - next[*i]);
-                if *i == out || next[*i] <= 0.0 {
-                    next[*i] = 0.0;
-                    set[*i] = false;
-                }
-            }
-        }
-        let c = cost(&next);
-        if c >= least {
-            break;
-        }
-        (x, passive, least) = (next, set, c);
-    }
-    x
-}
-
-/// `G_PP z = h_P` by Cholesky over the indices `p`, `None` where `G_PP` is not positive
-/// definite in floating point.
-fn solved(g: &[Vec<f64>], h: &[f64], p: &[usize]) -> Option<Vec<f64>> {
-    let k = p.len();
-    let mut l = vec![vec![0.0; k]; k];
-    for i in 0..k {
-        for j in 0..=i {
-            let s = g[p[i]][p[j]] - (0..j).map(|q| l[i][q] * l[j][q]).sum::<f64>();
-            if i == j {
-                if s <= 0.0 {
-                    return None;
-                }
-                l[i][i] = libm::sqrt(s);
-            } else {
-                l[i][j] = s / l[j][j];
-            }
-        }
-    }
-    let mut y = vec![0.0; k];
-    for i in 0..k {
-        y[i] = (h[p[i]] - (0..i).map(|q| l[i][q] * y[q]).sum::<f64>()) / l[i][i];
-    }
-    for i in (0..k).rev() {
-        y[i] = (y[i] - (i + 1..k).map(|q| l[q][i] * y[q]).sum::<f64>()) / l[i][i];
-    }
-    Some(y)
-}
-
 /// The level in dB `level` holds at `t`, from `on`.
 pub fn level_at(level: &Trajectory, on: f64, t: f64) -> f64 {
     let mut from = (on, level.base);
@@ -671,29 +555,4 @@ pub fn heard(atoms: &[Atom], like: &Grid) -> Grid {
         })
         .collect();
     like.with(power)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{nnls, ridged};
-
-    /// Three overlapping columns, one gain held at nought by the bound: the ridge leaves the
-    /// answer where it was to rounding.
-    #[test]
-    fn the_ridge_does_not_change_the_answer() {
-        let g = vec![
-            vec![4.0, 1.0, 0.5],
-            vec![1.0, 3.0, 1.0],
-            vec![0.5, 1.0, 2.0],
-        ];
-        let h = vec![3.0, 2.0, -1.0];
-        let (plain, ridge) = (nnls(&g, &h), nnls(&ridged(g.clone()), &h));
-        assert_eq!(plain[2], 0.0);
-        for (p, r) in plain.iter().zip(&ridge) {
-            assert!(
-                (p - r).abs() <= 8.0 * f64::EPSILON * p.abs().max(1.0),
-                "{p} {r}"
-            );
-        }
-    }
 }

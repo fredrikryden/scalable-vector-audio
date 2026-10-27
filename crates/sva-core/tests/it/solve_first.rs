@@ -1,4 +1,4 @@
-// Concern: states the coarse fit's sine, sine beside a band, two sines in a band, decaying voice, same atoms each run | Non-concern: the pyramid | IO: (rendered atoms) -> asserts
+// Concern: states the coarse fit's sine, sine beside a band, three close sines over a floor, decaying voice, same atoms each run | Non-concern: the pyramid | IO: (rendered atoms) -> asserts
 
 use sva_core::solve::atoms::{Atom, Clip, Sound, Trajectory};
 use sva_core::solve::calibrate::rendered;
@@ -98,19 +98,24 @@ fn a_sine_beside_a_band_is_one_partial_and_the_band() {
 }
 
 #[test]
-fn two_sines_in_one_band_are_one_partial_holding_both() {
-    let found = first(&[partial(0, 1200.0, -20.0), partial(1, 1500.0, -20.0)]);
-    assert_eq!(counts(&found), (1, 0, 0), "{found:?}");
-    let (hz, tone) = partial_hz(&found);
-    assert!(
-        (1200.0 - BIN_HZ / 2.0..=1500.0 + BIN_HZ / 2.0).contains(&hz),
-        "{hz} Hz"
-    );
-    let level = level_at(tone, 0.5);
-    assert!(
-        (level + 17.0).abs() <= 1.0,
-        "{level} dB, not both sines' power"
-    );
+fn three_close_sines_over_a_weak_floor_are_three_partials() {
+    let found = first(&[
+        partial(0, 829.0, -20.0),
+        partial(1, 878.0, -24.0),
+        partial(2, 918.0, -28.0),
+        Atom::noise(3, 0.0, (100.0, 7000.0), steady(-70.0)),
+    ]);
+    let (partials, voices, _) = counts(&found);
+    assert_eq!((partials, voices), (3, 0), "{found:?}");
+    for want in [829.0, 878.0, 918.0] {
+        assert!(
+            found.iter().any(|a| match &a.sound {
+                Sound::Partial { hz } => (hz.base - want).abs() <= BIN_HZ,
+                _ => false,
+            }),
+            "no partial near {want} Hz: {found:?}"
+        );
+    }
 }
 
 #[test]
