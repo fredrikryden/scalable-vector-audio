@@ -110,8 +110,13 @@ pub fn clip(rate: u32) -> Clip {
 
 /// The clip `atoms` write, rendered by the engine from their own nodes and score.
 pub fn rendered(atoms: &[Atom], clip: &Clip) -> Vec<f64> {
+    sounded(files(atoms, clip), clip)
+}
+
+/// The clip `files` write.
+pub fn sounded(files: Vec<(String, String)>, clip: &Clip) -> Vec<f64> {
     let mut held = Composition::new();
-    for (path, text) in files(atoms, clip) {
+    for (path, text) in files {
         held.insert(path, text);
     }
     let samples = [asked(&call("samples").expect("a call")).expect("a reading")];

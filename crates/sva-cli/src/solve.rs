@@ -9,8 +9,8 @@ use std::time::Instant;
 
 use sva_core::json::{num, strings};
 use sva_core::solve::atoms::Clip;
-use sva_core::solve::atoms::{Atom, Sound, files};
-use sva_core::solve::calibrate::rendered;
+use sva_core::solve::atoms::{Atom, Sound, files_at};
+use sva_core::solve::calibrate::{rendered, sounded};
 use sva_core::solve::first::fit;
 use sva_core::solve::grid::compared;
 use sva_core::solve::pyramid::{Asked, Event, Stage, mono, pyramid, read_at};
@@ -135,7 +135,7 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
 fn first(args: &SolveArgs, samples: &[f64], rate: u32) -> Result<String, CliError> {
     let started = Instant::now();
     let first = fit(samples, rate, args.spl_db);
-    let (grid_json, mean) = compared(&first.clip_grid, &first.fit_grid, args.spl_db);
+    let (grid_json, mean) = compared(&first.clip_grid, &first.fit_grid, first.spl_db);
     let mut wrote = Vec::new();
     let mut text = |name: &str, body: &str| -> Result<(), CliError> {
         let file = args.out.join(name);
@@ -146,29 +146,32 @@ fn first(args: &SolveArgs, samples: &[f64], rate: u32) -> Result<String, CliErro
         wrote.push(file.display().to_string());
         Ok(())
     };
-    for (path, body) in files(&first.atoms, &first.clip) {
-        text(&path, &body)?;
+    let composition = files_at(&first.atoms, &first.clip, first.gain_db);
+    for (path, body) in &composition {
+        text(path, body)?;
     }
     text("grid.json", &grid_json)?;
     let len = first.clip.len;
-    for (name, heard) in [
-        ("first.wav", rendered(&first.atoms, &first.clip)),
-        ("clip-grid.wav", first.clip_grid.sounded(len)),
-        ("fit-grid.wav", first.fit_grid.sounded(len)),
+    let back = libm::pow(10.0, first.gain_db / 20.0);
+    for (name, heard, gain) in [
+        ("first.wav", sounded(composition, &first.clip), 1.0),
+        ("clip-grid.wav", first.clip_grid.sounded(len), back),
+        ("fit-grid.wav", first.fit_grid.sounded(len), back),
     ] {
         let wav = args.out.join(name);
-        let samples: Vec<f32> = heard.iter().map(|s| *s as f32).collect();
+        let samples: Vec<f32> = heard.iter().map(|s| (*s * gain) as f32).collect();
         write_wav(&samples, first.clip.rate, &wav, SampleEncoding::Float)?;
         wrote.push(wav.display().to_string());
     }
     let count = |kind: fn(&Atom) -> bool| first.atoms.iter().filter(|a| kind(a)).count();
     let data = format!(
         "{{ \"first\": {{ \"rate_hz\": {}, \"partials\": {}, \"harmonics\": {}, \
-         \"noises\": {}, \"mean_abs_db\": {}, \"secs\": {}, \"wrote\": {} }} }}",
+         \"noises\": {}, \"gain_db\": {}, \"mean_abs_db\": {}, \"secs\": {}, \"wrote\": {} }} }}",
         first.clip.rate,
         count(|a| matches!(a.sound, Sound::Partial { .. })),
         count(|a| matches!(a.sound, Sound::Harmonic { .. })),
         count(|a| matches!(a.sound, Sound::Noise { .. })),
+        num(first.gain_db),
         num(mean),
         num(started.elapsed().as_secs_f64()),
         strings(&wrote)

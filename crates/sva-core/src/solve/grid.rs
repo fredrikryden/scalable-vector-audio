@@ -23,7 +23,10 @@ pub const MODEL: &str = "the coarse grid, the smallest thumbnail of the clip: th
      its leakage over its edges lands in its neighbours as the clip's does; a clip shorter \
      than the window is read at every hop, none lying inside it; a \
      cell is audible where the clip's or the fit's band is over the threshold at the band's \
-     geometric centre, its distance |fit - clip| dB with each held at that threshold; \
+     geometric centre, its distance |fit - clip| dB with each held at that threshold, a \
+     frame's distance the mean over its audible cells, the clip's the mean over all audible \
+     cells weighted by the clip's power in each, so the bands and frames that carry the \
+     clip's power count most and a near-silent cell barely counts; \
      phaseless resynthesis: each band's power spread flat over its bins, each bin at the \
      square root of its power, every phase drawn, inverse transformed, scaled to the frame's \
      mean square by Parseval and laid at its centre under the Hann window over the root of \
@@ -353,31 +356,32 @@ impl Grid {
 }
 
 /// The clip's and the fit's band maps, their distance per cell, per frame and over audible
-/// cells, as JSON beside that mean, as `MODEL` states.
+/// cells weighted by the clip's power, as JSON beside that mean, as `MODEL` states.
 pub fn compared(clip: &Grid, fit: &Grid, spl_db: f64) -> (String, f64) {
     let floors = clip.band_floors(spl_db);
     let (heard, fitted) = (clip.band_db_map(), fit.band_db_map());
-    let mut all = (0.0, 0usize);
+    let mut all = (0.0, 0.0);
     let mut per_frame = Vec::new();
     let mut apart = Vec::new();
-    for (h, f) in heard.iter().zip(&fitted) {
+    for ((h, f), power) in heard.iter().zip(&fitted).zip(&clip.power) {
+        let weights = clip.pooled(power);
         let mut frame = (0.0, 0usize);
         let row: Vec<f64> = (0..floors.len())
             .map(|z| {
                 let d = f[z].max(floors[z]) - h[z].max(floors[z]);
                 if h[z].max(f[z]) > floors[z] {
                     frame = (frame.0 + d.abs(), frame.1 + 1);
+                    all = (all.0 + weights[z] * d.abs(), all.1 + weights[z]);
                 }
                 d
             })
             .collect();
-        all = (all.0 + frame.0, all.1 + frame.1);
         per_frame.push((frame.1 > 0).then(|| frame.0 / frame.1 as f64));
         apart.push(row);
     }
-    let mean = match all.1 {
-        0 => 0.0,
-        n => all.0 / n as f64,
+    let mean = match all.1 > 0.0 {
+        true => all.0 / all.1,
+        false => 0.0,
     };
     let map = |m: &Vec<Vec<f64>>| {
         list(m, |row| {

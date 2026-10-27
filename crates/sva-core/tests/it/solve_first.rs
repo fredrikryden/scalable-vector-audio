@@ -1,4 +1,4 @@
-// Concern: states the coarse fit's sine, sine beside a band, three close sines over a floor, decaying voice, same atoms each run | Non-concern: the pyramid | IO: (rendered atoms) -> asserts
+// Concern: states the coarse fit: sine, sine beside a band, close sines, sine over noise, decaying voice, same atoms each run and at a level | Non-concern: the pyramid | IO: (rendered atoms) -> asserts
 
 use sva_core::solve::atoms::{Atom, Clip, Sound, Trajectory};
 use sva_core::solve::calibrate::rendered;
@@ -24,8 +24,20 @@ fn partial(key: u64, hz: f64, db: f64) -> Atom {
     Atom::partial(key, 0.0, Trajectory::steady(hz), steady(db))
 }
 
+/// The atoms fitted to `atoms`' render, each level moved by the master gain to the clip's.
 fn first(atoms: &[Atom]) -> Vec<Atom> {
-    let found = fit(&rendered(atoms, &CLIP), CLIP.rate, SPL).atoms;
+    let fitted = fit(&rendered(atoms, &CLIP), CLIP.rate, SPL);
+    let found: Vec<Atom> = fitted
+        .atoms
+        .into_iter()
+        .map(|a| Atom {
+            level: Trajectory {
+                base: a.level.base + fitted.gain_db,
+                ..a.level.clone()
+            },
+            ..a
+        })
+        .collect();
     for atom in &found {
         println!("{atom:?}");
     }
@@ -157,4 +169,63 @@ fn a_fit_is_the_same_every_run() {
     let again = fit(&samples, CLIP.rate, SPL);
     assert_eq!(once.atoms, again.atoms);
     assert_eq!(once.fit_grid.power, again.fit_grid.power);
+}
+
+/// A sine at -20 dBFS over white noise across the clip's band 40 dB under it.
+fn over_white_noise() -> Vec<Atom> {
+    vec![
+        partial(0, 440.0, -20.0),
+        Atom::noise(1, 0.0, (50.0, 7900.0), steady(-60.0)),
+    ]
+}
+
+#[test]
+fn a_sine_over_white_noise_40_db_down_is_one_partial() {
+    let found = first(&over_white_noise());
+    let (partials, voices, _) = counts(&found);
+    assert_eq!((partials, voices), (1, 0), "{found:?}");
+    let (hz, _) = partial_hz(&found);
+    assert!((hz - 440.0).abs() <= BIN_HZ / 2.0, "{hz} Hz");
+}
+
+/// A clip 20 dB up fits the same tones under a master gain 20 dB higher, and every noise
+/// of the quieter at the same band and end levels, knots between moving with the JND.
+#[test]
+fn a_clip_20_db_up_fits_the_same_atoms_under_a_master_gain_20_db_higher() {
+    let quiet = rendered(&over_white_noise(), &CLIP);
+    let loud: Vec<f64> = quiet.iter().map(|s| s * 10.0).collect();
+    let (a, b) = (fit(&loud, CLIP.rate, SPL), fit(&quiet, CLIP.rate, SPL));
+    assert!(
+        (a.gain_db - b.gain_db - 20.0).abs() <= 1e-9,
+        "{} dB, {} dB",
+        a.gain_db,
+        b.gain_db
+    );
+    let close = |x: f64, y: f64| (x - y).abs() <= 1e-9;
+    let tonal = |atom: &&Atom| !matches!(atom.sound, Sound::Noise { .. });
+    let (ta, tb): (Vec<&Atom>, Vec<&Atom>) = (
+        a.atoms.iter().filter(tonal).collect(),
+        b.atoms.iter().filter(tonal).collect(),
+    );
+    assert_eq!(ta.len(), tb.len(), "{ta:?} {tb:?}");
+    for (x, y) in ta.iter().zip(&tb) {
+        let (nx, ny) = (x.numbers(), y.numbers());
+        assert_eq!(nx.len(), ny.len(), "{x:?} {y:?}");
+        assert!(
+            nx.iter()
+                .zip(&ny)
+                .all(|(p, q)| p.0 == q.0 && close(p.1, q.1)),
+            "{x:?} {y:?}"
+        );
+    }
+    let end = |atom: &Atom| level_at(atom, CLIP.secs());
+    for y in b.atoms.iter().filter(|atom| !tonal(atom)) {
+        assert!(
+            a.atoms.iter().any(|x| x.sound == y.sound
+                && close(x.level.base, y.level.base)
+                && close(end(x), end(y))),
+            "no {y:?} in {:?}",
+            a.atoms
+        );
+    }
 }

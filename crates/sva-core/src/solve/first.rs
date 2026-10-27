@@ -1,6 +1,6 @@
 // Concern: one sound's coarse fit: kept peaks, one voice, one noise per band, levels read off band envelopes, level knots | Non-concern: onsets, the pyramid | IO: (samples, rate, spl) -> First
 
-use sva_engine::hearing::{CAM_LAST, cam_hz, level_jnd_db};
+use sva_engine::hearing::{CAM_LAST, cam, cam_hz, level_jnd_db};
 
 use super::add::{Spectrogram, Track, floor_db, sieved, span_hz};
 use super::atoms::{Atom, Clip, Sound, Trajectory};
@@ -11,7 +11,12 @@ pub const MODEL: &str = "one sound, fitted coarsely, as the smallest thumbnail o
      pyramid holds a picture: its pitch, its colour over a handful of bands, its rise and \
      decay and its tone against its noise, no more than the coarse grid (grid.rs: octave \
      bands, 48 ms frames) resolves; the clip read at its rate over the largest whole factor \
-     that keeps the feasible set's top (Cam 38.9) under the Nyquist; the sound spans the \
+     that keeps the feasible set's top (Cam 38.9) under the Nyquist, then scaled to unit RMS \
+     and fitted there, the inverse written as one master gain in dB, so the composition \
+     renders at the clip's level; every threshold read at the SPL plus that gain, a level \
+     in unit-RMS space heard where it is over its threshold at the clip's level, so a clip's \
+     atoms move with its level only where a threshold or a level JND at its sensation level \
+     does; the sound spans the \
      clip's first audible frame to its last, and so does every atom, only its level moving; \
      the clip's power averaged over those frames is K looks, K the span over half the window, \
      Hann windows half a window apart being near independent (Welch 1967), so a bin's mean \
@@ -19,9 +24,15 @@ pub const MODEL: &str = "one sound, fitted coarsely, as the smallest thumbnail o
      level by quadratic interpolation of its dB and its neighbours' (QIFFT; Smith and Serra \
      1987), its power at most its main lobe's; a peak is kept only where its power inside \
      its main lobe (its amplitude through the window's kernel over the lobe's bins) exceeds \
-     the noise inside that lobe, the median of its band's averaged bins times the lobe's \
-     width in bins, by more than its own standard error, its power over root K, and, louder \
-     peaks first, where its bin's power exceeds the louder kept peaks' kernels there by more \
+     the noise inside that lobe by more than its own standard error, its power over root \
+     K; that noise the median of the averaged bins around the peak times the lobe's width in \
+     bins, around it being the Cam centred on it (one ERB, the noise a tone competes with \
+     being the noise inside its critical band; Fletcher 1940, Glasberg and Moore 1990), \
+     less its own lobe and the louder kept peaks' lobes, widened a bin either side at a time \
+     till it holds as many bins as the lobe whose noise it estimates, so the noise is read \
+     where the peak stands even where power falls across its band; peaks tested louder \
+     first, one kept \
+     only where also its bin's power exceeds the louder kept peaks' kernels there by more \
      than its standard error, so a sidelobe is no peak; a band may hold several partials, the \
      lobe test already refusing a band's noise and a sine's sidelobes; one harmonic voice \
      where the sieve (add.rs) groups the kept peaks, its members at n f0 for every n up to \
@@ -47,11 +58,15 @@ pub const MODEL: &str = "one sound, fitted coarsely, as the smallest thumbnail o
      grid is the written atoms through the same templates, each at its level at the frame's \
      centre";
 
-/// One sound's coarse fit: the clip it read, its atoms, and the clip's and the atoms' coarse
-/// grids, each band's power spread flat over its bins.
+/// One sound's coarse fit: the clip it read, its atoms in the clip's unit-RMS space, the
+/// master gain in dB that brings them back to the clip's level, the SPL at which that space
+/// is heard, and the clip's and the atoms' coarse grids there, each band's power spread flat
+/// over its bins.
 pub struct First {
     pub clip: Clip,
     pub atoms: Vec<Atom>,
+    pub gain_db: f64,
+    pub spl_db: f64,
     pub clip_grid: Grid,
     pub fit_grid: Grid,
 }
@@ -73,12 +88,22 @@ pub fn fit(samples: &[f64], rate: u32, spl_db: f64) -> First {
         rate: to,
         len: samples.len(),
     };
-    let grid = Grid::of(&Spectrogram::of(&samples, to), samples.len());
-    let atoms = atoms(&grid, &clip, spl_db);
+    let square = samples.iter().map(|s| s * s).sum::<f64>() / samples.len().max(1) as f64;
+    let rms = match square > 0.0 {
+        true => libm::sqrt(square),
+        false => 1.0,
+    };
+    let unit: Vec<f64> = samples.iter().map(|s| s / rms).collect();
+    let gain_db = 20.0 * libm::log10(rms);
+    let heard_at = spl_db + gain_db;
+    let grid = Grid::of(&Spectrogram::of(&unit, to), unit.len());
+    let atoms = atoms(&grid, &clip, heard_at);
     let fit_grid = heard(&atoms, &grid);
     First {
         clip,
         atoms,
+        gain_db,
+        spl_db: heard_at,
         clip_grid: grid.broad(),
         fit_grid,
     }
@@ -114,6 +139,16 @@ fn band_of(grid: &Grid, bands: &[(f64, f64)], b: usize) -> Option<usize> {
         .position(|band| grid.bins_of(*band).contains(&b))
 }
 
+/// The bins the Cam centred on `hz` holds, of `bins` bins.
+fn neighbourhood(grid: &Grid, hz: f64, bins: usize) -> (usize, usize) {
+    let centre = cam(hz);
+    let at = |c: f64| grid.bin_of(cam_hz(c));
+    (
+        libm::ceil(at(centre - 0.5)).max(0.0) as usize,
+        (libm::floor(at(centre + 0.5)) as usize + 1).min(bins),
+    )
+}
+
 /// The kept peaks of the averaged power `mean` over `looks` looks, each beside its band,
 /// furthest over their threshold first, as `MODEL` states.
 fn peaks(
@@ -125,17 +160,10 @@ fn peaks(
 ) -> Vec<(Track, usize)> {
     let bands = grid.bands();
     let lobe = grid.lobe();
-    let noise: Vec<f64> = bands
-        .iter()
-        .map(|band| {
-            let mut bins = mean[grid.bins_of(*band)].to_vec();
-            bins.sort_by(f64::total_cmp);
-            bins[bins.len() / 2] * (2 * lobe + 1) as f64
-        })
-        .collect();
+    let lobe_of = |b: usize| b.saturating_sub(lobe)..(b + lobe + 1).min(mean.len());
     let (lo, hi) = span_hz(grid.rate);
     let se = 1.0 / libm::sqrt(looks);
-    let mut candidates: Vec<(f64, Track, usize, usize)> = Vec::new();
+    let mut candidates: Vec<(f64, Track, usize, usize, f64)> = Vec::new();
     for b in 1..mean.len() - 1 {
         let at = grid.hz(b);
         if at < lo || at > hi || mean[b] <= mean[b - 1] || mean[b] < mean[b + 1] {
@@ -147,37 +175,50 @@ fn peaks(
         let (hz, peak) = qifft(grid, mean, b);
         let level = sine_db(grid, peak);
         let over = level - floor_db(hz, spl_db);
-        let power = libm::pow(10.0, level / 10.0)
-            * (b.saturating_sub(lobe)..(b + lobe + 1).min(mean.len()))
-                .map(|k| grid.sine(hz, k))
-                .sum::<f64>();
-        if over <= 0.0 || power - noise[band] <= power * se {
+        if over <= 0.0 {
             continue;
         }
+        let power =
+            libm::pow(10.0, level / 10.0) * lobe_of(b).map(|k| grid.sine(hz, k)).sum::<f64>();
         let track = Track {
             hz,
             span,
             levels: (level, level),
         };
-        candidates.push((over, track, band, b));
+        candidates.push((over, track, band, b, power));
     }
     candidates.sort_by(|x, y| {
         (y.1.levels.0)
             .total_cmp(&x.1.levels.0)
             .then(x.1.hz.total_cmp(&y.1.hz))
     });
-    let mut out: Vec<(f64, Track, usize)> = Vec::new();
-    for (over, track, band, b) in candidates {
+    let mut out: Vec<(f64, Track, usize, usize)> = Vec::new();
+    for (over, track, band, b, power) in candidates {
+        let free = |k: &usize| {
+            std::iter::once(b)
+                .chain(out.iter().map(|o| o.3))
+                .all(|p| !lobe_of(p).contains(k))
+        };
+        let (mut from, mut to) = neighbourhood(grid, track.hz, mean.len());
+        while (from..to).filter(free).count() < 2 * lobe + 1 && (from > 0 || to < mean.len()) {
+            (from, to) = (from.saturating_sub(1), (to + 1).min(mean.len()));
+        }
+        let mut around: Vec<f64> = (from..to).filter(free).map(|k| mean[k]).collect();
+        if around.is_empty() {
+            continue;
+        }
+        around.sort_by(f64::total_cmp);
+        let noise = around[around.len() / 2] * (2 * lobe + 1) as f64;
         let leak: f64 = out
             .iter()
-            .map(|(_, t, _)| libm::pow(10.0, t.levels.0 / 10.0) * grid.sine(t.hz, b))
+            .map(|(_, t, _, _)| libm::pow(10.0, t.levels.0 / 10.0) * grid.sine(t.hz, b))
             .sum();
-        if mean[b] - leak > mean[b] * se {
-            out.push((over, track, band));
+        if power - noise > power * se && mean[b] - leak > mean[b] * se {
+            out.push((over, track, band, b));
         }
     }
     out.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.hz.total_cmp(&y.1.hz)));
-    out.into_iter().map(|(_, t, b)| (t, b)).collect()
+    out.into_iter().map(|(_, t, b, _)| (t, b)).collect()
 }
 
 /// The bins either side of a peak QIFFT's parabola reads: the three-point stencil.

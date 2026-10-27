@@ -492,6 +492,21 @@ pub fn files(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
     out
 }
 
+/// Every file a composition of `atoms` holds, its master scaling the score by one gain of
+/// `gain_db` dB.
+pub fn files_at(atoms: &[Atom], clip: &Clip, gain_db: f64) -> Vec<(String, String)> {
+    let mut out = files(atoms, clip);
+    out.retain(|(path, _)| path != "master");
+    let master = format!(
+        "; Models: the clip at one master gain in dB | Neglects: nothing | IO: (t) -> \
+         amplitude | Tags: master\ngain = {}\nexp({}*gain) * @score/clip(t)\n",
+        num(gain_db),
+        num(NEPER_PER_DB)
+    );
+    out.push(("master".to_string(), master));
+    out
+}
+
 pub fn nodes(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = atoms
         .iter()
