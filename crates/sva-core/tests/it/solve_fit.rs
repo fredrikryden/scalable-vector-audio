@@ -1,4 +1,4 @@
-// Concern: states the fit finds a sine's partial, a band's noise, a chord's voices, a stiff string's stretch; its DL never rising; determinism | Non-concern: the text written | IO: (a clip) -> asserts
+// Concern: states the fit finds a sine's partial, in noise too, a band's noise, voices steady or decaying, a stretch; a DL never rising; determinism | Non-concern: the text | IO: (a clip) -> asserts
 
 use std::f64::consts::TAU;
 
@@ -64,7 +64,17 @@ fn voice(f0: f64, b: f64, count: usize, level: f64) -> Vec<(f64, f64)> {
         .collect()
 }
 
-/// Flat noise over `[lo, hi)`: a sine on every 1/T Hz inside, its phase a fixed hash.
+/// A phase in `[0, 2 pi)` hashed from `k` (splitmix64's finaliser), so the lines' phases hold
+/// no order: a phase linear in `k` would sum them to a click.
+fn hashed(k: u64) -> f64 {
+    let mut z = k.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^= z >> 31;
+    TAU * (z >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// Flat noise over `[lo, hi)`: a sine on every 1/T Hz inside, its phase hashed.
 fn band(lo: f64, hi: f64, level: f64) -> Vec<f64> {
     let step = f64::from(RATE) / LEN as f64;
     let lines: Vec<f64> = (0..)
@@ -77,10 +87,7 @@ fn band(lo: f64, hi: f64, level: f64) -> Vec<f64> {
             lines
                 .iter()
                 .enumerate()
-                .map(|(k, hz)| {
-                    let phase = (k as f64 * 0.618_033_988_75).fract() * TAU * 7.0;
-                    each * libm::sin(TAU * hz * t(n) + phase)
-                })
+                .map(|(k, hz)| each * libm::sin(TAU * hz * t(n) + hashed(k as u64)))
                 .sum()
         })
         .collect()
@@ -180,4 +187,73 @@ fn a_fit_is_the_same_twice() {
     assert_eq!(a.atoms, b.atoms);
     let text = |lines: &[Line]| lines.iter().map(progress).collect::<Vec<_>>();
     assert_eq!(text(&heard_a), text(&heard_b));
+}
+
+/// A sum of `(hz, amplitude, decay per second)` sines, each its own phase.
+fn decaying(parts: &[(f64, f64, f64)]) -> Vec<f64> {
+    (0..LEN)
+        .map(|n| {
+            parts
+                .iter()
+                .enumerate()
+                .map(|(k, (hz, a, d))| {
+                    a * sva_formula::exp(-d * t(n)) * libm::sin(TAU * hz * t(n) + k as f64)
+                })
+                .sum()
+        })
+        .collect()
+}
+
+/// White noise of variance `variance`, each sample a Box-Muller draw of two hashed uniforms.
+fn white(variance: f64) -> Vec<f64> {
+    let uniform = |k: u64| (hashed(k) / TAU).max(f64::MIN_POSITIVE);
+    (0..LEN as u64)
+        .map(|n| {
+            let (u, v) = (uniform(2 * n), uniform(2 * n + 1));
+            libm::sqrt(variance) * libm::sqrt(-2.0 * libm::log(u)) * libm::cos(TAU * v)
+        })
+        .collect()
+}
+
+/// White noise 30 dB under the sine's power.
+#[test]
+fn a_sine_in_white_noise_thirty_db_under_is_one_partial() {
+    let (a, hz) = (0.3, 440.0);
+    let noise = white(a * a / 2.0 * 1e-3);
+    let samples: Vec<f64> = tones(&[(hz, a)])
+        .iter()
+        .zip(noise)
+        .map(|(s, n)| s + n)
+        .collect();
+    let (fit, _) = fitted(&samples);
+    let (partials, voices, _) = kinds(&fit.atoms);
+    assert_eq!((partials, voices), (1, 0), "{}", shown(&fit));
+}
+
+/// Eight harmonics at 1/k, each decaying at 4 per second (35 dB/s).
+#[test]
+fn a_decaying_tone_of_eight_harmonics_is_one_voice() {
+    let parts: Vec<(f64, f64, f64)> = voice(220.0, 0.0, 8, 0.3)
+        .into_iter()
+        .map(|(hz, a)| (hz, a, 4.0))
+        .collect();
+    let (fit, _) = fitted(&decaying(&parts));
+    assert_eq!(kinds(&fit.atoms), (0, 1, 0), "{}", shown(&fit));
+}
+
+/// A piano's C4: harmonic k decaying at 1 + k/4 per second, 11 to 35 dB/s, the faster the higher.
+#[test]
+fn a_stiff_string_decaying_harmonic_by_harmonic_is_one_voice_its_stretch_within_a_tenth() {
+    let b = 4e-4;
+    let parts: Vec<(f64, f64, f64)> = voice(261.63, b, 12, 0.3)
+        .into_iter()
+        .enumerate()
+        .map(|(k, (hz, a))| (hz, a, 1.0 + 0.25 * (k + 1) as f64))
+        .collect();
+    let (fit, _) = fitted(&decaying(&parts));
+    assert_eq!(kinds(&fit.atoms), (0, 1, 0), "{}", shown(&fit));
+    let Sound::Harmonic { stretch, .. } = fit.atoms[0].sound else {
+        unreachable!("a voice")
+    };
+    assert!((stretch - b).abs() <= 0.1 * b, "B {stretch} for {b}");
 }

@@ -89,6 +89,10 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_step() {
     for key in ["dl_bits", "atom_bits", "residual_bits", "gain_db", "secs"] {
         assert!(fit[key].is_number(), "`{key}`: {fit}");
     }
+    for key in ["start_dl_bits", "dl_bits", "atom_bits", "residual_bits"] {
+        assert!(fit["second"][key].is_number(), "`second.{key}`: {fit}");
+    }
+    assert!(fit["second"]["atoms"]["items"].is_array(), "{fit}");
     let lines: Vec<Value> = String::from_utf8_lossy(&out.stderr)
         .lines()
         .map(|l| serde_json::from_str(l).expect("each progress line is JSON"))
@@ -126,6 +130,7 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_step() {
         "master",
         "score/clip.jsonl",
         "first.wav",
+        "second.wav",
         "clip-grid.wav",
         "fit-grid.wav",
     ] {

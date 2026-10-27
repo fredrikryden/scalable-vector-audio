@@ -88,6 +88,17 @@ export interface SolveAnswer {
         gain_db: number;
         stopped: boolean;
         secs: number;
+        atoms: { items: SolveAtom[] };
+        /** The second pass over the first's residual, its atoms keyed after the first's. */
+        second: {
+            steps: number;
+            start_dl_bits: number;
+            dl_bits: number;
+            atom_bits: number;
+            residual_bits: number;
+            stopped: boolean;
+            atoms: { items: SolveAtom[] };
+        };
         wrote: string[];
     };
     files: { items: { path: string; text: string }[] };

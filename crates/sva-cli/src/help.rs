@@ -382,9 +382,12 @@ SOLVE:
   squares, then removes each atom whose removal shortens the description
   length; it stops where no candidate shortens it. The description length is
   the atoms' bits plus the residual's on the coarse grid's frames by its bins.
+  A second pass then runs the same loop on what the first leaves (the clip's
+  grid less the fit's, floored at nought), its atoms on top of the first's.
   `--spl` is a full-scale sine's level in dB SPL (default {spl}). Under `<out>`
   (default `{out}`) it writes the composition (its levels thinned at the level
-  JND), `first.wav` (its render), and `clip-grid.wav` and `fit-grid.wav`, the
+  JND), `first.wav` (its render), `second.wav` (its atoms and the second
+  pass's rendered together), and `clip-grid.wav` and `fit-grid.wav`, the
   clip's and the fit's octave bands by 48 ms frames sounded alike; an out
   directory already holding files refuses as a conflict unless `--confirm`.
   Stderr carries one JSON line per step: `step`, `action` (`start`, then `add`
@@ -396,8 +399,9 @@ SOLVE:
   `seconds`; the `start` line adds `rate_hz`, `frame_secs`,
   `first_centre_secs`, `band_edges_hz`, `band_floor_db` and `gain_db`. Stdout
   answers `fit` with `rate_hz`, `steps`, `partials`, `harmonics`, `noises`,
-  `dl_bits`, `atom_bits`, `residual_bits`, `gain_db`, `stopped`, `secs` and
-  `wrote`. SIGINT ends the fit after its step, `stopped` true.
+  `dl_bits`, `atom_bits`, `residual_bits`, `gain_db`, `stopped`, `secs`,
+  `atoms`, `second` (its `steps`, `start_dl_bits`, `dl_bits`, `atom_bits`,
+  `residual_bits`, `stopped` and `atoms`) and `wrote`. SIGINT ends the fit after its step, `stopped` true.
 
 ANALYZE:
   sva-cli analyze <file> --representation <list> [--confirm]

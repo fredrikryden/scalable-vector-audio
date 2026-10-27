@@ -1,4 +1,4 @@
-// Concern: runs a fit on a recording: a progress line per step on stderr, then its composition, render and both grids sounded | Non-concern: argv, the fit | IO: (SolveArgs) -> JSON or CliError
+// Concern: runs a fit on a recording: a progress line per step on stderr, then its composition, both passes' renders, both grids | Non-concern: argv, the fit | IO: (SolveArgs) -> JSON or CliError
 
 use std::path::Path;
 use std::pin::Pin;
@@ -20,8 +20,9 @@ fn io(path: &Path, e: std::io::Error) -> CliError {
     CliError::Io(format!("{}: {e}", path.display()))
 }
 
-/// The fit of `args.path` under `args.out`: its composition, `first.wav` (its render), and
-/// `clip-grid.wav` and `fit-grid.wav` (both coarse grids sounded alike).
+/// The fit of `args.path` under `args.out`: its composition, `first.wav` (its render),
+/// `second.wav` (its atoms and its second pass's rendered together), and `clip-grid.wav` and
+/// `fit-grid.wav` (both coarse grids sounded alike).
 pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
     let (planes, rate) = read_recording(&args.path)?;
     let held = std::fs::read_dir(&args.out).is_ok_and(|mut d| d.next().is_some());
@@ -59,10 +60,14 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
         std::fs::write(&file, body).map_err(|e| io(&file, e))?;
         wrote.push(file.display().to_string());
     }
+    let mut both = fitted.atoms.clone();
+    both.extend(fitted.second.atoms.iter().cloned());
+    let together = files_at(&both, &fitted.clip, fitted.gain_db);
     let len = fitted.clip.len;
     let back = libm::pow(10.0, fitted.gain_db / 20.0);
     for (name, heard, gain) in [
         ("first.wav", sounded(composition, &fitted.clip), 1.0),
+        ("second.wav", sounded(together, &fitted.clip), 1.0),
         ("clip-grid.wav", fitted.clip_grid.sounded(len), back),
         ("fit-grid.wav", fitted.fit_grid.sounded(len), back),
     ] {

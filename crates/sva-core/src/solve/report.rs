@@ -82,7 +82,7 @@ pub fn progress(line: &Line) -> String {
     )
 }
 
-/// The answer's `data`: the fit's counts, DL and time, the paths the CLI wrote, and its
+/// The answer's `data`: the fit's counts, DL, time and atoms, its second pass's, the paths the CLI wrote, and its
 /// composition's files where asked.
 pub fn answer(
     fit: &Fit,
@@ -101,10 +101,13 @@ pub fn answer(
             ))
         )
     });
+    let second = &fit.second;
     format!(
         "{{ \"fit\": {{ \"rate_hz\": {}, \"steps\": {}, \"partials\": {}, \"harmonics\": {}, \
          \"noises\": {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \"gain_db\": \
-         {}, \"stopped\": {}, \"secs\": {}, \"wrote\": {} }}{files} }}",
+         {}, \"stopped\": {}, \"secs\": {}, \"atoms\": {}, \"second\": {{ \"steps\": {}, \
+         \"start_dl_bits\": {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \
+         \"stopped\": {}, \"atoms\": {} }}, \"wrote\": {} }}{files} }}",
         fit.clip.rate,
         fit.steps,
         count("partial"),
@@ -116,6 +119,14 @@ pub fn answer(
         num(fit.gain_db),
         fit.stopped,
         num(secs),
+        list(&fit.atoms, atom),
+        second.steps,
+        num(second.start_bits),
+        num(second.atom_bits + second.residual_bits),
+        num(second.atom_bits),
+        num(second.residual_bits),
+        second.stopped,
+        list(&second.atoms, atom),
         strings(wrote)
     )
 }
