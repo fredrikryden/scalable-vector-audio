@@ -470,11 +470,13 @@ fn plop() -> Vec<f64> {
         .collect()
 }
 
+/// Partials only, the first gliding; fixed ones may take up its template's misfit.
 #[test]
-fn a_plop_is_one_partial_its_glide_within_a_tenth() {
+fn a_plop_is_a_gliding_partial_first_its_glide_within_a_tenth() {
     let rate = libm::log(2.0) / 0.2;
     let (fit, lines) = fitted(&plop());
-    assert_eq!(kinds(&fit.atoms), (1, 0, 0), "{}", shown(&fit));
+    let (partials, voices, noises) = kinds(&fit.atoms);
+    assert!(partials >= 1 && voices + noises == 0, "{}", shown(&fit));
     let glide = fit.atoms[0].glide();
     assert!(
         (glide - rate).abs() <= 0.1 * rate,
@@ -643,4 +645,48 @@ fn a_resume_from_another_clip_refuses_by_name() {
         Resume::of(&held, 0).map(|_| ()).map_err(|e| usage(&e)),
         Err("solve.from_unread".to_string())
     );
+}
+
+/// C4 from 0 s, E4 from 0.5 s its upper harmonics 6 dB under: E4's lowest line is added second.
+#[test]
+fn a_late_second_tone_is_added_second_by_its_lowest_line() {
+    let len = RATE as usize;
+    let late = len / 2;
+    let mut parts: Vec<(f64, f64, usize)> = voice(261.63, 0.0, 8, 0.2)
+        .into_iter()
+        .map(|(hz, a)| (hz, a, 0))
+        .collect();
+    parts.extend(
+        voice(329.63, 0.0, 8, 0.2)
+            .into_iter()
+            .enumerate()
+            .map(|(k, (hz, a))| (hz, if k == 0 { a } else { a / 2.0 }, late)),
+    );
+    let samples: Vec<f64> = (0..len)
+        .map(|n| {
+            parts
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, _, on))| n >= *on)
+                .map(|(k, (hz, a, _))| a * libm::sin(TAU * hz * t(n) + hashed(k as u64)))
+                .sum()
+        })
+        .collect();
+    let (_, lines) = fitted_with(
+        &samples,
+        &Options {
+            tolerance: TOLERANCE,
+            from: None,
+        },
+    );
+    let adds: Vec<&Atom> = lines
+        .iter()
+        .filter(|l| l.action == Action::Add)
+        .filter_map(|l| l.atom.as_ref())
+        .collect();
+    let lowest = |a: &Atom| lines_of(a).iter().copied().fold(f64::INFINITY, f64::min);
+    let shown: Vec<String> = adds.iter().map(|a| format!("{:?}", a.sound)).collect();
+    assert!(adds.len() >= 2, "{shown:?}");
+    assert!((lowest(adds[0]) - 261.63).abs() < 2.0, "{shown:?}");
+    assert!((lowest(adds[1]) - 329.63).abs() < 2.0, "{shown:?}");
 }

@@ -20,13 +20,14 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      scaled to unit RMS, one master gain in dB bringing it back, every floor read at the SPL plus that gain; \
      the residual on the coarse grid's 48 ms frames by its analysis bins (grid.rs), octave bands being too coarse to tell a sine from noise inside one; \
      a cell's power P the averaged periodogram of K looks, K the frame over half the window times the window over the padded transform (Welch 1967); \
-     a cell's variance that of a sine of power P_s in noise of power N: a bin's X = s + n, n complex Gaussian with E|n|^2 = N, so |X|^2 = |s|^2 + 2 Re(s* n) + |n|^2 is noncentral chi-square on 2 degrees, its variance N^2 + 2 P_s N per look, (N^2 + 2 P_s N) / K over K; \
-     N = P_n + F, the floor F a noise the ear's own; inside a tonal lobe P_n the local noise floor and P_s = max(P - P_n, 0); outside one P_n = P and P_s = 0, so a noise cell's variance stays (P + F)^2 / K and a tonal cell's falls to its true one; \
-     the local noise floor a bin's median over one Cam (at least a main lobe's width either side of its own lobe), outside the tonal lobes, on each side of the bin's own main lobe, over the median's share of the mean of K looks, (1 - 1/(9K))^3 (Wilson and Hilferty 1931), the higher side; \
+     a cell's heard power P' = P + F, the floor F a noise the ear's own; \
+     the tonal lobes the voices' sieve reads (below) against a local noise floor: a bin's median over one Cam (at least a main lobe's width either side of its own lobe), outside the tonal lobes, on each side of the bin's own main lobe, over the median's share of the mean of K looks, (1 - 1/(9K))^3 (Wilson and Hilferty 1931), the higher side; \
      a tonal lobe the main lobe (2 window bins either side) of a local maximum resolved from every higher bin within a main lobe's width and over 2 ln M times that floor, M the feasible bins: an exponential's tail, the periodogram's at one look and a bound at more, so noise alone passes in one bin with probability 1/M^2 and holds a false lobe in a spectrum with under 1/M; \
      its lobes found first against the lower side's median over all bins, then barred from the floor read against the higher; \
      F a noise at threshold: its power in one ERB a sine's at its threshold (add.rs), so per bin that sine's peak-bin power times f_s sum w^2 / (ERB (sum w)^2), the sine's own peak-bin power overstating a threshold noise's by 2 to 17 dB from 100 Hz to 10 kHz; \
-     residual bits 1/2 sum w r^2 log2(e), w the inverse of that variance, r = P less the model's expected power, bins outside the feasible set unweighted; \
+     the residual weighted by the clip's envelope, as the reported distance is: a cell's error its relative error r / P', r = P less the model's expected power, its dB error times ln 10 / 10 to first order with the log's power clipped at the floor so a cell the ear does not hear stays finite, weighted by its share P' / sum P' of the clip's heard power over every feasible cell; \
+     that share-weighted mean square scaled to bits so a clip of uniform heard power codes each cell's error as a Gaussian at a noise periodogram's variance P'^2 / K over K looks: one unit of it N K / 2 nats, N the feasible cells; \
+     so residual bits 1/2 sum w r^2 log2(e), w = K / (P' mean P'), the mean over the clip's feasible cells, read once off the clip; bins outside the feasible set unweighted; \
      templates in expected power: a sine through the window's closed-form kernel, a noise band's expected periodogram (grid.rs), a shaped noise's the sum of its bands' at their gains; \
      a gliding column's template in frame m the periodogram, by one transform, of a unit sine on its path in the window centred on the frame, its sweep across that window held, the frame's other hops left out: that template is the model's prediction, as a fixed sine's lobe is, not an estimate of another one, so its gap from the frame's pooled hops is misfit the residual holds and the DL prices; \
      a gliding column's floor at its Hz at the frames' mean time, its frequency looks at its path's Hz in each frame; \
@@ -517,25 +518,17 @@ impl Problem {
             .map(|f| f[range.clone()].to_vec())
             .collect();
         let lobes = Lobes::of(&grid, &range);
-        let weight: Vec<Vec<f64>> = each(default_threads(), (0..power.len()).collect(), |f| {
-            let (noise, tonal) = lobes.floor(&power[f], looks);
-            let inside = lobes.inside(&tonal, power[f].len());
-            power[f]
-                .iter()
-                .zip(&noise)
-                .zip(&floors)
-                .zip(&inside)
-                .map(|(((p, pn), fl), inside)| {
-                    let pn = match inside {
-                        true => pn.max(0.0),
-                        false => *p,
-                    };
-                    let n = pn + fl;
-                    let ps = (p - pn).max(0.0);
-                    looks / (n * n + 2.0 * ps * n)
-                })
-                .collect()
-        });
+        // P' = P + F per cell, and its mean over every feasible cell of the clip.
+        let heard: Vec<Vec<f64>> = power
+            .iter()
+            .map(|f| f.iter().zip(&floors).map(|(p, fl)| p + fl).collect())
+            .collect();
+        let cells = heard.iter().map(Vec::len).sum::<usize>().max(1) as f64;
+        let mean = heard.iter().flatten().sum::<f64>() / cells;
+        let weight: Vec<Vec<f64>> = heard
+            .iter()
+            .map(|f| f.iter().map(|h| looks / (h * mean)).collect())
+            .collect();
         let times = (0..grid.power.len()).map(|f| grid.centre_secs(f)).collect();
         let window = (0..grid.long)
             .map(|k| 0.5 - 0.5 * libm::cos(std::f64::consts::TAU * k as f64 / grid.long as f64))
