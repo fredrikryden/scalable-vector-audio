@@ -1,32 +1,29 @@
 // Concern: SOLVE: projected Levenberg-Marquardt in precision units, its step halved till the cost falls | Non-concern: a number's meaning, schedules | IO: (Problem, start, precisions) -> Descent
 
-use sva_engine::Abandon;
+use sva_engine::{Abandon, default_threads, each};
 
 pub const MODEL: &str = "projected Levenberg-Marquardt with the Fisher information as its \
-     curvature (Fisher scoring), in precision units y_i = x_i/delta_i, where D = I is \
-     Marquardt's scaling: g the cost's gradient and S its Fisher matrix in y, the numbers whose \
-     S_ii is 0 (seeded nowhere) left where they are, the rest ordered as the problem gives \
-     them (atoms by the last frame each reaches, so every atom's block row meets only atoms \
-     sharing a frame with it, an interval graph's perfect elimination order: no fill); the \
-     Levenberg path p(mu) = -(S + mu I)^-1 g for mu >= c, c = P eps max S_ii (P the numbers, \
-     eps = 2^-52; the numerical rank's cut, Golub and Van Loan, Matrix Computations, 4th ed., \
-     sec. 5.4.1), doubled until S + c I factors, by the Cholesky factor within each row's \
-     envelope (George and Liu 1981, Computer Solution of Large Sparse Positive Definite \
-     Systems, ch. 4), a pivot not positive refusing that mu; mu the least double with |p| <= \
-     r, by Newton's iteration on 1/|p| - 1/r from c (More and Sorensen 1983, SIAM J. Sci. Stat. \
-     Comput. 4(3) 553-572, doi 10.1137/0904038), which rises to the root, then bisection on \
-     the doubles' order between the last iterate short of r and the first past it; each point \
-     projected onto the feasible set nearest in y (the problem's own exact projection; Kanzow, \
-     Yamashita and Fukushima 2004, J. Comput. Appl. Math. 172(2) 375-397, doi \
-     10.1016/j.cam.2004.02.013); the Gauss-Newton point r = |p(c)| first, then r halved until \
-     the true cost falls, the first that falls taken (a search choice: plain backtracking, \
-     halving as bisection halves its bracket); an atom whose last taken step moved none of its \
-     numbers by 1 precision unit (the least move that counts) and none of whose neighbours \
-     (atoms sharing a frame) moved one is frozen: seeded nowhere, still in the cost, revived \
-     when a neighbour moves one; it ends when a taken step moves no number by 1 precision \
-     unit, or when none falls by the time the trial point is the state itself, every number \
-     unmoved in its double, at a cap on steps only if the caller sets one, or on a signal, and \
-     answers its least state and which atoms it left frozen";
+     curvature (Fisher scoring), in precision units y_i = x_i/delta_i, where D = I is Marquardt's \
+     scaling: g the cost's gradient and S its Fisher matrix in y, the numbers whose S_ii is 0 \
+     (seeded nowhere) left where they are; the Levenberg path p(mu) = -(S + mu I)^-1 g for mu >= \
+     c, c = P eps max S_ii (P the numbers, eps = 2^-52; the numerical rank's cut, Golub and Van \
+     Loan, Matrix Computations, 4th ed., sec. 5.4.1), doubled until S + c I factors, read through \
+     S = Q T Q^T, T tridiagonal by Householder reflections once per step (Golub and Van Loan, \
+     sec. 8.3.1), so p(mu) = Q z, z = -(T + mu I)^-1 Q^T g by the Cholesky factor of T + mu I and \
+     |p| = |z|, a pivot not positive refusing that mu; mu the least double with |p| <= r, by \
+     Newton's iteration on 1/|p| - 1/r from c (More and Sorensen 1983, SIAM J. Sci. Stat. Comput. \
+     4(3) 553-572, doi 10.1137/0904038), which rises to the root, then bisection on the doubles' \
+     order between the last iterate short of r and the first past it; each point projected onto \
+     the feasible set nearest in y (the problem's own exact projection; Kanzow, Yamashita and \
+     Fukushima 2004, J. Comput. Appl. Math. 172(2) 375-397, doi 10.1016/j.cam.2004.02.013); the \
+     Gauss-Newton point r = |p(c)| first, then r halved until the true cost falls, the first that \
+     falls taken (a search choice: plain backtracking, halving as bisection halves its bracket); \
+     an atom whose last taken step moved none of its numbers by 1 precision unit (the least move \
+     that counts) and none of whose neighbours (atoms sharing a frame) moved one is frozen: \
+     seeded nowhere, still in the cost, revived when a neighbour moves one; it ends when a taken \
+     step moves no number by 1 precision unit, or when none falls by the time the trial point is \
+     the state itself, every number unmoved in its double, at a cap on steps only if the caller \
+     sets one, or on a signal, and answers its least state and which atoms it left frozen";
 
 /// The cost's gradient and Fisher matrix at a state, in written coordinates.
 #[derive(Clone, Debug, PartialEq)]
@@ -214,7 +211,7 @@ pub async fn descend(
 
 /// `a . b` in four interleaved partial sums, so it vectorises; only its rounding is the
 /// order's.
-fn dot(a: &[f64], b: &[f64]) -> f64 {
+pub(super) fn dot(a: &[f64], b: &[f64]) -> f64 {
     let (whole_a, whole_b) = (a.chunks_exact(4), b.chunks_exact(4));
     let tail: f64 = whole_a
         .remainder()
@@ -240,46 +237,105 @@ fn numbered(sizes: &[usize], marks: &[bool]) -> Vec<bool> {
         .collect()
 }
 
-/// The Levenberg path in precision units: the kept rows from each one's first nonzero.
+/// The Levenberg path in precision units: the kept numbers' Fisher matrix in precision units as
+/// `Q T Q^T`, `T` tridiagonal (`diagonal`, `off`) and `Q` the Householder reflectors stored by
+/// column in `reflectors`, beside the pull `Q^T g`.
 struct Path {
     n: usize,
     kept: Vec<usize>,
-    rows: Vec<(usize, Vec<f64>)>,
+    diagonal: Vec<f64>,
+    off: Vec<f64>,
+    reflectors: Vec<Vec<f64>>,
     pulls: Vec<f64>,
     start: f64,
     longest: f64,
 }
 
-/// A point, its length, and `|L^-1 p|^2`.
+/// A point in `T`'s basis, its length, and `|L^-1 z|^2`.
 type Point = (Vec<f64>, f64, f64);
+
+/// `x - v (v . x) 2/|v|^2` over the tail of `x` the reflector `v` spans.
+fn reflect(v: &[f64], x: &mut [f64]) {
+    let norm = dot(v, v);
+    if norm == 0.0 {
+        return;
+    }
+    let from = x.len() - v.len();
+    let scale = 2.0 * dot(v, &x[from..]) / norm;
+    for (x, v) in x[from..].iter_mut().zip(v) {
+        *x -= scale * v;
+    }
+}
 
 impl Path {
     fn of(linear: &Linear, deltas: &[f64]) -> Path {
         let n = deltas.len();
         let kept: Vec<usize> = (0..n).filter(|i| linear.fisher[*i][*i] > 0.0).collect();
-        let rows: Vec<(usize, Vec<f64>)> = kept
+        let mut a: Vec<Vec<f64>> = kept
             .iter()
-            .enumerate()
-            .map(|(a, i)| {
-                let row = &linear.fisher[*i];
-                let first = (0..a).find(|b| row[kept[*b]] != 0.0).unwrap_or(a);
-                let scaled = (first..=a)
-                    .map(|b| deltas[*i] * row[kept[b]] * deltas[kept[b]])
-                    .collect();
-                (first, scaled)
+            .map(|i| {
+                kept.iter()
+                    .map(|j| deltas[*i] * linear.fisher[*i][*j] * deltas[*j])
+                    .collect()
             })
             .collect();
-        let pulls = kept
+        let top = (0..kept.len()).fold(0.0, |m: f64, i| m.max(a[i][i]));
+        let mut pulls: Vec<f64> = kept
             .iter()
             .map(|i| linear.gradient[*i] * deltas[*i])
             .collect();
-        let top = rows
-            .iter()
-            .fold(0.0, |m: f64, (_, r)| m.max(*r.last().expect("a diagonal")));
+        let m = kept.len();
+        let mut reflectors = Vec::with_capacity(m.saturating_sub(2));
+        let mut off = vec![0.0; m.saturating_sub(1)];
+        let threads = default_threads();
+        for k in 0..m.saturating_sub(1) {
+            let mut v: Vec<f64> = (k + 1..m).map(|i| a[i][k]).collect();
+            let norm = dot(&v, &v).sqrt();
+            let alpha = match v[0] > 0.0 {
+                true => -norm,
+                false => norm,
+            };
+            off[k] = alpha;
+            v[0] -= alpha;
+            let vv = dot(&v, &v);
+            if vv > 0.0 {
+                let beta = 2.0 / vv;
+                let size = (m - k - 1).div_ceil(threads.get());
+                let p: Vec<f64> = each(threads, a[k + 1..].chunks(size).collect(), |rows| {
+                    rows.iter()
+                        .map(|row| beta * dot(&row[k + 1..], &v))
+                        .collect::<Vec<f64>>()
+                })
+                .concat();
+                let half = beta * dot(&p, &v) / 2.0;
+                let w: Vec<f64> = p.iter().zip(&v).map(|(p, v)| p - half * v).collect();
+                let tasks: Vec<(usize, &mut [Vec<f64>])> = a[k + 1..]
+                    .chunks_mut(size)
+                    .enumerate()
+                    .map(|(c, rows)| (c * size, rows))
+                    .collect();
+                each(threads, tasks, |(at, rows)| {
+                    for (r, row) in rows.iter_mut().enumerate() {
+                        let (vi, wi) = (v[at + r], w[at + r]);
+                        for ((x, wc), vc) in row[k + 1..].iter_mut().zip(&w).zip(&v) {
+                            *x -= vi * wc + wi * vc;
+                        }
+                    }
+                });
+            } else {
+                off[k] = v[0] + alpha;
+                v.iter_mut().for_each(|x| *x = 0.0);
+            }
+            reflect(&v, &mut pulls);
+            reflectors.push(v);
+        }
+        let diagonal = (0..m).map(|i| a[i][i]).collect();
         let mut path = Path {
             n,
             kept,
-            rows,
+            diagonal,
+            off,
+            reflectors,
             pulls,
             start: 0.0,
             longest: 0.0,
@@ -301,47 +357,39 @@ impl Path {
         self.longest
     }
 
-    /// `p(mu)` as `MODEL` states, `None` where `S + mu I` does not factor.
+    /// `p(mu)` in `T`'s basis as `MODEL` states, `None` where `T + mu I` does not factor.
     fn solve(&self, mu: f64) -> Option<Point> {
         let m = self.kept.len();
-        let mut factor: Vec<Vec<f64>> = Vec::with_capacity(m);
-        for (i, (first, row)) in self.rows.iter().enumerate() {
-            let mut l = vec![0.0; row.len()];
-            for j in *first..i {
-                let (fj, lj) = (self.rows[j].0, &factor[j]);
-                let lo = fj.max(*first);
-                let dot = dot(&l[lo - first..j - first], &lj[lo - fj..j - fj]);
-                l[j - first] = (row[j - first] - dot) / lj[j - fj];
+        let (mut diagonal, mut below) = (vec![0.0; m], vec![0.0; m]);
+        for i in 0..m {
+            if i > 0 {
+                below[i] = self.off[i - 1] / diagonal[i - 1];
             }
-            let sum = dot(&l[..i - first], &l[..i - first]);
-            let pivot = row[i - first] + mu - sum;
+            let pivot = self.diagonal[i] + mu - below[i] * below[i];
             if pivot.is_nan() || pivot <= 0.0 {
                 return None;
             }
-            l[i - first] = pivot.sqrt();
-            factor.push(l);
+            diagonal[i] = pivot.sqrt();
         }
         let forward = |b: &[f64]| -> Vec<f64> {
             let mut y = vec![0.0; m];
             for i in 0..m {
-                let (first, l) = (self.rows[i].0, &factor[i]);
-                y[i] = (b[i] - dot(&l[..i - first], &y[first..i])) / l[i - first];
+                let carried = if i > 0 { below[i] * y[i - 1] } else { 0.0 };
+                y[i] = (b[i] - carried) / diagonal[i];
             }
             y
         };
         let minus: Vec<f64> = self.pulls.iter().map(|g| -g).collect();
-        let mut p = forward(&minus);
+        let mut z = forward(&minus);
         for i in (0..m).rev() {
-            let (first, l) = (self.rows[i].0, &factor[i]);
-            p[i] /= l[i - first];
-            let pi = p[i];
-            for (k, l) in (first..i).zip(l) {
-                p[k] -= l * pi;
+            if i + 1 < m {
+                z[i] -= below[i + 1] * z[i + 1];
             }
+            z[i] /= diagonal[i];
         }
-        let length = p.iter().map(|v| v * v).sum::<f64>().sqrt();
-        let q = forward(&p).iter().map(|v| v * v).sum();
-        Some((p, length, q))
+        let length = z.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let q = forward(&z).iter().map(|v| v * v).sum();
+        Some((z, length, q))
     }
 
     /// The length at `mu`, infinite where it does not factor.
@@ -399,9 +447,12 @@ impl Path {
                 hi
             }
         };
-        let (p, _, _) = self
+        let (mut p, _, _) = self
             .solve(mu)
             .expect("a damping past one that factors factors");
+        for v in self.reflectors.iter().rev() {
+            reflect(v, &mut p);
+        }
         for (i, v) in self.kept.iter().zip(p) {
             out[*i] = v;
         }

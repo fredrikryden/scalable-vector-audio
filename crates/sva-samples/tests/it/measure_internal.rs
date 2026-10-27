@@ -1,4 +1,4 @@
-// Concern: what `internal` owes silence, a tone, wider ears, two channels, rates, composed bins, a ripple, the adjoint | Non-concern: the curves (measure_hearing.rs) | IO: (samples, s) -> asserts
+// Concern: what `internal` owes silence, a tone, wider ears, two channels, rates, composed bins, a ripple, the adjoint, the vocoder | Non-concern: the curves | IO: (samples, s) -> asserts
 
 use std::f64::consts::PI;
 
@@ -308,5 +308,42 @@ fn pulled_weights_are_the_stages_adjoint() {
     assert!(
         (forward - back).abs() <= 1e-9 * forward.abs(),
         "{forward} {back}"
+    );
+}
+
+/// Power per Hz of `x` between `lo` and `hi`, by its DFT, one-sided.
+fn density(x: &[f64], rate: f64, (lo, hi): (f64, f64)) -> f64 {
+    let n = x.len().next_power_of_two();
+    let (mut re, mut im) = (x.to_vec(), vec![0.0; n]);
+    re.resize(n, 0.0);
+    sva_samples::fft::fft(&mut re, &mut im);
+    let hz = rate / n as f64;
+    let bins: Vec<usize> = (0..n / 2)
+        .filter(|j| (lo..hi).contains(&(*j as f64 * hz)))
+        .collect();
+    let power: f64 = bins.iter().map(|j| re[*j] * re[*j] + im[*j] * im[*j]).sum();
+    2.0 * power / (n as f64 * x.len() as f64) / (bins.len() as f64 * hz)
+}
+
+/// A flat noise read at a coarse scale and sounded back by the vocoder keeps its density
+/// within a band well inside the channels, and silence sounds as silence.
+#[test]
+fn a_flat_noise_vocodes_back_at_its_own_density() {
+    let rate = 16_000.0;
+    let ear = Ear::of(rate, SPL, 2.828_427_124_746_190_3);
+    let noise: Vec<f64> = (0..16_000)
+        .map(|k| 0.1 * (sva_formula::draw(7, k) - 0.5))
+        .collect();
+    let heard = ear.vocoded(&ear.excitations(&[&noise]), noise.len());
+    let band = (500.0, 4000.0);
+    let (was, is) = (density(&noise, rate, band), density(&heard, rate, band));
+    let gap = 10.0 * libm::log10(is / was);
+    println!("vocoded density {gap} dB from the noise's");
+    assert!(gap.abs() < 1.0, "{gap} dB");
+    let silence = vec![0.0; 4_000];
+    assert!(
+        ear.vocoded(&ear.excitations(&[&silence]), 4_000)
+            .iter()
+            .all(|v| *v == 0.0)
     );
 }

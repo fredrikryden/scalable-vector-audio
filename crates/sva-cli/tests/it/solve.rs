@@ -74,16 +74,25 @@ fn refuses(dir: &Path, argv: &[&str], code: &str, exit: i32) -> Value {
     answer
 }
 
-/// A solve answers one stage per level, coarsest first, each heard on stderr as it finishes
-/// with its terms, and writes each level's composition and wav as it does; every activity is
-/// named, its comparisons never falling, each level's composition renders, and N0 is kept
-/// under `--cache`.
+/// A solve answers one stage per level it runs, coarsest first, each heard on stderr as it
+/// finishes with its terms, and writes each level's composition, wav and vocoded clip and fit as
+/// it does; every activity is named, its comparisons never falling, each level's composition
+/// renders, N0 is kept under `--cache`, and the coarsest level alone runs unless told.
 #[test]
 fn a_solve_answers_and_writes_a_stage_per_level() {
     let (root, wav) = clip("solve-levels", TONE);
     let n0 = root.join("n0").display().to_string();
     let argv = [
-        "solve", &wav, "--levels", "2", "--out", "fit", "--cache", &n0,
+        "solve",
+        &wav,
+        "--levels",
+        "2",
+        "--coarsest",
+        "2",
+        "--out",
+        "fit",
+        "--cache",
+        &n0,
     ];
     let out = sva(&root, &argv);
     let answer = json(&out);
@@ -134,6 +143,13 @@ fn a_solve_answers_and_writes_a_stage_per_level() {
             Some(format!("fit/level-{}", k + 1).as_str())
         );
         assert!(root.join(format!("fit/level-{}.wav", k + 1)).is_file());
+        for heard in ["clip-coarse.wav", "fit-coarse.wav"] {
+            assert!(
+                level.join(heard).is_file(),
+                "level {} writes {heard}",
+                k + 1
+            );
+        }
         let rendered = json(&sva(
             &level,
             &[
@@ -172,16 +188,7 @@ fn a_solve_answers_and_writes_a_stage_per_level() {
     let coarse = json(&sva(
         &root,
         &[
-            "solve",
-            &wav,
-            "--levels",
-            "2",
-            "--coarsest",
-            "1",
-            "--out",
-            "coarse",
-            "--cache",
-            &n0,
+            "solve", &wav, "--levels", "2", "--out", "coarse", "--cache", &n0,
         ],
     ));
     let labels: Vec<&str> = items(&coarse["data"]["stages"])

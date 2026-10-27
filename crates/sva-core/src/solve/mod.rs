@@ -4,6 +4,7 @@ pub mod add;
 pub mod atoms;
 pub mod bits;
 pub mod calibrate;
+pub mod coarse;
 pub mod dual;
 pub mod fisher;
 pub mod lm;

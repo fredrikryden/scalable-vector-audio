@@ -23,7 +23,8 @@ fn io(path: &Path, e: std::io::Error) -> CliError {
     CliError::Io(format!("{}: {e}", path.display()))
 }
 
-/// Level `stage`'s files under `out/level-<k>/` and its render beside them as `level-<k>.wav`.
+/// Level `stage`'s files under `out/level-<k>/`, its render beside them as `level-<k>.wav`, and
+/// its vocoded clip and atoms in that directory as `clip-coarse.wav` and `fit-coarse.wav`.
 fn write(out: &Path, k: usize, stage: &Stage, clip: &Clip) -> Result<(String, String), CliError> {
     let dir = out.join(format!("level-{k}"));
     for (path, text) in &stage.files {
@@ -39,6 +40,14 @@ fn write(out: &Path, k: usize, stage: &Stage, clip: &Clip) -> Result<(String, St
         .map(|s| *s as f32)
         .collect();
     write_wav(&samples, clip.rate, &wav, SampleEncoding::Float)?;
+    std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
+    for (name, heard) in ["clip-coarse.wav", "fit-coarse.wav"]
+        .iter()
+        .zip(&stage.vocoded)
+    {
+        let samples: Vec<f32> = heard.iter().map(|s| *s as f32).collect();
+        write_wav(&samples, stage.rate, &dir.join(name), SampleEncoding::Float)?;
+    }
     Ok((dir.display().to_string(), wav.display().to_string()))
 }
 
@@ -79,6 +88,7 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
         &Asked {
             levels: args.levels,
             coarsest: args.coarsest,
+            coarse: true,
             spl_db: args.spl_db,
             threads: sva_engine::default_threads(),
             every_level: args.every_level,

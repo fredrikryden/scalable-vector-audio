@@ -108,6 +108,14 @@ pub fn ear_gain_db(hz: f64) -> f64 {
     free_field_db(hz) - middle_ear_db(hz)
 }
 
+/// The Hz between which `ear_gain_db` is one straight line: both tables' rows, ascending.
+pub fn ear_gain_rows() -> Vec<f64> {
+    let mut rows: Vec<f64> = FIELD_HZ.iter().chain(&MIDDLE_EAR_HZ).copied().collect();
+    rows.sort_by(f64::total_cmp);
+    rows.dedup();
+    rows
+}
+
 pub fn threshold_excitation_db(hz: f64) -> f64 {
     interpolate(&THRESHOLD_HZ, &THRESHOLD_TABLE_DB, hz) - THRESHOLD_SHIFT_DB
 }

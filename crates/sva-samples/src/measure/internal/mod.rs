@@ -2,6 +2,7 @@
 
 pub mod modulation;
 mod rate;
+pub mod vocode;
 
 use std::collections::HashMap;
 use std::f64::consts::{LN_10, PI};
@@ -107,7 +108,7 @@ fn decibels(x: f64) -> f64 {
 }
 
 /// The range holding `hz`, each half-open [lo, hi).
-fn range_of(hz: f64) -> usize {
+pub fn range_of(hz: f64) -> usize {
     WINDOW_SPLITS_HZ.partition_point(|split| *split <= hz)
 }
 
@@ -445,6 +446,31 @@ impl Ear {
         }
     }
 
+    pub fn hop_secs(&self) -> f64 {
+        self.hop_secs
+    }
+
+    pub fn scale(&self) -> f64 {
+        self.scale
+    }
+
+    pub fn rate(&self) -> f64 {
+        self.rate
+    }
+
+    /// A full-scale sine's power before `G`.
+    pub fn full_scale(&self) -> f64 {
+        decibels(self.spl_db) / 0.5
+    }
+
+    pub fn window_secs(&self) -> Vec<f64> {
+        self.ranges.iter().map(|r| r.window_secs).collect()
+    }
+
+    pub fn centres(&self) -> Vec<f64> {
+        self.channels.iter().map(|c| c.hz).collect()
+    }
+
     /// The ear keeping each window it reads.
     pub fn remembering(mut self) -> Ear {
         self.windows = Some(Mutex::default());
@@ -681,10 +707,18 @@ impl Ear {
     }
 
     pub fn read(&self, planes: &[&[f64]], start_secs: f64) -> Internal {
-        let outputs = self.elements(super::held(planes), &mut |m| {
-            self.excite(m, &self.compose(m, &mut |frame| frame.power(planes, 0)))
-        });
+        let outputs = self.elements(super::held(planes), &mut |m| self.excited(planes, m));
         self.reading(outputs, start_secs)
+    }
+
+    fn excited(&self, planes: &[&[f64]], m: i64) -> Vec<f64> {
+        self.excite(m, &self.compose(m, &mut |frame| frame.power(planes, 0)))
+    }
+
+    /// E per channel at every frame of `planes` from the first.
+    pub fn excitations(&self, planes: &[&[f64]]) -> Vec<Vec<f64>> {
+        let (first, last) = self.frames(super::held(planes));
+        (first..=last).map(|m| self.excited(planes, m)).collect()
     }
 
     pub fn reading(&self, outputs: Vec<Vec<Vec<C64>>>, start_secs: f64) -> Internal {

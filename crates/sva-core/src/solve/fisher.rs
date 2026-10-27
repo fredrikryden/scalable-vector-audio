@@ -9,7 +9,7 @@ use sva_formula::C64;
 
 use super::atoms::{Atom, Clip, Sound};
 use super::bits::Priced;
-use super::lm::{Groups, Linear, Problem};
+use super::lm::{self, Groups, Linear, Problem};
 use super::objective::{Held, NoisePower, Objective, excited, framed_beside, reach, summed_beside};
 use super::spectrum::{Series, series};
 use sva_engine::{default_threads, each};
@@ -168,54 +168,87 @@ pub fn linearise_beside(
     let (first, last) = ear.frames(clip.len);
     let frames = (last - first + 1) as usize;
     let channels = ear.thresholds().len();
-    let summed = coherent.then(|| summed_beside(atoms, clip, held));
+    let sampled = !objective.is_coarse();
+    let summed = (coherent && sampled).then(|| summed_beside(atoms, clip, held));
     let beside = (summed.as_ref(), coherent);
-    let series: Vec<Vec<Option<Series>>> = each(default_threads(), (0..moving).collect(), |a| {
+    let tonal = match sampled {
+        true => moving,
+        false => 0,
+    };
+    let series: Vec<Vec<Option<Series>>> = each(default_threads(), (0..tonal).collect(), |a| {
         let own = &still[offsets[a]..offsets[a] + numbers[a]];
         series(&atoms[a], &clip, own)
     });
-    let per = framed_beside(atoms, clip, coherent, (first, last), beside, &|model, m| {
-        model.forget();
-        let reached = colouring.reach.iter().any(|(f, t)| *f <= m && m <= *t);
-        if let Some(h) = held.filter(|_| !reached) {
-            return (ear.levels(&h.excitation[(m - first) as usize]), Vec::new());
-        }
-        let mut power = ear.compose(m, &mut |frame| model.bins(frame).power);
-        if let Some(h) = held {
-            h.add_noise(m - first, &mut power);
-        }
-        let excitation = excited(ear, m, &power);
-        let levels = ear.levels(&excitation);
-        let mut seeds = Vec::new();
-        let mut along = Vec::new();
-        for (a, (f, t)) in colouring.reach.iter().enumerate() {
-            if m < *f || m > *t {
-                continue;
-            }
-            let own = &still[offsets[a]..offsets[a] + numbers[a]];
-            if own.iter().all(|s| *s) {
-                continue;
-            }
-            let d_power = composed(ear, m, numbers[a], &mut |frame| {
-                model.tangents_read(frame, a, &series[a])
-            });
-            for (j, d) in d_power.into_iter().enumerate() {
-                if !own[j] {
-                    seeds.push(offsets[a] + j);
-                    along.push(d);
+    let reaches: Vec<(i64, i64)> = atoms.iter().map(|a| reach(ear, &clip, a)).collect();
+    let per = match objective.coarse_read(atoms, &reaches) {
+        Some(read) => each(default_threads(), (first..=last).collect(), |m| {
+            let mut seeds = Vec::new();
+            let mut pairs = Vec::new();
+            for (a, (f, t)) in colouring.reach.iter().enumerate() {
+                if m < *f || m > *t {
+                    continue;
+                }
+                for j in 0..numbers[a] {
+                    if !still[offsets[a] + j] {
+                        seeds.push(offsets[a] + j);
+                        pairs.push((a, j));
+                    }
                 }
             }
-        }
-        let moved: Vec<(usize, Vec<f64>)> = match along.is_empty() {
-            true => Vec::new(),
-            false => seeds
+            if pairs.is_empty() {
+                return (ear.levels(&read.excitation(m)), Vec::new());
+            }
+            let (excitation, along) = read.tangents(m, &pairs);
+            let moved = seeds
                 .into_iter()
-                .zip(ear.excite_along(m, &power, &along))
-                .map(|(p, d)| (p, ear.levels_along(&excitation, &d)))
-                .collect(),
-        };
-        (levels, moved)
-    });
+                .zip(along)
+                .filter_map(|(p, d)| d.map(|d| (p, ear.levels_along(&excitation, &d))))
+                .collect();
+            (ear.levels(&excitation), moved)
+        }),
+        None => framed_beside(atoms, clip, coherent, (first, last), beside, &|model, m| {
+            model.forget();
+            let reached = colouring.reach.iter().any(|(f, t)| *f <= m && m <= *t);
+            if let Some(h) = held.filter(|_| !reached) {
+                return (ear.levels(&h.excitation[(m - first) as usize]), Vec::new());
+            }
+            let mut power = ear.compose(m, &mut |frame| model.bins(frame).power);
+            if let Some(h) = held {
+                h.add_noise(m - first, &mut power);
+            }
+            let excitation = excited(ear, m, &power);
+            let levels = ear.levels(&excitation);
+            let mut seeds = Vec::new();
+            let mut along = Vec::new();
+            for (a, (f, t)) in colouring.reach.iter().enumerate() {
+                if m < *f || m > *t {
+                    continue;
+                }
+                let own = &still[offsets[a]..offsets[a] + numbers[a]];
+                if own.iter().all(|s| *s) {
+                    continue;
+                }
+                let d_power = composed(ear, m, numbers[a], &mut |frame| {
+                    model.tangents_read(frame, a, &series[a])
+                });
+                for (j, d) in d_power.into_iter().enumerate() {
+                    if !own[j] {
+                        seeds.push(offsets[a] + j);
+                        along.push(d);
+                    }
+                }
+            }
+            let moved: Vec<(usize, Vec<f64>)> = match along.is_empty() {
+                true => Vec::new(),
+                false => seeds
+                    .into_iter()
+                    .zip(ear.excite_along(m, &power, &along))
+                    .map(|(p, d)| (p, ear.levels_along(&excitation, &d)))
+                    .collect(),
+            };
+            (levels, moved)
+        }),
+    };
     let mut levels = vec![vec![0.0; frames]; channels];
     let mut d_levels: Vec<Option<Column>> = (0..columns)
         .map(|p| {
@@ -349,11 +382,7 @@ fn fisher(
                 let from = (*ja).max(*jb);
                 let to = (ja + ra.len()).min(jb + rb.len());
                 if from < to {
-                    sum += ra[from - ja..to - ja]
-                        .iter()
-                        .zip(&rb[from - jb..to - jb])
-                        .map(|(x, y)| x * y)
-                        .sum::<f64>();
+                    sum += lm::dot(&ra[from - ja..to - ja], &rb[from - jb..to - jb]);
                 }
             }
         }
@@ -434,10 +463,10 @@ impl<'a> Fit<'a> {
     }
 
     /// The same fit with `held` sounding beside its atoms, none of their numbers moving: read
-    /// once where partials are summed in samples (objective.rs), else sounded at each call.
+    /// once where partials are summed in samples (objective.rs), else (or at a coarse
+    /// objective) sounded at each call.
     pub fn holding(mut self, held: Vec<Atom>) -> Fit<'a> {
-        self.read = self
-            .coherent
+        self.read = (self.coherent && !self.objective.is_coarse())
             .then(|| Rc::new(Held::of(self.objective, &held)));
         self.held = held;
         self
@@ -520,6 +549,12 @@ impl Problem for Fit<'_> {
     /// its numbers stay (a frozen atom's), else as `expect` reads it.
     fn cost(&self, x: &[f64]) -> f64 {
         let atoms = self.sounding(x);
+        if self.objective.is_coarse() {
+            return self
+                .objective
+                .residual_bits(&self.objective.expect(&atoms, true))
+                * LN_2;
+        }
         let expected = match self.coherent {
             true => {
                 let last = self.noises.take();

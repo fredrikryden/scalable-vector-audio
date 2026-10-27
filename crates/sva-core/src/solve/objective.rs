@@ -8,27 +8,30 @@ use sva_formula::C64;
 
 use super::atoms::{Atom, Clip, Sound};
 use super::bits::{self, Priced};
+use super::coarse::{Coarse, Read};
 use super::spectrum::{Model, Summed};
 
-pub const MODEL: &str = "residual bits = sum_i d_i^2 log2(e)/2, the Gaussian code length of \
-     the clip's elements given the model's over the noise-free code, channels summed, place \
-     only (no temporal cue), d_i = (e_model,i - e_clip,i)/sigma_i, sigma_i^2 = N0 rho_kc, equal \
-     noise density in every band (calibrate.rs); the model's elements are the reading of each \
-     frame's expected excitation, partials and harmonics as written and noise in expectation \
-     over its lines' phases (spectrum.rs), so a noise is compared by its expected excitation \
-     alone; the total is the residual bits plus B(x) (bits.rs) at the caller's precisions; \
-     an evaluation sums its partials in samples over the clip once (spectrum.rs), and reads a \
-     noise whose numbers the last evaluation read as it read them, the same sum; atoms held \
-     while others move are read once: their partials so summed, their noise's expected power \
-     per frame, and their excitation alone per frame, which a frame no moving atom reaches \
-     takes as it is (an atom reaches a frame \
-     when any window of the frame weighs a sample whose cell meets [on, end))";
+pub const MODEL: &str = "residual bits = sum_i d_i^2 log2(e)/2, the Gaussian code length of the \
+     clip's elements given the model's over the noise-free code, channels summed, place only (no \
+     temporal cue), d_i = (e_model,i - e_clip,i)/sigma_i, sigma_i^2 = N0 rho_kc, equal noise \
+     density in every band (calibrate.rs); the model's elements are the reading of each frame's \
+     expected excitation, partials and harmonics as written and noise in expectation over its \
+     lines' phases (spectrum.rs), so a noise is compared by its expected excitation alone; the \
+     total is the residual bits plus B(x) (bits.rs) at the caller's precisions; an evaluation \
+     sums its partials in samples over the clip once (spectrum.rs), and reads a noise whose \
+     numbers the last evaluation read as it read them, the same sum; atoms held while others move \
+     are read once: their partials so summed, their noise's expected power per frame, and their \
+     excitation alone per frame, which a frame no moving atom reaches takes as it is (an atom \
+     reaches a frame when any window of the frame weighs a sample whose cell meets [on, end)); at \
+     a coarse objective every frame's excitation is the coarse model's (coarse.rs), the held \
+     atoms read beside the moving, and the clip's elements stay its samples' reading";
 
 pub struct Objective {
     ear: Ear,
     clip: Clip,
     heard: Internal,
     n0: f64,
+    coarse: Option<Coarse>,
 }
 
 /// Per channel, band and element, the model's expected element.
@@ -43,7 +46,37 @@ impl Objective {
             clip,
             heard,
             n0,
+            coarse: None,
         }
+    }
+
+    /// The same objective reading its atoms by the coarse model (coarse.rs).
+    pub fn coarse(mut self) -> Objective {
+        self.coarse = Some(Coarse::of(&self.ear, &self.clip));
+        self
+    }
+
+    pub fn is_coarse(&self) -> bool {
+        self.coarse.is_some()
+    }
+
+    /// The coarse model's excitation of `atoms` at each frame of `frames`, where coarse.
+    fn read_coarse(&self, atoms: &[Atom], frames: (i64, i64)) -> Option<Vec<Vec<f64>>> {
+        let coarse = self.coarse.as_ref()?;
+        let reach: Vec<(i64, i64)> = atoms
+            .iter()
+            .map(|a| reach(&self.ear, &self.clip, a))
+            .collect();
+        Some(Read::of(coarse, atoms, &reach).excitations(frames))
+    }
+
+    /// The coarse model's state of `atoms`, each atom's reach beside it, where coarse.
+    pub fn coarse_read<'a>(
+        &'a self,
+        atoms: &'a [Atom],
+        reach: &'a [(i64, i64)],
+    ) -> Option<Read<'a>> {
+        Some(Read::of(self.coarse.as_ref()?, atoms, reach))
     }
 
     pub fn ear(&self) -> &Ear {
@@ -79,7 +112,17 @@ impl Objective {
 
     /// `expect` beside `held`.
     pub fn expect_beside(&self, atoms: &[Atom], coherent: bool, held: Option<&Held>) -> Elements {
-        let (first, _) = self.ear.frames(self.clip.len);
+        let frames = self.ear.frames(self.clip.len);
+        if self.is_coarse() {
+            let all: Vec<Atom> = atoms
+                .iter()
+                .chain(held.iter().flat_map(|h| &h.atoms))
+                .cloned()
+                .collect();
+            let each = self.read_coarse(&all, frames).expect("a coarse objective");
+            return self.elements_of(&each);
+        }
+        let (first, _) = frames;
         let reach: Vec<(i64, i64)> = atoms
             .iter()
             .map(|a| reach(&self.ear, &self.clip, a))
@@ -104,6 +147,12 @@ impl Objective {
                 }
             },
         );
+        self.elements_of(&each)
+    }
+
+    /// The elements of `each` frame's excitation from the first.
+    fn elements_of(&self, each: &[Vec<f64>]) -> Elements {
+        let (first, _) = self.ear.frames(self.clip.len);
         let outputs = self
             .ear
             .elements(self.clip.len, &mut |m| each[(m - first) as usize].clone());
@@ -147,6 +196,9 @@ impl Objective {
         coherent: bool,
         (from, to): (i64, i64),
     ) -> Vec<Vec<f64>> {
+        if let Some(each) = self.read_coarse(atoms, (from, to)) {
+            return each;
+        }
         let summed = coherent.then(|| Summed::of(atoms, self.clip));
         framed_beside(
             atoms,
@@ -185,6 +237,9 @@ impl Objective {
         noise: &[&NoisePower],
         held: Option<&Held>,
     ) -> Elements {
+        if self.is_coarse() {
+            return self.expect_beside(atoms, true, held);
+        }
         let tonal: Vec<Atom> = atoms
             .iter()
             .filter(|a| !matches!(a.sound, Sound::Noise { .. }))
@@ -278,8 +333,10 @@ impl NoisePower {
     }
 }
 
-/// Atoms held while others move, read once as `MODEL` states.
+/// Atoms held while others move, read once as `MODEL` states; at a coarse objective only
+/// `atoms`, read beside the moving.
 pub struct Held {
+    pub atoms: Vec<Atom>,
     pub summed: Summed,
     noise: Vec<Option<Vec<f64>>>,
     pub excitation: Vec<Vec<f64>>,
@@ -288,6 +345,14 @@ pub struct Held {
 impl Held {
     pub fn of(objective: &Objective, atoms: &[Atom]) -> Held {
         let (ear, clip) = (objective.ear(), objective.clip());
+        if objective.is_coarse() {
+            return Held {
+                atoms: atoms.to_vec(),
+                summed: Summed::of(&[], clip),
+                noise: Vec::new(),
+                excitation: Vec::new(),
+            };
+        }
         let summed = Summed::of(atoms, clip);
         let noises: Vec<Atom> = atoms
             .iter()
@@ -317,6 +382,7 @@ impl Held {
             },
         );
         Held {
+            atoms: Vec::new(),
             summed,
             noise,
             excitation,

@@ -34,7 +34,9 @@ pub const MODEL: &str = "levels at scales s = r^-(L-1-k), k = 0 the coarsest, up
      stage move no stage's length and the stages share one measure, priced again as each \
      finishes; the last stage no longer than every earlier the one chosen; a signal, asked before \
      every descent's step, ends the run with the stage it interrupts, measured as one that \
-     finished";
+     finished; a run asked coarse reads every level it runs by the coarse model (coarse.rs); each \
+     stage sounds the clip's excitation map and its atoms' through its level's ear as a noise \
+     vocoder (the ear's vocode.rs), the one operator for both";
 
 /// The ratio between levels' scales, exempt from the no-tuning rule.
 pub const RATIO: f64 = FRAC_1_SQRT_2;
@@ -216,6 +218,8 @@ pub struct Stage {
     pub edits: Vec<String>,
     pub descents: Vec<(usize, Ended)>,
     pub files: Vec<(String, String)>,
+    /// The clip's and the atoms' excitation, vocoded at `rate`.
+    pub vocoded: [Vec<f64>; 2],
 }
 
 impl Stage {
@@ -291,12 +295,13 @@ impl Run<'_> {
     }
 }
 
-/// What a run is asked: its levels and how many of the coarsest it runs, the clip's
-/// full-scale sine in dB SPL, the threads N0 is fitted on, whether every level grows in rounds
-/// (else the coarsest alone, a cost limit).
+/// What a run is asked: its levels and how many of the coarsest it runs, whether by the coarse
+/// model, the clip's full-scale sine in dB SPL, the threads N0 is fitted on, whether every
+/// level grows in rounds (else the coarsest alone, a cost limit).
 pub struct Asked {
     pub levels: usize,
     pub coarsest: usize,
+    pub coarse: bool,
     pub spl_db: f64,
     pub threads: NonZeroUsize,
     pub every_level: bool,
@@ -376,7 +381,11 @@ pub async fn pyramid(
     let read = |k: usize| Read::of(samples, rate, run_levels[k].0);
     let at = |read: &Read, s: f64| {
         let n0 = n0(read.clip.rate, s, spl, asked.threads);
-        Objective::new(&read.samples, read.clip, spl, s, n0)
+        let objective = Objective::new(&read.samples, read.clip, spl, s, n0);
+        match asked.coarse {
+            true => objective.coarse(),
+            false => objective,
+        }
     };
     let last = run_levels.len() - 1;
     let finest_read = read(last);
@@ -441,6 +450,13 @@ pub async fn pyramid(
         });
         run.evaluated(objective, 1);
         run.evaluated(&finest, 1);
+        let ear = objective.ear();
+        let len = level_read.clip.len;
+        let fit = objective.excitations(&state.atoms, COHERENT, ear.frames(len));
+        let vocoded = [
+            ear.vocoded(&ear.excitations(&[&level_read.samples]), len),
+            ear.vocoded(&fit, len),
+        ];
         let stopped = run.stopped.abandoned().await;
         stages.push(Stage {
             label: run.stage.clone(),
@@ -457,6 +473,7 @@ pub async fn pyramid(
             edits: run.edits.clone(),
             descents: run.descents.clone(),
             files: files(&state.atoms, &clip),
+            vocoded,
         });
         repriced(&mut stages, &measured);
         (run.hear)(Event::Finished(stages.last().expect("a stage")));

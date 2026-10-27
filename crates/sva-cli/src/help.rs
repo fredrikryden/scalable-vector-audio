@@ -27,8 +27,9 @@ pub fn help_text() -> String {
         .map(|e| format!("`.{e}`"))
         .join(", ");
     let unreadable = crate::recording::UNREADABLE;
-    let (levels, spl, out) = (
+    let (levels, coarsest, spl, out) = (
         sva_core::solve::pyramid::LEVELS,
+        crate::args::COARSEST,
         sva_core::solve::pyramid::SPL_DB,
         crate::args::OUT,
     );
@@ -389,12 +390,16 @@ SOLVE:
   with the atoms sharing their frames and drops each atom whose removal
   shortens the description length: rounds until one keeps none at the
   coarsest level, one round at each finer unless `--every-level`.
-  `--coarsest <k>` runs levels 1 to k alone, the stages measured at level k's
-  scale instead of s = 1.
+  `--coarsest <k>` runs levels 1 to k alone (default {coarsest}), the stages
+  measured at level k's scale instead of s = 1, each read by the coarse model:
+  every frame's excitation predicted from the atoms' numbers in expected power,
+  with no samples rendered.
   `--spl` is a full-scale sine's level in dB SPL (default {spl}). Each level is
   a stage, written as it finishes: its composition under
-  `<out>/level-<k>/` and its render as `<out>/level-<k>.wav` (default out
-  `{out}`); an out directory already holding files refuses as a conflict
+  `<out>/level-<k>/`, its render as `<out>/level-<k>.wav` (default out
+  `{out}`), and beside its composition `clip-coarse.wav` and `fit-coarse.wav`,
+  the clip's excitation and the atoms' at that level sounded by one noise
+  vocoder; an out directory already holding files refuses as a conflict
   unless `--confirm`. Stderr carries one JSON progress line per activity, per
   descent and per finished stage; stdout answers every stage and the chosen
   one, the last shorter than every earlier, each priced at the last stage's

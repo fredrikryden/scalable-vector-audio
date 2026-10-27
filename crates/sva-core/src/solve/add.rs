@@ -277,23 +277,32 @@ pub fn priced_and_pinned(
     let a = probe.curvatures(&probe.numbers());
     let ear = objective.ear();
     let thresholds = ear.thresholds();
-    let looks = framed(
-        std::slice::from_ref(atom),
-        clip,
-        COHERENT,
-        ear.frames(clip.len),
-        &|model, m| {
-            let e = excited(ear, m, &ear.compose(m, &mut |f| model.bins(f).power));
-            let peak = e
-                .iter()
-                .zip(&thresholds)
-                .fold(0.0f64, |p, (e, t)| p.max(e / t));
-            Look {
-                sl_db: 10.0 * libm::log10(peak),
-                hz,
-            }
-        },
-    );
+    let look = |e: &[f64]| {
+        let peak = e
+            .iter()
+            .zip(&thresholds)
+            .fold(0.0f64, |p, (e, t)| p.max(e / t));
+        Look {
+            sl_db: 10.0 * libm::log10(peak),
+            hz,
+        }
+    };
+    let alone = std::slice::from_ref(atom);
+    let frames = ear.frames(clip.len);
+    let looks: Vec<Look> = match objective.is_coarse() {
+        true => objective
+            .excitations(alone, COHERENT, frames)
+            .iter()
+            .map(|e| look(e))
+            .collect(),
+        false => framed(alone, clip, COHERENT, frames, &|model, m| {
+            look(&excited(
+                ear,
+                m,
+                &ear.compose(m, &mut |f| model.bins(f).power),
+            ))
+        }),
+    };
     let hop = objective.heard().hop_secs;
     let numbers = atom.numbers();
     let deltas: Vec<f64> = numbers
@@ -518,17 +527,22 @@ fn sieved(
     let each_anchor = each(default_threads(), pool.to_vec(), |p| {
         let mut best: Option<(usize, f64, Members)> = None;
         let anchor = &tracks[p];
+        let met: Vec<usize> = pool
+            .iter()
+            .copied()
+            .filter(|q| tracks[*q].meets(anchor))
+            .collect();
         for k in 1.. {
             let f0 = anchor.hz / f64::from(k);
             if f0 < lo {
                 break;
             }
             let mut by_number: Vec<Option<(usize, f64)>> = Vec::new();
-            for &q in pool {
+            for &q in &met {
                 let t = &tracks[q];
                 let n = libm::round(t.hz / f0);
                 let miss = (t.hz - n * f0).abs();
-                if n < 1.0 || 2.0 * miss > analysis_hz || !t.meets(anchor) {
+                if n < 1.0 || 2.0 * miss > analysis_hz {
                     continue;
                 }
                 let n = n as usize;
@@ -882,13 +896,16 @@ fn without(objective: &Objective, state: &State, i: usize, length: f64) -> State
 type Noises = HashMap<u64, NoisePower>;
 
 /// `atoms`' excitation per frame over `frames`, their partials and harmonics summed in samples
-/// beside each noise's power as `noises` holds it.
+/// beside each noise's power as `noises` holds it; at a coarse objective, the coarse model's.
 fn excitations(
     objective: &Objective,
     atoms: &[Atom],
     noises: &Noises,
     frames: (i64, i64),
 ) -> Vec<Vec<f64>> {
+    if objective.is_coarse() {
+        return objective.excitations(atoms, COHERENT, frames);
+    }
     let tonal: Vec<Atom> = atoms
         .iter()
         .filter(|a| !matches!(a.sound, Sound::Noise { .. }))
@@ -931,7 +948,7 @@ async fn pruned(objective: &Objective, mut state: State, run: &mut Run<'_>) -> (
     let noises: Noises = state
         .atoms
         .iter()
-        .filter(|a| matches!(a.sound, Sound::Noise { .. }))
+        .filter(|a| !objective.is_coarse() && matches!(a.sound, Sound::Noise { .. }))
         .map(|a| (a.key, objective.noise_power(a)))
         .collect();
     loop {

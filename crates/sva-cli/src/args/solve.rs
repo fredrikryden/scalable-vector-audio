@@ -10,6 +10,9 @@ use sva_core::solve::pyramid::{LEVELS, SPL_DB};
 /// Where a solve writes its levels unless told.
 pub const OUT: &str = "fit";
 
+/// Levels run unless told.
+pub const COARSEST: usize = 1;
+
 #[derive(Debug, PartialEq)]
 pub struct SolveArgs {
     pub path: PathBuf,
@@ -84,7 +87,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
             }
         }
     }
-    args.coarsest = coarsest.unwrap_or(args.levels);
+    args.coarsest = coarsest.unwrap_or(COARSEST);
     if args.coarsest > args.levels {
         return Err(CliError::usage(
             "cli.bad_value",
