@@ -297,3 +297,32 @@ fn a_stiff_string_decaying_harmonic_by_harmonic_is_one_voice_its_stretch_within_
     };
     assert!((stretch - b).abs() <= 0.1 * b, "B {stretch} for {b}");
 }
+
+/// An add line names the atom that step added: its key kept after the step and not before.
+#[test]
+fn an_add_line_names_the_atom_it_added() {
+    let mut parts = voice(261.63, 0.0, 8, 0.2);
+    parts.extend(voice(329.63, 0.0, 8, 0.2));
+    let samples: Vec<f64> = tones(&parts)
+        .iter()
+        .zip(band(2000.0, 4000.0, 0.05))
+        .map(|(a, b)| a + b)
+        .collect();
+    let (_, lines) = fitted(&samples);
+    let keys = |l: &Line| l.envelopes.iter().map(|(k, _)| *k).collect::<Vec<u64>>();
+    let mut adds = 0;
+    for (before, line) in lines.iter().zip(&lines[1..]) {
+        if line.action != Action::Add {
+            continue;
+        }
+        adds += 1;
+        let key = line.atom.as_ref().expect("an atom").key;
+        let held = match before.pass == line.pass {
+            true => keys(before),
+            false => Vec::new(),
+        };
+        assert!(keys(line).contains(&key), "step {}: {key} kept", line.step);
+        assert!(!held.contains(&key), "step {}: {key} new", line.step);
+    }
+    assert!(adds >= 2, "{adds} adds");
+}

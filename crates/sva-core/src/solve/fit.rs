@@ -1391,7 +1391,13 @@ async fn greedy(
         }
         let before = state.dl();
         state = grown;
-        let added = state.written.last().expect("an atom").atom.clone();
+        let added = state
+            .written
+            .iter()
+            .find(|w| w.atom.key == key)
+            .expect("the added atom")
+            .atom
+            .clone();
         said(&state, before, Action::Add, added, &mut steps);
         while let Some((a, next)) = pruned(p, &state) {
             let before = state.dl();
