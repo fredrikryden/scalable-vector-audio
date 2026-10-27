@@ -140,14 +140,37 @@ fn a_sine_beside_a_noise_band_is_one_partial_and_that_band() {
     assert_eq!(noise, (2000.0, 4000.0));
 }
 
-/// The fundamentals each of a voice, partials aside: with no joint re-solve, partials beside the
-/// voices' harmonics may stay.
+/// The main lobe's half-width.
+const LOBE_HZ: f64 = 2.0 / 0.064;
+
+/// Each tonal line's Hz, a voice's every harmonic.
+fn lines_of(atom: &Atom) -> Vec<f64> {
+    match &atom.sound {
+        Sound::Partial { hz, .. } => vec![hz.base],
+        Sound::Harmonic { hz, .. } => (1..=atom.harmonics())
+            .map(|k| hz.base * atom.ratio(k))
+            .collect(),
+        Sound::Noise { .. } | Sound::Shaped { .. } => Vec::new(),
+    }
+}
+
+/// Whether `atom`'s lines lie a lobe from every line of `others`.
+fn apart(atom: &Atom, others: &[Atom]) -> bool {
+    others.iter().filter(|o| o.key != atom.key).all(|o| {
+        lines_of(atom)
+            .iter()
+            .all(|x| lines_of(o).iter().all(|y| (x - y).abs() >= LOBE_HZ))
+    })
+}
+
+/// C4 and E4: E4's fourth harmonic lies in C4's fifth's main lobe, so the voices overlap and
+/// one is voiced, no two atoms' lines within a main lobe.
 #[test]
-fn a_chord_of_two_harmonic_tones_holds_a_voice_at_each_fundamental() {
+fn a_chord_of_two_harmonic_tones_holds_one_voice_its_lines_apart() {
     let mut parts = voice(261.63, 0.0, 8, 0.2);
     parts.extend(voice(329.63, 0.0, 8, 0.2));
     let (fit, _) = fitted(&tones(&parts));
-    let mut f0s: Vec<f64> = fit
+    let f0s: Vec<f64> = fit
         .atoms
         .iter()
         .filter_map(|a| match &a.sound {
@@ -155,11 +178,42 @@ fn a_chord_of_two_harmonic_tones_holds_a_voice_at_each_fundamental() {
             _ => None,
         })
         .collect();
-    f0s.sort_by(f64::total_cmp);
-    assert_eq!(f0s.len(), 2, "{}", shown(&fit));
+    assert_eq!(f0s.len(), 1, "{}", shown(&fit));
     assert!(
-        (f0s[0] - 261.63).abs() < 1.0 && (f0s[1] - 329.63).abs() < 1.0,
+        [261.63, 329.63].iter().any(|f| (f0s[0] - f).abs() < 1.0),
         "{f0s:?}"
+    );
+    assert!(
+        fit.atoms.iter().all(|a| apart(a, &fit.atoms)),
+        "{}",
+        shown(&fit)
+    );
+}
+
+/// A partial 10 Hz over a voice's third harmonic: no add puts a line there; the voice adjusts.
+#[test]
+fn a_partial_at_a_voices_harmonic_is_an_adjust_not_an_add() {
+    let mut parts = voice(200.0, 0.0, 8, 0.2);
+    parts.push((610.0, 0.1));
+    let (fit, lines) = fitted(&tones(&parts));
+    let held = fit
+        .atoms
+        .iter()
+        .find(|a| matches!(a.sound, Sound::Harmonic { .. }))
+        .unwrap_or_else(|| panic!("a voice: {}", shown(&fit)));
+    for (before, line) in lines.iter().zip(&lines[1..]) {
+        if line.action == Action::Add {
+            let added = line.atom.as_ref().expect("an atom");
+            assert!(apart(added, &before.atoms), "pass {}: {added:?}", line.pass);
+        }
+    }
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.action == Action::Adjust
+                && l.atom.as_ref().is_some_and(|a| a.key == held.key)),
+        "{}",
+        shown(&fit)
     );
 }
 

@@ -1,7 +1,7 @@
 // Concern: states what atoms owe their nodes, rows and ordinals, a shaped noise's too | Non-concern: fitting them (solve_fit.rs) | IO: (atoms) -> asserts
 
 use sva_core::solve::atoms::{
-    Atom, Clip, Trajectory, birth, files, nodes, phase as phase_of, read, score, sounded,
+    Atom, Clip, SCORE, Trajectory, birth, files, nodes, phase as phase_of, read, score, sounded,
 };
 
 const CLIP: Clip = Clip {
@@ -100,7 +100,7 @@ fn ordinals_and_harmonic_levels_read_back_from_the_written_rows() {
     let text = score(&atoms);
     let mut born = atoms.clone();
     born.sort_by_key(|a| a.key);
-    assert_eq!(read(&text), Some(born), "{text}");
+    assert_eq!(read(&files(&atoms, &CLIP)), Some(born), "{text}");
     let harmonic = text
         .lines()
         .find(|r| r.contains("\"key\": 4"))
@@ -109,15 +109,18 @@ fn ordinals_and_harmonic_levels_read_back_from_the_written_rows() {
         harmonic.contains("\"l4\"") && !harmonic.contains("\"l5\""),
         "{harmonic}"
     );
-    assert!(harmonic.contains("harmonic_h4_f1_l2-1-2-1"), "{harmonic}");
-    assert_eq!(
-        read("{\"at\": \"0s\", \"node\": \"@../atoms/partial_f0_l1\"}\n"),
-        None
-    );
+    assert!(harmonic.contains("harmonic_h4_f1_l2-1-2-1_n"), "{harmonic}");
+    let lone = vec![(
+        SCORE.to_string(),
+        "{\"at\": \"0s\", \"node\": \"@../atoms/partial_f0_l1_n0\"}\n".to_string(),
+    )];
+    assert_eq!(read(&lone), None);
 }
 
+/// Each kind, knot count and level curve plays one node, its level curves knot tables of its
+/// own numbers, named by its kind, its counts and their hash.
 #[test]
-fn each_kind_and_knot_count_plays_one_node() {
+fn each_kind_knot_count_and_level_plays_one_node() {
     let mut atoms = unheld();
     atoms.push(Atom::partial(
         3,
@@ -126,21 +129,33 @@ fn each_kind_and_knot_count_plays_one_node() {
         knots(-10.0, &[(0.25, 0.0), (0.4, -6.0)]),
     ));
     let held = nodes(&atoms, &CLIP);
-    let names: Vec<&str> = held.iter().map(|(path, _)| path.as_str()).collect();
+    let names: Vec<&str> = held
+        .iter()
+        .map(|(path, _)| path.rsplit_once("_n").expect("a hash").0)
+        .collect();
     assert_eq!(
         names,
         [
             "atoms/harmonic_h4_f1_l3-1-2-1",
             "atoms/noise_l1",
+            "atoms/partial_f3_l2",
             "atoms/partial_f3_l2"
         ]
     );
+    let mut twin = atoms[3].clone();
+    twin.key = 11;
+    twin.on = 0.2;
+    assert_eq!(twin.node(), atoms[3].node(), "one level curve, one node");
     assert!(held[1].1.contains("period=0.5s"), "{}", held[1].1);
+    assert!(
+        held.iter()
+            .any(|(_, text)| text.contains("pwl(t - on, 0s, 0, 0.25s, 0, 0.4s, -6)")),
+        "{held:?}"
+    );
     let mut longer = atoms[3].clone();
     longer.level.knots.push((0.45, -9.0));
-    assert_eq!(
-        longer.node(),
-        "atoms/partial_f3_l3",
+    assert!(
+        longer.node().starts_with("atoms/partial_f3_l3_n"),
         "a knot more is the next count's node"
     );
 }
@@ -159,6 +174,35 @@ fn a_harmonic_writes_until_its_node_nests_past_the_parser() {
     assert!(!harmonic(400).writes(&CLIP));
 }
 
+/// A voice of 19 harmonics, each level through 51 knots, its Hz through one, writes, reads back
+/// and sounds: its level curves are knot tables, whose literals count toward no bound.
+#[test]
+fn a_long_envelope_voice_writes_and_sounds() {
+    let curve = |k: usize| {
+        let held: Vec<(f64, f64)> = (1..=51)
+            .map(|i| {
+                (
+                    0.4 * i as f64 / 51.0,
+                    -0.5 * i as f64 - (i % 3) as f64 - k as f64,
+                )
+            })
+            .collect();
+        knots(-20.0 - k as f64, &held)
+    };
+    let voice = Atom::harmonic(
+        9,
+        0.05,
+        (knots(110.0, &[(0.2, 2.0)]), 1e-4),
+        (1..=19).map(curve).collect(),
+    );
+    assert!(voice.writes(&CLIP), "{}", voice.node_text(&CLIP));
+    let written = files(std::slice::from_ref(&voice), &CLIP);
+    assert_eq!(read(&written), Some(vec![voice.clone()]));
+    let heard = sounded(written, &CLIP);
+    let power = heard.iter().map(|s| s * s).sum::<f64>() / heard.len() as f64;
+    assert!(power > 0.0 && power.is_finite(), "{power}");
+}
+
 /// A shaped noise writes one node per band count, reads back as written, parses and sounds.
 #[test]
 fn a_shaped_noise_reads_back_and_sounds() {
@@ -168,10 +212,10 @@ fn a_shaped_noise_reads_back_and_sounds() {
         vec![(500.0, 1000.0, -6.0), (2000.0, 4000.0, 0.0)],
         knots(-20.0, &[(0.25, -3.0), (0.5, 0.0)]),
     );
-    assert_eq!(shaped.node(), "atoms/shaped_b2_l2");
+    assert!(shaped.node().starts_with("atoms/shaped_b2_l2_n"));
     assert!(shaped.writes(&CLIP));
-    let text = score(std::slice::from_ref(&shaped));
-    assert_eq!(read(&text), Some(vec![shaped.clone()]), "{text}");
+    let written = files(std::slice::from_ref(&shaped), &CLIP);
+    assert_eq!(read(&written), Some(vec![shaped.clone()]), "{written:?}");
     let heard = sounded(files(&[shaped], &CLIP), &CLIP);
     let power = heard.iter().map(|s| s * s).sum::<f64>() / heard.len() as f64;
     assert!(power > 0.0, "{power}");
@@ -196,11 +240,15 @@ fn a_glide_reads_back_and_sounds_its_closed_form() {
         vec![knots(-30.0, &[(0.5, 0.0)]); 3],
     )
     .glided(-glide);
-    assert_eq!(partial.node(), "atoms/partial_f0_g1_l1");
-    assert_eq!(harmonic.node(), "atoms/harmonic_h3_f0_g1_l1-1-1");
+    assert!(partial.node().starts_with("atoms/partial_f0_g1_l1_n"));
+    assert!(
+        harmonic
+            .node()
+            .starts_with("atoms/harmonic_h3_f0_g1_l1-1-1_n")
+    );
     let both = vec![partial.clone(), harmonic];
-    let text = score(&both);
-    assert_eq!(read(&text), Some(both), "{text}");
+    let written = files(&both, &CLIP);
+    assert_eq!(read(&written), Some(both), "{written:?}");
     let heard = sounded(files(std::slice::from_ref(&partial), &CLIP), &CLIP);
     let rate = f64::from(CLIP.rate);
     let worst = heard

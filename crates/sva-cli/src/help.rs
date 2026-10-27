@@ -398,7 +398,8 @@ SOLVE:
   is no more), `delta_dl_bits` (the pass's change), `dl_bits`, `atom_bits` and
   `residual_bits` (the total and its parts), `residual_db` (per frame, each
   octave band's power the fit leaves, in dB, null where none), `envelopes`
-  (each kept atom's `key` and written level per frame in dB) and `seconds`;
+  (each kept atom's `key` and written level per frame in dB), `skipped` (the
+  atoms of better moves passed over, their nodes refused) and `seconds`;
   the start line adds `rate_hz`, `frame_secs`, `first_centre_secs`,
   `band_edges_hz`, `band_floor_db` and `gain_db`. Stdout answers `fit` with
   `rate_hz`, `passes`, `adds`, `adjusts`, `partials`, `harmonics`, `noises`,

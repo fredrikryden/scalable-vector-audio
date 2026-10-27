@@ -32,6 +32,9 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      each column's gain per frame its power; \
      each pass scores every move against the residual and makes the one that lowers the DL most, or none, and the fit stops at the first pass with none, so the DL falls at every pass; \
      a move an add or an adjust; \
+     the model's power the sum of its atoms' powers, which holds only where no two atoms' tonal lines, a voice's every harmonic a line, lie within the main lobe's half-width (2 window bins) of each other in any frame: inside it two lines beat and their powers do not add; \
+     so no add or frequency adjust leaves two atoms' lines within it: a candidate whose lines fall within it of a kept atom's line is no add, that kept atom's own adjusts (its level, frequency or rethin) the moves there, and two voices overlap where any of their lines do; \
+     a move whose atom's node the parser refuses (atoms.rs) skipped for the next best, and named in its pass's line; \
      an add a new atom off the residual averaged over the frames, at its best level: \
      a free partial at each local maximum over its floor, its Hz by QIFFT (Smith and Serra 1987); \
      a partial or voice candidate, refined, glides where its columns' peak tracks glide: a column's track in each frame the highest local maximum over its floor, by QIFFT, in the basin of the averaged residual about its Hz, from the local maximum it climbs to down to the local minimum either side; \
@@ -59,7 +62,7 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      a voice's f0 at the JND at f0, its B where its highest harmonic moves by that harmonic's JND; a glide at its precision; \
      a time at the frame, a noise band's edge one of the grid's band edges; \
      a key one past the last born; \
-     each pass reported as it ends: its move and what an adjust changed, the atom's level before and after, the DL's drop and total, the residual's grid";
+     each pass reported as it ends: its move and what an adjust changed, the atom's level before and after, the DL's drop and total, the residual's grid, the moves it skipped";
 
 /// A full-scale sine at 103.95 dB SPL by default (SMPTE RP 200: -20 dBFS pink noise at 83 dB
 /// SPL, a sine's RMS 3.01 dB under its peak).
@@ -190,6 +193,8 @@ pub struct Line {
     pub seconds: f64,
     pub atoms: Vec<Atom>,
     pub clip: Clip,
+    /// The atoms of the moves better than its own it skipped, their nodes refused.
+    pub skipped: Vec<Atom>,
 }
 
 /// A fit: the clip it read, its atoms in unit-RMS space, the master gain bringing them back,
@@ -877,7 +882,8 @@ fn refined(p: &Problem, n: usize, residual: &[Vec<f64>], kind: Kind, key: u64) -
 }
 
 /// A level from `on` to `end` through `levels` at `times`, the first held back to `on` and
-/// the last on to `end`, thinned by Ramer-Douglas-Peucker at `tolerance` dB.
+/// the last on to `end`, thinned by Ramer-Douglas-Peucker at `tolerance` dB, its knots' times
+/// from `on`.
 fn thinned((on, end): (f64, f64), times: &[f64], levels: &[f64], tolerance: f64) -> Trajectory {
     let mut points = vec![(on, levels[0])];
     points.extend(
@@ -916,15 +922,15 @@ fn thinned((on, end): (f64, f64), times: &[f64], levels: &[f64], tolerance: f64)
     let base = kept[0].1;
     Trajectory {
         base,
-        knots: kept[1..].iter().map(|(t, l)| (*t, l - base)).collect(),
+        knots: kept[1..].iter().map(|(t, l)| (t - on, l - base)).collect(),
     }
 }
 
-/// The level in dB `level` holds at `t`, from `on`.
+/// The level in dB `level` holds at `t`, its knots' times from `on`.
 pub fn level_at(level: &Trajectory, on: f64, t: f64) -> f64 {
     let mut from = (on, level.base);
     for (at, d) in &level.knots {
-        let to = (*at, level.base + d);
+        let to = (on + at, level.base + d);
         if t <= to.0 {
             return match to.0 > from.0 {
                 true => from.1 + (to.1 - from.1) * (t - from.0) / (to.0 - from.0),
@@ -973,6 +979,7 @@ struct State {
     atom_bits: f64,
     residual_bits: f64,
     moved: Option<Moved>,
+    skipped: Vec<Atom>,
 }
 
 impl State {
@@ -983,6 +990,7 @@ impl State {
             atom_bits: 0.0,
             residual_bits: 0.0,
             moved: None,
+            skipped: Vec::new(),
         };
         state.price(p);
         state
@@ -1331,6 +1339,24 @@ fn lobe_hz(p: &Problem) -> f64 {
     p.lobes.half as f64 * p.grid.rate / p.grid.n as f64
 }
 
+/// Each tonal line's Hz per frame, a voice's every harmonic one, none for a noise.
+fn lines(p: &Problem, kind: &Kind) -> Vec<Vec<f64>> {
+    match kind {
+        Kind::Noise { .. } | Kind::Shaped { .. } => Vec::new(),
+        _ => p.columns(kind).paths,
+    }
+}
+
+/// Whether any of `a`'s lines lies within the main lobe's half-width of any of `b`'s in some
+/// frame, where their powers do not add, as `MODEL` states.
+fn collide(p: &Problem, a: &[Vec<f64>], b: &[Vec<f64>]) -> bool {
+    let lobe = lobe_hz(p);
+    a.iter().any(|x| {
+        b.iter()
+            .any(|y| x.iter().zip(y).any(|(x, y)| (x - y).abs() < lobe))
+    })
+}
+
 /// The peak nearest each frame's Hz on `path` in Cam within a main lobe of it, as
 /// `(t, ln hz)`.
 fn pathed(p: &Problem, power: &[Vec<f64>], path: &[f64]) -> Vec<(f64, f64)> {
@@ -1442,6 +1468,12 @@ enum Move {
     Adjust(usize, Option<Box<Held>>, Tweak),
 }
 
+/// A move about to be made, an add's atom written.
+enum Made {
+    Add(Kind, Box<Written>),
+    Adjust(usize, Option<Box<Held>>, Tweak),
+}
+
 /// One pass over `p` from `state`, as `MODEL` states: every move scored against its residual,
 /// the best made where it lowers the DL; the state it makes, its `moved` `None` where none does.
 fn pass(p: &Problem, state: &State) -> State {
@@ -1449,18 +1481,31 @@ fn pass(p: &Problem, state: &State) -> State {
     let n = state.held.len();
     let residual = state.residual(p);
     let mean = averaged(p, &residual);
-    let adds = each(default_threads(), candidates(p, state, &residual), |kind| {
+    let kept: Vec<Vec<Vec<f64>>> = state.held.iter().map(|h| lines(p, &h.kind)).collect();
+    // Whether `kind`'s lines lie apart from every kept atom's but atom `but`'s.
+    let apart = |kind: &Kind, but: Option<usize>| {
+        let mine = lines(p, kind);
+        kept.iter()
+            .enumerate()
+            .all(|(i, theirs)| Some(i) == but || !collide(p, &mine, theirs))
+    };
+    let proposed: Vec<Kind> = candidates(p, state, &residual)
+        .into_iter()
+        .filter(|kind| apart(kind, None))
+        .collect();
+    let adds = each(default_threads(), proposed, |kind| {
         let (fixed, change) = refined(p, n, &residual, kind, key);
         let glided = gliding(p, n, &residual, &mean, &fixed, key)
             .map(|kind| refined(p, n, &residual, kind, key))
-            .filter(|(_, glided)| *glided < change);
+            .filter(|(kind, glided)| *glided < change && apart(kind, None));
         let (kind, change) = glided.unwrap_or((fixed, change));
-        (change, Move::Add(kind))
+        apart(&kind, None).then_some((change, Move::Add(kind)))
     });
     let adjusts = each(default_threads(), (0..n).collect(), |a| {
         let (change, tweak, held) = scaled(p, state, &residual, a);
         let mut out = vec![(change, Move::Adjust(a, held.map(Box::new), tweak))];
-        if let Some((change, held)) = retuned(p, state, &residual, a) {
+        let retune = retuned(p, state, &residual, a).filter(|(_, h)| apart(&h.kind, Some(a)));
+        if let Some((change, held)) = retune {
             out.push((
                 change,
                 Move::Adjust(a, Some(Box::new(held)), Tweak::Frequency),
@@ -1470,24 +1515,50 @@ fn pass(p: &Problem, state: &State) -> State {
         out.push((change, Move::Adjust(a, Some(Box::new(held)), Tweak::Rethin)));
         out
     });
-    let best = adds
+    let mut ranked: Vec<(f64, Move)> = adds
         .into_iter()
+        .flatten()
         .chain(adjusts.into_iter().flatten())
         .filter(|(change, _)| *change < 0.0)
-        .min_by(|x, y| x.0.total_cmp(&y.0));
+        .collect();
+    // Stable, so ties keep the moves' order.
+    ranked.sort_by(|x, y| x.0.total_cmp(&y.0));
     let mut next = state.clone();
     next.moved = None;
-    let Some((_, made)) = best else {
+    next.skipped = Vec::new();
+    let mut best = None;
+    for (_, made) in ranked {
+        let (atom, made) = match made {
+            Move::Add(kind) => {
+                let (_, written) = scored(p, n, &residual, &kind, key);
+                (
+                    Some(written.atom.clone()),
+                    Made::Add(kind, Box::new(written)),
+                )
+            }
+            Move::Adjust(a, held, tweak) => (
+                held.as_ref().map(|h| h.written.atom.clone()),
+                Made::Adjust(a, held, tweak),
+            ),
+        };
+        match atom.filter(|atom| !atom.writes(&p.clip)) {
+            Some(refused) => next.skipped.push(refused),
+            None => {
+                best = Some(made);
+                break;
+            }
+        }
+    }
+    let Some(made) = best else {
         return next;
     };
     let moved = match made {
-        Move::Add(kind) => {
-            let (_, written) = scored(p, n, &residual, &kind, key);
+        Made::Add(kind, written) => {
             let to_db = Some(level_db(&kind, &written));
             next.held.push(Held {
                 templates: p.templates(&kind),
                 kind,
-                written,
+                written: *written,
             });
             next.born += 1;
             Moved {
@@ -1498,7 +1569,7 @@ fn pass(p: &Problem, state: &State) -> State {
                 to_db,
             }
         }
-        Move::Adjust(a, made, tweak) => {
+        Made::Adjust(a, made, tweak) => {
             let held = &state.held[a];
             let moved = Moved {
                 action: Action::Adjust,
@@ -1519,8 +1590,10 @@ fn pass(p: &Problem, state: &State) -> State {
     next.price(p);
     // A drop under the rounding of the repricing is no drop, as `MODEL` states.
     if next.dl() >= state.dl() {
+        let skipped = std::mem::take(&mut next.skipped);
         next = state.clone();
         next.moved = None;
+        next.skipped = skipped;
         return next;
     }
     next.moved = Some(moved);
@@ -1863,6 +1936,7 @@ fn line(p: &Problem, state: &State, pass: usize, before: f64, removed: Option<At
         seconds: 0.0,
         atoms,
         clip: p.clip,
+        skipped: state.skipped.clone(),
     }
 }
 /// `model` over `p`'s feasible bins laid into every bin, nought outside.

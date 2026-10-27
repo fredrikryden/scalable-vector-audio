@@ -57,7 +57,8 @@ fn atom(atom: &Atom) -> String {
     )
 }
 
-/// One progress line per pass, its move beside it, the first (pass 0) with the grid's shape.
+/// One progress line per pass, its move beside it and the moves it skipped, their nodes
+/// refused, the first (pass 0) with the grid's shape.
 pub fn progress(line: &Line) -> String {
     let rows: Vec<String> = line
         .residual_db
@@ -90,7 +91,7 @@ pub fn progress(line: &Line) -> String {
     format!(
         "{{ \"pass\": {}, \"action\": \"{}\", \"adjust\": {}, \"atom\": {}, \"from_db\": {}, \"to_db\": {}, \
          \"delta_dl_bits\": {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \
-         \"residual_db\": [{}], \"envelopes\": {}, \"seconds\": {}{geometry} }}",
+         \"residual_db\": [{}], \"envelopes\": {}, \"skipped\": {}, \"seconds\": {}{geometry} }}",
         line.pass,
         line.action.name(),
         line.tweak
@@ -107,6 +108,7 @@ pub fn progress(line: &Line) -> String {
             let rows: Vec<String> = db.iter().map(|row| numbers(row)).collect();
             format!("{{ \"key\": {key}, \"db\": [{}] }}", rows.join(", "))
         }),
+        list(&line.skipped, atom),
         num(line.seconds)
     )
 }

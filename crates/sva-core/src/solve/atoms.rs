@@ -31,8 +31,8 @@ impl Clip {
     }
 }
 
-/// `base` at the atom's onset, then straight lines through each knot's time and deviation from
-/// `base`, held after the last.
+/// `base` at the atom's onset, then straight lines through each knot's time from the onset and
+/// deviation from `base`, held after the last.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trajectory {
     pub base: f64,
@@ -119,7 +119,7 @@ pub fn birth(atoms: &[Atom]) -> u64 {
 
 impl Atom {
     pub fn end(&self) -> f64 {
-        self.level.knots.last().expect("a level ends on a knot").0
+        self.on + self.level.knots.last().expect("a level ends on a knot").0
     }
 
     pub fn hz(&self) -> Option<&Trajectory> {
@@ -324,7 +324,7 @@ impl Atom {
         out.into_iter().zip(self.values()).collect()
     }
 
-    /// One node per kind and knot count.
+    /// One node per kind, knot counts and level tables, these by their hash.
     pub fn node(&self) -> String {
         let (f, l) = (
             self.hz().map_or(0, |t| t.knots.len()),
@@ -334,8 +334,10 @@ impl Atom {
             true => "_g1",
             false => "",
         };
+        let tables: Vec<String> = self.levels().iter().map(|t| literal(t)).collect();
+        let key = fnv(&tables.join("\n"));
         match &self.sound {
-            Sound::Partial { .. } => format!("{DIRECTORY}/partial_f{f}{g}_l{l}"),
+            Sound::Partial { .. } => format!("{DIRECTORY}/partial_f{f}{g}_l{l}_n{key}"),
             Sound::Harmonic { .. } => {
                 let each: Vec<String> = self
                     .levels()
@@ -343,13 +345,15 @@ impl Atom {
                     .map(|t| t.knots.len().to_string())
                     .collect();
                 format!(
-                    "{DIRECTORY}/harmonic_h{}_f{f}{g}_l{}",
+                    "{DIRECTORY}/harmonic_h{}_f{f}{g}_l{}_n{key}",
                     self.harmonics(),
                     each.join("-")
                 )
             }
-            Sound::Noise { .. } => format!("{DIRECTORY}/noise_l{l}"),
-            Sound::Shaped { bands } => format!("{DIRECTORY}/shaped_b{}_l{l}", bands.len()),
+            Sound::Noise { .. } => format!("{DIRECTORY}/noise_l{l}_n{key}"),
+            Sound::Shaped { bands } => {
+                format!("{DIRECTORY}/shaped_b{}_l{l}_n{key}", bands.len())
+            }
         }
     }
 
@@ -361,15 +365,13 @@ impl Atom {
 
     pub fn node_text(&self, clip: &Clip) -> String {
         let l = self.level.knots.len();
-        let end = format!("lt{l}");
+        let end = format!("{}s", num(self.end() - self.on));
         let neper = num(NEPER_PER_DB);
-        let levelled = |base: &str, time: &str, dev: &str, count: usize| {
-            format!(
-                "exp({neper}*{})",
-                table("pwl", base, &knot_names(time, dev, base, count), None)
-            )
+        let levelled = |base: &str, held: &Trajectory| match held.knots.is_empty() {
+            true => format!("exp({neper}*{base})"),
+            false => format!("exp({neper}*({base} + {}))", literal(held)),
         };
-        let level = levelled("level", "lt", "ld", l);
+        let level = levelled("level", &self.level);
         let glide = self.glide();
         let turning = |f: usize| match glide != 0.0 {
             true => "hz*(exp(glide*(t - on)) - 1)/glide".to_string(),
@@ -404,10 +406,9 @@ impl Atom {
                 let mut lines = vec![format!("{level}*{}", stretched(1, &phi))];
                 for (i, held) in levels.iter().enumerate() {
                     let k = i + 2;
-                    let (base, time, dev) = (format!("l{k}"), format!("l{k}t"), format!("l{k}d"));
                     lines.push(format!(
                         "{}*{}",
-                        levelled(&base, &time, &dev, held.knots.len()),
+                        levelled(&format!("l{k}"), held),
                         stretched(k, &phi)
                     ));
                 }
@@ -451,11 +452,11 @@ impl Atom {
         format!(
             "; Models: {what}, its level in dBFS through {l} knots, the last ending it | Neglects: \
              every other atom, each its own row | IO: (t) -> amplitude | Tags: atom\n\
-             crop({body}, on, {end})\n"
+             crop({body}, on, on + {end})\n"
         )
     }
 
-    /// Played from the clip's start, its node one directory up.
+    /// Played from the clip's start, its node one directory up, holding its levels' knots.
     pub fn row(&self) -> String {
         let mut fields = vec![
             ("at".to_string(), "\"0s\"".to_string()),
@@ -492,9 +493,7 @@ impl Atom {
                 glided(&mut fields, *glide);
                 fields.push(("b".to_string(), num(*stretch)));
                 for (i, level) in levels.iter().enumerate() {
-                    let k = i + 2;
-                    let (base, time, dev) = (format!("l{k}"), format!("l{k}t"), format!("l{k}d"));
-                    knots(&mut fields, level, (&base, &time, &dev));
+                    fields.push((format!("l{}", i + 2), num(level.base)));
                 }
             }
             Sound::Noise { lo, hi } => {
@@ -509,7 +508,7 @@ impl Atom {
                 }
             }
         }
-        knots(&mut fields, &self.level, ("level", "lt", "ld"));
+        fields.push(("level".to_string(), num(self.level.base)));
         let written: Vec<String> = fields
             .iter()
             .map(|(k, v)| format!("\"{k}\": {v}"))
@@ -517,14 +516,17 @@ impl Atom {
         format!("{{{}}}", written.join(", "))
     }
 
-    /// The atom a row `row` writes reads back, from its node's kind and counts and its numbers.
-    fn read(node: &str, numbers: &HashMap<&str, f64>) -> Option<Atom> {
+    /// The atom a row writes reads back, its levels' knots from its node's text `text`.
+    fn read(node: &str, numbers: &HashMap<&str, f64>, text: &str) -> Option<Atom> {
         let name = node.strip_prefix(&format!("../{DIRECTORY}/"))?;
         let mut counts: HashMap<&str, Vec<usize>> = HashMap::new();
         let mut parts = name.split('_');
         let kind = parts.next()?;
         for part in parts {
             let (letter, held) = part.split_at_checked(1)?;
+            if letter == "n" {
+                continue;
+            }
             let each = held.split('-').map(|c| c.parse::<usize>().ok());
             counts.insert(letter, each.collect::<Option<_>>()?);
         }
@@ -544,8 +546,20 @@ impl Atom {
         let key = get("key")?;
         let key =
             (key >= 0.0 && key.fract() == 0.0 && key < u64::MAX as f64).then_some(key as u64)?;
+        let on = get("on")?;
         let held = counts.get("l")?;
-        let level = trajectory("level", ("lt", "ld"), *held.first()?)?;
+        let mut tables = tables(text)?.into_iter();
+        let mut levelled = |base: &str, count: usize| {
+            let knots = match count {
+                0 => Vec::new(),
+                _ => tables.next().filter(|t| t.len() == count)?,
+            };
+            Some(Trajectory {
+                base: get(base)?,
+                knots,
+            })
+        };
+        let level = levelled("level", *held.first()?)?;
         let hz = || trajectory("hz", ("ft", "fd"), one("f")?);
         let glide = || match counts.get("g").map(Vec::as_slice) {
             None => Some(0.0),
@@ -567,11 +581,7 @@ impl Atom {
                 levels: held[1..]
                     .iter()
                     .enumerate()
-                    .map(|(i, count)| {
-                        let k = i + 2;
-                        let (time, dev) = (format!("l{k}t"), format!("l{k}d"));
-                        trajectory(&format!("l{k}"), (&time, &dev), *count)
-                    })
+                    .map(|(i, count)| levelled(&format!("l{}", i + 2), *count))
                     .collect::<Option<_>>()?,
             },
             "noise" => Sound::Noise {
@@ -591,14 +601,53 @@ impl Atom {
             },
             _ => return None,
         };
+        if tables.next().is_some() {
+            return None;
+        }
         let atom = Atom {
             key,
-            on: get("on")?,
+            on,
             sound,
             level,
         };
-        (atom.values().len() + 1 == numbers.len()).then_some(atom)
+        let knots: usize = atom.levels().iter().map(|t| t.knots.len()).sum();
+        (atom.values().len() + 1 == numbers.len() + 2 * knots).then_some(atom)
     }
+}
+
+/// A level's deviations from its base as a knot table of literals, which no token bound counts.
+fn literal(level: &Trajectory) -> String {
+    let mut args = vec!["t - on".to_string(), "0s".to_string(), "0".to_string()];
+    for (at, d) in &level.knots {
+        args.extend([format!("{}s", num(*at)), num(*d)]);
+    }
+    format!("pwl({})", args.join(", "))
+}
+
+/// Each table `literal` wrote into `text`, its knots after the first.
+fn tables(text: &str) -> Option<Vec<Vec<(f64, f64)>>> {
+    let opening = "pwl(t - on, ";
+    text.match_indices(opening)
+        .map(|(at, _)| {
+            let rest = &text[at + opening.len()..];
+            let values: Vec<f64> = rest[..rest.find(')')?]
+                .split(", ")
+                .enumerate()
+                .map(|(i, v)| match i % 2 {
+                    0 => v.strip_suffix('s')?.parse().ok(),
+                    _ => v.parse().ok(),
+                })
+                .collect::<Option<_>>()?;
+            match values.as_slice() {
+                [first, zero, knots @ ..]
+                    if *first == 0.0 && *zero == 0.0 && knots.len().is_multiple_of(2) =>
+                {
+                    Some(knots.chunks(2).map(|c| (c[0], c[1])).collect())
+                }
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 fn knot_names(time: &str, dev: &str, base: &str, count: usize) -> Vec<(String, String)> {
@@ -609,7 +658,7 @@ fn knot_names(time: &str, dev: &str, base: &str, count: usize) -> Vec<(String, S
 
 /// `hold` repeats the last value to there, as `pwl_integral` needs to keep turning.
 fn table(name: &str, base: &str, knots: &[(String, String)], hold: Option<&str>) -> String {
-    let mut args = vec!["t".to_string(), "on".to_string(), base.to_string()];
+    let mut args = vec!["t - on".to_string(), "0s".to_string(), base.to_string()];
     for (at, value) in knots {
         args.push(at.clone());
         args.push(value.clone());
@@ -617,7 +666,7 @@ fn table(name: &str, base: &str, knots: &[(String, String)], hold: Option<&str>)
     if let Some(hold) = hold {
         let (last_at, last) = knots
             .last()
-            .map_or(("on".to_string(), base.to_string()), |(t, v)| {
+            .map_or(("0s".to_string(), base.to_string()), |(t, v)| {
                 (t.clone(), v.clone())
             });
         args.push(match knots.is_empty() {
@@ -644,9 +693,15 @@ pub fn score(atoms: &[Atom]) -> String {
     out
 }
 
-/// The atoms a score `score` wrote, `None` where it holds anything else.
-pub fn read(text: &str) -> Option<Vec<Atom>> {
-    let held = sva_ast::parse_score(text).ok()?;
+/// The atoms a composition's `files` wrote, `None` where they hold anything else.
+pub fn read(files: &[(String, String)]) -> Option<Vec<Atom>> {
+    let file = |path: &str| {
+        files
+            .iter()
+            .find(|(p, _)| p == path)
+            .map(|(_, t)| t.as_str())
+    };
+    let held = sva_ast::parse_score(file(SCORE)?).ok()?;
     let mut out = Vec::new();
     for item in held.lines.iter().flat_map(|l| &l.items) {
         let Item::Event(event) = item else {
@@ -659,7 +714,8 @@ pub fn read(text: &str) -> Option<Vec<Atom>> {
             };
             numbers.insert(bind.name.as_str(), *v);
         }
-        out.push(Atom::read(&event.node.name, &numbers)?);
+        let path = event.node.name.strip_prefix("../")?;
+        out.push(Atom::read(&event.node.name, &numbers, file(path)?)?);
     }
     Some(out)
 }
@@ -753,4 +809,11 @@ pub fn sounded(files: Vec<(String, String)>, clip: &Clip) -> Vec<f64> {
         unreachable!("samples answer samples")
     };
     buffer.plane(0).to_vec()
+}
+
+/// FNV-1a, the same on every platform.
+fn fnv(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
 }

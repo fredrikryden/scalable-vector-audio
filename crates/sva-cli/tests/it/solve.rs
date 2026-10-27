@@ -137,6 +137,7 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_pass() {
             assert_eq!(row.as_array().map_or(0, Vec::len), bands, "{line}");
         }
         assert!(line["envelopes"]["items"].is_array(), "{line}");
+        assert!(line["skipped"]["items"].is_array(), "{line}");
     }
     for name in [
         "master",

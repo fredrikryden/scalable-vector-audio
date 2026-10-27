@@ -58,7 +58,8 @@ export interface SolveAtom {
  * pass's change to the description length, `dl_bits` the total, `atom_bits` plus
  * `residual_bits`; `residual_db[frame][band]` the power
  * the fit leaves in each octave band in dB, null where none; `envelopes` each kept atom's
- * written level per frame in dB. `pass` counts from 1, the start's 0.
+ * written level per frame in dB; `skipped` the atoms of better moves passed over, their nodes
+ * refused. `pass` counts from 1, the start's 0.
  */
 export interface SolveStep {
     pass: number;
@@ -73,6 +74,7 @@ export interface SolveStep {
     residual_bits: number;
     residual_db: (number | null)[][];
     envelopes: { items: { key: number; db: number[] }[] };
+    skipped: { items: SolveAtom[] };
     seconds: number;
 }
 /** The first line, before any atom: the grid's shape beside the empty fit's line. */
