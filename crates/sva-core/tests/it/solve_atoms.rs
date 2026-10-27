@@ -1,6 +1,8 @@
 // Concern: states what atoms owe their nodes, rows and ordinals, a shaped noise's too | Non-concern: fitting them (solve_fit.rs) | IO: (atoms) -> asserts
 
-use sva_core::solve::atoms::{Atom, Clip, Trajectory, birth, files, nodes, read, score, sounded};
+use sva_core::solve::atoms::{
+    Atom, Clip, Trajectory, birth, files, nodes, phase as phase_of, read, score, sounded,
+};
 
 const CLIP: Clip = Clip {
     rate: 16_000,
@@ -173,4 +175,43 @@ fn a_shaped_noise_reads_back_and_sounds() {
     let heard = sounded(files(&[shaped], &CLIP), &CLIP);
     let power = heard.iter().map(|s| s * s).sum::<f64>() / heard.len() as f64;
     assert!(power > 0.0, "{power}");
+}
+
+/// A gliding partial and a gliding harmonic write one node each, read back as written, and the
+/// partial sounds its closed form: its phase `hz (e^(glide t) - 1) / glide` from its onset.
+#[test]
+fn a_glide_reads_back_and_sounds_its_closed_form() {
+    let glide = libm::log(2.0) / 0.2;
+    let partial = Atom::partial(
+        7,
+        0.0,
+        Trajectory::steady(400.0),
+        knots(-20.0, &[(0.5, 0.0)]),
+    )
+    .glided(glide);
+    let harmonic = Atom::harmonic(
+        8,
+        0.0,
+        (Trajectory::steady(200.0), 1e-4),
+        vec![knots(-30.0, &[(0.5, 0.0)]); 3],
+    )
+    .glided(-glide);
+    assert_eq!(partial.node(), "atoms/partial_f0_g1_l1");
+    assert_eq!(harmonic.node(), "atoms/harmonic_h3_f0_g1_l1-1-1");
+    let both = vec![partial.clone(), harmonic];
+    let text = score(&both);
+    assert_eq!(read(&text), Some(both), "{text}");
+    let heard = sounded(files(std::slice::from_ref(&partial), &CLIP), &CLIP);
+    let rate = f64::from(CLIP.rate);
+    let worst = heard
+        .iter()
+        .enumerate()
+        .map(|(n, s)| {
+            let t = n as f64 / rate;
+            let phase = std::f64::consts::TAU * 400.0 * libm::expm1(glide * t) / glide;
+            let stated = 0.1 * libm::sin(phase + phase_of(7, 1));
+            (s - stated).abs()
+        })
+        .fold(0.0, f64::max);
+    assert!(worst < 1e-6, "{worst}");
 }

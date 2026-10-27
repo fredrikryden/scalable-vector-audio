@@ -55,10 +55,15 @@ impl Trajectory {
     }
 }
 
+/// A partial's or harmonic's frequency at `t` is `hz(t) e^(glide (t - on))`: `glide` in nepers
+/// per second, 0 a tone whose frequency only its knots move. A glide is written only on a steady
+/// `hz`, whose phase then has the closed form `hz (e^(glide (t - on)) - 1) / glide`; on knots it
+/// has none the engine writes, a correctness limit.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Sound {
     Partial {
         hz: Trajectory,
+        glide: f64,
     },
     /// Harmonic `k` turns `k sqrt(1 + stretch k^2)` times as fast as `hz` (a stiff string's
     /// partials; Fletcher 1964) at its own level, the first at the atom's, harmonic `k > 1` at
@@ -66,6 +71,7 @@ pub enum Sound {
     Harmonic {
         hz: Trajectory,
         stretch: f64,
+        glide: f64,
         levels: Vec<Trajectory>,
     },
     Noise {
@@ -97,6 +103,7 @@ pub enum Quantity {
     Db,
     DbDeviation,
     Stretch,
+    Glide,
     Edge,
 }
 
@@ -117,7 +124,7 @@ impl Atom {
 
     pub fn hz(&self) -> Option<&Trajectory> {
         match &self.sound {
-            Sound::Partial { hz } | Sound::Harmonic { hz, .. } => Some(hz),
+            Sound::Partial { hz, .. } | Sound::Harmonic { hz, .. } => Some(hz),
             Sound::Noise { .. } | Sound::Shaped { .. } => None,
         }
     }
@@ -130,6 +137,31 @@ impl Atom {
             Sound::Noise { .. } => "noise",
             Sound::Shaped { .. } => "shaped",
         }
+    }
+
+    /// Its glide in nepers per second, 0 where it has none.
+    pub fn glide(&self) -> f64 {
+        match self.sound {
+            Sound::Partial { glide, .. } | Sound::Harmonic { glide, .. } => glide,
+            Sound::Noise { .. } | Sound::Shaped { .. } => 0.0,
+        }
+    }
+
+    /// This partial or harmonic gliding at `rate`, as `Sound` states; its `hz` steady.
+    pub fn glided(mut self, rate: f64) -> Atom {
+        match &mut self.sound {
+            Sound::Partial { hz, glide } | Sound::Harmonic { hz, glide, .. } => {
+                assert!(
+                    rate == 0.0 || hz.knots.is_empty(),
+                    "a glide is written on a steady frequency"
+                );
+                *glide = rate;
+            }
+            Sound::Noise { .. } | Sound::Shaped { .. } => {
+                unreachable!("a noise has no frequency to glide")
+            }
+        }
+        self
     }
 
     pub fn harmonics(&self) -> usize {
@@ -149,14 +181,24 @@ impl Atom {
                 out.push(*d);
             }
         };
+        let glided = |out: &mut Vec<f64>, glide: f64| {
+            if glide != 0.0 {
+                out.push(glide);
+            }
+        };
         match &self.sound {
-            Sound::Partial { hz } => knots(&mut out, hz),
+            Sound::Partial { hz, glide } => {
+                knots(&mut out, hz);
+                glided(&mut out, *glide);
+            }
             Sound::Harmonic {
                 hz,
                 stretch,
+                glide,
                 levels,
             } => {
                 knots(&mut out, hz);
+                glided(&mut out, *glide);
                 out.push(*stretch);
                 for level in levels {
                     knots(&mut out, level);
@@ -177,7 +219,7 @@ impl Atom {
         Atom {
             key,
             on,
-            sound: Sound::Partial { hz },
+            sound: Sound::Partial { hz, glide: 0.0 },
             level,
         }
     }
@@ -197,6 +239,7 @@ impl Atom {
             sound: Sound::Harmonic {
                 hz,
                 stretch,
+                glide: 0.0,
                 levels: levels.collect(),
             },
             level,
@@ -250,10 +293,21 @@ impl Atom {
                 out.push(dev);
             }
         };
+        let glided = |out: &mut Vec<_>, glide: f64| {
+            if glide != 0.0 {
+                out.push(Quantity::Glide);
+            }
+        };
         match &self.sound {
-            Sound::Partial { hz } => knots(&mut out, hz, (Quantity::Hz, Quantity::HzDeviation)),
-            Sound::Harmonic { hz, levels, .. } => {
+            Sound::Partial { hz, glide } => {
                 knots(&mut out, hz, (Quantity::Hz, Quantity::HzDeviation));
+                glided(&mut out, *glide);
+            }
+            Sound::Harmonic {
+                hz, glide, levels, ..
+            } => {
+                knots(&mut out, hz, (Quantity::Hz, Quantity::HzDeviation));
+                glided(&mut out, *glide);
                 out.push(Quantity::Stretch);
                 for level in levels {
                     knots(&mut out, level, (Quantity::Db, Quantity::DbDeviation));
@@ -276,8 +330,12 @@ impl Atom {
             self.hz().map_or(0, |t| t.knots.len()),
             self.level.knots.len(),
         );
+        let g = match self.glide() != 0.0 {
+            true => "_g1",
+            false => "",
+        };
         match &self.sound {
-            Sound::Partial { .. } => format!("{DIRECTORY}/partial_f{f}_l{l}"),
+            Sound::Partial { .. } => format!("{DIRECTORY}/partial_f{f}{g}_l{l}"),
             Sound::Harmonic { .. } => {
                 let each: Vec<String> = self
                     .levels()
@@ -285,7 +343,7 @@ impl Atom {
                     .map(|t| t.knots.len().to_string())
                     .collect();
                 format!(
-                    "{DIRECTORY}/harmonic_h{}_f{f}_l{}",
+                    "{DIRECTORY}/harmonic_h{}_f{f}{g}_l{}",
                     self.harmonics(),
                     each.join("-")
                 )
@@ -312,13 +370,19 @@ impl Atom {
             )
         };
         let level = levelled("level", "lt", "ld", l);
-        let turning = |f: usize| {
-            table(
+        let glide = self.glide();
+        let turning = |f: usize| match glide != 0.0 {
+            true => "hz*(exp(glide*(t - on)) - 1)/glide".to_string(),
+            false => table(
                 "pwl_integral",
                 "hz",
                 &knot_names("ft", "fd", "hz", f),
                 Some(&end),
-            )
+            ),
+        };
+        let gliding = match glide != 0.0 {
+            true => ", gliding at glide nepers per second",
+            false => "",
         };
         let line = |k: usize, phi: &str| format!("sin(2*pi*{k}*{phi} + 2*pi*draw({k}, seed=key))");
         let stretched = |k: usize, phi: &str| {
@@ -328,9 +392,9 @@ impl Atom {
             )
         };
         let (what, body) = match &self.sound {
-            Sound::Partial { hz } => (
+            Sound::Partial { hz, .. } => (
                 format!(
-                    "one partial, its frequency through {} knots",
+                    "one partial, its frequency through {} knots{gliding}",
                     hz.knots.len()
                 ),
                 format!("{} * {level}", line(1, &turning(hz.knots.len()))),
@@ -349,8 +413,8 @@ impl Atom {
                 }
                 (
                     format!(
-                        "{} harmonics of one fundamental through {} knots, harmonic k at k \
-                         sqrt(1 + b k^2) times it, each at its own level, the first's",
+                        "{} harmonics of one fundamental through {} knots{gliding}, harmonic k \
+                         at k sqrt(1 + b k^2) times it, each at its own level, the first's",
                         self.harmonics(),
                         hz.knots.len()
                     ),
@@ -408,14 +472,24 @@ impl Atom {
                 fields.push((format!("{dev}{}", i + 1), num(*d)));
             }
         };
+        let glided = |fields: &mut Vec<(String, String)>, glide: f64| {
+            if glide != 0.0 {
+                fields.push(("glide".to_string(), num(glide)));
+            }
+        };
         match &self.sound {
-            Sound::Partial { hz } => knots(&mut fields, hz, ("hz", "ft", "fd")),
+            Sound::Partial { hz, glide } => {
+                knots(&mut fields, hz, ("hz", "ft", "fd"));
+                glided(&mut fields, *glide);
+            }
             Sound::Harmonic {
                 hz,
                 stretch,
+                glide,
                 levels,
             } => {
                 knots(&mut fields, hz, ("hz", "ft", "fd"));
+                glided(&mut fields, *glide);
                 fields.push(("b".to_string(), num(*stretch)));
                 for (i, level) in levels.iter().enumerate() {
                     let k = i + 2;
@@ -473,14 +547,23 @@ impl Atom {
         let held = counts.get("l")?;
         let level = trajectory("level", ("lt", "ld"), *held.first()?)?;
         let hz = || trajectory("hz", ("ft", "fd"), one("f")?);
+        let glide = || match counts.get("g").map(Vec::as_slice) {
+            None => Some(0.0),
+            Some([1]) if one("f")? == 0 => get("glide").filter(|g| *g != 0.0),
+            Some(_) => None,
+        };
         if kind != "harmonic" && held.len() != 1 {
             return None;
         }
         let sound = match kind {
-            "partial" => Sound::Partial { hz: hz()? },
+            "partial" => Sound::Partial {
+                hz: hz()?,
+                glide: glide()?,
+            },
             "harmonic" if held.len() == one("h")? => Sound::Harmonic {
                 hz: hz()?,
                 stretch: get("b")?,
+                glide: glide()?,
                 levels: held[1..]
                     .iter()
                     .enumerate()

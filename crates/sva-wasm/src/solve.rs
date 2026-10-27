@@ -40,6 +40,8 @@ export interface SolveAtom {
     key: number;
     kind: "partial" | "harmonic" | "noise" | "shaped";
     hz: number | null;
+    /** A partial's or voice's glide in nepers per second, its Hz `hz` e^(glide t); 0 fixed. */
+    glide: number;
     /** A voice's B: harmonic k at k sqrt(1 + B k^2) times `hz`. */
     stretch: number | null;
     harmonics: number;
@@ -50,16 +52,18 @@ export interface SolveAtom {
     bands: { lo_hz: number; hi_hz: number; gain_db: number }[] | null;
 }
 /**
- * One pass, one move: `action` an add of a new atom or an adjust of a kept one's level,
- * `from_db` and `to_db` the atom's level before and after (null where it was not, or an
- * adjust to nought removed it); `delta_dl_bits` the pass's change to the description length,
- * `dl_bits` the total, `atom_bits` plus `residual_bits`; `residual_db[frame][band]` the power
+ * One pass, one move: `action` an add of a new atom or an adjust of a kept one, `adjust` what
+ * that adjust changed (null for an add), `from_db` and `to_db` the atom's level before and
+ * after (null where it was not, or an adjust to nought removed it); `delta_dl_bits` the
+ * pass's change to the description length, `dl_bits` the total, `atom_bits` plus
+ * `residual_bits`; `residual_db[frame][band]` the power
  * the fit leaves in each octave band in dB, null where none; `envelopes` each kept atom's
  * written level per frame in dB. `pass` counts from 1, the start's 0.
  */
 export interface SolveStep {
     pass: number;
     action: "start" | "add" | "adjust";
+    adjust: "level" | "remove" | "frequency" | "rethin" | null;
     atom: SolveAtom | null;
     from_db: number | null;
     to_db: number | null;
@@ -89,6 +93,7 @@ export interface SolveAnswer {
         passes: number;
         adds: number;
         adjusts: number;
+        adjusts_by: { level: number; remove: number; frequency: number; rethin: number };
         partials: number;
         harmonics: number;
         noises: number;

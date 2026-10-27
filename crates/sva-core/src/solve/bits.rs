@@ -11,8 +11,8 @@ pub const MODEL: &str = "B(x) in bits: the atom count n by Rissanen's (1983, doi
      region where log* has k positive terms integrates to (ln 2)^k, as d/dx of the k-th \
      iterated log2 is (ln 2)^-k / (x times the k - 1 before it), so the sum is the direct sum \
      to N plus (ln 2)^5 (1 - log2^5(N)) + (ln 2)^6/(1 - ln 2) - f(N)/2 - f'(N)/12 (Euler and \
-     Maclaurin) for 16 < log2 N < 65536; then per atom log2 4 for its kind (partial, \
-     harmonic, noise band or shaped noise), each level's knot \
+     Maclaurin) for 16 < log2 N < 65536; then per atom log2 6 for its kind (partial, \
+     gliding partial, harmonic, gliding harmonic, noise band or shaped noise), each level's knot \
      count n >= 1 as log2 c + log*(n), a partial's or harmonic's frequency knot count n >= 0 \
      as log2 c + log*(n + 1), a harmonic's H >= 1 as log2 c + log*(H), a shaped noise's \
      band count n >= 1 as log2 c + log*(n); a number by a uniform \
@@ -22,7 +22,8 @@ pub const MODEL: &str = "B(x) in bits: the atom count n by Rissanen's (1983, doi
      over T_W, multiple looks (Viemeister and Wakefield 1991, doi 10.1121/1.401953) over the \
      frames m the number moves, a frame with SL_m <= 0 no look; every other number at the \
      precision its caller states (fit.rs); a stretch from 0 to where the highest harmonic \
-     meets the top of the feasible set; keys and phases are the ordinal's, \
+     meets the top of the feasible set; a glide over minus to plus the rate that moves the \
+     feasible set's lowest Hz to its highest over the clip; keys and phases are the ordinal's, \
      0 bits; a deviation's range is minus to plus its quantity's width";
 
 /// `sum_{n >= 1} 2^-log*(n)`, as MODEL derives it; the bits suite recomputes it.
@@ -100,6 +101,7 @@ pub fn range(atom: &Atom, feasible: &Feasible, quantity: Quantity) -> f64 {
             let top = feasible.hz.1 / (h * f0);
             ((top * top - 1.0) / (h * h)).max(0.0)
         }
+        Quantity::Glide => 2.0 * libm::log(feasible.hz.1 / feasible.hz.0) / width(feasible.secs),
         Quantity::Db => width(feasible.db),
         Quantity::DbDeviation => 2.0 * feasible.offset(),
         Quantity::Edge => width(feasible.hz),
@@ -122,7 +124,7 @@ pub fn atom(atom: &Atom, priced: &Priced) -> f64 {
         "one precision per number"
     );
     let counts = match &atom.sound {
-        Sound::Partial { hz } => count(hz.knots.len()),
+        Sound::Partial { hz, .. } => count(hz.knots.len()),
         Sound::Harmonic { hz, .. } => integer(atom.harmonics() as u64) + count(hz.knots.len()),
         Sound::Noise { .. } => 0.0,
         Sound::Shaped { bands } => integer(bands.len() as u64),
@@ -137,7 +139,7 @@ pub fn atom(atom: &Atom, priced: &Priced) -> f64 {
         .fold(0.0, |sum, ((q, _), d)| {
             sum + number(range(atom, &priced.feasible, *q), *d)
         });
-    libm::log2(4.0) + counts + written
+    libm::log2(6.0) + counts + written
 }
 
 pub fn bits(atoms: &[Atom], priced: &[Priced]) -> f64 {

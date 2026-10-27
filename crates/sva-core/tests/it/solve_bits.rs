@@ -89,6 +89,7 @@ fn priced(atom: &Atom) -> Priced {
         .iter()
         .map(|(q, _)| match q {
             Quantity::Stretch => 1e-5,
+            Quantity::Glide => 0.05,
             Quantity::Time => 0.003,
             Quantity::Hz | Quantity::HzDeviation | Quantity::Edge => 2.9,
             Quantity::Db | Quantity::DbDeviation => 0.4,
@@ -140,6 +141,7 @@ fn written(atom: &Atom, i: usize) -> f64 {
         Quantity::Db => db,
         Quantity::DbDeviation => 2.0 * db,
         Quantity::Edge => f.hz.1 - f.hz.0,
+        Quantity::Glide => 2.0 * libm::log(f.hz.1 / f.hz.0) / CLIP.secs(),
         Quantity::Stretch => {
             let h = atom.harmonics() as f64;
             let top = f.hz.1 / (h * 110.0);
@@ -214,7 +216,7 @@ fn adding_an_atom_costs_its_stated_code() {
                 };
                 level + c + star((hz.knots.len() + 1) as f64) + shared
             }
-        } + libm::log2(4.0)
+        } + libm::log2(6.0)
             + numbers;
         let grown = total(&all[..=n]) - total(&all[..n]);
         let counted = star((n + 2) as f64) - star((n + 1) as f64);
@@ -232,7 +234,7 @@ fn adding_a_knot_costs_its_count_its_time_and_its_deviation() {
     let mut levelled = c.clone();
     levelled.level.knots.insert(1, (0.4, -10.0));
     let mut glided = c.clone();
-    if let Sound::Partial { hz } = &mut glided.sound {
+    if let Sound::Partial { hz, .. } = &mut glided.sound {
         hz.knots.push((0.5, 40.0));
     }
     for (grown, time, counts) in [
@@ -259,7 +261,7 @@ fn a_number_whose_precision_spans_its_range_costs_nothing() {
         deltas: vec![f64::INFINITY; a.numbers().len()],
     };
     let c = libm::log2(NORMALISER);
-    let counts = libm::log2(4.0) + c + star(2.0) + c + star(2.0);
+    let counts = libm::log2(6.0) + c + star(2.0) + c + star(2.0);
     assert!((atom(&a, &coarse) - counts).abs() < 1e-12);
 }
 
@@ -272,7 +274,7 @@ fn a_deviations_code_does_not_change_with_its_value() {
         let mut moved = a.clone();
         moved.level.knots[0].1 = d;
         moved.level.base = -60.0;
-        if let Sound::Partial { hz } = &mut moved.sound {
+        if let Sound::Partial { hz, .. } = &mut moved.sound {
             hz.knots[0].1 = f;
             hz.base = 2000.0;
         }

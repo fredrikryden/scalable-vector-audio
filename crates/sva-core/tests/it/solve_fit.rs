@@ -1,9 +1,9 @@
-// Concern: states what the fit owes sines, voices, noise bands, a burst; a DL falling every pass; an adjust; determinism | Non-concern: the text | IO: (a clip) -> asserts
+// Concern: states what the fit owes sines, glides, voices, noise bands, a burst; a DL falling every pass; adjusts; determinism | Non-concern: the text | IO: (a clip) -> asserts
 
 use std::f64::consts::TAU;
 
 use sva_core::solve::atoms::{Atom, Sound};
-use sva_core::solve::fit::{Action, Fit, Line, SPL_DB, fit};
+use sva_core::solve::fit::{Action, Fit, Line, SPL_DB, Tweak, fit};
 use sva_core::solve::report::progress;
 use sva_engine::Never;
 
@@ -114,7 +114,7 @@ fn shown(fit: &Fit) -> String {
 fn a_sine_is_one_partial() {
     let (fit, _) = fitted(&tones(&[(440.0, 0.3)]));
     assert_eq!(kinds(&fit.atoms), (1, 0, 0), "{}", shown(&fit));
-    let Sound::Partial { hz } = &fit.atoms[0].sound else {
+    let Sound::Partial { hz, .. } = &fit.atoms[0].sound else {
         unreachable!("a partial")
     };
     assert!((hz.base - 440.0).abs() < 1.0, "{}", hz.base);
@@ -249,15 +249,21 @@ fn a_sine_in_white_noise_thirty_db_under_is_one_partial() {
     assert_eq!((partials, voices), (1, 0), "{}", shown(&fit));
 }
 
-/// Eight harmonics at 1/k, each decaying at 4 per second (35 dB/s).
+/// Eight harmonics at 1/k, each decaying at 4 per second (35 dB/s): a voice at the fundamental,
+/// first. With no backward prune, atoms beside it a level adjust leaves room for may stay.
 #[test]
-fn a_decaying_tone_of_eight_harmonics_is_one_voice() {
+fn a_decaying_tone_of_eight_harmonics_is_voiced_first() {
     let parts: Vec<(f64, f64, f64)> = voice(220.0, 0.0, 8, 0.3)
         .into_iter()
         .map(|(hz, a)| (hz, a, 4.0))
         .collect();
     let (fit, _) = fitted(&decaying(&parts));
-    assert_eq!(kinds(&fit.atoms), (0, 1, 0), "{}", shown(&fit));
+    let (_, voices, noises) = kinds(&fit.atoms);
+    assert!(voices >= 1 && noises == 0, "{}", shown(&fit));
+    let Sound::Harmonic { hz, .. } = &fit.atoms[0].sound else {
+        panic!("a voice first: {}", shown(&fit))
+    };
+    assert!((hz.base - 220.0).abs() < 1.0, "{}", hz.base);
 }
 
 /// A piano's C4: harmonic k decaying at 1 + k/4 per second, 11 to 35 dB/s, the faster the higher;
@@ -365,4 +371,82 @@ fn an_adjust_lowers_the_level_of_an_atom_added_first() {
     });
     assert!(lowered, "{} adjusts: {}", fit.adjusts, shown(&fit));
     assert_eq!(kinds(&fit.atoms), (1, 0, 1), "{}", shown(&fit));
+}
+
+/// Each line's DL, the start's first.
+fn dls(lines: &[Line]) -> Vec<f64> {
+    lines
+        .iter()
+        .map(|l| l.atom_bits + l.residual_bits)
+        .collect()
+}
+
+#[test]
+fn a_fixed_sine_glides_not_at_all() {
+    let (fit, _) = fitted(&tones(&[(440.0, 0.3)]));
+    assert_eq!(kinds(&fit.atoms), (1, 0, 0), "{}", shown(&fit));
+    assert_eq!(fit.atoms[0].glide(), 0.0, "{}", shown(&fit));
+}
+
+/// A plop: a sine rising from 400 to 800 Hz over 0.2 s, exponentially, decaying at 10 per
+/// second.
+fn plop() -> Vec<f64> {
+    let rate = libm::log(2.0) / 0.2;
+    (0..LEN)
+        .map(|n| {
+            let phase = TAU * 400.0 * (sva_formula::exp(rate * t(n)) - 1.0) / rate;
+            0.3 * sva_formula::exp(-10.0 * t(n)) * libm::sin(phase)
+        })
+        .collect()
+}
+
+#[test]
+fn a_plop_is_one_partial_its_glide_within_a_tenth() {
+    let rate = libm::log(2.0) / 0.2;
+    let (fit, lines) = fitted(&plop());
+    assert_eq!(kinds(&fit.atoms), (1, 0, 0), "{}", shown(&fit));
+    let glide = fit.atoms[0].glide();
+    assert!(
+        (glide - rate).abs() <= 0.1 * rate,
+        "glide {glide} for {rate}"
+    );
+    let dl = dls(&lines);
+    assert!(dl.windows(2).all(|w| w[1] < w[0]), "{dl:?}");
+}
+
+#[test]
+fn a_gliding_fit_is_the_same_twice() {
+    let (a, heard_a) = fitted(&plop());
+    let (b, heard_b) = fitted(&plop());
+    assert_eq!(a.atoms, b.atoms);
+    let text = |lines: &[Line]| lines.iter().map(progress).collect::<Vec<_>>();
+    assert_eq!(text(&heard_a), text(&heard_b));
+}
+
+/// A piano's C4 as above: the fit takes more than one pass, adjusts among them, each counted
+/// by what it changed, and the DL falls at every pass.
+#[test]
+fn a_decaying_stiff_string_is_adjusted_after_it_is_added() {
+    let parts: Vec<(f64, f64, f64)> = voice(261.63, 4e-4, 12, 0.3)
+        .into_iter()
+        .enumerate()
+        .map(|(k, (hz, a))| (hz, a, 1.0 + 0.25 * (k + 1) as f64))
+        .collect();
+    let (fit, lines) = fitted(&decaying(&parts));
+    assert!(
+        fit.passes > 1 && fit.adjusts >= 1,
+        "{} passes, {} adjusts",
+        fit.passes,
+        fit.adjusts
+    );
+    assert_eq!(fit.tweaks.iter().sum::<usize>(), fit.adjusts);
+    let tweaked = lines.iter().filter(|l| l.action == Action::Adjust);
+    assert!(tweaked.clone().all(|l| l.tweak.is_some()));
+    assert!(
+        tweaked
+            .clone()
+            .all(|l| Tweak::ALL.contains(&l.tweak.expect("a tweak")))
+    );
+    let dl = dls(&lines);
+    assert!(dl.windows(2).all(|w| w[1] < w[0]), "{dl:?}");
 }

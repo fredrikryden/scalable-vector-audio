@@ -1,7 +1,7 @@
 // Concern: a fit's progress lines and its answer as JSON, the shapes sva-portal's page reads | Non-concern: running it (fit.rs), where a line goes | IO: (Line | Fit) -> JSON
 
 use super::atoms::{Atom, Sound};
-use super::fit::{Fit, Line};
+use super::fit::{Fit, Line, Tweak};
 use crate::json::{NONE, escape, list, num, strings};
 
 fn text(s: &str) -> String {
@@ -14,12 +14,12 @@ fn numbers(values: &[f64]) -> String {
     format!("[{}]", each.join(", "))
 }
 
-/// What an atom is: its kind, key, Hz, stretch, harmonics, band (a shaped noise's lowest
+/// What an atom is: its kind, key, Hz, glide, stretch, harmonics, band (a shaped noise's lowest
 /// edge to its highest) and a shaped noise's bands, `null` where its kind has none.
 fn atom(atom: &Atom) -> String {
     let none = || NONE.to_string();
     let (hz, stretch, lo, hi, bands) = match &atom.sound {
-        Sound::Partial { hz } => (num(hz.base), none(), none(), none(), none()),
+        Sound::Partial { hz, .. } => (num(hz.base), none(), none(), none(), none()),
         Sound::Harmonic { hz, stretch, .. } => {
             (num(hz.base), num(*stretch), none(), none(), none())
         }
@@ -48,10 +48,11 @@ fn atom(atom: &Atom) -> String {
         }
     };
     format!(
-        "{{ \"key\": {}, \"kind\": \"{}\", \"hz\": {hz}, \"stretch\": {stretch}, \"harmonics\": \
-         {}, \"lo_hz\": {lo}, \"hi_hz\": {hi}, \"bands\": {bands} }}",
+        "{{ \"key\": {}, \"kind\": \"{}\", \"hz\": {hz}, \"glide\": {}, \"stretch\": \
+         {stretch}, \"harmonics\": {}, \"lo_hz\": {lo}, \"hi_hz\": {hi}, \"bands\": {bands} }}",
         atom.key,
         atom.kind(),
+        num(atom.glide()),
         atom.harmonics()
     )
 }
@@ -87,11 +88,13 @@ pub fn progress(line: &Line) -> String {
         )
     });
     format!(
-        "{{ \"pass\": {}, \"action\": \"{}\", \"atom\": {}, \"from_db\": {}, \"to_db\": {}, \
+        "{{ \"pass\": {}, \"action\": \"{}\", \"adjust\": {}, \"atom\": {}, \"from_db\": {}, \"to_db\": {}, \
          \"delta_dl_bits\": {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \
          \"residual_db\": [{}], \"envelopes\": {}, \"seconds\": {}{geometry} }}",
         line.pass,
         line.action.name(),
+        line.tweak
+            .map_or_else(|| NONE.to_string(), |t| text(t.name())),
         line.atom.as_ref().map_or_else(|| NONE.to_string(), atom),
         line.from_db.map_or_else(|| NONE.to_string(), num),
         line.to_db.map_or_else(|| NONE.to_string(), num),
@@ -129,13 +132,19 @@ pub fn answer(
     });
     format!(
         "{{ \"fit\": {{ \"rate_hz\": {}, \"passes\": {}, \"adds\": {}, \"adjusts\": {}, \
-         \"partials\": {}, \"harmonics\": {}, \"noises\": {}, \"shaped\": {}, \"dl_bits\": {}, \
+         \"adjusts_by\": {{ {} }}, \"partials\": {}, \"harmonics\": {}, \"noises\": {}, \"shaped\": {}, \"dl_bits\": {}, \
          \"atom_bits\": {}, \"residual_bits\": {}, \"gain_db\": {}, \"stopped\": {}, \"secs\": {}, \
          \"atoms\": {}, \"wrote\": {} }}{files} }}",
         fit.clip.rate,
         fit.passes,
         fit.adds,
         fit.adjusts,
+        Tweak::ALL
+            .iter()
+            .zip(fit.tweaks)
+            .map(|(t, n)| format!("{}: {n}", text(t.name())))
+            .collect::<Vec<_>>()
+            .join(", "),
         count("partial"),
         count("harmonic"),
         count("noise"),

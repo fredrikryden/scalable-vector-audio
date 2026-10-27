@@ -1,4 +1,4 @@
-// Concern: FIT: one sound by passes of one move each, the best add or level adjust under one DL | Non-concern: the analysis (add.rs), JSON | IO: (samples, rate, spl) -> Fit, Lines
+// Concern: FIT: one sound by passes of one move each, the best add or adjust under one DL | Non-concern: the spectrogram, floor and sieve (add.rs), JSON | IO: (samples, rate, spl) -> Fit, Lines
 
 use std::f64::consts::LOG2_E;
 use std::ops::Range;
@@ -11,10 +11,10 @@ use super::atoms::{Atom, Clip, Feasible, Quantity, Trajectory};
 use super::bits::{self, Look, Priced, frequency_delta, level_delta};
 use super::grid::Grid;
 
-pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate descent on the atoms' levels beside matching pursuit for new atoms (Mallat and Zhang 1993, doi 10.1109/78.258082); \
+pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate descent on the atoms' levels and frequencies beside matching pursuit for new atoms (Mallat and Zhang 1993, doi 10.1109/78.258082); \
      DL = B(x) (bits.rs) plus the residual's bits, the one objective; \
      every pass over one problem: the clip's grid, its weights read once off the clip and never off a residual; \
-     every atom spans the clip, only its level moving; \
+     every atom spans the clip; a partial's or voice's Hz f(t) = f(0) e^(glide t), glide 0 a fixed tone (atoms.rs); \
      the clip read at its rate over the largest whole factor keeping Cam 38.9 under the Nyquist; \
      scaled to unit RMS, one master gain in dB bringing it back, every floor read at the SPL plus that gain; \
      the residual on the coarse grid's 48 ms frames by its analysis bins (grid.rs), octave bands being too coarse to tell a sine from noise inside one; \
@@ -27,11 +27,16 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      F a noise at threshold: its power in one ERB a sine's at its threshold (add.rs), so per bin that sine's peak-bin power times f_s sum w^2 / (ERB (sum w)^2), the sine's own peak-bin power overstating a threshold noise's by 2 to 17 dB from 100 Hz to 10 kHz; \
      residual bits 1/2 sum w r^2 log2(e), w the inverse of that variance, r = P less the model's expected power, bins outside the feasible set unweighted; \
      templates in expected power: a sine through the window's closed-form kernel, a noise band's expected periodogram (grid.rs), a shaped noise's the sum of its bands' at their gains; \
+     a gliding column's template in frame m the periodogram, by one transform, of a unit sine on its path in the window centred on the frame, its sweep across that window held, the frame's other hops left out: that template is the model's prediction, as a fixed sine's lobe is, not an estimate of another one, so its gap from the frame's pooled hops is misfit the residual holds and the DL prices; \
+     a gliding column's floor at its Hz at the frames' mean time, its frequency looks at its path's Hz in each frame; \
      each column's gain per frame its power; \
      each pass scores every move against the residual and makes the one that lowers the DL most, or none, and the fit stops at the first pass with none, so the DL falls at every pass; \
      a move an add or an adjust; \
      an add a new atom off the residual averaged over the frames, at its best level: \
      a free partial at each local maximum over its floor, its Hz by QIFFT (Smith and Serra 1987); \
+     a partial or voice candidate, refined, glides where its columns' peak tracks glide: a column's track in each frame the highest local maximum over its floor, by QIFFT, in the basin of the averaged residual about its Hz, from the local maximum it climbs to down to the local minimum either side; \
+     a glide one slope of ln Hz on time by least squares over its columns' tracks, each its own intercept, its precision the coarser of that slope's standard error and the rate moving the first column's Hz by its written precision over the frames, 0 within that of 0; \
+     a gliding candidate starts at its tracks' intercepts, is refined as a fixed one is, and is kept where its DL is the lower; \
      a voice at each fundamental the sieve (add.rs) finds among those peaks that are tonal lobes of the averaged residual at K times its frames looks, taken from the pool with its members till none is found; \
      a voice's harmonic k at k f0 sqrt(1 + B k^2) (Fletcher 1964), f0 and B by least squares of (f_k / k)^2 = f0^2 + f0^2 B k^2 over its member peaks, B at least 0; \
      members reassigned within half an analysis bin of the stretched Hz and refitted till the set repeats; \
@@ -39,21 +44,22 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      one noise band per octave band no kept noise band holds; \
      one shaped noise: a gain per octave band times one envelope over the frames (rank 1), both at least 0, by alternating least squares against the residual from a flat envelope till an alternation no longer lowers the weighted misfit, which never rises, its bands' cross terms left out of the alternation and in its score; a band whose gain falls to 0 carved out, the rest's gains over the highest's written in dB; \
      an add scored in closed form: each column's gain per frame its weighted correlation with the residual over its weighted energy, at least 0, written, the DL drop those gains give less its bits; \
-     each partial's and voice's frequencies refined against the residual as it is scored: a partial's Hz by golden section (Kiefer 1953) over half an analysis bin of its peak to the finer of the precision it is written at and its standard deviation under the weights, sigma = (sum w (du/dx)^2)^-1/2, u its expected power, du/dx by central difference at the cube root of epsilon; a voice's harmonics each so as a partial, then f0 and B by that least squares weighted by the inverse variance of (f_k / k)^2, (2 f_k sigma_k / k^2)^-2, kept where the voice's score falls; \
-     a kept atom's frequencies never move again; \
-     an adjust a kept atom's level changed by the exact best amount for that atom alone, up or down: each column's written gain per frame plus the residual's weighted correlation with the column over its weighted energy, at least 0, written; a voice's columns each so alone, their main lobes apart; \
-     or to 0, which removes it, where that gives the lower DL, as an atom's bits are no smooth function of its level; \
-     so like terms collect: an add then an adjust is one atom at their sum; \
+     each partial's and voice's frequencies refined against the residual as it is scored, its glide held: a partial's Hz by golden section (Kiefer 1953) over half an analysis bin of its peak to the finer of the precision it is written at and its standard deviation under the weights, sigma = (sum w (du/dx)^2)^-1/2, u its expected power, du/dx by central difference at the cube root of epsilon; a voice's harmonics each so as a partial, then f0 and B by that least squares weighted by the inverse variance of (f_k / k)^2, (2 f_k sigma_k / k^2)^-2, kept where the voice's score falls; \
+     an adjust changes one kept atom in its own written numbers, three for each: \
+     level, one gain over its whole level curve, 1 + sum w r u / sum w u^2 in closed form (u its expected power), its levels' bases moved by it in dB; or to 0, which removes it, where that gives the lower DL or the gain is not positive; \
+     frequency, for a partial or voice: its tracks read off the residual with the atom added back, in each frame the local maximum over its floor nearest its path's Hz in Cam within a main lobe of it, give a glide as an add's do; \
+     at its own glide, at none and at that one, its Hz at the start moved so its path holds at the frames' mean time, a partial's Hz by golden section over half a bin to the finer of its written precision and its standard deviation, a voice refined as an add's against that residual, its levels kept, the lowest DL kept; \
+     rethin, its level curve thinned afresh from each column's written gain per frame plus the residual's weighted correlation with the column over its weighted energy, at least 0; \
      the DL of every move the written state's, in closed form from the residual, its drop exact; the residual derived afresh from the kept atoms at each pass, a move whose repriced DL does not fall, its drop under rounding, no move; \
-     ties broken by the move's order: adds in the candidates' order, then adjusts in the atoms'; \
+     ties broken by the move's order: adds in the candidates' order, then adjusts in the atoms', each atom's level, frequency, then rethin; \
      a column's level 10 log10 of its gain, held at its floor; a shaped noise's floor the least of its bands' floors less their gains; \
      each level through the frame centres from 0 to the clip's end, thinned by Ramer-Douglas-Peucker at the level JND at its peak sensation level (Jesteadt, Wier and Green 1977); \
      the DL the written atoms': levels at the level JND by looks, frequencies at the frequency JND by looks (bits.rs), every frame a look at its level over its floor; \
      a shaped noise's band gain at the level JND by looks of that band's level over its own floor, its envelope by its looks over the envelope's floor; \
-     a voice's f0 at the JND at f0, its B where its highest harmonic moves by that harmonic's JND; \
+     a voice's f0 at the JND at f0, its B where its highest harmonic moves by that harmonic's JND; a glide at its precision; \
      a time at the frame, a noise band's edge one of the grid's band edges; \
      a key one past the last born; \
-     each pass reported as it ends: its move, the atom's level before and after, the DL's drop and total, the residual's grid";
+     each pass reported as it ends: its move and what an adjust changed, the atom's level before and after, the DL's drop and total, the residual's grid";
 
 /// A full-scale sine at 103.95 dB SPL by default (SMPTE RP 200: -20 dBFS pink noise at 83 dB
 /// SPL, a sine's RMS 3.01 dB under its peak).
@@ -128,6 +134,28 @@ impl Action {
     }
 }
 
+/// What an adjust changed, as `MODEL` states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tweak {
+    Level,
+    Remove,
+    Frequency,
+    Rethin,
+}
+
+impl Tweak {
+    pub const ALL: [Tweak; 4] = [Tweak::Level, Tweak::Remove, Tweak::Frequency, Tweak::Rethin];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Tweak::Level => "level",
+            Tweak::Remove => "remove",
+            Tweak::Frequency => "frequency",
+            Tweak::Rethin => "rethin",
+        }
+    }
+}
+
 /// The coarse grid's shape, which the first line carries.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Geometry {
@@ -147,6 +175,7 @@ pub struct Line {
     /// The pass, from 1; 0 for the start.
     pub pass: usize,
     pub action: Action,
+    pub tweak: Option<Tweak>,
     pub atom: Option<Atom>,
     /// The atom's level in dB before and after, as `level_db` states; `None` where it was not,
     /// or is no more.
@@ -165,8 +194,8 @@ pub struct Line {
 
 /// A fit: the clip it read, its atoms in unit-RMS space, the master gain bringing them back,
 /// the SPL that space is heard at, its DL's parts, its passes and how many added and adjusted,
-/// whether a stop ended it, and the clip's and the fit's coarse grids, each band's power spread
-/// flat over its bins.
+/// the adjusts by `Tweak::ALL`'s order, whether a stop ended it, and the clip's and the fit's
+/// coarse grids, each band's power spread flat over its bins.
 pub struct Fit {
     pub clip: Clip,
     pub atoms: Vec<Atom>,
@@ -177,21 +206,31 @@ pub struct Fit {
     pub passes: usize,
     pub adds: usize,
     pub adjusts: usize,
+    pub tweaks: [usize; 4],
     pub stopped: bool,
     pub clip_grid: Grid,
     pub fit_grid: Grid,
 }
 
-/// What an atom is before its level is written.
+/// A glide's rate in nepers per second, 0 a fixed tone, and its precision.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Glide {
+    rate: f64,
+    step: f64,
+}
+
+/// What an atom is before its level is written, its Hz at the clip's start.
 #[derive(Clone, Debug, PartialEq)]
 enum Kind {
     Partial {
         hz: f64,
+        glide: Glide,
     },
     Voice {
         f0: f64,
         stretch: f64,
         count: usize,
+        glide: Glide,
     },
     Noise {
         band: (f64, f64),
@@ -206,8 +245,10 @@ impl Kind {
     /// Each column's Hz: a noise band's its geometric centre, a shaped noise's its first band's.
     fn hzs(&self) -> Vec<f64> {
         match self {
-            Kind::Partial { hz } => vec![*hz],
-            Kind::Voice { f0, stretch, count } => (1..=*count)
+            Kind::Partial { hz, .. } => vec![*hz],
+            Kind::Voice {
+                f0, stretch, count, ..
+            } => (1..=*count)
                 .map(|k| {
                     let k = k as f64;
                     f0 * k * libm::sqrt(1.0 + stretch * k * k)
@@ -215,6 +256,55 @@ impl Kind {
                 .collect(),
             Kind::Noise { band } => vec![centre(*band)],
             Kind::Shaped { bands } => vec![centre(bands[0].0)],
+        }
+    }
+
+    fn glide(&self) -> Glide {
+        match self {
+            Kind::Partial { glide, .. } | Kind::Voice { glide, .. } => *glide,
+            Kind::Noise { .. } | Kind::Shaped { .. } => Glide::default(),
+        }
+    }
+
+    /// This partial or voice at `to`, its Hz at the start moved so its path holds at `middle`.
+    fn glided(&self, to: Glide, middle: f64) -> Kind {
+        let moved = |hz: f64| hz * sva_formula::exp((self.glide().rate - to.rate) * middle);
+        match self {
+            Kind::Partial { hz, .. } => Kind::Partial {
+                hz: moved(*hz),
+                glide: to,
+            },
+            Kind::Voice {
+                f0, stretch, count, ..
+            } => Kind::Voice {
+                f0: moved(*f0),
+                stretch: *stretch,
+                count: *count,
+                glide: to,
+            },
+            Kind::Noise { .. } | Kind::Shaped { .. } => self.clone(),
+        }
+    }
+}
+
+/// Each column's Hz at the clip's start and per frame, its Hz at the frames' mean time, and
+/// its floor in dB.
+struct Columns {
+    starts: Vec<f64>,
+    paths: Vec<Vec<f64>>,
+    heard: Vec<f64>,
+    floors: Vec<f64>,
+}
+
+/// A column's template over the feasible bins, one for every frame or one per frame.
+#[derive(Clone)]
+struct Template(Vec<Vec<f64>>);
+
+impl Template {
+    fn at(&self, f: usize) -> &[f64] {
+        match self.0.len() {
+            1 => &self.0[0],
+            _ => &self.0[f],
         }
     }
 }
@@ -324,6 +414,8 @@ struct Problem {
     power: Vec<Vec<f64>>,
     weight: Vec<Vec<f64>>,
     times: Vec<f64>,
+    window: Vec<f64>,
+    twiddle: Vec<(f64, f64)>,
 }
 
 impl Problem {
@@ -367,6 +459,10 @@ impl Problem {
                 .collect()
         });
         let times = (0..grid.power.len()).map(|f| grid.centre_secs(f)).collect();
+        let window = (0..grid.long)
+            .map(|k| 0.5 - 0.5 * libm::cos(std::f64::consts::TAU * k as f64 / grid.long as f64))
+            .collect();
+        let twiddle = fft::twiddles(grid.n);
         Problem {
             grid,
             clip,
@@ -378,6 +474,8 @@ impl Problem {
             power,
             weight,
             times,
+            window,
+            twiddle,
         }
     }
 
@@ -385,10 +483,12 @@ impl Problem {
         self.power.len()
     }
 
-    /// Each column's template over the feasible bins.
-    fn templates(&self, kind: &Kind) -> Vec<Vec<f64>> {
+    /// Each column's template over the feasible bins, a gliding one's per frame.
+    fn templates(&self, kind: &Kind) -> Vec<Template> {
         match kind {
-            Kind::Noise { band } => vec![self.grid.noise_bins(*band)[self.range.clone()].to_vec()],
+            Kind::Noise { band } => vec![Template(vec![
+                self.grid.noise_bins(*band)[self.range.clone()].to_vec(),
+            ])],
             Kind::Shaped { bands } => {
                 let mut sum = vec![0.0; self.range.len()];
                 for (band, gain) in bands {
@@ -397,13 +497,79 @@ impl Problem {
                         *s += gain * b;
                     }
                 }
-                vec![sum]
+                vec![Template(vec![sum])]
             }
-            _ => kind
-                .hzs()
+            _ => {
+                let rate = kind.glide().rate;
+                let at = |hz: f64| self.range.clone().map(|b| self.grid.sine(hz, b)).collect();
+                kind.hzs()
+                    .iter()
+                    .map(|hz| {
+                        Template(match rate != 0.0 {
+                            true => self
+                                .times
+                                .iter()
+                                .map(|t| self.swept(*hz, rate, *t))
+                                .collect(),
+                            false => vec![at(*hz)],
+                        })
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// The power a unit sine at `hz e^(rate t)` puts in each feasible bin of the window
+    /// centred at `centre`: its periodogram, its positive frequencies alone, as `MODEL` states.
+    fn swept(&self, hz: f64, rate: f64, centre: f64) -> Vec<f64> {
+        let (n, long) = (self.grid.n, self.grid.long);
+        let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
+        let turns = std::f64::consts::TAU * hz * sva_formula::exp(rate * centre) / rate;
+        for (k, w) in self.window.iter().enumerate() {
+            let from = (k as f64 - (long / 2) as f64) / self.grid.rate;
+            let (sin, cos) = libm::sincos(turns * libm::expm1(rate * from));
+            (re[k], im[k]) = (0.5 * w * cos, 0.5 * w * sin);
+        }
+        fft::fft_with(&mut re, &mut im, &self.twiddle);
+        self.range
+            .clone()
+            .map(|b| re[b] * re[b] + im[b] * im[b])
+            .collect()
+    }
+
+    fn middle(&self) -> f64 {
+        self.times.iter().sum::<f64>() / self.times.len().max(1) as f64
+    }
+
+    fn columns(&self, kind: &Kind) -> Columns {
+        let rate = kind.glide().rate;
+        let hzs = kind.hzs();
+        let heard: Vec<f64> = hzs
+            .iter()
+            .map(|hz| hz * sva_formula::exp(rate * self.middle()))
+            .collect();
+        let floors = match kind {
+            Kind::Shaped { bands } => vec![
+                bands
+                    .iter()
+                    .map(|(band, g)| floor_db(centre(*band), self.spl_db) - db(*g))
+                    .fold(f64::INFINITY, f64::min),
+            ],
+            _ => heard.iter().map(|hz| floor_db(*hz, self.spl_db)).collect(),
+        };
+        Columns {
+            starts: hzs.clone(),
+            paths: hzs
                 .iter()
-                .map(|hz| self.range.clone().map(|b| self.grid.sine(*hz, b)).collect())
+                .map(|hz| {
+                    self.times
+                        .iter()
+                        .map(|t| hz * sva_formula::exp(rate * t))
+                        .collect()
+                })
                 .collect(),
+            heard,
+            floors,
         }
     }
 
@@ -419,13 +585,14 @@ impl Problem {
             })
     }
 
-    /// The frames' looks at a level `level` over `floor` at `hz`.
-    fn looks(&self, level: &[f64], floor: f64, hz: f64) -> Vec<Look> {
+    /// The frames' looks at a level `level` over `floor` at `hz` per frame.
+    fn looks(&self, level: &[f64], floor: f64, hz: &[f64]) -> Vec<Look> {
         level
             .iter()
-            .map(|l| Look {
+            .zip(hz)
+            .map(|(l, hz)| Look {
                 sl_db: l - floor,
-                hz,
+                hz: *hz,
             })
             .collect()
     }
@@ -448,8 +615,7 @@ fn db(power: f64) -> f64 {
 /// `kind` keyed `key` written from `fitted`, each column's gain per frame, as `MODEL` states.
 fn write(p: &Problem, kind: &Kind, key: u64, fitted: &[Vec<f64>]) -> Written {
     let secs = p.clip.secs();
-    let hzs = kind.hzs();
-    let floors = floors(p, kind);
+    let floors = p.columns(kind).floors;
     let trajectories: Vec<Trajectory> = fitted
         .iter()
         .zip(&floors)
@@ -459,6 +625,13 @@ fn write(p: &Problem, kind: &Kind, key: u64, fitted: &[Vec<f64>]) -> Written {
             thinned((0.0, secs), &p.times, &held, level_jnd_db(peak - floor))
         })
         .collect();
+    rewrite(p, kind, key, trajectories)
+}
+
+/// `kind` keyed `key` written at each column's level `trajectories`.
+fn rewrite(p: &Problem, kind: &Kind, key: u64, trajectories: Vec<Trajectory>) -> Written {
+    let columns = p.columns(kind);
+    let glide = kind.glide();
     let levels: Vec<Vec<f64>> = trajectories
         .iter()
         .map(|t| p.times.iter().map(|at| level_at(t, 0.0, *at)).collect())
@@ -470,13 +643,16 @@ fn write(p: &Problem, kind: &Kind, key: u64, fitted: &[Vec<f64>]) -> Written {
     let mut trajectories = trajectories.into_iter();
     let first = trajectories.next().expect("a column");
     let atom = match kind {
-        Kind::Partial { hz } => Atom::partial(key, 0.0, Trajectory::steady(*hz), first),
+        Kind::Partial { hz, .. } => {
+            Atom::partial(key, 0.0, Trajectory::steady(*hz), first).glided(glide.rate)
+        }
         Kind::Voice { f0, stretch, .. } => Atom::harmonic(
             key,
             0.0,
             (Trajectory::steady(*f0), *stretch),
             std::iter::once(first).chain(trajectories).collect(),
-        ),
+        )
+        .glided(glide.rate),
         Kind::Noise { band } => Atom::noise(key, 0.0, *band, first),
         Kind::Shaped { bands } => Atom::shaped(
             key,
@@ -489,31 +665,14 @@ fn write(p: &Problem, kind: &Kind, key: u64, fitted: &[Vec<f64>]) -> Written {
         ),
     };
     let bits = match kind {
-        Kind::Shaped { bands } => shaped_bits(p, &atom, bands, &levels[0], floors[0]),
-        _ => priced(p, &atom, &hzs, &levels, &floors),
+        Kind::Shaped { bands } => shaped_bits(p, &atom, bands, &levels[0], columns.floors[0]),
+        _ => priced(p, &atom, &columns, &levels, glide.step),
     };
     Written {
         atom,
         gains,
         levels,
         bits,
-    }
-}
-
-/// Each column's floor in dB, as `MODEL` states.
-fn floors(p: &Problem, kind: &Kind) -> Vec<f64> {
-    match kind {
-        Kind::Shaped { bands } => vec![
-            bands
-                .iter()
-                .map(|(band, g)| floor_db(centre(*band), p.spl_db) - db(*g))
-                .fold(f64::INFINITY, f64::min),
-        ],
-        _ => kind
-            .hzs()
-            .iter()
-            .map(|hz| floor_db(*hz, p.spl_db))
-            .collect(),
     }
 }
 
@@ -537,10 +696,12 @@ fn shaped_bits(
     let mut deltas = vec![hop];
     for (band, g) in bands {
         let heard: Vec<f64> = level.iter().map(|l| l + db(*g)).collect();
-        let at = p.looks(&heard, floor_db(centre(*band), p.spl_db), centre(*band));
+        let hz = vec![centre(*band); level.len()];
+        let at = p.looks(&heard, floor_db(centre(*band), p.spl_db), &hz);
         deltas.extend([edge, edge, level_delta(hop, &at)]);
     }
-    let envelope = level_delta(hop, &p.looks(level, floor, centre(bands[0].0)));
+    let hz = vec![centre(bands[0].0); level.len()];
+    let envelope = level_delta(hop, &p.looks(level, floor, &hz));
     for (q, _) in &atom.numbers()[deltas.len()..] {
         deltas.push(match q {
             Quantity::Time => hop,
@@ -550,12 +711,18 @@ fn shaped_bits(
     bits::atom(atom, &Priced { feasible, deltas })
 }
 
-/// `atom`'s bits at the precisions `MODEL` states, harmonic `k` at `hzs[k]` and `levels[k]`
-/// per frame over `floors[k]`.
-fn priced(p: &Problem, atom: &Atom, hzs: &[f64], levels: &[Vec<f64>], floors: &[f64]) -> f64 {
+/// `atom`'s bits at the precisions `MODEL` states, harmonic `k` at `levels[k]` per frame over
+/// its column's floor, its glide at `glide_step`.
+fn priced(
+    p: &Problem,
+    atom: &Atom,
+    columns: &Columns,
+    levels: &[Vec<f64>],
+    glide_step: f64,
+) -> f64 {
     let hop = p.grid.frame_secs();
-    let looks = |k: usize| p.looks(&levels[k], floors[k], hzs[k]);
-    let lowest = floors.iter().copied().fold(f64::INFINITY, f64::min);
+    let looks = |k: usize| p.looks(&levels[k], columns.floors[k], &columns.paths[k]);
+    let lowest = columns.floors.iter().copied().fold(f64::INFINITY, f64::min);
     let feasible = Feasible::of(&p.clip, (lowest, p.top_db));
     let mut level = 0;
     let mut deltas = Vec::new();
@@ -563,12 +730,13 @@ fn priced(p: &Problem, atom: &Atom, hzs: &[f64], levels: &[Vec<f64>], floors: &[
         if q == Quantity::Db {
             level += 1;
         }
-        let member = level % hzs.len();
+        let member = level % columns.heard.len();
         deltas.push(match q {
             Quantity::Time => hop,
             Quantity::Db | Quantity::DbDeviation => level_delta(hop, &looks(member)),
-            Quantity::Hz | Quantity::HzDeviation => frequency_steps(p, hzs, levels, floors).0,
-            Quantity::Stretch => frequency_steps(p, hzs, levels, floors).1,
+            Quantity::Hz | Quantity::HzDeviation => frequency_steps(p, columns, levels).0,
+            Quantity::Stretch => frequency_steps(p, columns, levels).1,
+            Quantity::Glide => glide_step,
             Quantity::Edge => edge_step(p, &feasible),
         });
     }
@@ -576,15 +744,16 @@ fn priced(p: &Problem, atom: &Atom, hzs: &[f64], levels: &[Vec<f64>], floors: &[
 }
 
 /// The precisions a fundamental's Hz and its stretch are written at, as `MODEL` states,
-/// harmonic `k` at `hzs[k]` and `levels[k]` per frame over `floors[k]`.
-fn frequency_steps(p: &Problem, hzs: &[f64], levels: &[Vec<f64>], floors: &[f64]) -> (f64, f64) {
+/// harmonic `k` at `levels[k]` per frame over its column's floor.
+fn frequency_steps(p: &Problem, columns: &Columns, levels: &[Vec<f64>]) -> (f64, f64) {
     let hop = p.grid.frame_secs();
-    let looks = |k: usize| p.looks(&levels[k], floors[k], hzs[k]);
+    let hzs = &columns.heard;
+    let looks = |k: usize| p.looks(&levels[k], columns.floors[k], &columns.paths[k]);
     let last = hzs.len() - 1;
     let (f0, h, top) = (hzs[0], hzs.len() as f64, hzs[last]);
     let moved = h * h * h * h * f0 * f0 / (2.0 * top);
     (
-        frequency_delta(hop, &looks(0)),
+        frequency_delta(hop, &looks(0)) * columns.starts[0] / f0,
         frequency_delta(hop, &looks(last)) / moved,
     )
 }
@@ -641,7 +810,7 @@ fn spread(p: &Problem, (below, above): (&Kind, &Kind), h: f64, gains: &[Vec<f64>
                         .iter()
                         .zip(&hi)
                         .zip(gains)
-                        .map(|((l, u), g)| g[f] * (u[b] - l[b]))
+                        .map(|((l, u), g)| g[f] * (u.at(f)[b] - l.at(f)[b]))
                         .sum::<f64>()
                         / (2.0 * h);
                     p.weight[f][b] * du * du
@@ -657,27 +826,29 @@ fn refined(p: &Problem, n: usize, residual: &[Vec<f64>], kind: Kind, key: u64) -
     let bin = p.grid.rate / p.grid.n as f64;
     let score = |k: &Kind| scored(p, n, residual, k, key).0;
     let (best, written) = scored(p, n, residual, &kind, key);
+    let glide = kind.glide();
+    let partial_at = |hz: f64| Kind::Partial { hz, glide };
     // Harmonic `c` at `hz` refined as a partial: its Hz, score and standard deviation.
     let partial = |c: usize, hz: f64, held: f64| {
         let h = bin * libm::cbrt(f64::EPSILON);
-        let near = (&Kind::Partial { hz: hz - h }, &Kind::Partial { hz: hz + h });
+        let near = (&partial_at(hz - h), &partial_at(hz + h));
         let sigma = spread(p, near, h, &written.gains[c..=c]);
-        let floor = [floor_db(hz, p.spl_db)];
-        let written_step = frequency_steps(p, &[hz], &written.levels[c..=c], &floor).0;
-        let at = |h: f64| score(&Kind::Partial { hz: h });
+        let columns = p.columns(&partial_at(hz));
+        let written_step = frequency_steps(p, &columns, &written.levels[c..=c]).0;
+        let at = |h: f64| score(&partial_at(h));
         let range = (hz - bin / 2.0, hz + bin / 2.0);
         let (to, v) = golden(&at, range, written_step.min(sigma), (hz, held));
         (to, v, sigma)
     };
     match kind {
-        Kind::Partial { hz } => {
+        Kind::Partial { hz, .. } => {
             let (hz, v, _) = partial(0, hz, best);
-            (Kind::Partial { hz }, v)
+            (partial_at(hz), v)
         }
         Kind::Voice { count, .. } => {
             let hzs = kind.hzs();
             let refined = each(default_threads(), (0..count).collect(), |c| {
-                let held = score(&Kind::Partial { hz: hzs[c] });
+                let held = score(&partial_at(hzs[c]));
                 let (to, _, sigma) = partial(c, hzs[c], held);
                 let k = (c + 1) as f64;
                 let deviation = 2.0 * to * sigma / (k * k);
@@ -689,7 +860,12 @@ fn refined(p: &Problem, n: usize, residual: &[Vec<f64>], kind: Kind, key: u64) -
                 return (kind, best);
             }
             let (f0, stretch) = stretched(&points);
-            let fitted = Kind::Voice { f0, stretch, count };
+            let fitted = Kind::Voice {
+                f0,
+                stretch,
+                count,
+                glide,
+            };
             let v = score(&fitted);
             match v < best {
                 true => (fitted, v),
@@ -764,14 +940,25 @@ pub fn level_at(level: &Trajectory, on: f64, t: f64) -> f64 {
 #[derive(Clone)]
 struct Held {
     kind: Kind,
-    templates: Vec<Vec<f64>>,
+    templates: Vec<Template>,
     written: Written,
 }
 
-/// The move a pass made: its action, the atom's key, and its level before and after.
+impl Held {
+    fn model(&self, p: &Problem, f: usize) -> Vec<f64> {
+        let mut u = vec![0.0; p.range.len()];
+        for (t, g) in self.templates.iter().zip(&self.written.gains) {
+            u.iter_mut().zip(t.at(f)).for_each(|(u, t)| *u += g[f] * t);
+        }
+        u
+    }
+}
+
+/// The move a pass made: its action and tweak, the atom's key, and its level before and after.
 #[derive(Clone)]
 struct Moved {
     action: Action,
+    tweak: Option<Tweak>,
     key: u64,
     from_db: Option<f64>,
     to_db: Option<f64>,
@@ -830,8 +1017,8 @@ impl State {
         let mut out = p.power.clone();
         for h in &self.held {
             for (t, g) in h.templates.iter().zip(&h.written.gains) {
-                for (r, g) in out.iter_mut().zip(g) {
-                    r.iter_mut().zip(t).for_each(|(r, t)| *r -= g * t);
+                for (f, (r, g)) in out.iter_mut().zip(g).enumerate() {
+                    r.iter_mut().zip(t.at(f)).for_each(|(r, t)| *r -= g * t);
                 }
             }
         }
@@ -860,24 +1047,13 @@ fn level_db(kind: &Kind, written: &Written) -> f64 {
     db(shape * total / frames)
 }
 
-/// `sum w (u^2 - 2 r u)` over every frame, `u` the change `templates` at `after` less
-/// `before` make: the residual's weighted square's change.
-fn change(
-    p: &Problem,
-    residual: &[Vec<f64>],
-    templates: &[Vec<f64>],
-    (after, before): (&[Vec<f64>], &[Vec<f64>]),
-) -> f64 {
+/// `sum w (u^2 - 2 r u)` over every frame against `residual`, `u` frame `f`'s change
+/// `delta(f)`: the residual's weighted square's change.
+fn change(p: &Problem, residual: &[Vec<f64>], delta: &dyn Fn(usize) -> Vec<f64>) -> f64 {
     (0..p.frames())
         .map(|f| {
-            let mut u = vec![0.0; p.range.len()];
-            for ((t, a), b) in templates.iter().zip(after).zip(before) {
-                let d = a[f] - b[f];
-                if d != 0.0 {
-                    u.iter_mut().zip(t).for_each(|(u, t)| *u += d * t);
-                }
-            }
-            u.iter()
+            delta(f)
+                .iter()
                 .zip(&residual[f])
                 .zip(&p.weight[f])
                 .map(|((u, r), w)| w * (u * u - 2.0 * r * u))
@@ -886,9 +1062,62 @@ fn change(
         .sum()
 }
 
-/// Atom `a`'s adjust, as `MODEL` states: its DL change beside its written atom, `None` where
-/// the adjust takes it to 0.
-fn adjusted(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> (f64, Option<Written>) {
+fn rewritten(held: &Held, written: Written) -> Held {
+    Held {
+        kind: held.kind.clone(),
+        templates: held.templates.clone(),
+        written,
+    }
+}
+
+/// Atom `a`'s level adjust, as `MODEL` states: its DL change, its tweak and what it leaves.
+fn scaled(
+    p: &Problem,
+    state: &State,
+    residual: &[Vec<f64>],
+    a: usize,
+) -> (f64, Tweak, Option<Held>) {
+    let held = &state.held[a];
+    let (energy, pull) = (0..p.frames()).fold((0.0, 0.0), |(e, c), f| {
+        held.model(p, f)
+            .iter()
+            .zip(&residual[f])
+            .zip(&p.weight[f])
+            .fold((e, c), |(e, c), ((u, r), w)| (e + w * u * u, c + w * u * r))
+    });
+    let n = state.held.len();
+    // Removing it changes the residual by +u: sum w (u^2 + 2 r u).
+    let gone = bits::count(n - 1) - bits::count(n) - held.written.bits
+        + 0.5 * LOG2_E * (energy + 2.0 * pull);
+    let gain = match energy > 0.0 {
+        true => 1.0 + pull / energy,
+        false => 1.0,
+    };
+    if gain <= 0.0 {
+        return (gone, Tweak::Remove, None);
+    }
+    let trajectories = held
+        .written
+        .atom
+        .levels()
+        .into_iter()
+        .map(|t| Trajectory {
+            base: t.base + db(gain),
+            knots: t.knots.clone(),
+        })
+        .collect();
+    let written = rewrite(p, &held.kind, held.written.atom.key, trajectories);
+    // The residual changes by -(gain - 1) u: sum w (d^2 u^2 - 2 d r u).
+    let d = gain - 1.0;
+    let kept = written.bits - held.written.bits + 0.5 * LOG2_E * (d * d * energy - 2.0 * d * pull);
+    match gone < kept {
+        true => (gone, Tweak::Remove, None),
+        false => (kept, Tweak::Level, Some(rewritten(held, written))),
+    }
+}
+
+/// Atom `a`'s rethin, as `MODEL` states: its DL change beside the atom it leaves.
+fn rethinned(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> (f64, Held) {
     let held = &state.held[a];
     let before = &held.written.gains;
     let fitted: Vec<Vec<f64>> = held
@@ -898,7 +1127,7 @@ fn adjusted(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> (f64
         .map(|(t, g)| {
             (0..p.frames())
                 .map(|f| {
-                    let (energy, pull) = p.moments(f, t, &residual[f]);
+                    let (energy, pull) = p.moments(f, t.at(f), &residual[f]);
                     match energy > 0.0 {
                         true => (g[f] + pull / energy).max(0.0),
                         false => g[f],
@@ -908,22 +1137,309 @@ fn adjusted(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> (f64
         })
         .collect();
     let written = write(p, &held.kind, held.written.atom.key, &fitted);
-    let squared =
-        |after: &[Vec<f64>]| 0.5 * LOG2_E * change(p, residual, &held.templates, (after, before));
-    let kept = written.bits - held.written.bits + squared(&written.gains);
-    let n = state.held.len();
-    let zeros = vec![vec![0.0; p.frames()]; before.len()];
-    let gone = bits::count(n - 1) - bits::count(n) - held.written.bits + squared(&zeros);
-    match gone < kept {
-        true => (gone, None),
-        false => (kept, Some(written)),
+    let delta = |f: usize| {
+        let mut u = vec![0.0; p.range.len()];
+        for ((t, after), before) in held.templates.iter().zip(&written.gains).zip(before) {
+            let d = after[f] - before[f];
+            if d != 0.0 {
+                u.iter_mut().zip(t.at(f)).for_each(|(u, t)| *u += d * t);
+            }
+        }
+        u
+    };
+    let kept = written.bits - held.written.bits + 0.5 * LOG2_E * change(p, residual, &delta);
+    (kept, rewritten(held, written))
+}
+
+/// The Hz at the clip's start a track of `(t, ln hz)` gives at `rate`.
+fn start(track: &[(f64, f64)], rate: f64) -> Option<f64> {
+    (!track.is_empty()).then(|| {
+        sva_formula::exp(track.iter().map(|(t, y)| y - rate * t).sum::<f64>() / track.len() as f64)
+    })
+}
+
+/// Atom `a`'s frequency adjust, as `MODEL` states, `None` for a noise.
+fn retuned(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> Option<(f64, Held)> {
+    let held = &state.held[a];
+    if matches!(held.kind, Kind::Noise { .. } | Kind::Shaped { .. }) {
+        return None;
+    }
+    let key = held.written.atom.key;
+    let alone: Vec<Vec<f64>> = residual
+        .iter()
+        .enumerate()
+        .map(|(f, r)| r.iter().zip(held.model(p, f)).map(|(r, u)| r + u).collect())
+        .collect();
+    let columns = p.columns(&held.kind);
+    let tracks: Vec<Vec<(f64, f64)>> = columns
+        .paths
+        .iter()
+        .map(|path| pathed(p, &alone, path))
+        .collect();
+    let trajectories: Vec<Trajectory> = held.written.atom.levels().into_iter().cloned().collect();
+    let score = |kind: &Kind| -> (f64, Held) {
+        let templates = p.templates(kind);
+        let written = rewrite(p, kind, key, trajectories.clone());
+        let delta = |f: usize| {
+            let mut u = vec![0.0; p.range.len()];
+            for ((after, before), g) in templates.iter().zip(&held.templates).zip(&written.gains) {
+                for ((u, x), y) in u.iter_mut().zip(after.at(f)).zip(before.at(f)) {
+                    *u += g[f] * (x - y);
+                }
+            }
+            u
+        };
+        let v = written.bits - held.written.bits + 0.5 * LOG2_E * change(p, residual, &delta);
+        let held = Held {
+            kind: kind.clone(),
+            templates,
+            written,
+        };
+        (v, held)
+    };
+    let value = |kind: &Kind| score(kind).0;
+    let current = held.kind.glide();
+    let fitted = slope(&tracks, rate_floor(p, &columns, &held.written.levels));
+    let mut glides = vec![current];
+    for g in [Glide::default(), fitted] {
+        if !glides.iter().any(|h| h.rate == g.rate) {
+            glides.push(g);
+        }
+    }
+    let others = state.held.len() - 1;
+    glides
+        .into_iter()
+        .map(|glide| {
+            let kind = match held.kind.glided(glide, p.middle()) {
+                Kind::Partial { hz, glide } => tuned(p, hz, glide, &value, &held.written),
+                voice => refined(p, others, &alone, voice, key).0,
+            };
+            score(&kind)
+        })
+        .min_by(|x, y| x.0.total_cmp(&y.0))
+}
+
+/// A partial's Hz by golden section against `value` over half an analysis bin of `hz`, its
+/// levels `written`'s, to the finer of its written precision and its standard deviation.
+fn tuned(
+    p: &Problem,
+    hz: f64,
+    glide: Glide,
+    value: &dyn Fn(&Kind) -> f64,
+    written: &Written,
+) -> Kind {
+    let bin = p.grid.rate / p.grid.n as f64;
+    let h = bin * libm::cbrt(f64::EPSILON);
+    let at = |hz: f64| Kind::Partial { hz, glide };
+    let step = frequency_steps(p, &p.columns(&at(hz)), &written.levels).0;
+    let sigma = spread(p, (&at(hz - h), &at(hz + h)), h, &written.gains);
+    let score = |hz: f64| value(&at(hz));
+    let range = (hz - bin / 2.0, hz + bin / 2.0);
+    at(golden(&score, range, step.min(sigma), (hz, score(hz))).0)
+}
+
+/// The rate that moves `columns`' first Hz by its written precision over the frames, at
+/// levels `levels`: the finest glide heard apart from none.
+fn rate_floor(p: &Problem, columns: &Columns, levels: &[Vec<f64>]) -> f64 {
+    let span = p.times.last().copied().unwrap_or(0.0) - p.times.first().copied().unwrap_or(0.0);
+    frequency_steps(p, columns, levels).0 / columns.starts[0] / span
+}
+
+/// The glide `tracks` of `(t, ln hz)` give, as `MODEL` states: one slope of ln Hz on time by
+/// least squares, each track its own intercept, written at the coarser of its standard error
+/// and `floor`; 0 where it is within that of 0 or too few points hold it.
+fn slope(tracks: &[Vec<(f64, f64)>], floor: f64) -> Glide {
+    type Track<'a> = (&'a [(f64, f64)], (f64, f64));
+    let means = |t: &[(f64, f64)]| {
+        let n = t.len() as f64;
+        (
+            t.iter().map(|x| x.0).sum::<f64>() / n,
+            t.iter().map(|x| x.1).sum::<f64>() / n,
+        )
+    };
+    let held: Vec<Track> = tracks
+        .iter()
+        .filter(|t| t.len() >= 2)
+        .map(|t| (t.as_slice(), means(t)))
+        .collect();
+    let (mut sxx, mut sxy, mut count) = (0.0, 0.0, 0);
+    for (t, (mt, my)) in &held {
+        for (x, y) in t.iter() {
+            sxx += (x - mt) * (x - mt);
+            sxy += (x - mt) * (y - my);
+        }
+        count += t.len();
+    }
+    let dof = count as f64 - held.len() as f64 - 1.0;
+    if dof < 1.0 || sxx <= 0.0 {
+        return Glide::default();
+    }
+    let rate = sxy / sxx;
+    let rss: f64 = held
+        .iter()
+        .map(|(t, (mt, my))| {
+            t.iter()
+                .map(|(x, y)| {
+                    let e = y - my - rate * (x - mt);
+                    e * e
+                })
+                .sum::<f64>()
+        })
+        .sum();
+    let step = libm::sqrt(rss / dof / sxx).max(floor);
+    match step > 0.0 && rate.abs() > step {
+        true => Glide { rate, step },
+        false => Glide::default(),
     }
 }
 
-/// A move: an add of a kind, or an adjust of a kept atom to its written level, `None` being 0.
+/// The Hz and level in dBFS of `power`'s local maximum at `i` by QIFFT (Smith and Serra 1987).
+fn qifft(p: &Problem, power: &[f64], i: usize) -> (f64, f64) {
+    let dbs = |v: f64| db(v.max(f64::MIN_POSITIVE));
+    let (a, c, e) = (dbs(power[i - 1]), dbs(power[i]), dbs(power[i + 1]));
+    let curve = a - 2.0 * c + e;
+    let shift = match curve < 0.0 {
+        true => 0.5 * (a - e) / curve,
+        false => 0.0,
+    };
+    let hz = p.grid.hz(p.range.start + i) + shift * p.grid.rate / p.grid.n as f64;
+    let peak = libm::pow(10.0, (c - 0.25 * (a - e) * shift) / 10.0);
+    (
+        hz,
+        20.0 * libm::log10(2.0 * libm::sqrt(peak) / p.grid.sum_w),
+    )
+}
+
+/// The local maxima of `power` in `bins` over their floors, each its Hz beside its power.
+fn maxima(p: &Problem, power: &[f64], bins: Range<usize>) -> Vec<(f64, f64)> {
+    let bins = bins.start.max(1)..bins.end.min(power.len().saturating_sub(1));
+    bins.filter(|i| power[*i] > power[i - 1] && power[*i] >= power[i + 1])
+        .map(|i| (qifft(p, power, i), power[i]))
+        .filter(|((hz, level), _)| *level > floor_db(*hz, p.spl_db))
+        .map(|((hz, _), power)| (hz, power))
+        .collect()
+}
+
+fn bins_of(p: &Problem, (lo, hi): (f64, f64)) -> Range<usize> {
+    let local = |hz: f64| p.grid.bin_of(hz) - p.range.start as f64;
+    let first = libm::ceil(local(lo)).max(0.0) as usize;
+    let last = libm::floor(local(hi)).max(-1.0) + 1.0;
+    first..(last.max(0.0) as usize).min(p.range.len())
+}
+
+fn lobe_hz(p: &Problem) -> f64 {
+    p.lobes.half as f64 * p.grid.rate / p.grid.n as f64
+}
+
+/// The peak nearest each frame's Hz on `path` in Cam within a main lobe of it, as
+/// `(t, ln hz)`.
+fn pathed(p: &Problem, power: &[Vec<f64>], path: &[f64]) -> Vec<(f64, f64)> {
+    let lobe = lobe_hz(p);
+    path.iter()
+        .enumerate()
+        .filter_map(|(f, hz)| {
+            let target = cam(*hz);
+            maxima(p, &power[f], bins_of(p, (hz - lobe, hz + lobe)))
+                .into_iter()
+                .map(|(h, _)| h)
+                .min_by(|a, b| {
+                    (cam(*a) - target)
+                        .abs()
+                        .total_cmp(&(cam(*b) - target).abs())
+                })
+                .map(|h| (p.times[f], libm::log(h)))
+        })
+        .collect()
+}
+
+/// The basin of `mean` about the bin nearest `hz`: from the local maximum it climbs to, down
+/// to the local minimum on each side.
+fn basin(p: &Problem, mean: &[f64], hz: f64) -> Range<usize> {
+    let bin = libm::round(p.grid.bin_of(hz)) as usize;
+    let mut i = bin.clamp(p.range.start, p.range.end - 1) - p.range.start;
+    loop {
+        let up = [i.checked_sub(1), (i + 1 < mean.len()).then_some(i + 1)]
+            .into_iter()
+            .flatten()
+            .filter(|j| mean[*j] > mean[i])
+            .max_by(|a, b| mean[*a].total_cmp(&mean[*b]).then(b.cmp(a)));
+        match up {
+            Some(j) => i = j,
+            None => break,
+        }
+    }
+    let (mut lo, mut hi) = (i, i);
+    while lo > 0 && mean[lo - 1] < mean[lo] {
+        lo -= 1;
+    }
+    while hi + 1 < mean.len() && mean[hi + 1] < mean[hi] {
+        hi += 1;
+    }
+    lo..hi + 1
+}
+
+/// The peak track a candidate at `hz` holds through `power`, as `MODEL` states: in each frame
+/// the highest local maximum over its floor in the basin of `mean` about `hz`, as `(t, ln hz)`.
+fn searched(p: &Problem, power: &[Vec<f64>], mean: &[f64], hz: f64) -> Vec<(f64, f64)> {
+    let bins = basin(p, mean, hz);
+    (0..p.frames())
+        .filter_map(|f| {
+            maxima(p, &power[f], bins.clone())
+                .into_iter()
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(h, _)| (p.times[f], libm::log(h)))
+        })
+        .collect()
+}
+
+/// `kind`, refined, gliding where its columns' peak tracks glide past the precision its
+/// fixed tone's written levels give, as `MODEL` states; `None` where they do not.
+fn gliding(
+    p: &Problem,
+    n: usize,
+    residual: &[Vec<f64>],
+    mean: &[f64],
+    kind: &Kind,
+    key: u64,
+) -> Option<Kind> {
+    if matches!(kind, Kind::Noise { .. } | Kind::Shaped { .. }) {
+        return None;
+    }
+    let tracks: Vec<Vec<(f64, f64)>> = kind
+        .hzs()
+        .iter()
+        .map(|hz| searched(p, residual, mean, *hz))
+        .collect();
+    let (_, written) = scored(p, n, residual, kind, key);
+    let glide = slope(&tracks, rate_floor(p, &p.columns(kind), &written.levels));
+    if glide.rate == 0.0 {
+        return None;
+    }
+    let starts: Vec<(usize, f64, f64)> = tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(c, t)| start(t, glide.rate).map(|s| (c + 1, s, 1.0)))
+        .collect();
+    let moved = kind.glided(glide, p.middle());
+    Some(match (&moved, &starts[..]) {
+        (Kind::Partial { .. }, [(_, hz, _), ..]) => Kind::Partial { hz: *hz, glide },
+        (Kind::Voice { count, .. }, [_, _, ..]) => {
+            let (f0, stretch) = stretched(&starts);
+            Kind::Voice {
+                f0,
+                stretch,
+                count: *count,
+                glide,
+            }
+        }
+        _ => moved,
+    })
+}
+
+/// A move: an add of a kind, or an adjust of a kept atom to what it leaves, `None` removing it.
 enum Move {
     Add(Kind),
-    Adjust(usize, Option<Written>),
+    Adjust(usize, Option<Box<Held>>, Tweak),
 }
 
 /// One pass over `p` from `state`, as `MODEL` states: every move scored against its residual,
@@ -932,17 +1448,31 @@ fn pass(p: &Problem, state: &State) -> State {
     let key = state.born;
     let n = state.held.len();
     let residual = state.residual(p);
+    let mean = averaged(p, &residual);
     let adds = each(default_threads(), candidates(p, state, &residual), |kind| {
-        let (kind, change) = refined(p, n, &residual, kind, key);
+        let (fixed, change) = refined(p, n, &residual, kind, key);
+        let glided = gliding(p, n, &residual, &mean, &fixed, key)
+            .map(|kind| refined(p, n, &residual, kind, key))
+            .filter(|(_, glided)| *glided < change);
+        let (kind, change) = glided.unwrap_or((fixed, change));
         (change, Move::Add(kind))
     });
     let adjusts = each(default_threads(), (0..n).collect(), |a| {
-        let (change, written) = adjusted(p, state, &residual, a);
-        (change, Move::Adjust(a, written))
+        let (change, tweak, held) = scaled(p, state, &residual, a);
+        let mut out = vec![(change, Move::Adjust(a, held.map(Box::new), tweak))];
+        if let Some((change, held)) = retuned(p, state, &residual, a) {
+            out.push((
+                change,
+                Move::Adjust(a, Some(Box::new(held)), Tweak::Frequency),
+            ));
+        }
+        let (change, held) = rethinned(p, state, &residual, a);
+        out.push((change, Move::Adjust(a, Some(Box::new(held)), Tweak::Rethin)));
+        out
     });
     let best = adds
         .into_iter()
-        .chain(adjusts)
+        .chain(adjusts.into_iter().flatten())
         .filter(|(change, _)| *change < 0.0)
         .min_by(|x, y| x.0.total_cmp(&y.0));
     let mut next = state.clone();
@@ -962,21 +1492,23 @@ fn pass(p: &Problem, state: &State) -> State {
             next.born += 1;
             Moved {
                 action: Action::Add,
+                tweak: None,
                 key,
                 from_db: None,
                 to_db,
             }
         }
-        Move::Adjust(a, written) => {
+        Move::Adjust(a, made, tweak) => {
             let held = &state.held[a];
             let moved = Moved {
                 action: Action::Adjust,
+                tweak: Some(tweak),
                 key: held.written.atom.key,
                 from_db: Some(level_db(&held.kind, &held.written)),
-                to_db: written.as_ref().map(|w| level_db(&held.kind, w)),
+                to_db: made.as_ref().map(|h| level_db(&h.kind, &h.written)),
             };
-            match written {
-                Some(w) => next.held[a].written = w,
+            match made {
+                Some(h) => next.held[a] = *h,
                 None => {
                     next.held.remove(a);
                 }
@@ -998,23 +1530,13 @@ fn pass(p: &Problem, state: &State) -> State {
 /// The bins `power` peaks at over their floor, each a track spanning the clip beside its bin,
 /// as `MODEL` states.
 fn peaks(p: &Problem, power: &[f64]) -> Vec<(Track, usize)> {
-    let at = |i: usize| p.range.start + i;
     let span = (0.0, p.clip.secs());
     let mut out = Vec::new();
     for i in 1..power.len().saturating_sub(1) {
         if power[i] <= power[i - 1] || power[i] < power[i + 1] {
             continue;
         }
-        let dbs = |v: f64| db(v.max(f64::MIN_POSITIVE));
-        let (a, c, e) = (dbs(power[i - 1]), dbs(power[i]), dbs(power[i + 1]));
-        let curve = a - 2.0 * c + e;
-        let shift = match curve < 0.0 {
-            true => 0.5 * (a - e) / curve,
-            false => 0.0,
-        };
-        let hz = p.grid.hz(at(i)) + shift * p.grid.rate / p.grid.n as f64;
-        let peak = libm::pow(10.0, (c - 0.25 * (a - e) * shift) / 10.0);
-        let level = 20.0 * libm::log10(2.0 * libm::sqrt(peak) / p.grid.sum_w);
+        let (hz, level) = qifft(p, power, i);
         if level > floor_db(hz, p.spl_db) {
             out.push((Track { hz, span }, i));
         }
@@ -1112,6 +1634,7 @@ fn voices(p: &Problem, tracks: &[Track]) -> Vec<Kind> {
             f0: fitted.0,
             stretch: fitted.1,
             count,
+            glide: Glide::default(),
         };
         let level = Trajectory {
             base: 0.0,
@@ -1130,15 +1653,22 @@ fn voices(p: &Problem, tracks: &[Track]) -> Vec<Kind> {
     out
 }
 
+fn averaged(p: &Problem, residual: &[Vec<f64>]) -> Vec<f64> {
+    (0..p.range.len())
+        .map(|b| residual.iter().map(|r| r[b]).sum::<f64>() / residual.len() as f64)
+        .collect()
+}
+
 /// Every candidate the residual `residual` proposes, as `MODEL` states.
 fn candidates(p: &Problem, state: &State, residual: &[Vec<f64>]) -> Vec<Kind> {
-    let mean: Vec<f64> = (0..p.range.len())
-        .map(|b| residual.iter().map(|r| r[b]).sum::<f64>() / residual.len() as f64)
-        .collect();
+    let mean = averaged(p, residual);
     let found = peaks(p, &mean);
     let mut out: Vec<Kind> = found
         .iter()
-        .map(|(t, _)| Kind::Partial { hz: t.hz })
+        .map(|(t, _)| Kind::Partial {
+            hz: t.hz,
+            glide: Glide::default(),
+        })
         .collect();
     let (_, tonal) = p.lobes.floor(&mean, p.looks * p.frames() as f64);
     let tracks: Vec<Track> = found
@@ -1244,7 +1774,7 @@ fn scored(p: &Problem, n: usize, residual: &[Vec<f64>], kind: &Kind, key: u64) -
         .iter()
         .map(|t| {
             (0..p.frames())
-                .map(|f| p.moments(f, t, &residual[f]))
+                .map(|f| p.moments(f, t.at(f), &residual[f]))
                 .collect()
         })
         .collect();
@@ -1271,7 +1801,7 @@ fn scored(p: &Problem, n: usize, residual: &[Vec<f64>], kind: &Kind, key: u64) -
             .map(|f| {
                 let mut u = vec![0.0; p.range.len()];
                 for (t, g) in templates.iter().zip(&written.gains) {
-                    for (u, t) in u.iter_mut().zip(t) {
+                    for (u, t) in u.iter_mut().zip(t.at(f)) {
                         *u += g[f] * t;
                     }
                 }
@@ -1316,6 +1846,7 @@ fn line(p: &Problem, state: &State, pass: usize, before: f64, removed: Option<At
     Line {
         pass,
         action: moved.map_or(Action::Start, |m| m.action),
+        tweak: moved.and_then(|m| m.tweak),
         atom,
         from_db: moved.and_then(|m| m.from_db),
         to_db: moved.and_then(|m| m.to_db),
@@ -1390,6 +1921,7 @@ pub async fn fit(
     first.seconds = clock();
     hear(&first);
     let (mut passes, mut adds, mut adjusts, mut stopped) = (0, 0, 0, false);
+    let mut tweaks = [0; 4];
     loop {
         if stop.abandoned().await {
             stopped = true;
@@ -1403,6 +1935,12 @@ pub async fn fit(
         match moved.action {
             Action::Add => adds += 1,
             _ => adjusts += 1,
+        }
+        if let Some(tweak) = moved.tweak {
+            tweaks[Tweak::ALL
+                .iter()
+                .position(|t| *t == tweak)
+                .expect("a tweak")] += 1;
         }
         let removed = state
             .atoms()
@@ -1424,6 +1962,7 @@ pub async fn fit(
         passes,
         adds,
         adjusts,
+        tweaks,
         stopped,
         clip_grid: p.grid.broad(),
         fit_grid: p.grid.with(model).broad(),
