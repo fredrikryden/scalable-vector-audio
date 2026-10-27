@@ -1,4 +1,4 @@
-// Concern: states the first fit recovers a partial beside a band, two partials in one Cam band, a decaying voice, the same atoms each run | Non-concern: the pyramid | IO: (rendered atoms) -> asserts
+// Concern: states the coarse fit's sine, sine beside a band, two sines in a band, decaying voice, same atoms each run | Non-concern: the pyramid | IO: (rendered atoms) -> asserts
 
 use sva_core::solve::atoms::{Atom, Clip, Sound, Trajectory};
 use sva_core::solve::calibrate::rendered;
@@ -36,14 +36,24 @@ fn level_at(atom: &Atom, t: f64) -> f64 {
     sva_core::solve::first::level_at(&atom.level, atom.on, t)
 }
 
-fn partials(atoms: &[Atom]) -> Vec<(f64, &Atom)> {
+/// The partials', voices' and noises' counts.
+fn counts(atoms: &[Atom]) -> (usize, usize, usize) {
+    let count = |kind: fn(&Sound) -> bool| atoms.iter().filter(|a| kind(&a.sound)).count();
+    (
+        count(|s| matches!(s, Sound::Partial { .. })),
+        count(|s| matches!(s, Sound::Harmonic { .. })),
+        count(|s| matches!(s, Sound::Noise { .. })),
+    )
+}
+
+fn partial_hz(atoms: &[Atom]) -> (f64, &Atom) {
     atoms
         .iter()
-        .filter_map(|a| match &a.sound {
+        .find_map(|a| match &a.sound {
             Sound::Partial { hz } => Some((hz.base, a)),
             _ => None,
         })
-        .collect()
+        .expect("a partial")
 }
 
 fn with_band() -> Vec<Atom> {
@@ -54,37 +64,53 @@ fn with_band() -> Vec<Atom> {
 }
 
 #[test]
-fn a_partial_and_a_band_come_back_at_their_hz_and_levels() {
-    let found = first(&with_band());
-    let (hz, tone) = partials(&found)
-        .into_iter()
-        .min_by(|a, b| (a.0 - 440.0).abs().total_cmp(&(b.0 - 440.0).abs()))
-        .expect("a partial");
+fn a_pure_sine_is_one_partial_and_no_noise() {
+    let found = first(&[partial(0, 440.0, -20.0)]);
+    assert_eq!(counts(&found), (1, 0, 0), "{found:?}");
+    let (hz, tone) = partial_hz(&found);
     assert!((hz - 440.0).abs() <= BIN_HZ / 2.0, "{hz} Hz");
     let level = level_at(tone, 0.5);
     assert!((level + 20.0).abs() <= 0.5, "{level} dB");
+}
+
+#[test]
+fn a_sine_beside_a_band_is_one_partial_and_the_band() {
+    let found = first(&with_band());
+    let (partials, voices, noises) = counts(&found);
+    assert_eq!((partials, voices), (1, 0), "{found:?}");
+    assert!((1..=2).contains(&noises), "{noises} noises");
+    let (hz, tone) = partial_hz(&found);
+    assert!((hz - 440.0).abs() <= BIN_HZ / 2.0, "{hz} Hz");
+    let level = level_at(tone, 0.5);
+    assert!((level + 20.0).abs() <= 0.5, "{level} dB");
+    let times: Vec<f64> = (1..10).map(|k| 0.1 * f64::from(k)).collect();
     let noise: f64 = found
         .iter()
         .filter(|a| matches!(a.sound, Sound::Noise { .. }))
-        .map(|a| libm::pow(10.0, level_at(a, 0.5) / 10.0))
+        .flat_map(|a| {
+            times
+                .iter()
+                .map(|t| libm::pow(10.0, level_at(a, *t) / 10.0))
+        })
         .sum();
-    let noise = 10.0 * libm::log10(noise);
+    let noise = 10.0 * libm::log10(noise / times.len() as f64);
     assert!((noise + 30.0).abs() <= 1.0, "{noise} dB");
 }
 
 #[test]
-fn two_partials_in_one_cam_band_both_come_back() {
-    let found = first(&[partial(0, 1000.0, -20.0), partial(1, 1030.0, -20.0)]);
-    let tones = partials(&found);
-    for want in [1000.0, 1030.0] {
-        let (hz, atom) = tones
-            .iter()
-            .min_by(|a, b| (a.0 - want).abs().total_cmp(&(b.0 - want).abs()))
-            .expect("a partial");
-        assert!((hz - want).abs() <= BIN_HZ / 2.0, "{want}: {hz} Hz");
-        let level = level_at(atom, 0.5);
-        assert!((level + 20.0).abs() <= 1.0, "{want}: {level} dB");
-    }
+fn two_sines_in_one_band_are_one_partial_holding_both() {
+    let found = first(&[partial(0, 1200.0, -20.0), partial(1, 1500.0, -20.0)]);
+    assert_eq!(counts(&found), (1, 0, 0), "{found:?}");
+    let (hz, tone) = partial_hz(&found);
+    assert!(
+        (1200.0 - BIN_HZ / 2.0..=1500.0 + BIN_HZ / 2.0).contains(&hz),
+        "{hz} Hz"
+    );
+    let level = level_at(tone, 0.5);
+    assert!(
+        (level + 17.0).abs() <= 1.0,
+        "{level} dB, not both sines' power"
+    );
 }
 
 #[test]
@@ -101,12 +127,11 @@ fn a_decaying_harmonic_tone_is_one_voice_following_its_decay() {
         },
     );
     let found = first(&[tone]);
-    let voices: Vec<&Atom> = found
+    assert_eq!(counts(&found).1, 1, "one voice: {found:?}");
+    let voice = found
         .iter()
-        .filter(|a| matches!(a.sound, Sound::Harmonic { .. }))
-        .collect();
-    assert_eq!(voices.len(), 1, "one voice");
-    let voice = voices[0];
+        .find(|a| matches!(a.sound, Sound::Harmonic { .. }))
+        .expect("a voice");
     assert_eq!(voice.harmonics(), 8);
     let f0 = voice.hz().expect("a voice's Hz").base;
     assert!((f0 - 220.0).abs() <= BIN_HZ / 2.0, "{f0} Hz");
