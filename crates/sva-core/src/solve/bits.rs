@@ -11,9 +11,11 @@ pub const MODEL: &str = "B(x) in bits: the atom count n by Rissanen's (1983, doi
      region where log* has k positive terms integrates to (ln 2)^k, as d/dx of the k-th \
      iterated log2 is (ln 2)^-k / (x times the k - 1 before it), so the sum is the direct sum \
      to N plus (ln 2)^5 (1 - log2^5(N)) + (ln 2)^6/(1 - ln 2) - f(N)/2 - f'(N)/12 (Euler and \
-     Maclaurin) for 16 < log2 N < 65536; then per atom log2 3 for its kind, each level's knot \
+     Maclaurin) for 16 < log2 N < 65536; then per atom log2 4 for its kind (partial, \
+     harmonic, noise band or shaped noise), each level's knot \
      count n >= 1 as log2 c + log*(n), a partial's or harmonic's frequency knot count n >= 0 \
-     as log2 c + log*(n + 1), a harmonic's H >= 1 as log2 c + log*(H); a number by a uniform \
+     as log2 c + log*(n + 1), a harmonic's H >= 1 as log2 c + log*(H), a shaped noise's \
+     band count n >= 1 as log2 c + log*(n); a number by a uniform \
      code over its range in cells of its precision delta, log2 max(1, ceil(range/delta)); a \
      level or level deviation at delta = (sum_m (h/T_J) DL_J(SL_m)^-2)^-1/2 and a \
      partial's frequency or frequency deviation at the same form in Wier's DLF(F_m, SL_m) \
@@ -123,6 +125,7 @@ pub fn atom(atom: &Atom, priced: &Priced) -> f64 {
         Sound::Partial { hz } => count(hz.knots.len()),
         Sound::Harmonic { hz, .. } => integer(atom.harmonics() as u64) + count(hz.knots.len()),
         Sound::Noise { .. } => 0.0,
+        Sound::Shaped { bands } => integer(bands.len() as u64),
     } + atom
         .levels()
         .iter()
@@ -134,7 +137,7 @@ pub fn atom(atom: &Atom, priced: &Priced) -> f64 {
         .fold(0.0, |sum, ((q, _), d)| {
             sum + number(range(atom, &priced.feasible, *q), *d)
         });
-    libm::log2(3.0) + counts + written
+    libm::log2(4.0) + counts + written
 }
 
 pub fn bits(atoms: &[Atom], priced: &[Priced]) -> f64 {

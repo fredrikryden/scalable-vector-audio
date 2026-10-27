@@ -214,7 +214,7 @@ fn adding_an_atom_costs_its_stated_code() {
                 };
                 level + c + star((hz.knots.len() + 1) as f64) + shared
             }
-        } + libm::log2(3.0)
+        } + libm::log2(4.0)
             + numbers;
         let grown = total(&all[..=n]) - total(&all[..n]);
         let counted = star((n + 2) as f64) - star((n + 1) as f64);
@@ -259,7 +259,7 @@ fn a_number_whose_precision_spans_its_range_costs_nothing() {
         deltas: vec![f64::INFINITY; a.numbers().len()],
     };
     let c = libm::log2(NORMALISER);
-    let counts = libm::log2(3.0) + c + star(2.0) + c + star(2.0);
+    let counts = libm::log2(4.0) + c + star(2.0) + c + star(2.0);
     assert!((atom(&a, &coarse) - counts).abs() < 1e-12);
 }
 

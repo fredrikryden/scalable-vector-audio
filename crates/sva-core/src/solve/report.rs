@@ -14,26 +14,49 @@ fn numbers(values: &[f64]) -> String {
     format!("[{}]", each.join(", "))
 }
 
-/// What an atom is: its kind, key, Hz, stretch, harmonics and band, `null` where its kind
-/// has none.
+/// What an atom is: its kind, key, Hz, stretch, harmonics, band (a shaped noise's lowest
+/// edge to its highest) and a shaped noise's bands, `null` where its kind has none.
 fn atom(atom: &Atom) -> String {
     let none = || NONE.to_string();
-    let (hz, stretch, lo, hi) = match &atom.sound {
-        Sound::Partial { hz } => (num(hz.base), none(), none(), none()),
-        Sound::Harmonic { hz, stretch, .. } => (num(hz.base), num(*stretch), none(), none()),
-        Sound::Noise { lo, hi } => (none(), none(), num(*lo), num(*hi)),
+    let (hz, stretch, lo, hi, bands) = match &atom.sound {
+        Sound::Partial { hz } => (num(hz.base), none(), none(), none(), none()),
+        Sound::Harmonic { hz, stretch, .. } => {
+            (num(hz.base), num(*stretch), none(), none(), none())
+        }
+        Sound::Noise { lo, hi } => (none(), none(), num(*lo), num(*hi), none()),
+        Sound::Shaped { bands } => {
+            let each: Vec<String> = bands
+                .iter()
+                .map(|(lo, hi, g)| {
+                    format!(
+                        "{{ \"lo_hz\": {}, \"hi_hz\": {}, \"gain_db\": {} }}",
+                        num(*lo),
+                        num(*hi),
+                        num(*g)
+                    )
+                })
+                .collect();
+            let lo = bands.iter().map(|b| b.0).fold(f64::INFINITY, f64::min);
+            let hi = bands.iter().map(|b| b.1).fold(f64::NEG_INFINITY, f64::max);
+            (
+                none(),
+                none(),
+                num(lo),
+                num(hi),
+                format!("[{}]", each.join(", ")),
+            )
+        }
     };
     format!(
         "{{ \"key\": {}, \"kind\": \"{}\", \"hz\": {hz}, \"stretch\": {stretch}, \"harmonics\": \
-         {}, \"lo_hz\": {lo}, \"hi_hz\": {hi} }}",
+         {}, \"lo_hz\": {lo}, \"hi_hz\": {hi}, \"bands\": {bands} }}",
         atom.key,
         atom.kind(),
         atom.harmonics()
     )
 }
 
-/// One progress line per step of either pass, its pass beside it, the first with the grid's
-/// shape.
+/// One progress line per pass, its move beside it, the first (pass 0) with the grid's shape.
 pub fn progress(line: &Line) -> String {
     let rows: Vec<String> = line
         .residual_db
@@ -64,13 +87,14 @@ pub fn progress(line: &Line) -> String {
         )
     });
     format!(
-        "{{ \"pass\": {}, \"step\": {}, \"action\": \"{}\", \"atom\": {}, \"delta_dl_bits\": \
-         {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \"residual_db\": [{}], \
-         \"envelopes\": {}, \"seconds\": {}{geometry} }}",
+        "{{ \"pass\": {}, \"action\": \"{}\", \"atom\": {}, \"from_db\": {}, \"to_db\": {}, \
+         \"delta_dl_bits\": {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \
+         \"residual_db\": [{}], \"envelopes\": {}, \"seconds\": {}{geometry} }}",
         line.pass,
-        line.step,
         line.action.name(),
         line.atom.as_ref().map_or_else(|| NONE.to_string(), atom),
+        line.from_db.map_or_else(|| NONE.to_string(), num),
+        line.to_db.map_or_else(|| NONE.to_string(), num),
         num(line.delta_bits),
         num(line.atom_bits + line.residual_bits),
         num(line.atom_bits),
@@ -84,7 +108,7 @@ pub fn progress(line: &Line) -> String {
     )
 }
 
-/// The answer's `data`: the fit's counts, DL, time and atoms, its second pass's, the paths the CLI wrote, and its
+/// The answer's `data`: the fit's counts, DL, time and atoms, the paths the CLI wrote, and its
 /// composition's files where asked.
 pub fn answer(
     fit: &Fit,
@@ -103,18 +127,19 @@ pub fn answer(
             ))
         )
     });
-    let second = &fit.second;
     format!(
-        "{{ \"fit\": {{ \"rate_hz\": {}, \"steps\": {}, \"partials\": {}, \"harmonics\": {}, \
-         \"noises\": {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \"gain_db\": \
-         {}, \"stopped\": {}, \"secs\": {}, \"atoms\": {}, \"second\": {{ \"steps\": {}, \
-         \"start_dl_bits\": {}, \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \
-         \"stopped\": {}, \"atoms\": {} }}, \"wrote\": {} }}{files} }}",
+        "{{ \"fit\": {{ \"rate_hz\": {}, \"passes\": {}, \"adds\": {}, \"adjusts\": {}, \
+         \"partials\": {}, \"harmonics\": {}, \"noises\": {}, \"shaped\": {}, \"dl_bits\": {}, \
+         \"atom_bits\": {}, \"residual_bits\": {}, \"gain_db\": {}, \"stopped\": {}, \"secs\": {}, \
+         \"atoms\": {}, \"wrote\": {} }}{files} }}",
         fit.clip.rate,
-        fit.steps,
+        fit.passes,
+        fit.adds,
+        fit.adjusts,
         count("partial"),
         count("harmonic"),
         count("noise"),
+        count("shaped"),
         num(fit.atom_bits + fit.residual_bits),
         num(fit.atom_bits),
         num(fit.residual_bits),
@@ -122,13 +147,6 @@ pub fn answer(
         fit.stopped,
         num(secs),
         list(&fit.atoms, atom),
-        second.steps,
-        num(second.start_bits),
-        num(second.atom_bits + second.residual_bits),
-        num(second.atom_bits),
-        num(second.residual_bits),
-        second.stopped,
-        list(&second.atoms, atom),
         strings(wrote)
     )
 }

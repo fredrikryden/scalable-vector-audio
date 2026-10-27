@@ -74,12 +74,12 @@ fn refuses(dir: &Path, argv: &[&str], code: &str, exit: i32) -> Value {
     answer
 }
 
-/// A solve fits the clip and writes its composition, its render and both grids sounded under
-/// `--out`; stderr hears a start line with the grid's shape and then one line per step, each an
-/// add or a removal, the description length never rising and each line's change its
-/// difference; the composition renders; a held destination refuses.
+/// A solve fits the clip and writes a render per pass, its composition, its render and both
+/// grids sounded under `--out`; stderr hears a start line with the grid's shape and then one
+/// line per pass, each an add or an adjust, the description length falling and each line's
+/// change its difference; the composition renders; a held destination refuses.
 #[test]
-fn a_solve_writes_its_fit_and_hears_a_line_per_step() {
+fn a_solve_writes_its_fit_and_hears_a_line_per_pass() {
     let (root, wav) = clip("solve-fit", TONE);
     let out = sva(&root, &["solve", &wav, "--out", "fit"]);
     let answer = json(&out);
@@ -89,27 +89,21 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_step() {
     for key in ["dl_bits", "atom_bits", "residual_bits", "gain_db", "secs"] {
         assert!(fit[key].is_number(), "`{key}`: {fit}");
     }
-    for key in ["start_dl_bits", "dl_bits", "atom_bits", "residual_bits"] {
-        assert!(fit["second"][key].is_number(), "`second.{key}`: {fit}");
-    }
-    assert!(fit["second"]["atoms"]["items"].is_array(), "{fit}");
     let heard: Vec<Value> = String::from_utf8_lossy(&out.stderr)
         .lines()
         .map(|l| serde_json::from_str(l).expect("each progress line is JSON"))
         .collect();
-    let lines: Vec<Value> = heard.iter().filter(|l| l["pass"] == 1).cloned().collect();
-    let second: Vec<&Value> = heard.iter().filter(|l| l["pass"] == 2).collect();
+    let lines = heard;
+    let passes = fit["passes"].as_u64().expect("a count");
+    assert_eq!(Some(lines.len() as u64 - 1), Some(passes), "{fit}");
     assert_eq!(
-        lines.len() + second.len(),
-        heard.len(),
-        "each line's pass is 1 or 2"
+        fit["adds"]
+            .as_u64()
+            .zip(fit["adjusts"].as_u64())
+            .map(|(a, b)| a + b),
+        Some(passes),
+        "{fit}"
     );
-    assert_eq!(
-        Some(second.len() as u64),
-        fit["second"]["steps"].as_u64().map(|s| s + 1),
-        "the second pass's start and steps"
-    );
-    assert_eq!(Some(lines.len() as u64 - 1), fit["steps"].as_u64(), "{fit}");
     assert_eq!(lines[0]["action"], "start", "{}", lines[0]);
     assert!(lines[0]["atom"].is_null());
     for key in ["rate_hz", "frame_secs", "band_edges_hz", "band_floor_db"] {
@@ -118,7 +112,7 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_step() {
     let bands = lines[0]["band_edges_hz"].as_array().map_or(0, Vec::len);
     let mut dl = f64::INFINITY;
     for (k, line) in lines.iter().enumerate() {
-        assert_eq!(line["step"].as_u64(), Some(k as u64), "{line}");
+        assert_eq!(line["pass"].as_u64(), Some(k as u64), "{line}");
         let total = line["dl_bits"].as_f64().expect("a total");
         let parts = ["atom_bits", "residual_bits"].map(|p| line[p].as_f64().expect("a part"));
         assert!(
@@ -126,7 +120,13 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_step() {
             "{line}"
         );
         if k > 0 {
-            assert!(["add", "remove"].contains(&line["action"].as_str().unwrap_or("")));
+            assert!(["add", "adjust"].contains(&line["action"].as_str().unwrap_or("")));
+            assert!(
+                line.get("from_db").is_some() && line.get("to_db").is_some(),
+                "{line}"
+            );
+            let wav = root.join("fit").join(format!("pass-{k:03}.wav"));
+            assert!(wav.is_file(), "{} written", wav.display());
             assert!(line["atom"]["kind"].is_string(), "{line}");
             let delta = line["delta_dl_bits"].as_f64().expect("a change");
             assert!((delta - (total - dl)).abs() <= 1e-6 * dl.abs(), "{line}");
@@ -141,8 +141,7 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_step() {
     for name in [
         "master",
         "score/clip.jsonl",
-        "first.wav",
-        "second.wav",
+        "final.wav",
         "clip-grid.wav",
         "fit-grid.wav",
     ] {

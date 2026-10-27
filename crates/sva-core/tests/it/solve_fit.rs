@@ -1,4 +1,4 @@
-// Concern: states the fit finds a sine's partial, in noise too, a band's noise, voices steady or decaying, a stretch; a DL never rising; determinism | Non-concern: the text | IO: (a clip) -> asserts
+// Concern: states what the fit owes sines, voices, noise bands, a burst; a DL falling every pass; an adjust; determinism | Non-concern: the text | IO: (a clip) -> asserts
 
 use std::f64::consts::TAU;
 
@@ -98,7 +98,7 @@ fn kinds(atoms: &[Atom]) -> (usize, usize, usize) {
     (
         count(|s| matches!(s, Sound::Partial { .. })),
         count(|s| matches!(s, Sound::Harmonic { .. })),
-        count(|s| matches!(s, Sound::Noise { .. })),
+        count(|s| matches!(s, Sound::Noise { .. } | Sound::Shaped { .. })),
     )
 }
 
@@ -140,12 +140,27 @@ fn a_sine_beside_a_noise_band_is_one_partial_and_that_band() {
     assert_eq!(noise, (2000.0, 4000.0));
 }
 
+/// The fundamentals each of a voice, partials aside: with no joint re-solve, partials beside the
+/// voices' harmonics may stay.
 #[test]
-fn a_chord_of_two_harmonic_tones_is_two_voices() {
+fn a_chord_of_two_harmonic_tones_holds_a_voice_at_each_fundamental() {
     let mut parts = voice(261.63, 0.0, 8, 0.2);
     parts.extend(voice(329.63, 0.0, 8, 0.2));
     let (fit, _) = fitted(&tones(&parts));
-    assert_eq!(kinds(&fit.atoms), (0, 2, 0), "{}", shown(&fit));
+    let mut f0s: Vec<f64> = fit
+        .atoms
+        .iter()
+        .filter_map(|a| match &a.sound {
+            Sound::Harmonic { hz, .. } => Some(hz.base),
+            _ => None,
+        })
+        .collect();
+    f0s.sort_by(f64::total_cmp);
+    assert_eq!(f0s.len(), 2, "{}", shown(&fit));
+    assert!(
+        (f0s[0] - 261.63).abs() < 1.0 && (f0s[1] - 329.63).abs() < 1.0,
+        "{f0s:?}"
+    );
 }
 
 #[test]
@@ -159,64 +174,28 @@ fn a_stiff_string_is_one_voice_its_stretch_within_a_tenth() {
     assert!((stretch - b).abs() <= 0.1 * b, "B {stretch} for {b}");
 }
 
+/// Every pass lowers the DL, its line's change the drop from the last.
 #[test]
-fn the_dl_never_rises_from_line_to_line() {
+fn the_dl_falls_at_every_pass() {
     let samples: Vec<f64> = tones(&voice(220.0, 0.0, 6, 0.2))
         .iter()
         .zip(band(1000.0, 2000.0, 0.05))
         .map(|(a, b)| a + b)
         .collect();
     let (fit, lines) = fitted(&samples);
-    let lines: Vec<Line> = lines.into_iter().filter(|l| l.pass == 1).collect();
-    assert_eq!(lines.len(), fit.steps + 1, "a line per step and the start");
+    assert_eq!(lines.len(), fit.passes + 1, "a line per pass and the start");
+    assert_eq!(fit.adds + fit.adjusts, fit.passes);
+    assert!(lines.iter().enumerate().all(|(k, l)| l.pass == k));
+    assert_eq!(lines[0].action, Action::Start);
     let dl: Vec<f64> = lines
         .iter()
         .map(|l| l.atom_bits + l.residual_bits)
         .collect();
-    assert!(dl.windows(2).all(|w| w[1] <= w[0]), "{dl:?}");
+    assert!(dl.windows(2).all(|w| w[1] < w[0]), "{dl:?}");
     for (line, next) in lines.iter().zip(&lines[1..]) {
         let drop = (next.atom_bits + next.residual_bits) - (line.atom_bits + line.residual_bits);
         assert!((next.delta_bits - drop).abs() <= 1e-9 * drop.abs().max(1.0));
     }
-}
-
-#[test]
-fn the_second_pass_reports_its_steps_its_dl_never_rising_within_a_pass() {
-    let samples: Vec<f64> = tones(&voice(220.0, 0.0, 6, 0.2))
-        .iter()
-        .zip(band(1000.0, 2000.0, 0.05))
-        .map(|(a, b)| a + b)
-        .collect();
-    let (fit, lines) = fitted(&samples);
-    for (pass, steps) in [(1, fit.steps), (2, fit.second.steps)] {
-        let held: Vec<&Line> = lines.iter().filter(|l| l.pass == pass).collect();
-        assert_eq!(
-            held.len(),
-            steps + 1,
-            "pass {pass}: a line per step and the start"
-        );
-        assert_eq!(held[0].action, Action::Start, "pass {pass}");
-        assert!(
-            held.iter().enumerate().all(|(k, l)| l.step == k),
-            "pass {pass}"
-        );
-        let dl: Vec<f64> = held.iter().map(|l| l.atom_bits + l.residual_bits).collect();
-        assert!(dl.windows(2).all(|w| w[1] <= w[0]), "pass {pass}: {dl:?}");
-    }
-    assert!(fit.second.steps > 0, "the second pass takes a step");
-    let second = lines
-        .iter()
-        .position(|l| l.pass == 2)
-        .expect("a second pass");
-    assert!(
-        lines[second..].iter().all(|l| l.pass == 2),
-        "the passes in turn"
-    );
-    let start = &lines[second];
-    assert!(
-        (start.atom_bits + start.residual_bits - fit.second.start_bits).abs()
-            <= 1e-9 * fit.second.start_bits.abs()
-    );
 }
 
 #[test]
@@ -281,9 +260,11 @@ fn a_decaying_tone_of_eight_harmonics_is_one_voice() {
     assert_eq!(kinds(&fit.atoms), (0, 1, 0), "{}", shown(&fit));
 }
 
-/// A piano's C4: harmonic k decaying at 1 + k/4 per second, 11 to 35 dB/s, the faster the higher.
+/// A piano's C4: harmonic k decaying at 1 + k/4 per second, 11 to 35 dB/s, the faster the higher;
+/// every atom a voice at its fundamental, the first's stretch within a tenth. With no backward
+/// prune a second voice there may stay.
 #[test]
-fn a_stiff_string_decaying_harmonic_by_harmonic_is_one_voice_its_stretch_within_a_tenth() {
+fn a_stiff_string_decaying_harmonic_by_harmonic_is_voiced_its_stretch_within_a_tenth() {
     let b = 4e-4;
     let parts: Vec<(f64, f64, f64)> = voice(261.63, b, 12, 0.3)
         .into_iter()
@@ -291,7 +272,19 @@ fn a_stiff_string_decaying_harmonic_by_harmonic_is_one_voice_its_stretch_within_
         .map(|(k, (hz, a))| (hz, a, 1.0 + 0.25 * (k + 1) as f64))
         .collect();
     let (fit, _) = fitted(&decaying(&parts));
-    assert_eq!(kinds(&fit.atoms), (0, 1, 0), "{}", shown(&fit));
+    let (partials, voices, noises) = kinds(&fit.atoms);
+    assert!(
+        partials == 0 && noises == 0 && voices >= 1,
+        "{}",
+        shown(&fit)
+    );
+    assert!(
+        fit.atoms
+            .iter()
+            .all(|a| a.hz().is_some_and(|hz| (hz.base - 261.63).abs() < 1.0)),
+        "{}",
+        shown(&fit)
+    );
     let Sound::Harmonic { stretch, .. } = fit.atoms[0].sound else {
         unreachable!("a voice")
     };
@@ -317,12 +310,59 @@ fn an_add_line_names_the_atom_it_added() {
         }
         adds += 1;
         let key = line.atom.as_ref().expect("an atom").key;
-        let held = match before.pass == line.pass {
-            true => keys(before),
-            false => Vec::new(),
-        };
-        assert!(keys(line).contains(&key), "step {}: {key} kept", line.step);
-        assert!(!held.contains(&key), "step {}: {key} new", line.step);
+        let held = keys(before);
+        assert!(keys(line).contains(&key), "pass {}: {key} kept", line.pass);
+        assert!(!held.contains(&key), "pass {}: {key} new", line.pass);
     }
     assert!(adds >= 2, "{adds} adds");
+}
+
+/// Eight steady harmonics at 1/k.
+#[test]
+fn a_tone_of_eight_harmonics_is_one_voice() {
+    let (fit, _) = fitted(&tones(&voice(220.0, 0.0, 8, 0.3)));
+    assert_eq!(kinds(&fit.atoms), (0, 1, 0), "{}", shown(&fit));
+}
+
+/// White noise from 0.1 s to 0.25 s, silence around it.
+#[test]
+fn a_white_noise_burst_is_one_shaped_noise() {
+    let samples: Vec<f64> = white(0.05)
+        .into_iter()
+        .enumerate()
+        .map(|(n, v)| match (0.1..0.25).contains(&t(n)) {
+            true => v,
+            false => 0.0,
+        })
+        .collect();
+    let (fit, _) = fitted(&samples);
+    assert_eq!(fit.atoms.len(), 1, "{}", shown(&fit));
+    let Sound::Shaped { bands } = &fit.atoms[0].sound else {
+        panic!("a shaped noise: {}", shown(&fit))
+    };
+    assert!(bands.len() > 1, "{bands:?}");
+}
+
+/// A sine inside a noise band: the band, added first, holds some of the sine's power, and once
+/// the sine is added an adjust lowers the band's level.
+#[test]
+fn an_adjust_lowers_the_level_of_an_atom_added_first() {
+    let samples: Vec<f64> = tones(&[(1500.0, 0.3)])
+        .iter()
+        .zip(band(1000.0, 2000.0, 0.3))
+        .map(|(a, b)| a + b)
+        .collect();
+    let (fit, lines) = fitted(&samples);
+    let first = lines[1].atom.as_ref().expect("an add").key;
+    let lowered = lines[2..].iter().any(|l| {
+        l.action == Action::Adjust
+            && l.atom.as_ref().is_some_and(|a| a.key == first)
+            && match (l.from_db, l.to_db) {
+                (Some(from), Some(to)) => to < from,
+                (Some(_), None) => true,
+                _ => false,
+            }
+    });
+    assert!(lowered, "{} adjusts: {}", fit.adjusts, shown(&fit));
+    assert_eq!(kinds(&fit.atoms), (1, 0, 1), "{}", shown(&fit));
 }

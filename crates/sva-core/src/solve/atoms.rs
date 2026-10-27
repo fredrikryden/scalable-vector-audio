@@ -1,4 +1,4 @@
-// Concern: the three atom kinds solve writes: numbers, ranges, rows, nodes, keys, and their render through the engine | Non-concern: fitting them (fit.rs) | IO: (Atom) -> numbers, row, node, samples
+// Concern: the four atom kinds solve writes: numbers, ranges, rows, nodes, keys, and their render through the engine | Non-concern: fitting them (fit.rs) | IO: (Atom) -> numbers, row, node, samples
 
 use std::collections::HashMap;
 use std::f64::consts::{LN_10, TAU};
@@ -72,6 +72,11 @@ pub enum Sound {
         lo: f64,
         hi: f64,
     },
+    /// Noise over `bands`, each `(lo, hi, gain_db)`: band `k`'s power the atom's level plus
+    /// its gain in dB, one level over time shared by every band (rank 1).
+    Shaped {
+        bands: Vec<(f64, f64, f64)>,
+    },
 }
 
 /// A level in dBFS whose last knot ends the atom; a noise's is its band's power, density times
@@ -113,7 +118,7 @@ impl Atom {
     pub fn hz(&self) -> Option<&Trajectory> {
         match &self.sound {
             Sound::Partial { hz } | Sound::Harmonic { hz, .. } => Some(hz),
-            Sound::Noise { .. } => None,
+            Sound::Noise { .. } | Sound::Shaped { .. } => None,
         }
     }
 
@@ -123,6 +128,7 @@ impl Atom {
             Sound::Partial { .. } => "partial",
             Sound::Harmonic { .. } => "harmonic",
             Sound::Noise { .. } => "noise",
+            Sound::Shaped { .. } => "shaped",
         }
     }
 
@@ -157,6 +163,11 @@ impl Atom {
                 }
             }
             Sound::Noise { lo, hi } => out.extend([*lo, *hi]),
+            Sound::Shaped { bands } => {
+                for (lo, hi, gain) in bands {
+                    out.extend([*lo, *hi, *gain]);
+                }
+            }
         }
         knots(&mut out, &self.level);
         out
@@ -219,6 +230,16 @@ impl Atom {
         }
     }
 
+    /// `bands` each `(lo, hi, gain_db)`, as `Sound::Shaped` states.
+    pub fn shaped(key: u64, on: f64, bands: Vec<(f64, f64, f64)>, level: Trajectory) -> Atom {
+        Atom {
+            key,
+            on,
+            sound: Sound::Shaped { bands },
+            level,
+        }
+    }
+
     /// Each number beside its quantity, in `values()`' order.
     pub fn numbers(&self) -> Vec<(Quantity, f64)> {
         let mut out = vec![Quantity::Time];
@@ -239,6 +260,11 @@ impl Atom {
                 }
             }
             Sound::Noise { .. } => out.extend([Quantity::Edge, Quantity::Edge]),
+            Sound::Shaped { bands } => {
+                for _ in bands {
+                    out.extend([Quantity::Edge, Quantity::Edge, Quantity::DbDeviation]);
+                }
+            }
         }
         knots(&mut out, &self.level, (Quantity::Db, Quantity::DbDeviation));
         out.into_iter().zip(self.values()).collect()
@@ -265,6 +291,7 @@ impl Atom {
                 )
             }
             Sound::Noise { .. } => format!("{DIRECTORY}/noise_l{l}"),
+            Sound::Shaped { bands } => format!("{DIRECTORY}/shaped_b{}_l{l}", bands.len()),
         }
     }
 
@@ -337,6 +364,25 @@ impl Atom {
                     num(clip.secs())
                 ),
             ),
+            Sound::Shaped { bands } => {
+                let each: Vec<String> = (1..=bands.len())
+                    .map(|k| {
+                        format!(
+                            "noise(key, period={}s, lo=lo{k}, hi=hi{k}) * exp({neper}*g{k}) / \
+                             sqrt(hi{k} - lo{k})",
+                            num(clip.secs())
+                        )
+                    })
+                    .collect();
+                (
+                    format!(
+                        "noise in {} bands flat in Hz, each its gain in dB over one level shared \
+                         by every band, its level plus its gain the band's power",
+                        bands.len()
+                    ),
+                    format!("({}) * {level}", each.join(" + ")),
+                )
+            }
         };
         format!(
             "; Models: {what}, its level in dBFS through {l} knots, the last ending it | Neglects: \
@@ -380,6 +426,13 @@ impl Atom {
             Sound::Noise { lo, hi } => {
                 fields.push(("lo".to_string(), num(*lo)));
                 fields.push(("hi".to_string(), num(*hi)));
+            }
+            Sound::Shaped { bands } => {
+                for (k, (lo, hi, gain)) in bands.iter().enumerate() {
+                    fields.push((format!("lo{}", k + 1), num(*lo)));
+                    fields.push((format!("hi{}", k + 1), num(*hi)));
+                    fields.push((format!("g{}", k + 1), num(*gain)));
+                }
             }
         }
         knots(&mut fields, &self.level, ("level", "lt", "ld"));
@@ -441,6 +494,17 @@ impl Atom {
             "noise" => Sound::Noise {
                 lo: get("lo")?,
                 hi: get("hi")?,
+            },
+            "shaped" => Sound::Shaped {
+                bands: (1..=one("b")?)
+                    .map(|k| {
+                        Some((
+                            get(&format!("lo{k}"))?,
+                            get(&format!("hi{k}"))?,
+                            get(&format!("g{k}"))?,
+                        ))
+                    })
+                    .collect::<Option<_>>()?,
             },
             _ => return None,
         };

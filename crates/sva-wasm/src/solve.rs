@@ -21,8 +21,8 @@ export interface SolveClip {
 }
 /**
  * `spl`, a full-scale sine's dB SPL (default 103.95), as `sva-cli solve` takes `--spl`;
- * `progress` hears each line the CLI prints on stderr, one per step; `signal`, read before
- * each step once the page has had its turn: aborted, the fit ends there, `stopped` true.
+ * `progress` hears each line the CLI prints on stderr, one per pass; `signal`, read before
+ * each pass once the page has had its turn: aborted, the fit ends there, `stopped` true.
  */
 export interface SolveOptions {
     spl?: number;
@@ -33,31 +33,36 @@ export interface SolveOptions {
 
 #[wasm_bindgen(typescript_custom_section)]
 const SOLVE_PROGRESS: &str = r#"
-/** A solve's `progress` line: each pass's start, then one per step. */
+/** A solve's `progress` line: the start, then one per pass. */
 export type SolveProgress = SolveStart | SolveStep;
-/** What a step added or removed; `null` where its kind has none. */
+/** What a pass added or adjusted; `null` where its kind has none. */
 export interface SolveAtom {
     key: number;
-    kind: "partial" | "harmonic" | "noise";
+    kind: "partial" | "harmonic" | "noise" | "shaped";
     hz: number | null;
     /** A voice's B: harmonic k at k sqrt(1 + B k^2) times `hz`. */
     stretch: number | null;
     harmonics: number;
+    /** A noise band's edges; a shaped noise's lowest and highest. */
     lo_hz: number | null;
     hi_hz: number | null;
+    /** A shaped noise's bands, each its gain in dB over its one shared level. */
+    bands: { lo_hz: number; hi_hz: number; gain_db: number }[] | null;
 }
 /**
- * One step: `delta_dl_bits` its change to the description length, `dl_bits` the total,
- * `atom_bits` plus `residual_bits`; `residual_db[frame][band]` the power the fit leaves in
- * each octave band in dB, null where none; `envelopes` each kept atom's written level per
- * frame in dB. `pass` 1 for the first pass, 2 for the second over its residual, which opens
- * with its own `start` (no grid shape) and counts `step` from 0 again.
+ * One pass, one move: `action` an add of a new atom or an adjust of a kept one's level,
+ * `from_db` and `to_db` the atom's level before and after (null where it was not, or an
+ * adjust to nought removed it); `delta_dl_bits` the pass's change to the description length,
+ * `dl_bits` the total, `atom_bits` plus `residual_bits`; `residual_db[frame][band]` the power
+ * the fit leaves in each octave band in dB, null where none; `envelopes` each kept atom's
+ * written level per frame in dB. `pass` counts from 1, the start's 0.
  */
 export interface SolveStep {
-    pass: 1 | 2;
-    step: number;
-    action: "start" | "add" | "remove";
+    pass: number;
+    action: "start" | "add" | "adjust";
     atom: SolveAtom | null;
+    from_db: number | null;
+    to_db: number | null;
     delta_dl_bits: number;
     dl_bits: number;
     atom_bits: number;
@@ -66,9 +71,9 @@ export interface SolveStep {
     envelopes: { items: { key: number; db: number[] }[] };
     seconds: number;
 }
-/** The first line, before any atom: the grid's shape beside the empty fit's step. */
+/** The first line, before any atom: the grid's shape beside the empty fit's line. */
 export interface SolveStart extends SolveStep {
-    pass: 1;
+    pass: 0;
     action: "start";
     rate_hz: number;
     frame_secs: number;
@@ -81,10 +86,13 @@ export interface SolveStart extends SolveStep {
 export interface SolveAnswer {
     fit: {
         rate_hz: number;
-        steps: number;
+        passes: number;
+        adds: number;
+        adjusts: number;
         partials: number;
         harmonics: number;
         noises: number;
+        shaped: number;
         dl_bits: number;
         atom_bits: number;
         residual_bits: number;
@@ -92,23 +100,13 @@ export interface SolveAnswer {
         stopped: boolean;
         secs: number;
         atoms: { items: SolveAtom[] };
-        /** The second pass over the first's residual, its atoms keyed after the first's. */
-        second: {
-            steps: number;
-            start_dl_bits: number;
-            dl_bits: number;
-            atom_bits: number;
-            residual_bits: number;
-            stopped: boolean;
-            atoms: { items: SolveAtom[] };
-        };
         wrote: string[];
     };
     files: { items: { path: string; text: string }[] };
 }
 "#;
 
-/// A solve's `signal`, asked before each step once the page has had its turn, so the page
+/// A solve's `signal`, asked before each pass once the page has had its turn, so the page
 /// paints its progress and an abort it queued arrives mid-fit.
 struct Paced(Option<JsValue>);
 

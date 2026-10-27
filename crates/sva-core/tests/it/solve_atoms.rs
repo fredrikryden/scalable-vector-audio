@@ -1,6 +1,6 @@
-// Concern: states what atoms owe their nodes, rows and ordinals | Non-concern: fitting them (solve_fit.rs) | IO: (atoms) -> asserts
+// Concern: states what atoms owe their nodes, rows and ordinals, a shaped noise's too | Non-concern: fitting them (solve_fit.rs) | IO: (atoms) -> asserts
 
-use sva_core::solve::atoms::{Atom, Clip, Trajectory, birth, nodes, read, score};
+use sva_core::solve::atoms::{Atom, Clip, Trajectory, birth, files, nodes, read, score, sounded};
 
 const CLIP: Clip = Clip {
     rate: 16_000,
@@ -155,4 +155,22 @@ fn a_harmonic_writes_until_its_node_nests_past_the_parser() {
     };
     assert!(harmonic(4).writes(&CLIP));
     assert!(!harmonic(400).writes(&CLIP));
+}
+
+/// A shaped noise writes one node per band count, reads back as written, parses and sounds.
+#[test]
+fn a_shaped_noise_reads_back_and_sounds() {
+    let shaped = Atom::shaped(
+        5,
+        0.0,
+        vec![(500.0, 1000.0, -6.0), (2000.0, 4000.0, 0.0)],
+        knots(-20.0, &[(0.25, -3.0), (0.5, 0.0)]),
+    );
+    assert_eq!(shaped.node(), "atoms/shaped_b2_l2");
+    assert!(shaped.writes(&CLIP));
+    let text = score(std::slice::from_ref(&shaped));
+    assert_eq!(read(&text), Some(vec![shaped.clone()]), "{text}");
+    let heard = sounded(files(&[shaped], &CLIP), &CLIP);
+    let power = heard.iter().map(|s| s * s).sum::<f64>() / heard.len() as f64;
+    assert!(power > 0.0, "{power}");
 }

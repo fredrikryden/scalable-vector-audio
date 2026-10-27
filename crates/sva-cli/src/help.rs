@@ -371,39 +371,39 @@ REPRESENTATIONS:
 SOLVE:
   sva-cli solve <recording> [--spl <dB>] [--out <dir>] [--confirm]
 
-  Fits one sound of atoms (partials, harmonic voices and noise bands, each
-  spanning the clip, only its level moving) to a recording, read in the formats
-  ANALYZE reads, its channels averaged, scaled to unit RMS with one master gain
-  back. Forward-backward greedy selection with an orthogonal re-solve: each step
-  scores every candidate off the residual (a partial at each peak, a voice at
-  each fundamental a harmonic sieve finds, its stretch B fitted, one noise band
-  per octave band) by the drop in description length it gives, adds the best,
-  re-solves every kept atom's level per 48 ms frame by non-negative least
-  squares, then removes each atom whose removal shortens the description
-  length; it stops where no candidate shortens it. The description length is
-  the atoms' bits plus the residual's on the coarse grid's frames by its bins.
-  A second pass then runs the same loop on what the first leaves (the clip's
-  grid less the fit's, floored at nought), its atoms on top of the first's.
+  Fits one sound of atoms (partials, harmonic voices, noise bands and shaped
+  noises, each spanning the clip, only its level moving) to a recording, read
+  in the formats ANALYZE reads, its channels averaged, scaled to unit RMS with
+  one master gain back. The fit runs in passes of one move each, every pass
+  over the clip's own grid and weights: it scores every move and makes the one
+  that shortens the description length most. A move adds a new atom off the
+  residual at its best level (a partial at each peak, a voice at each
+  fundamental a harmonic sieve finds, its stretch B fitted, a noise band per
+  octave band, and one shaped noise: a gain per octave band times one envelope
+  over time), or adjusts a kept atom's level per 48 ms frame by the exact best
+  amount for it alone, up or down, to nought removing it. It stops where no
+  move shortens it, so the description length falls at every pass. The
+  description length is the atoms' bits plus the residual's on the coarse
+  grid's frames by its bins.
   `--spl` is a full-scale sine's level in dB SPL (default {spl}). Under `<out>`
-  (default `{out}`) it writes the composition (its levels thinned at the level
-  JND), `first.wav` (its render), `second.wav` (its atoms and the second
-  pass's rendered together), and `clip-grid.wav` and `fit-grid.wav`, the
-  clip's and the fit's octave bands by 48 ms frames sounded alike; an out
-  directory already holding files refuses as a conflict unless `--confirm`.
-  Stderr carries one JSON line per step of each pass: `pass` (1, then 2 for
-  the second pass, which opens with its own `start`), `step` (from 0 in each
-  pass), `action` (`start`, then `add` or `remove`), `atom` (`key`, `kind`,
-  `hz`, `stretch`, `harmonics`, `lo_hz`, `hi_hz`, null where none),
-  `delta_dl_bits` (the step's change), `dl_bits`, `atom_bits` and
+  (default `{out}`) it writes `pass-001.wav` and on (the atoms each pass
+  leaves, rendered as it ends), the composition (its levels thinned at the
+  level JND), `final.wav` (its render), and `clip-grid.wav` and
+  `fit-grid.wav`, the clip's and the fit's octave bands by 48 ms frames sounded
+  alike; an out directory already holding files refuses as a conflict unless
+  `--confirm`. Stderr carries one JSON line per pass: `pass` (0 for the
+  start), `action` (`start`, then `add` or `adjust`), `atom` (`key`, `kind`,
+  `hz`, `stretch`, `harmonics`, `lo_hz`, `hi_hz`, `bands`, null where none),
+  `from_db` and `to_db` (its level before and after, null where it was not or
+  is no more), `delta_dl_bits` (the pass's change), `dl_bits`, `atom_bits` and
   `residual_bits` (the total and its parts), `residual_db` (per frame, each
-  octave band's power the fit leaves, in dB, null where none),
-  `envelopes` (each kept atom's `key` and written level per frame in dB) and
-  `seconds`; the first pass's `start` line adds `rate_hz`, `frame_secs`,
-  `first_centre_secs`, `band_edges_hz`, `band_floor_db` and `gain_db`. Stdout
-  answers `fit` with `rate_hz`, `steps`, `partials`, `harmonics`, `noises`,
-  `dl_bits`, `atom_bits`, `residual_bits`, `gain_db`, `stopped`, `secs`,
-  `atoms`, `second` (its `steps`, `start_dl_bits`, `dl_bits`, `atom_bits`,
-  `residual_bits`, `stopped` and `atoms`) and `wrote`. SIGINT ends the fit after its step, `stopped` true.
+  octave band's power the fit leaves, in dB, null where none), `envelopes`
+  (each kept atom's `key` and written level per frame in dB) and `seconds`;
+  the start line adds `rate_hz`, `frame_secs`, `first_centre_secs`,
+  `band_edges_hz`, `band_floor_db` and `gain_db`. Stdout answers `fit` with
+  `rate_hz`, `passes`, `adds`, `adjusts`, `partials`, `harmonics`, `noises`,
+  `shaped`, `dl_bits`, `atom_bits`, `residual_bits`, `gain_db`, `stopped`,
+  `secs`, `atoms` and `wrote`. SIGINT ends the fit after its pass, `stopped` true.
 
 ANALYZE:
   sva-cli analyze <file> --representation <list> [--confirm]
