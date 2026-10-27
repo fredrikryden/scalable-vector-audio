@@ -1,4 +1,4 @@
-// Concern: parses a solve's argv: the recording, its levels, its loudness, where its levels are written and N0 kept | Non-concern: running the pyramid (solve.rs) | IO: (argv tail) -> Command or CliError
+// Concern: parses a solve's argv: the recording, its levels or first fit, its loudness, where it writes and N0 kept | Non-concern: running the pyramid (solve.rs) | IO: (argv tail) -> Command or CliError
 
 use std::path::PathBuf;
 
@@ -27,6 +27,7 @@ pub struct SolveArgs {
     pub cache: CacheAt,
     /// Every level grows in rounds.
     pub every_level: bool,
+    pub first: bool,
 }
 
 pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
@@ -47,8 +48,13 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
         confirm: false,
         cache: CacheAt::Platform,
         every_level: false,
+        first: false,
     };
+    let mut levelled = Vec::new();
     while let Some(flag) = it.next() {
+        if ["--levels", "--coarsest", "--every-level", "--cache"].contains(&flag.as_str()) {
+            levelled.push(format!("`{flag}`"));
+        }
         match flag.as_str() {
             "--levels" => {
                 args.levels = count(&value(&mut it, "--levels")?, "--levels", "levels")?.get();
@@ -73,6 +79,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
             "--out" => args.out = PathBuf::from(value(&mut it, "--out")?),
             "--confirm" => args.confirm = true,
             "--every-level" => args.every_level = true,
+            "--first" => args.first = true,
             "--cache" => {
                 args.cache = match value(&mut it, "--cache")?.as_str() {
                     "none" => CacheAt::Off,
@@ -86,6 +93,15 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
                 ));
             }
         }
+    }
+    if args.first && !levelled.is_empty() {
+        return Err(CliError::usage(
+            "cli.bad_value",
+            format!(
+                "--first fits once, with no levels and no N0; drop {}",
+                levelled.join(", ")
+            ),
+        ));
     }
     args.coarsest = coarsest.unwrap_or(COARSEST);
     if args.coarsest > args.levels {

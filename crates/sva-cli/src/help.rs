@@ -376,6 +376,7 @@ REPRESENTATIONS:
 SOLVE:
   sva-cli solve <recording> [--levels <n>] [--coarsest <k>] [--spl <dB>]
                 [--out <dir>] [--confirm] [--cache <path|none>] [--every-level]
+                [--first]
 
   Fits atoms (harmonics, partials and noise bands) to a recording, read in the
   formats ANALYZE reads, its channels averaged, from silence and coarse to
@@ -407,6 +408,10 @@ SOLVE:
   per rate, scale and spl, is kept for the same build under
   `$XDG_CACHE_HOME/sva-n0`, else `~/.cache/sva-n0`; `--cache <path>` moves
   it and `--cache none` fits it afresh.
+  `--first` fits one sound once in place of the levels, refusing the level and
+  N0 flags: its composition, `first.wav`, `clip-grid.wav`, `fit-grid.wav` and
+  `grid.json` under `<out>`; stdout answers `first` with `rate_hz`,
+  `partials`, `harmonics`, `noises`, `mean_abs_db`, `secs` and `wrote`.
 
 ANALYZE:
   sva-cli analyze <file> --representation <list> [--confirm]

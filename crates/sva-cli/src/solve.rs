@@ -1,4 +1,4 @@
-// Concern: runs a solve on a recording: progress on stderr, each level's files and wav written as it ends, N0 kept | Non-concern: argv, the pyramid (sva-core) | IO: (SolveArgs) -> JSON or CliError
+// Concern: runs a solve on a recording: progress on stderr, each level's files and wav as it ends, N0 kept; or a first fit's files | Non-concern: argv, the fits | IO: (SolveArgs) -> JSON or CliError
 
 use std::cell::Cell;
 use std::path::Path;
@@ -7,8 +7,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use sva_core::json::{num, strings};
 use sva_core::solve::atoms::Clip;
+use sva_core::solve::atoms::{Atom, Sound, files};
 use sva_core::solve::calibrate::rendered;
+use sva_core::solve::first::fit;
+use sva_core::solve::grid::compared;
 use sva_core::solve::pyramid::{Asked, Event, Stage, mono, pyramid, read_at};
 use sva_core::solve::report::{answer, progress};
 use sva_core::{Abandon, CliError, success_envelope};
@@ -65,6 +69,9 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
     }
     std::fs::create_dir_all(&args.out).map_err(|e| io(&args.out, e))?;
     let samples = mono(&planes);
+    if args.first {
+        return first(args, &samples, rate);
+    }
     let clip = Clip {
         rate,
         len: samples.len(),
@@ -121,6 +128,52 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
         &answer(&stages, args.levels, &wrote),
         &warnings,
     ))
+}
+
+/// One sound's first fit of `samples` under `args.out`: its composition, `first.wav` (its
+/// render), `clip-grid.wav` and `fit-grid.wav` (both grids sounded alike) and `grid.json`.
+fn first(args: &SolveArgs, samples: &[f64], rate: u32) -> Result<String, CliError> {
+    let started = Instant::now();
+    let first = fit(samples, rate, args.spl_db);
+    let (grid_json, mean) = compared(&first.clip_grid, &first.fit_grid, args.spl_db);
+    let mut wrote = Vec::new();
+    let mut text = |name: &str, body: &str| -> Result<(), CliError> {
+        let file = args.out.join(name);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+        }
+        std::fs::write(&file, body).map_err(|e| io(&file, e))?;
+        wrote.push(file.display().to_string());
+        Ok(())
+    };
+    for (path, body) in files(&first.atoms, &first.clip) {
+        text(&path, &body)?;
+    }
+    text("grid.json", &grid_json)?;
+    let len = first.clip.len;
+    for (name, heard) in [
+        ("first.wav", rendered(&first.atoms, &first.clip)),
+        ("clip-grid.wav", first.clip_grid.sounded(len)),
+        ("fit-grid.wav", first.fit_grid.sounded(len)),
+    ] {
+        let wav = args.out.join(name);
+        let samples: Vec<f32> = heard.iter().map(|s| *s as f32).collect();
+        write_wav(&samples, first.clip.rate, &wav, SampleEncoding::Float)?;
+        wrote.push(wav.display().to_string());
+    }
+    let count = |kind: fn(&Atom) -> bool| first.atoms.iter().filter(|a| kind(a)).count();
+    let data = format!(
+        "{{ \"first\": {{ \"rate_hz\": {}, \"partials\": {}, \"harmonics\": {}, \
+         \"noises\": {}, \"mean_abs_db\": {}, \"secs\": {}, \"wrote\": {} }} }}",
+        first.clip.rate,
+        count(|a| matches!(a.sound, Sound::Partial { .. })),
+        count(|a| matches!(a.sound, Sound::Harmonic { .. })),
+        count(|a| matches!(a.sound, Sound::Noise { .. })),
+        num(mean),
+        num(started.elapsed().as_secs_f64()),
+        strings(&wrote)
+    );
+    Ok(success_envelope(&data, &[]))
 }
 
 /// A solve's stop: a level that could not be written, or a signal.

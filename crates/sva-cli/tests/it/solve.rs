@@ -1,4 +1,4 @@
-// Concern: freezes `solve`'s refusals, its stages, progress lines and the levels it writes, and `new --from`'s stub | Non-concern: the atoms a level finds | IO: (argv, a clip) -> envelope, stderr, files
+// Concern: freezes `solve`'s refusals, stages, progress lines, the levels and first fits it writes, `new --from`'s stub | Non-concern: the atoms found | IO: (argv, a clip) -> envelope, stderr, files
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -207,7 +207,7 @@ fn a_solve_answers_and_writes_a_stage_per_level() {
 #[test]
 fn a_solve_refuses_each_mistake_under_its_code() {
     let root = scratch("solve-refusals");
-    let cases: [(&[&str], &str, i32); 6] = [
+    let cases: [(&[&str], &str, i32); 7] = [
         (&["solve"], "cli.missing_argument", 3),
         (&["solve", "clip.wav", "--levels", "0"], "cli.bad_value", 3),
         (
@@ -216,6 +216,11 @@ fn a_solve_refuses_each_mistake_under_its_code() {
             3,
         ),
         (&["solve", "clip.wav", "--spl", "loud"], "cli.bad_value", 3),
+        (
+            &["solve", "clip.wav", "--first", "--levels", "2"],
+            "cli.bad_value",
+            3,
+        ),
         (
             &["solve", "clip.wav", "--vary", "gain=0..1"],
             "cli.unknown_argument",
@@ -269,4 +274,27 @@ fn new_from_refuses_as_unbuilt_and_a_node_reading_repr_is_told_why() {
     });
     assert!(helps, "{answer:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--first` fits the clip once and writes its composition, its render, both grids sounded
+/// and the grids' comparison under `--out`, answering its atom counts and distance.
+#[test]
+fn a_first_fit_writes_its_composition_render_and_grids() {
+    let (root, wav) = clip("solve-first", TONE);
+    let out = sva(&root, &["solve", &wav, "--first", "--out", "first"]);
+    let answer = json(&out);
+    assert_eq!(answer["status"], "success", "{answer}");
+    let first = &answer["data"]["first"];
+    assert_eq!(first["partials"], 1, "{first}");
+    assert!(first["mean_abs_db"].as_f64().is_some(), "{first}");
+    for name in [
+        "master",
+        "score/clip.jsonl",
+        "first.wav",
+        "clip-grid.wav",
+        "fit-grid.wav",
+        "grid.json",
+    ] {
+        assert!(root.join("first").join(name).is_file(), "{name} written");
+    }
 }

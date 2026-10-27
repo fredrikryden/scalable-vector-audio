@@ -10,6 +10,7 @@ mod solve_atoms;
 mod solve_bits;
 mod solve_calibrate;
 mod solve_coarse;
+mod solve_first;
 mod solve_lm;
 mod solve_objective;
 mod solve_pyramid;

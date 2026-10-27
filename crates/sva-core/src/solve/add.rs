@@ -89,13 +89,13 @@ pub const COHERENT: bool = true;
 
 /// Power per bin `0..=n/2` of each frame every `hop` samples, centred on the frame's sample.
 pub struct Spectrogram {
-    rate: f64,
-    n: usize,
-    long: usize,
-    hop: usize,
-    sum_w: f64,
-    sum_w2: f64,
-    power: Vec<Vec<f64>>,
+    pub(super) rate: f64,
+    pub(super) n: usize,
+    pub(super) long: usize,
+    pub(super) hop: usize,
+    pub(super) sum_w: f64,
+    pub(super) sum_w2: f64,
+    pub(super) power: Vec<Vec<f64>>,
 }
 
 impl Spectrogram {
@@ -244,7 +244,7 @@ fn critical_band(hz: f64) -> usize {
 }
 
 /// The Hz the feasible set spans at `rate`.
-fn span_hz(rate: f64) -> (f64, f64) {
+pub(super) fn span_hz(rate: f64) -> (f64, f64) {
     (cam_hz(CAM_FIRST), cam_hz(CAM_LAST).min(rate / 2.0))
 }
 
@@ -388,10 +388,10 @@ fn components(reach: &[(i64, i64)], frozen: &[bool]) -> Vec<Vec<usize>> {
 
 /// A partial the residual proposes: its Hz, start and end, and its level at the peak and its
 /// end's deviation from it.
-struct Track {
-    hz: f64,
-    span: (f64, f64),
-    levels: (f64, f64),
+pub(super) struct Track {
+    pub(super) hz: f64,
+    pub(super) span: (f64, f64),
+    pub(super) levels: (f64, f64),
 }
 
 impl Track {
@@ -510,11 +510,11 @@ fn written(harmonics: usize) -> usize {
 }
 
 /// A harmonic's members as (track, harmonic number).
-type Members = Vec<(usize, usize)>;
+pub(super) type Members = Vec<(usize, usize)>;
 
 /// The fundamental whose sieve over `pool` scores most, as `MODEL` states, beside its members
 /// as (track, harmonic number); `None` where no fundamental saves numbers.
-fn sieved(
+pub(super) fn sieved(
     tracks: &[Track],
     pool: &[usize],
     analysis_hz: f64,
