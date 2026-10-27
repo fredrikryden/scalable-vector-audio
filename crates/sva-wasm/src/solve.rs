@@ -248,7 +248,11 @@ pub(crate) async fn solved(clip: &JsValue, options_js: &JsValue) -> Result<JsVal
                 )
             })?,
     };
-    let options = Options { tolerance, from };
+    let options = Options {
+        tolerance,
+        from,
+        threads: crate::threads::limit(None),
+    };
     let hear = js_sys::Reflect::get(options_js, &"progress".into())
         .ok()
         .and_then(|f| f.dyn_into::<js_sys::Function>().ok());

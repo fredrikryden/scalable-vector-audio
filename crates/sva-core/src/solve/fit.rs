@@ -1,6 +1,7 @@
 // Concern: FIT: one sound by passes of one move each, the best add or adjust under one DL | Non-concern: the spectrogram, floor and sieve (add.rs), JSON | IO: (samples, rate, spl) -> Fit, Lines
 
 use std::f64::consts::LOG2_E;
+use std::num::NonZeroUsize;
 use std::ops::Range;
 
 use sva_engine::hearing::{CAM_FIRST, CAM_LAST, cam, cam_hz, erb_hz, level_jnd_db};
@@ -242,6 +243,8 @@ impl Resume {
 pub struct Options {
     pub tolerance: f64,
     pub from: Option<Resume>,
+    /// The threads the fit computes on; its answers are the same at any count.
+    pub threads: NonZeroUsize,
 }
 
 impl Default for Options {
@@ -249,6 +252,7 @@ impl Default for Options {
         Options {
             tolerance: TOLERANCE,
             from: None,
+            threads: default_threads(),
         }
     }
 }
@@ -497,11 +501,12 @@ struct Problem {
     times: Vec<f64>,
     window: Vec<f64>,
     twiddle: Vec<(f64, f64)>,
+    threads: NonZeroUsize,
 }
 
 impl Problem {
-    /// `grid` read as `MODEL` states, its power the target.
-    fn of(grid: Grid, clip: Clip, spl_db: f64, gain_db: f64) -> Problem {
+    /// `grid` read as `MODEL` states, its power the target, computed on at most `threads`.
+    fn of(grid: Grid, clip: Clip, spl_db: f64, gain_db: f64, threads: NonZeroUsize) -> Problem {
         let range = feasible(&grid);
         let looks = grid.hop as f64 / (grid.long as f64 / 2.0) * grid.long as f64 / grid.n as f64;
         let floors: Vec<f64> = range
@@ -547,6 +552,7 @@ impl Problem {
             times,
             window,
             twiddle,
+            threads,
         }
     }
 
@@ -946,7 +952,7 @@ fn refined(p: &Problem, n: usize, residual: &[Vec<f64>], kind: Kind, key: u64) -
         }
         Kind::Voice { count, .. } => {
             let hzs = kind.hzs();
-            let refined = each(default_threads(), (0..count).collect(), |c| {
+            let refined = each(p.threads, (0..count).collect(), |c| {
                 let held = score(&partial_at(hzs[c]));
                 let (to, _, sigma) = partial(c, hzs[c], held);
                 let k = (c + 1) as f64;
@@ -1593,13 +1599,14 @@ enum Made {
     Adjust(usize, Option<Box<Held>>, Tweak),
 }
 
-/// `run` over `tasks`, `stop` asked before each turn of a task per thread; `None` if it stops.
+/// `run` over `tasks` on at most `threads`, `stop` asked before each turn of a task per thread,
+/// answers in task order; `None` if it stops.
 async fn paced<T: Send, R: Send>(
+    threads: NonZeroUsize,
     stop: &dyn Abandon,
     tasks: Vec<T>,
     run: impl Fn(T) -> R + Sync,
 ) -> Option<Vec<R>> {
-    let threads = default_threads();
     let mut tasks = tasks.into_iter().peekable();
     let mut out = Vec::new();
     while tasks.peek().is_some() {
@@ -1632,7 +1639,7 @@ async fn pass(p: &Problem, state: &State, stop: &dyn Abandon) -> Option<State> {
         .filter(|kind| apart(kind, None))
         .collect();
     // Fixed candidates, then gliding variants, so each turn's tasks cost alike.
-    let fixed = paced(stop, proposed, |kind| {
+    let fixed = paced(p.threads, stop, proposed, |kind| {
         let (fixed, change) = refined(p, n, &residual, kind, key);
         let glide = gliding(p, n, &residual, &mean, &fixed, key);
         (fixed, change, glide)
@@ -1644,7 +1651,7 @@ async fn pass(p: &Problem, state: &State, stop: &dyn Abandon) -> Option<State> {
         .filter_map(|(i, (_, _, glide))| glide.clone().map(|g| (i, g)))
         .collect();
     let mut glided: Vec<Option<(Kind, f64)>> = vec![None; fixed.len()];
-    let refined_glides = paced(stop, tried, |(i, kind)| {
+    let refined_glides = paced(p.threads, stop, tried, |(i, kind)| {
         (i, refined(p, n, &residual, kind, key))
     })
     .await?;
@@ -1659,7 +1666,7 @@ async fn pass(p: &Problem, state: &State, stop: &dyn Abandon) -> Option<State> {
             let (kind, change) = glided.unwrap_or((fixed, change));
             apart(&kind, None).then_some((change, Move::Add(kind)))
         });
-    let adjusts = paced(stop, (0..n).collect(), |a| {
+    let adjusts = paced(p.threads, stop, (0..n).collect(), |a| {
         let (change, tweak, held) = scaled(p, state, &residual, a);
         let mut out = vec![(change, Move::Adjust(a, held.map(Box::new), tweak))];
         let retune = retuned(p, state, &residual, a).filter(|(_, h)| apart(&h.kind, Some(a)));
@@ -1847,7 +1854,7 @@ fn voices(p: &Problem, tracks: &[Track]) -> Vec<Kind> {
     let bin = p.grid.rate / p.grid.n as f64;
     let mut pool: Vec<usize> = (0..tracks.len()).collect();
     let mut out = Vec::new();
-    while let Some((_, found)) = sieved(tracks, &pool, bin, span_hz(p.grid.rate)) {
+    while let Some((_, found)) = sieved(tracks, &pool, bin, span_hz(p.grid.rate), p.threads) {
         let mut members = found;
         let mut seen: Vec<Members> = Vec::new();
         let mut fitted = stiffness(tracks, &members);
@@ -2273,7 +2280,11 @@ pub async fn fit(
     let unit: Vec<f64> = samples.iter().map(|s| s / rms).collect();
     let gain_db = 20.0 * libm::log10(rms);
     let heard_at = spl_db + gain_db;
-    let grid = Grid::of(&Spectrogram::of(&unit, clip.rate), unit.len());
+    let grid = Grid::of(
+        &Spectrogram::of(&unit, clip.rate),
+        unit.len(),
+        options.threads,
+    );
     if feasible(&grid).is_empty() {
         return Err(CliError::usage(
             "solve.rate_too_low",
@@ -2285,7 +2296,7 @@ pub async fn fit(
             ),
         ));
     }
-    let p = Problem::of(grid, clip, heard_at, gain_db);
+    let p = Problem::of(grid, clip, heard_at, gain_db, options.threads);
     let start_bits = State::empty(&p).dl();
     let (mut state, from_pass) = match &options.from {
         Some(from) => (resumed(&p, from, gain_db)?, from.passes),

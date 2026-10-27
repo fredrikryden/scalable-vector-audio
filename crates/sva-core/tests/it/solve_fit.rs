@@ -1,6 +1,7 @@
 // Concern: states what the fit owes sines, glides, voices, noise bands, a burst; a DL falling every pass; adjusts; determinism; its threshold; a resume | Non-concern: the text | IO: (a clip) -> asserts
 
 use std::f64::consts::TAU;
+use std::num::NonZeroUsize;
 
 use sva_core::CliError;
 use sva_core::solve::atoms::{Atom, Sound, files_at};
@@ -48,7 +49,7 @@ fn fitted(samples: &[f64]) -> (Fit, Vec<Line>) {
         samples,
         &Options {
             tolerance: 0.0,
-            from: None,
+            ..Options::default()
         },
     )
 }
@@ -276,6 +277,30 @@ fn a_fit_is_the_same_twice() {
     assert_eq!(a.atoms, b.atoms);
     let text = |lines: &[Line]| lines.iter().map(progress).collect::<Vec<_>>();
     assert_eq!(text(&heard_a), text(&heard_b));
+}
+
+/// A fit on one thread and on several finds the same atoms at the same DL, line by line.
+#[test]
+fn a_fit_is_the_same_on_one_thread_and_on_several() {
+    let mut parts = voice(196.0, 0.0, 5, 0.2);
+    parts.push((1500.0, 0.1));
+    let samples = tones(&parts);
+    let on = |threads: usize| {
+        let threads = NonZeroUsize::new(threads).expect("a thread");
+        let options = Options {
+            tolerance: 0.0,
+            threads,
+            ..Options::default()
+        };
+        fitted_with(&samples, &options)
+    };
+    let (one, heard_one) = on(1);
+    let (several, heard_several) = on(4);
+    assert_eq!(one.atoms, several.atoms);
+    assert_eq!(one.atom_bits.to_bits(), several.atom_bits.to_bits());
+    assert_eq!(one.residual_bits.to_bits(), several.residual_bits.to_bits());
+    let text = |lines: &[Line]| lines.iter().map(progress).collect::<Vec<_>>();
+    assert_eq!(text(&heard_one), text(&heard_several));
 }
 
 /// A sum of `(hz, amplitude, decay per second)` sines, each its own phase.
@@ -572,6 +597,7 @@ fn a_resumed_fit_goes_on_from_the_composition_it_reads() {
         &Options {
             tolerance: 0.0,
             from: Some(from),
+            ..Options::default()
         },
     );
     let last = |l: &Line| l.atom_bits + l.residual_bits;
@@ -618,6 +644,7 @@ fn a_resume_from_another_clip_refuses_by_name() {
         let options = Options {
             tolerance: 0.0,
             from: Some(from),
+            ..Options::default()
         };
         match now(fit(
             samples,
@@ -676,7 +703,7 @@ fn a_late_second_tone_is_added_second_by_its_lowest_line() {
         &samples,
         &Options {
             tolerance: TOLERANCE,
-            from: None,
+            ..Options::default()
         },
     );
     let adds: Vec<&Atom> = lines

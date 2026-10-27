@@ -1,10 +1,12 @@
 // Concern: the analysis a fit reads: the spectrogram, the floor a sine is heard over, the harmonic sieve | Non-concern: choosing atoms (fit.rs) | IO: (samples) -> Spectrogram; (peaks) -> f0, members
 
 use std::f64::consts::TAU;
+use std::num::NonZeroUsize;
+
 use sva_engine::hearing::{
     CAM_FIRST, CAM_LAST, HOP_SECS, WINDOW_SECS, cam_hz, ear_gain_db, threshold_excitation_db,
 };
-use sva_engine::{default_threads, each, fft};
+use sva_engine::{each, fft};
 
 use super::atoms::{Atom, Trajectory};
 
@@ -124,18 +126,19 @@ fn written(harmonics: usize) -> usize {
 pub(super) type Members = Vec<(usize, usize)>;
 
 /// The fundamental whose sieve over `pool` scores most, as `MODEL` states, beside its members
-/// as (track, harmonic number); `None` where no fundamental saves numbers.
+/// as (track, harmonic number), on at most `threads`; `None` where no fundamental saves numbers.
 pub(super) fn sieved(
     tracks: &[Track],
     pool: &[usize],
     analysis_hz: f64,
     (lo, hi): (f64, f64),
+    threads: NonZeroUsize,
 ) -> Option<(f64, Members)> {
     let better = |best: &Option<(usize, f64, Members)>, score: usize, f0: f64| {
         best.as_ref()
             .is_none_or(|(s, f, _)| score > *s || (score == *s && f0 > *f))
     };
-    let each_anchor = each(default_threads(), pool.to_vec(), |p| {
+    let each_anchor = each(threads, pool.to_vec(), |p| {
         let mut best: Option<(usize, f64, Members)> = None;
         let anchor = &tracks[p];
         let met: Vec<usize> = pool

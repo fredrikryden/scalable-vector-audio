@@ -1,6 +1,8 @@
 // Concern: the coarse grid: octave bands by 48 ms frames, sine and band templates, phaseless resynthesis | Non-concern: the fit (fit.rs) | IO: (Spectrogram) -> Grid, samples
 
-use sva_engine::{default_threads, each, fft};
+use std::num::NonZeroUsize;
+
+use sva_engine::{each, fft};
 
 use super::add::{Spectrogram, span_hz};
 use super::atoms::phase;
@@ -51,8 +53,8 @@ pub struct Grid {
 }
 
 impl Grid {
-    /// `spectrogram` of a clip `len` samples long, as `MODEL` states.
-    pub fn of(spectrogram: &Spectrogram, len: usize) -> Grid {
+    /// `spectrogram` of a clip `len` samples long, as `MODEL` states, on at most `threads`.
+    pub fn of(spectrogram: &Spectrogram, len: usize, threads: NonZeroUsize) -> Grid {
         let step = spectrogram.hop;
         let pooled =
             QUARTERS * (libm::round(spectrogram.long as f64 / 4.0 / step as f64) as usize).max(1);
@@ -69,7 +71,7 @@ impl Grid {
             .step_by(pooled)
             .map(|at| at..(at + pooled).min(inside.end))
             .collect();
-        let power = each(default_threads(), frames, |held| {
+        let power = each(threads, frames, |held| {
             let hops: Vec<Vec<f64>> = held.map(|m| spectrogram.power(m)).collect();
             (0..hops[0].len())
                 .map(|b| hops.iter().map(|h| h[b]).sum::<f64>() / hops.len() as f64)

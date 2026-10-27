@@ -32,6 +32,7 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
             None => TOLERANCE,
         }),
         from,
+        threads: sva_engine::default_threads(),
     };
     let after = options.from.as_ref().map_or(0, |r| r.passes);
     let held = std::fs::read_dir(&args.out).is_ok_and(|mut d| d.next().is_some());
