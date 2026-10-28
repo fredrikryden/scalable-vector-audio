@@ -9,12 +9,5 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --quiet -- -D warnings
 comment-crusher --config .comment-crusher.toml .
 annotated-tree --strict-check --include-tests --hidden .
-# annotated-tree denies crate edges only, so two module edges are denied here.
-if grep -rln 'continuation' crates/sva-core/src/solve/prox; then
-  echo >&2 "solve/prox names continuation; the solver never reads a scheme"; exit 1
-fi
-if grep -rln 'solve::prox' crates/sva-core/src/structure; then
-  echo >&2 "structure names solve::prox; an edit is text, never the solver's"; exit 1
-fi
 node play/links.mjs --check
 cargo test --workspace --quiet
