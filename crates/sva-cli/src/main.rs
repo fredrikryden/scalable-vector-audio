@@ -67,11 +67,9 @@ fn run() -> ExitCode {
         Ok(Command::Trace { target }) => trace_node(&target),
         Ok(Command::Builtins) => Ok(success_envelope(&builtins_data(&builtins()), &[])),
         Ok(Command::Outline { text }) => outline(&text),
-        Ok(Command::New { from: Some(_), .. }) => Err(sva_core::solve::seed_unbuilt()),
         Ok(Command::New {
             name,
             idempotency_key,
-            from: None,
         }) => scaffold_new(&name, idempotency_key.as_deref()),
         Err(e) => Err(e),
     };

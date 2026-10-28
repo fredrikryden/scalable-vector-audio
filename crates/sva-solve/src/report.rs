@@ -1,9 +1,10 @@
-// Concern: a fit's progress lines and its answer as JSON, its shared variables listed, the shapes sva-portal's page reads | Non-concern: running it (fit.rs), where a line goes | IO: (Line | Fit) -> JSON
+// Concern: a fit's progress lines and its answer as JSON, its shared variables listed, the shapes sva-portal's page reads | Non-concern: running it (fit/), where a line goes | IO: (Line | Fit) -> JSON
 
-use super::atoms::{Atom, Shared, Sound};
-use super::fit::{Action, Fit, Line, Tweak};
-use super::optimize::End;
-use crate::json::{NONE, escape, list, num, strings};
+use sva_core::json::{NONE, escape, list, num, strings};
+
+use crate::End;
+use crate::fit::{Action, Fit, Line, Tweak};
+use crate::sources::{Shared, Sound, Source};
 
 fn text(s: &str) -> String {
     format!("\"{}\"", escape(s))
@@ -15,15 +16,13 @@ fn numbers(values: &[f64]) -> String {
     format!("[{}]", each.join(", "))
 }
 
-/// What an atom is: its kind, key, Hz, glide, stretch, harmonics, band (a shaped noise's lowest
-/// edge to its highest) and a shaped noise's bands, `null` where its kind has none.
-fn atom(atom: &Atom) -> String {
+/// What a source is: its kind, key, Hz, glide, stretch, harmonics, band (a shaped noise's
+/// lowest edge to its highest) and a shaped noise's bands, `null` where its kind has none.
+fn source(source: &Source) -> String {
     let none = || NONE.to_string();
-    let (hz, stretch, lo, hi, bands) = match &atom.sound {
-        Sound::Partial { hz, .. } => (num(hz.base), none(), none(), none(), none()),
-        Sound::Harmonic { hz, stretch, .. } => {
-            (num(hz.base), num(*stretch), none(), none(), none())
-        }
+    let (hz, stretch, lo, hi, bands) = match &source.sound {
+        Sound::Partial { hz, .. } => (num(*hz), none(), none(), none(), none()),
+        Sound::Harmonic { hz, stretch, .. } => (num(*hz), num(*stretch), none(), none(), none()),
         Sound::Noise { lo, hi } => (none(), none(), num(*lo), num(*hi), none()),
         Sound::Shaped { bands } => {
             let each: Vec<String> = bands
@@ -51,16 +50,16 @@ fn atom(atom: &Atom) -> String {
     format!(
         "{{ \"key\": {}, \"kind\": \"{}\", \"hz\": {hz}, \"glide\": {}, \"stretch\": \
          {stretch}, \"harmonics\": {}, \"lo_hz\": {lo}, \"hi_hz\": {hi}, \"bands\": {bands} }}",
-        atom.key,
-        atom.kind(),
-        num(atom.glide()),
-        atom.harmonics()
+        source.key,
+        source.kind(),
+        num(source.sound.glide()),
+        source.harmonics()
     )
 }
 
-/// The `shared` variables `atoms` reference, each its index, kind, numbers by name, and each
-/// referencing atom's key beside its own numbers by name.
-fn shared(atoms: &[Atom], shared: &[(usize, Shared)]) -> String {
+/// The `shared` variables `sources` reference, each its index, kind, numbers by name, and each
+/// referencing source's key beside its own numbers by name.
+fn shared(sources: &[Source], shared: &[(usize, Shared)]) -> String {
     list(shared, |(to, node)| {
         let numbers: Vec<String> = node
             .kind
@@ -69,7 +68,7 @@ fn shared(atoms: &[Atom], shared: &[(usize, Shared)]) -> String {
             .zip(&node.numbers)
             .map(|(n, v)| format!("\"{n}\": {}", num(*v)))
             .collect();
-        let each: Vec<String> = atoms
+        let each: Vec<String> = sources
             .iter()
             .flat_map(|a| a.links.iter().filter(|l| l.to == *to).map(move |l| (a, l)))
             .map(|(a, l)| {
@@ -94,7 +93,7 @@ fn shared(atoms: &[Atom], shared: &[(usize, Shared)]) -> String {
 
 /// A pass's move in words: `start`, `add <kind>`, or `<adjust> <kind>`.
 fn moved(line: &Line) -> String {
-    let kind = line.atom.as_ref().map_or("", |a| a.kind());
+    let kind = line.source.as_ref().map_or("", |a| a.kind());
     match (line.action, line.tweak) {
         (Action::Start, _) => "start".to_string(),
         (_, Some(tweak)) => format!("{} {kind}", tweak.name()),
@@ -134,7 +133,7 @@ pub fn progress(line: &Line) -> String {
             num(g.gain_db)
         )
     });
-    let dl = line.atom_bits + line.residual_bits;
+    let dl = line.source_bits + line.residual_bits;
     let total = line.start_bits - dl;
     let share = match total > 0.0 {
         true => num((0.0 - line.delta_bits) / total),
@@ -150,22 +149,24 @@ pub fn progress(line: &Line) -> String {
         line.tweak
             .map_or_else(|| NONE.to_string(), |t| text(t.name())),
         text(&moved(line)),
-        line.atom.as_ref().map_or_else(|| NONE.to_string(), atom),
+        line.source
+            .as_ref()
+            .map_or_else(|| NONE.to_string(), source),
         line.from_db.map_or_else(|| NONE.to_string(), num),
         line.to_db.map_or_else(|| NONE.to_string(), num),
         num(line.delta_bits),
         num(0.0 - line.delta_bits),
         num(total),
         num(dl),
-        num(line.atom_bits),
+        num(line.source_bits),
         num(line.residual_bits),
         rows.join(", "),
         list(&line.envelopes, |(key, db)| {
             let rows: Vec<String> = db.iter().map(|row| numbers(row)).collect();
             format!("{{ \"key\": {key}, \"db\": [{}] }}", rows.join(", "))
         }),
-        shared(&line.atoms, &line.shared),
-        list(&line.skipped, atom),
+        shared(&line.sources, &line.shared),
+        list(&line.skipped, source),
         num(line.seconds),
         num(line.pass_secs)
     )
@@ -178,7 +179,7 @@ pub fn composition(files: &[(String, String)]) -> String {
     })
 }
 
-/// The answer's `data`: the fit's counts, DL, time and atoms, the paths the CLI wrote, and its
+/// The answer's `data`: the fit's counts, DL, time and sources, the paths the CLI wrote, and its
 /// composition's files where asked.
 pub fn answer(
     fit: &Fit,
@@ -186,7 +187,7 @@ pub fn answer(
     wrote: &[String],
     files: Option<&[(String, String)]>,
 ) -> String {
-    let count = |kind: &str| fit.atoms.iter().filter(|a| a.kind() == kind).count();
+    let count = |kind: &str| fit.sources.iter().filter(|a| a.kind() == kind).count();
     let files = files.map_or_else(String::new, |files| {
         format!(", \"files\": {}", composition(files))
     });
@@ -210,8 +211,8 @@ pub fn answer(
         count("harmonic"),
         count("noise"),
         count("shaped"),
-        num(fit.atom_bits + fit.residual_bits),
-        num(fit.atom_bits),
+        num(fit.source_bits + fit.residual_bits),
+        num(fit.source_bits),
         num(fit.residual_bits),
         num(fit.gain_db),
         fit.from_pass,
@@ -219,8 +220,8 @@ pub fn answer(
         fit.ended.name(),
         fit.ended == End::Stopped,
         num(secs),
-        list(&fit.atoms, atom),
-        shared(&fit.atoms, &fit.shared),
+        list(&fit.sources, source),
+        shared(&fit.sources, &fit.shared),
         strings(wrote)
     )
 }

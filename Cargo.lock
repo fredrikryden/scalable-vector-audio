@@ -411,6 +411,7 @@ dependencies = [
  "sva-core",
  "sva-engine",
  "sva-formula",
+ "sva-solve",
  "symphonia",
 ]
 
@@ -451,6 +452,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sva-solve"
+version = "0.16.1"
+dependencies = [
+ "libm",
+ "sva-ast",
+ "sva-core",
+ "sva-engine",
+ "sva-formula",
+]
+
+[[package]]
 name = "sva-wasm"
 version = "0.16.1"
 dependencies = [
@@ -459,6 +471,7 @@ dependencies = [
  "sva-ast",
  "sva-core",
  "sva-engine",
+ "sva-solve",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-rayon",

@@ -1,4 +1,4 @@
-// Concern: the four atom kinds solve writes, the shared nodes they read: numbers, ranges, rows, nodes, keys, their render | Non-concern: fitting them (fit.rs) | IO: (Atom) -> numbers, row, node, samples
+// Concern: the four source kinds solve writes and the shared nodes they read: numbers, rows, nodes, keys, their render | Non-concern: fitting them (fit/) | IO: (Source) -> numbers, row, node, samples
 
 use std::collections::HashMap;
 use std::f64::consts::{LN_10, TAU};
@@ -6,13 +6,9 @@ use std::f64::consts::{LN_10, TAU};
 use sva_ast::Composition;
 use sva_ast::score::Item;
 use sva_ast::{Expr, Literal};
+use sva_core::json::num;
+use sva_core::{CliError, Job, Output, Representation, Tier, asked, call, execute};
 use sva_engine::hearing::{CAM_FIRST, CAM_LAST, cam_hz};
-
-use sva_engine::Tier;
-
-use crate::cli_error::CliError;
-use crate::json::num;
-use crate::{Job, Output, Representation, asked, call, execute};
 
 /// Every node writes these bits, so the model reads the same.
 pub const NEPER_PER_DB: f64 = LN_10 / 20.0;
@@ -32,68 +28,67 @@ impl Clip {
     }
 }
 
-/// `base` at the atom's onset, then straight lines through each knot's time from the onset and
-/// deviation from `base`, held after the last.
+/// A level in dB: `base` at the source's onset, then straight lines through each knot's time
+/// from the onset and deviation from `base`, held after the last.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trajectory {
     pub base: f64,
     pub knots: Vec<(f64, f64)>,
 }
 
-impl Trajectory {
-    pub fn steady(base: f64) -> Trajectory {
-        Trajectory {
-            base,
-            knots: Vec::new(),
-        }
-    }
-}
-
-impl Trajectory {
-    /// As a node folds `base + deviation`.
-    pub fn values(&self) -> impl Iterator<Item = f64> + '_ {
-        std::iter::once(self.base).chain(self.knots.iter().map(|(_, d)| self.base + *d))
-    }
-}
-
-/// A partial's or harmonic's frequency at `t` is `hz(t) e^(glide (t - on))`: `glide` in nepers
-/// per second, 0 a tone whose frequency only its knots move. A glide is written only on a steady
-/// `hz`, whose phase then has the closed form `hz (e^(glide (t - on)) - 1) / glide`; on knots it
-/// has none the engine writes, a correctness limit.
+/// What a source is, its levels aside. A partial's or harmonic's frequency at `t` is
+/// `hz e^(glide (t - on))`: `glide` in nepers per second, 0 a fixed tone, its phase then
+/// `hz (e^(glide (t - on)) - 1) / glide` in closed form.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Sound {
     Partial {
-        hz: Trajectory,
+        hz: f64,
         glide: f64,
     },
-    /// Harmonic `k` turns `k sqrt(1 + stretch k^2)` times as fast as `hz` (a stiff string's
-    /// partials; Fletcher 1964) at its own level, the first at the atom's, harmonic `k > 1` at
-    /// `levels[k - 2]`.
+    /// `count` harmonics, harmonic `k` turning `k sqrt(1 + stretch k^2)` times as fast as `hz`
+    /// (a stiff string's partials; Fletcher 1964), each at its own level.
     Harmonic {
-        hz: Trajectory,
+        hz: f64,
         stretch: f64,
+        count: usize,
         glide: f64,
-        levels: Vec<Trajectory>,
     },
     Noise {
         lo: f64,
         hi: f64,
     },
-    /// Noise over `bands`, each `(lo, hi, gain_db)`: band `k`'s power the atom's level plus
+    /// Noise over `bands`, each `(lo, hi, gain_db)`: band `k`'s power the source's level plus
     /// its gain in dB, one level over time shared by every band (rank 1).
     Shaped {
         bands: Vec<(f64, f64, f64)>,
     },
 }
 
-/// A kind of shared node: numbers several atoms reference, each atom its own beside them.
+impl Sound {
+    /// How many levels it holds: a harmonic's one per harmonic, any other's one.
+    pub fn columns(&self) -> usize {
+        match self {
+            Sound::Harmonic { count, .. } => *count,
+            Sound::Partial { .. } | Sound::Noise { .. } | Sound::Shaped { .. } => 1,
+        }
+    }
+
+    pub fn glide(&self) -> f64 {
+        match self {
+            Sound::Partial { glide, .. } | Sound::Harmonic { glide, .. } => *glide,
+            Sound::Noise { .. } | Sound::Shaped { .. } => 0.0,
+        }
+    }
+}
+
+/// A kind of shared node: numbers several sources reference, each source its own beside them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SharedKind {
-    /// A level in dB moving as `depth sin(2 pi rate t + phase)`, `depth` each atom's own.
+    /// A level in dB moving as `depth sin(2 pi rate t + phase)`, `depth` each source's own.
     Periodic,
 }
 
-/// Name, the letter naming a referencing node, its numbers, the referencing atom's own.
+/// Name, the letter naming a referencing node, its numbers, the referencing source's own.
 type Named = (
     &'static str,
     &'static str,
@@ -125,7 +120,7 @@ impl SharedKind {
         format!("{DIRECTORY}/{}_{to}", self.name())
     }
 
-    /// What a referencing atom's node multiplies its amplitude by.
+    /// What a referencing source's node multiplies its amplitude by.
     fn factor(self, to: usize) -> String {
         match self {
             SharedKind::Periodic => {
@@ -135,7 +130,6 @@ impl SharedKind {
     }
 }
 
-/// A shared node: its kind and its numbers, in the order its kind names them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shared {
     pub kind: SharedKind,
@@ -165,7 +159,7 @@ impl Shared {
     }
 }
 
-/// An atom's reference to shared node `to` of its kind, beside the atom's own numbers.
+/// A source's reference to shared node `to` of its kind, beside the source's own numbers.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Link {
     pub to: usize,
@@ -173,23 +167,23 @@ pub struct Link {
     pub own: Vec<f64>,
 }
 
-/// A level in dBFS whose last knot ends the atom; a noise's is its band's power, density times
-/// `hi - lo`. `key` is its ordinal, every phase and the noise seed drawn from it. `links` the
-/// shared nodes it references, its amplitude times each one's factor.
+/// One sound in the clip: its kind, its levels in dBFS, one per column (a noise's its band's
+/// power, density times `hi - lo`), each one's last knot ending it. `key` is its ordinal, every
+/// phase and the noise seed drawn from it; `links` the shared nodes it references, its amplitude
+/// times each one's factor.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Atom {
+pub struct Source {
     pub key: u64,
     pub on: f64,
     pub sound: Sound,
-    pub level: Trajectory,
+    pub levels: Vec<Trajectory>,
     pub links: Vec<Link>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Quantity {
+pub(crate) enum Quantity {
     Time,
     Hz,
-    HzDeviation,
     Db,
     DbDeviation,
     Stretch,
@@ -205,23 +199,39 @@ pub fn phase(key: u64, k: usize) -> f64 {
 }
 
 /// The ordinal a birth takes: one past the largest living, the first 0.
-pub fn birth(atoms: &[Atom]) -> u64 {
-    atoms.iter().map(|a| a.key + 1).max().unwrap_or(0)
+pub fn birth(sources: &[Source]) -> u64 {
+    sources.iter().map(|a| a.key + 1).max().unwrap_or(0)
 }
 
-impl Atom {
-    pub fn end(&self) -> f64 {
-        self.on + self.level.knots.last().expect("a level ends on a knot").0
+impl Source {
+    /// `sound` keyed `key` from `on` at `levels`, one per column, referencing nothing.
+    pub fn new(key: u64, on: f64, sound: Sound, levels: Vec<Trajectory>) -> Source {
+        assert_eq!(levels.len(), sound.columns(), "a level per column");
+        Source {
+            key,
+            on,
+            sound,
+            levels,
+            links: Vec::new(),
+        }
     }
 
-    pub fn hz(&self) -> Option<&Trajectory> {
+    pub fn end(&self) -> f64 {
+        self.on
+            + self.levels[0]
+                .knots
+                .last()
+                .expect("a level ends on a knot")
+                .0
+    }
+
+    pub fn hz(&self) -> Option<f64> {
         match &self.sound {
-            Sound::Partial { hz, .. } | Sound::Harmonic { hz, .. } => Some(hz),
+            Sound::Partial { hz, .. } | Sound::Harmonic { hz, .. } => Some(*hz),
             Sound::Noise { .. } | Sound::Shaped { .. } => None,
         }
     }
 
-    /// Its kind by name.
     pub fn kind(&self) -> &'static str {
         match self.sound {
             Sound::Partial { .. } => "partial",
@@ -231,125 +241,14 @@ impl Atom {
         }
     }
 
-    /// Its glide in nepers per second, 0 where it has none.
-    pub fn glide(&self) -> f64 {
-        match self.sound {
-            Sound::Partial { glide, .. } | Sound::Harmonic { glide, .. } => glide,
-            Sound::Noise { .. } | Sound::Shaped { .. } => 0.0,
-        }
-    }
-
-    /// This partial or harmonic gliding at `rate`, as `Sound` states; its `hz` steady.
-    pub fn glided(mut self, rate: f64) -> Atom {
-        match &mut self.sound {
-            Sound::Partial { hz, glide } | Sound::Harmonic { hz, glide, .. } => {
-                assert!(
-                    rate == 0.0 || hz.knots.is_empty(),
-                    "a glide is written on a steady frequency"
-                );
-                *glide = rate;
-            }
-            Sound::Noise { .. } | Sound::Shaped { .. } => {
-                unreachable!("a noise has no frequency to glide")
-            }
-        }
-        self
-    }
-
     pub fn harmonics(&self) -> usize {
-        match &self.sound {
-            Sound::Harmonic { levels, .. } => levels.len() + 1,
-            _ => 1,
-        }
+        self.sound.columns()
     }
 
-    /// Every number but the key, in the order `with` reads.
+    /// Every number but the key, in the order `numbers` names them: a harmonic's levels after
+    /// the first before its kind's numbers' end, its first level last.
     pub fn values(&self) -> Vec<f64> {
-        let mut out = vec![self.on];
-        let knots = |out: &mut Vec<f64>, t: &Trajectory| {
-            out.push(t.base);
-            for (at, d) in &t.knots {
-                out.push(*at);
-                out.push(*d);
-            }
-        };
-        let glided = |out: &mut Vec<f64>, glide: f64| {
-            if glide != 0.0 {
-                out.push(glide);
-            }
-        };
-        match &self.sound {
-            Sound::Partial { hz, glide } => {
-                knots(&mut out, hz);
-                glided(&mut out, *glide);
-            }
-            Sound::Harmonic {
-                hz,
-                stretch,
-                glide,
-                levels,
-            } => {
-                knots(&mut out, hz);
-                glided(&mut out, *glide);
-                out.push(*stretch);
-                for level in levels {
-                    knots(&mut out, level);
-                }
-            }
-            Sound::Noise { lo, hi } => out.extend([*lo, *hi]),
-            Sound::Shaped { bands } => {
-                for (lo, hi, gain) in bands {
-                    out.extend([*lo, *hi, *gain]);
-                }
-            }
-        }
-        knots(&mut out, &self.level);
-        for link in &self.links {
-            out.extend(&link.own);
-        }
-        out
-    }
-
-    pub fn partial(key: u64, on: f64, hz: Trajectory, level: Trajectory) -> Atom {
-        Atom {
-            key,
-            on,
-            sound: Sound::Partial { hz, glide: 0.0 },
-            level,
-            links: Vec::new(),
-        }
-    }
-
-    /// `levels` each harmonic's, the first's the atom's.
-    pub fn harmonic(
-        key: u64,
-        on: f64,
-        (hz, stretch): (Trajectory, f64),
-        levels: Vec<Trajectory>,
-    ) -> Atom {
-        let mut levels = levels.into_iter();
-        let level = levels.next().expect("a harmonic has a first");
-        Atom {
-            key,
-            on,
-            sound: Sound::Harmonic {
-                hz,
-                stretch,
-                glide: 0.0,
-                levels: levels.collect(),
-            },
-            level,
-            links: Vec::new(),
-        }
-    }
-
-    /// Each harmonic's level, the first the atom's.
-    pub fn levels(&self) -> Vec<&Trajectory> {
-        let mut out = vec![&self.level];
-        if let Sound::Harmonic { levels, .. } = &self.sound {
-            out.extend(levels);
-        }
-        out
+        self.numbers().into_iter().map(|(_, v)| v).collect()
     }
 
     /// Harmonic `k`'s ratio to the fundamental, `k` where it is no harmonic.
@@ -361,84 +260,63 @@ impl Atom {
         }
     }
 
-    pub fn noise(key: u64, on: f64, (lo, hi): (f64, f64), level: Trajectory) -> Atom {
-        Atom {
-            key,
-            on,
-            sound: Sound::Noise { lo, hi },
-            level,
-            links: Vec::new(),
-        }
-    }
-
-    /// `bands` each `(lo, hi, gain_db)`, as `Sound::Shaped` states.
-    pub fn shaped(key: u64, on: f64, bands: Vec<(f64, f64, f64)>, level: Trajectory) -> Atom {
-        Atom {
-            key,
-            on,
-            sound: Sound::Shaped { bands },
-            level,
-            links: Vec::new(),
-        }
-    }
-
-    /// Each number beside its quantity, in `values()`' order.
-    pub fn numbers(&self) -> Vec<(Quantity, f64)> {
-        let mut out = vec![Quantity::Time];
-        let knots = |out: &mut Vec<_>, t: &Trajectory, (base, dev)| {
-            out.push(base);
-            for _ in &t.knots {
-                out.push(Quantity::Time);
-                out.push(dev);
+    pub(crate) fn numbers(&self) -> Vec<(Quantity, f64)> {
+        let mut out = vec![(Quantity::Time, self.on)];
+        let knots = |out: &mut Vec<_>, t: &Trajectory, base: Quantity| {
+            out.push((base, t.base));
+            for (at, d) in &t.knots {
+                out.push((Quantity::Time, *at));
+                out.push((Quantity::DbDeviation, *d));
             }
         };
         let glided = |out: &mut Vec<_>, glide: f64| {
             if glide != 0.0 {
-                out.push(Quantity::Glide);
+                out.push((Quantity::Glide, glide));
             }
         };
         match &self.sound {
             Sound::Partial { hz, glide } => {
-                knots(&mut out, hz, (Quantity::Hz, Quantity::HzDeviation));
+                out.push((Quantity::Hz, *hz));
                 glided(&mut out, *glide);
             }
             Sound::Harmonic {
-                hz, glide, levels, ..
+                hz, stretch, glide, ..
             } => {
-                knots(&mut out, hz, (Quantity::Hz, Quantity::HzDeviation));
+                out.push((Quantity::Hz, *hz));
                 glided(&mut out, *glide);
-                out.push(Quantity::Stretch);
-                for level in levels {
-                    knots(&mut out, level, (Quantity::Db, Quantity::DbDeviation));
+                out.push((Quantity::Stretch, *stretch));
+                for level in &self.levels[1..] {
+                    knots(&mut out, level, Quantity::Db);
                 }
             }
-            Sound::Noise { .. } => out.extend([Quantity::Edge, Quantity::Edge]),
+            Sound::Noise { lo, hi } => out.extend([(Quantity::Edge, *lo), (Quantity::Edge, *hi)]),
             Sound::Shaped { bands } => {
-                for _ in bands {
-                    out.extend([Quantity::Edge, Quantity::Edge, Quantity::DbDeviation]);
+                for (lo, hi, gain) in bands {
+                    out.extend([
+                        (Quantity::Edge, *lo),
+                        (Quantity::Edge, *hi),
+                        (Quantity::DbDeviation, *gain),
+                    ]);
                 }
             }
         }
-        knots(&mut out, &self.level, (Quantity::Db, Quantity::DbDeviation));
+        knots(&mut out, &self.levels[0], Quantity::Db);
         for link in &self.links {
-            out.extend(link.own.iter().map(|_| match link.kind {
-                SharedKind::Periodic => Quantity::Depth,
+            out.extend(link.own.iter().map(|v| match link.kind {
+                SharedKind::Periodic => (Quantity::Depth, *v),
             }));
         }
-        out.into_iter().zip(self.values()).collect()
+        out
     }
 
     /// One node per kind, knot counts and level tables, these by their hash.
     pub fn node(&self) -> String {
-        let (f, l) = (
-            self.hz().map_or(0, |t| t.knots.len()),
-            self.level.knots.len(),
-        );
-        let g = match self.glide() != 0.0 {
+        let l = self.levels[0].knots.len();
+        let g = match self.sound.glide() != 0.0 {
             true => "_g1",
             false => "",
         };
-        let tables: Vec<String> = self.levels().iter().map(|t| literal(t)).collect();
+        let tables: Vec<String> = self.levels.iter().map(literal).collect();
         let key = fnv(&tables.join("\n"));
         let linked: String = self
             .links
@@ -446,17 +324,17 @@ impl Atom {
             .map(|k| format!("_{}{}", k.kind.named().1, k.to))
             .collect();
         let key = format!("{linked}_n{key}");
+        // `f0`: no frequency knot, which the name counts.
         match &self.sound {
-            Sound::Partial { .. } => format!("{DIRECTORY}/partial_f{f}{g}_l{l}{key}"),
-            Sound::Harmonic { .. } => {
+            Sound::Partial { .. } => format!("{DIRECTORY}/partial_f0{g}_l{l}{key}"),
+            Sound::Harmonic { count, .. } => {
                 let each: Vec<String> = self
-                    .levels()
+                    .levels
                     .iter()
                     .map(|t| t.knots.len().to_string())
                     .collect();
                 format!(
-                    "{DIRECTORY}/harmonic_h{}_f{f}{g}_l{}{key}",
-                    self.harmonics(),
+                    "{DIRECTORY}/harmonic_h{count}_f0{g}_l{}{key}",
                     each.join("-")
                 )
             }
@@ -467,8 +345,8 @@ impl Atom {
         }
     }
 
-    /// Whether the parser and engine read this atom's node: a harmonic of many harmonics nests
-    /// past its bound, a band holding no line at k over the clip's length is empty.
+    /// Whether the parser and engine read this source's node: a harmonic of many harmonics
+    /// nests past its bound, a band holding no line at k over the clip's length is empty.
     pub fn writes(&self, clip: &Clip) -> bool {
         let holds = |lo: f64, hi: f64| {
             matches!(
@@ -485,60 +363,49 @@ impl Atom {
     }
 
     pub fn node_text(&self, clip: &Clip) -> String {
-        let l = self.level.knots.len();
+        let l = self.levels[0].knots.len();
         let end = format!("{}s", num(self.end() - self.on));
         let neper = num(NEPER_PER_DB);
         let levelled = |base: &str, held: &Trajectory| match held.knots.is_empty() {
             true => format!("exp({neper}*{base})"),
             false => format!("exp({neper}*({base} + {}))", literal(held)),
         };
-        let level = levelled("level", &self.level);
-        let glide = self.glide();
-        let turning = |f: usize| match glide != 0.0 {
+        let level = levelled("level", &self.levels[0]);
+        let glide = self.sound.glide();
+        let phi = match glide != 0.0 {
             true => "hz*(exp(glide*(t - on)) - 1)/glide".to_string(),
-            false => table(
-                "pwl_integral",
-                "hz",
-                &knot_names("ft", "fd", "hz", f),
-                Some(&end),
-            ),
+            false => format!("pwl_integral(t - on, 0s, hz, {end}, hz)"),
         };
         let gliding = match glide != 0.0 {
             true => ", gliding at glide nepers per second",
             false => "",
         };
-        let line = |k: usize, phi: &str| format!("sin(2*pi*{k}*{phi} + 2*pi*draw({k}, seed=key))");
-        let stretched = |k: usize, phi: &str| {
+        let line = |k: usize| format!("sin(2*pi*{k}*{phi} + 2*pi*draw({k}, seed=key))");
+        let stretched = |k: usize| {
             format!(
                 "sin(2*pi*{k}*sqrt(1 + b*{})*{phi} + 2*pi*draw({k}, seed=key))",
                 k * k
             )
         };
         let (what, body) = match &self.sound {
-            Sound::Partial { hz, .. } => (
-                format!(
-                    "one partial, its frequency through {} knots{gliding}",
-                    hz.knots.len()
-                ),
-                format!("{} * {level}", line(1, &turning(hz.knots.len()))),
+            Sound::Partial { .. } => (
+                format!("one partial, its frequency through 0 knots{gliding}"),
+                format!("{} * {level}", line(1)),
             ),
-            Sound::Harmonic { hz, levels, .. } => {
-                let phi = turning(hz.knots.len());
-                let mut lines = vec![format!("{level}*{}", stretched(1, &phi))];
-                for (i, held) in levels.iter().enumerate() {
+            Sound::Harmonic { count, .. } => {
+                let mut lines = vec![format!("{level}*{}", stretched(1))];
+                for (i, held) in self.levels[1..].iter().enumerate() {
                     let k = i + 2;
                     lines.push(format!(
                         "{}*{}",
                         levelled(&format!("l{k}"), held),
-                        stretched(k, &phi)
+                        stretched(k)
                     ));
                 }
                 (
                     format!(
-                        "{} harmonics of one fundamental through {} knots{gliding}, harmonic k \
-                         at k sqrt(1 + b k^2) times it, each at its own level, the first's",
-                        self.harmonics(),
-                        hz.knots.len()
+                        "{count} harmonics of one fundamental through 0 knots{gliding}, harmonic k \
+                         at k sqrt(1 + b k^2) times it, each at its own level, the first's"
                     ),
                     lines.join(" + "),
                 )
@@ -597,15 +464,6 @@ impl Atom {
             ("key".to_string(), self.key.to_string()),
             ("on".to_string(), num(self.on)),
         ];
-        let knots = |fields: &mut Vec<(String, String)>,
-                     t: &Trajectory,
-                     (base, time, dev): (&str, &str, &str)| {
-            fields.push((base.to_string(), num(t.base)));
-            for (i, (at, d)) in t.knots.iter().enumerate() {
-                fields.push((format!("{time}{}", i + 1), num(*at)));
-                fields.push((format!("{dev}{}", i + 1), num(*d)));
-            }
-        };
         let glided = |fields: &mut Vec<(String, String)>, glide: f64| {
             if glide != 0.0 {
                 fields.push(("glide".to_string(), num(glide)));
@@ -613,19 +471,16 @@ impl Atom {
         };
         match &self.sound {
             Sound::Partial { hz, glide } => {
-                knots(&mut fields, hz, ("hz", "ft", "fd"));
+                fields.push(("hz".to_string(), num(*hz)));
                 glided(&mut fields, *glide);
             }
             Sound::Harmonic {
-                hz,
-                stretch,
-                glide,
-                levels,
+                hz, stretch, glide, ..
             } => {
-                knots(&mut fields, hz, ("hz", "ft", "fd"));
+                fields.push(("hz".to_string(), num(*hz)));
                 glided(&mut fields, *glide);
                 fields.push(("b".to_string(), num(*stretch)));
-                for (i, level) in levels.iter().enumerate() {
+                for (i, level) in self.levels[1..].iter().enumerate() {
                     fields.push((format!("l{}", i + 2), num(level.base)));
                 }
             }
@@ -641,7 +496,7 @@ impl Atom {
                 }
             }
         }
-        fields.push(("level".to_string(), num(self.level.base)));
+        fields.push(("level".to_string(), num(self.levels[0].base)));
         for link in &self.links {
             for (name, v) in link.kind.own().iter().zip(&link.own) {
                 fields.push((name.to_string(), num(*v)));
@@ -654,8 +509,9 @@ impl Atom {
         format!("{{{}}}", written.join(", "))
     }
 
-    /// The atom a row writes reads back, its levels' knots from its node's text `text`.
-    fn read(node: &str, numbers: &HashMap<&str, f64>, text: &str) -> Option<Atom> {
+    /// The source a row writes reads back, its levels' knots from its node's text `text`;
+    /// `None` for a shape no fit writes.
+    fn read(node: &str, numbers: &HashMap<&str, f64>, text: &str) -> Option<Source> {
         let name = node.strip_prefix(&format!("../{DIRECTORY}/"))?;
         let mut counts: HashMap<&str, Vec<usize>> = HashMap::new();
         let mut parts = name.split('_');
@@ -673,14 +529,6 @@ impl Atom {
             _ => None,
         };
         let get = |name: &str| numbers.get(name).copied();
-        let trajectory = |base: &str, (time, dev): (&str, &str), count: usize| {
-            Some(Trajectory {
-                base: get(base)?,
-                knots: (1..=count)
-                    .map(|i| Some((get(&format!("{time}{i}"))?, get(&format!("{dev}{i}"))?)))
-                    .collect::<Option<_>>()?,
-            })
-        };
         let key = get("key")?;
         let key =
             (key >= 0.0 && key.fract() == 0.0 && key < u64::MAX as f64).then_some(key as u64)?;
@@ -697,31 +545,33 @@ impl Atom {
                 knots,
             })
         };
-        let level = levelled("level", *held.first()?)?;
-        let hz = || trajectory("hz", ("ft", "fd"), one("f")?);
+        let first = levelled("level", *held.first()?)?;
+        let hz = || (one("f")? == 0).then(|| get("hz"))?;
         let glide = || match counts.get("g").map(Vec::as_slice) {
             None => Some(0.0),
-            Some([1]) if one("f")? == 0 => get("glide").filter(|g| *g != 0.0),
+            Some([1]) => get("glide").filter(|g| *g != 0.0),
             Some(_) => None,
         };
         if kind != "harmonic" && held.len() != 1 {
             return None;
         }
+        let mut levels = vec![first];
         let sound = match kind {
             "partial" => Sound::Partial {
                 hz: hz()?,
                 glide: glide()?,
             },
-            "harmonic" if held.len() == one("h")? => Sound::Harmonic {
-                hz: hz()?,
-                stretch: get("b")?,
-                glide: glide()?,
-                levels: held[1..]
-                    .iter()
-                    .enumerate()
-                    .map(|(i, count)| levelled(&format!("l{}", i + 2), *count))
-                    .collect::<Option<_>>()?,
-            },
+            "harmonic" if held.len() == one("h")? => {
+                for (i, count) in held[1..].iter().enumerate() {
+                    levels.push(levelled(&format!("l{}", i + 2), *count)?);
+                }
+                Sound::Harmonic {
+                    hz: hz()?,
+                    stretch: get("b")?,
+                    count: held.len(),
+                    glide: glide()?,
+                }
+            }
             "noise" => Sound::Noise {
                 lo: get("lo")?,
                 hi: get("hi")?,
@@ -756,22 +606,22 @@ impl Atom {
                 own: kind.own().iter().map(|n| get(n)).collect::<Option<_>>()?,
             });
         }
-        let atom = Atom {
+        let source = Source {
             key,
             on,
             sound,
-            level,
+            levels,
             links,
         };
-        let knots: usize = atom.levels().iter().map(|t| t.knots.len()).sum();
-        (atom.values().len() + 1 == numbers.len() + 2 * knots).then_some(atom)
+        let knots: usize = source.levels.iter().map(|t| t.knots.len()).sum();
+        (source.values().len() + 1 == numbers.len() + 2 * knots).then_some(source)
     }
 }
 
-/// Each shared node `atoms` reference, by index; `None` where one is missing.
-pub fn shared(files: &[(String, String)], atoms: &[Atom]) -> Option<Vec<(usize, Shared)>> {
+/// Each shared node `sources` reference, by index; `None` where one is missing.
+pub fn shared(files: &[(String, String)], sources: &[Source]) -> Option<Vec<(usize, Shared)>> {
     let mut out: Vec<(usize, Shared)> = Vec::new();
-    for link in atoms.iter().flat_map(|a| &a.links) {
+    for link in sources.iter().flat_map(|a| &a.links) {
         if out.iter().any(|(to, _)| *to == link.to) {
             continue;
         }
@@ -832,51 +682,22 @@ fn tables(text: &str) -> Option<Vec<Vec<(f64, f64)>>> {
         .collect()
 }
 
-fn knot_names(time: &str, dev: &str, base: &str, count: usize) -> Vec<(String, String)> {
-    (1..=count)
-        .map(|k| (format!("{time}{k}"), format!("{base} + {dev}{k}")))
-        .collect()
-}
-
-/// `hold` repeats the last value to there, as `pwl_integral` needs to keep turning.
-fn table(name: &str, base: &str, knots: &[(String, String)], hold: Option<&str>) -> String {
-    let mut args = vec!["t - on".to_string(), "0s".to_string(), base.to_string()];
-    for (at, value) in knots {
-        args.push(at.clone());
-        args.push(value.clone());
-    }
-    if let Some(hold) = hold {
-        let (last_at, last) = knots
-            .last()
-            .map_or(("0s".to_string(), base.to_string()), |(t, v)| {
-                (t.clone(), v.clone())
-            });
-        args.push(match knots.is_empty() {
-            true => hold.to_string(),
-            false => format!("max({last_at}, {hold})"),
-        });
-        args.push(last);
-    }
-    format!("{name}({})", args.join(", "))
-}
-
-/// One row each in birth order, which is their keys' order.
-pub fn score(atoms: &[Atom]) -> String {
+/// One row each in birth order.
+pub fn score(sources: &[Source]) -> String {
     let mut out = String::from(
         "{\"annotation\": \"Models: the clip's atoms, one row each in birth order | Neglects: \
          what no atom explains | IO: (t) -> amplitude | Tags: score\"}\n",
     );
-    let mut born: Vec<&Atom> = atoms.iter().collect();
+    let mut born: Vec<&Source> = sources.iter().collect();
     born.sort_by_key(|a| a.key);
-    for atom in born {
-        out.push_str(&atom.row());
+    for source in born {
+        out.push_str(&source.row());
         out.push('\n');
     }
     out
 }
 
-/// The atoms a composition's `files` wrote, `None` where they hold anything else.
-pub fn read(files: &[(String, String)]) -> Option<Vec<Atom>> {
+pub fn read(files: &[(String, String)]) -> Option<Vec<Source>> {
     let file = |path: &str| {
         files
             .iter()
@@ -897,38 +718,26 @@ pub fn read(files: &[(String, String)]) -> Option<Vec<Atom>> {
             numbers.insert(bind.name.as_str(), *v);
         }
         let path = event.node.name.strip_prefix("../")?;
-        out.push(Atom::read(&event.node.name, &numbers, file(path)?)?);
+        out.push(Source::read(&event.node.name, &numbers, file(path)?)?);
     }
     Some(out)
 }
 
-/// The score every composition of atoms plays, and the master that plays it.
 pub const SCORE: &str = "score/clip.jsonl";
-pub const MASTER: &str = "; Models: the clip | Neglects: nothing | IO: (t) -> amplitude | \
-     Tags: master\n@score/clip(t)\n";
 
-/// Every file a composition of `atoms` holds: its nodes, the `shared` nodes they reference by
-/// index, its score and its master.
-pub fn files(atoms: &[Atom], shared: &[(usize, Shared)], clip: &Clip) -> Vec<(String, String)> {
-    let mut out = nodes(atoms, clip);
-    for (to, node) in shared {
-        out.push((node.kind.node(*to), node.node_text()));
-    }
-    out.push((SCORE.to_string(), score(atoms)));
-    out.push(("master".to_string(), MASTER.to_string()));
-    out
-}
-
-/// Every file a composition of `atoms` holds, its master scaling the score by one gain of
-/// `gain_db` dB.
+/// Every file a composition of `sources` holds: its nodes, the `shared` nodes they reference by
+/// index, its score, and its master scaling the score by one gain of `gain_db` dB.
 pub fn files_at(
-    atoms: &[Atom],
+    sources: &[Source],
     shared: &[(usize, Shared)],
     clip: &Clip,
     gain_db: f64,
 ) -> Vec<(String, String)> {
-    let mut out = files(atoms, shared, clip);
-    out.retain(|(path, _)| path != "master");
+    let mut out = nodes(sources, clip);
+    for (to, node) in shared {
+        out.push((node.kind.node(*to), node.node_text()));
+    }
+    out.push((SCORE.to_string(), score(sources)));
     let master = format!(
         "; Models: the clip at one master gain in dB | Neglects: nothing | IO: (t) -> \
          amplitude | Tags: master\ngain = {}\nexp({}*gain) * @score/clip(t)\n",
@@ -939,7 +748,6 @@ pub fn files_at(
     out
 }
 
-/// The master gain `files_at` wrote into `files`, if it did.
 pub fn gain_of(files: &[(String, String)]) -> Option<f64> {
     let (_, master) = files.iter().find(|(path, _)| path == "master")?;
     master
@@ -948,8 +756,8 @@ pub fn gain_of(files: &[(String, String)]) -> Option<f64> {
         .and_then(|v| v.trim().parse().ok())
 }
 
-pub fn nodes(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = atoms
+pub fn nodes(sources: &[Source], clip: &Clip) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = sources
         .iter()
         .map(|a| (a.node(), a.node_text(clip)))
         .collect();
@@ -958,16 +766,16 @@ pub fn nodes(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
     out
 }
 
-/// The ranges an atom's numbers are priced over (bits.rs).
+/// The ranges a source's numbers are priced over (bits.rs).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Feasible {
+pub(crate) struct Feasible {
     pub hz: (f64, f64),
     pub secs: (f64, f64),
     pub db: (f64, f64),
 }
 
 impl Feasible {
-    pub fn of(clip: &Clip, db: (f64, f64)) -> Feasible {
+    pub(crate) fn of(clip: &Clip, db: (f64, f64)) -> Feasible {
         Feasible {
             hz: (
                 cam_hz(CAM_FIRST),
@@ -978,17 +786,15 @@ impl Feasible {
         }
     }
 
-    pub fn hz_of(&self, atom: &Atom) -> (f64, f64) {
-        (self.hz.0, self.hz.1 / atom.ratio(atom.harmonics()))
+    pub(crate) fn hz_of(&self, source: &Source) -> (f64, f64) {
+        (self.hz.0, self.hz.1 / source.ratio(source.harmonics()))
     }
 
-    /// A deviation's range: the width of its quantity's either way.
-    pub fn offset(&self) -> f64 {
+    pub(crate) fn offset(&self) -> f64 {
         self.db.1 - self.db.0
     }
 }
 
-/// The clip `files` write, or why the engine refuses them.
 pub fn sounded(files: Vec<(String, String)>, clip: &Clip) -> Result<Vec<f64>, CliError> {
     let mut held = Composition::new();
     for (path, text) in files {

@@ -27,8 +27,8 @@ pub fn help_text() -> String {
         .map(|e| format!("`.{e}`"))
         .join(", ");
     let unreadable = crate::recording::UNREADABLE;
-    let (spl, out) = (sva_core::solve::fit::SPL_DB, crate::args::OUT);
-    let tolerance = sva_core::solve::optimize::TOLERANCE;
+    let (spl, out) = (sva_solve::fit::SPL_DB, crate::args::OUT);
+    let tolerance = sva_solve::TOLERANCE;
     format!(
         r#"USAGE:
   sva-cli (render | analyze | solve | lint | trace | builtins | outline | new) [arguments]
@@ -530,15 +530,12 @@ OUTLINE:
   instances beside its limit.
 
 NEW:
-  sva-cli new <name> [--from <recording> [--harmonics <n>] [--lone <n>]]
-      [--idempotency-key <key>]
+  sva-cli new <name> [--idempotency-key <key>]
 
   Writes a starter composition at ./<name>, and refuses if that directory
-  exists. `--from <recording>`, a starter of a recording, refuses as
-  `seed.unbuilt`: `solve <recording>` fits one from silence. `--idempotency-key <key>` records
-  the key beside the composition, so a retry under the same key succeeds
-  identically while the tree still holds what was written. Any other key, or an
-  edited tree, refuses.
+  exists. `--idempotency-key <key>` records the key beside the composition, so
+  a retry under the same key succeeds identically while the tree still holds
+  what was written. Any other key, or an edited tree, refuses.
 
 EXAMPLES:
   sva-cli new song1 && cd song1

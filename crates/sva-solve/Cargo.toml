@@ -1,0 +1,15 @@
+# Concern: declares the package and its dependencies: the pipeline it renders through and the hearing tables | Non-concern: the deny edges barring the front ends (.annotated-tree.toml) | IO: none
+[package]
+name = "sva-solve"
+description = "Fits a recording as a composition of sources by minimum description length"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libm = { workspace = true }
+sva-ast = { workspace = true }
+sva-core = { workspace = true }
+sva-engine = { workspace = true }
+sva-formula = { workspace = true }

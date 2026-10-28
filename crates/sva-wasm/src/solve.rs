@@ -1,12 +1,12 @@
-// Concern: a solve's JS shapes and run over a page's clip, fresh or resumed, a composition per pass; `seed` refused | Non-concern: the method's binding (lib.rs) | IO: (clip, options) -> `data`
+// Concern: a solve's JS shapes and run over a page's clip, fresh or resumed, a composition per pass | Non-concern: the method's binding (lib.rs) | IO: (clip, options) -> `data`
 
 use std::pin::Pin;
 
-use sva_core::solve::atoms::files_at;
-use sva_core::solve::fit::{Options, Resume, SPL_DB, fit, mono};
-use sva_core::solve::optimize::TOLERANCE;
-use sva_core::solve::report::{answer, composition, progress};
 use sva_core::{Abandon, success_envelope};
+use sva_solve::TOLERANCE;
+use sva_solve::fit::{Options, Resume, SPL_DB, fit, mono};
+use sva_solve::report::{answer, composition, progress};
+use sva_solve::sources::files_at;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
 
@@ -71,8 +71,8 @@ export interface SolveAtom {
     /** A shaped noise's bands, each its gain in dB over its one shared level. */
     bands: { lo_hz: number; hi_hz: number; gain_db: number }[] | null;
 }
-/** A shared variable the atoms reference: a periodic level, its rate in Hz and phase shared,
- * each atom's level moved by its own `depth` in dB times sin(2 pi rate t + phase). */
+/** A shared variable the sources reference: a periodic level, its rate in Hz and phase shared,
+ * each source's level moved by its own `depth` in dB times sin(2 pi rate t + phase). */
 export interface SolveShared {
     id: number;
     kind: "periodic";
@@ -81,17 +81,17 @@ export interface SolveShared {
     atoms: { key: number; depth: number }[];
 }
 /**
- * One pass, one move: `action` an add of a new atom or an adjust of a kept one, `adjust` what
+ * One pass, one move: `action` an add of a new source or an adjust of a kept one, `adjust` what
  * that adjust changed (null for an add), `move` both in words (`"add partial"`, `"level
- * harmonic"`, `"start"`), `from_db` and `to_db` the atom's level before and
+ * harmonic"`, `"start"`), `from_db` and `to_db` the source's level before and
  * after (null where it was not, or an adjust to nought removed it); `delta_dl_bits` the
  * pass's change to the description length, `drop_bits` its negation, `total_drop_bits` the
  * drop from the empty fit's description length to `dl_bits`, `share` the pass's drop over that
  * (null where it is none), `dl_bits` the total, `atom_bits` plus
  * `residual_bits`; `residual_db[frame][band]` the power
- * the fit leaves in each octave band in dB, null where none; `envelopes` each kept atom's
- * written level per frame in dB; `shared` the shared variables its atoms reference;
- * `skipped` the atoms of better moves passed over, their nodes refused; `seconds` the clock
+ * the fit leaves in each octave band in dB, null where none; `envelopes` each kept source's
+ * written level per frame in dB; `shared` the shared variables its sources reference;
+ * `skipped` the sources of better moves passed over, their nodes refused; `seconds` the clock
  * since the solve began as it ended, `pass_secs` its pass's own time; `files` the
  * composition it leaves, as the answer's `files`, to render as it arrives.
  * `pass` counts from 1, a fresh start's 0, a resumed start's the pass it resumes from.
@@ -286,7 +286,7 @@ pub(crate) async fn solved(clip: &JsValue, options_js: &JsValue) -> Result<JsVal
             }
             if let Some(hear) = &hear {
                 let line_js = parse(&progress(line)).unwrap_or(JsValue::NULL);
-                let files = files_at(&line.atoms, &line.shared, &line.clip, gain_db);
+                let files = files_at(&line.sources, &line.shared, &line.clip, gain_db);
                 let files = parse(&composition(&files)).unwrap_or(JsValue::NULL);
                 let _ = js_sys::Reflect::set(&line_js, &"files".into(), &files);
                 let _ = hear.call1(&JsValue::NULL, &line_js);
@@ -297,39 +297,14 @@ pub(crate) async fn solved(clip: &JsValue, options_js: &JsValue) -> Result<JsVal
     )
     .await
     .map_err(|e| thrown(&e))?;
-    let files = files_at(&fitted.atoms, &fitted.shared, &fitted.clip, fitted.gain_db);
+    let files = files_at(
+        &fitted.sources,
+        &fitted.shared,
+        &fitted.clip,
+        fitted.gain_db,
+    );
     parse(&success_envelope(
         &answer(&fitted, clock(), &[], Some(&files)),
         &[],
     ))
-}
-
-/// `limits`: `{ harmonics, lone }`, each optional, as `new --from` takes `--harmonics` and
-/// `--lone`. This build checks them and throws `seed.unbuilt`.
-#[wasm_bindgen]
-pub fn seed(
-    rate: u32,
-    channels: js_sys::Array,
-    clip: &str,
-    limits: Option<js_sys::Object>,
-) -> Result<JsValue, JsValue> {
-    planes_of(channels)?;
-    if let Some(limits) = limits {
-        for key in ["harmonics", "lone"] {
-            let value = js_sys::Reflect::get(&limits, &key.into()).unwrap_or(JsValue::UNDEFINED);
-            let least = f64::from(u8::from(key == "harmonics"));
-            if !value.is_undefined()
-                && !value
-                    .as_f64()
-                    .is_some_and(|n| n.fract() == 0.0 && n >= least)
-            {
-                return Err(refuse(
-                    format!("`limits.{key}` is no whole number from {least}"),
-                    "pass `{ harmonics: 48, lone: 8 }` or leave a key out for its default",
-                ));
-            }
-        }
-    }
-    let _ = (rate, clip);
-    Err(thrown(&sva_core::solve::seed_unbuilt()))
 }

@@ -6,8 +6,4 @@ mod hear;
 mod lint_codes;
 mod pipeline;
 mod sampled;
-mod solve_atoms;
-mod solve_bits;
-mod solve_bounds;
-mod solve_fit;
 mod stream;

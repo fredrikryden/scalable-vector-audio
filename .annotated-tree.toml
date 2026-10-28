@@ -34,4 +34,11 @@ deny = [
     ["sva-core", "sva-cli"],
     ["sva-core", "sva-wasm"],
     ["sva-wasm", "sva-cli"],
+    ["sva-core", "sva-solve"],
+    ["sva-solve", "sva-cli"],
+    ["sva-solve", "sva-wasm"],
+    ["sva-ast", "sva-solve"],
+    ["sva-formula", "sva-solve"],
+    ["sva-samples", "sva-solve"],
+    ["sva-engine", "sva-solve"],
 ]

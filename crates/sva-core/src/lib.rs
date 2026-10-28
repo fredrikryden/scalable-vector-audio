@@ -11,7 +11,6 @@ mod outline;
 mod output;
 mod query;
 mod set;
-pub mod solve;
 mod song;
 mod target;
 mod until;
@@ -29,8 +28,7 @@ pub use output::{
     Diagnostic, Severity, diagnostics_json, error_envelope, error_envelope_with, success_envelope,
 };
 pub use query::{
-    Asked, Call, Destination, RETIRED, Spelled, Taken, asked, asked_all, call, calls, is_wav,
-    retired, seconds,
+    Asked, Call, Destination, Spelled, Taken, asked, asked_all, call, calls, is_wav, seconds,
 };
 pub use set::{overlaid, set};
 pub use song::{as_lane, sung};
@@ -105,7 +103,7 @@ impl Rendered {
         )
     }
 
-    /// What a bar lasts in this render's tempo; `None` where it has none.
+    /// What a bar lasts in this render's tempo, if it has one.
     pub fn seconds_per_bar(&self) -> Option<f64> {
         self.graph.tempo().map(|tempo| tempo.seconds_per_bar())
     }
@@ -172,20 +170,16 @@ impl<'a> Job<'a> {
 fn settle(job: &Job) -> Result<(Graph, RenderConfig, Song), CliError> {
     let Target { expr, interval } = target(job.target)?;
     let roots = roots_of(job.source, &expr)?;
-    let hinted = |e| solve::hinted(e, job.source, Some(job.target));
     let mut graph = settled(sva_ast::load_reaching(
         job.source,
         &roots.iter().map(String::as_str).collect::<Vec<_>>(),
-    ))
-    .map_err(hinted)?;
-    let parsed = sva_ast::parse_expr(&expr)
-        .map_err(|d| {
-            CliError::BadProbe(format!(
-                "`{}` does not parse as an expression: {}",
-                job.target, d.message
-            ))
-        })
-        .map_err(hinted)?;
+    ))?;
+    let parsed = sva_ast::parse_expr(&expr).map_err(|d| {
+        CliError::BadProbe(format!(
+            "`{}` does not parse as an expression: {}",
+            job.target, d.message
+        ))
+    })?;
     let parsed =
         sva_ast::resolve_recordings(&parsed, job.source).map_err(|unheld| match unheld.why {
             None => CliError::NotFound(unheld.message()),
@@ -599,37 +593,8 @@ pub fn cwd() -> Result<std::path::PathBuf, CliError> {
         .map_err(|e| CliError::Io(format!("could not read the current directory: {e}")))
 }
 
-/// Every node `source` holds; a solve's `fits/` costs are no nodes, so the load never sees them.
 pub fn prepared(source: &dyn Source) -> Result<Graph, CliError> {
-    settled(sva_ast::load(&Unfitted(source))).map_err(|e| solve::hinted(e, source, None))
-}
-
-struct Unfitted<'a>(&'a dyn Source);
-
-impl Source for Unfitted<'_> {
-    fn paths(&self) -> Result<sva_ast::Listing, String> {
-        let fits = format!("{}/", solve::FITS);
-        let mut listing = self.0.paths()?;
-        listing.found.retain(|path| !path.starts_with(&fits));
-        listing.unreadable.retain(|path| !path.starts_with(&fits));
-        Ok(listing)
-    }
-
-    fn get(&self, path: &str) -> Result<Option<std::borrow::Cow<'_, str>>, String> {
-        self.0.get(path)
-    }
-
-    fn generation(&self, path: &str) -> Option<u64> {
-        self.0.generation(path)
-    }
-
-    fn name(&self) -> String {
-        self.0.name()
-    }
-
-    fn recording(&self, path: &str) -> Result<Option<std::sync::Arc<sva_ast::Recording>>, String> {
-        self.0.recording(path)
-    }
+    settled(sva_ast::load(source))
 }
 
 /// Argv math: `trace` and `lint` each refuse a target no node answers for here, under one

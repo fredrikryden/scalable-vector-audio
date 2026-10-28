@@ -72,8 +72,6 @@ pub enum Command {
         /// Present where the caller says this is a retry, per the `cli` standard's own
         /// requirement that a create verb be made idempotent.
         idempotency_key: Option<String>,
-        /// A recording to start the composition from, which this build refuses.
-        from: Option<PathBuf>,
     },
 }
 
@@ -167,45 +165,21 @@ fn new_args(rest: &[String]) -> Result<Command, CliError> {
         Some(name) if !name.starts_with("--") => name.clone(),
         Some(_) | None => return Err(CliError::usage("cli.missing_argument", "missing <name>")),
     };
-    let (mut idempotency_key, mut from) = (None, None);
-    let mut sized = None;
+    let mut idempotency_key = None;
     while let Some(flag) = it.next() {
         match flag.as_str() {
             "--idempotency-key" => idempotency_key = Some(value(&mut it, "--idempotency-key")?),
-            "--from" => from = Some(PathBuf::from(value(&mut it, "--from")?)),
-            "--harmonics" | "--lone" => {
-                let least = usize::from(flag == "--harmonics");
-                value(&mut it, flag)?
-                    .parse::<usize>()
-                    .ok()
-                    .filter(|n| *n >= least)
-                    .ok_or_else(|| {
-                        CliError::usage(
-                            "cli.bad_value",
-                            format!("`{flag}` takes a whole number from {least}"),
-                        )
-                    })?;
-                sized = Some(flag.clone());
-            }
             _ => {
                 return Err(CliError::usage(
                     "cli.unknown_argument",
-                    "new takes one <name>, an optional `--from <recording>` with `--harmonics <n>` \
-                     and `--lone <n>`, and an optional `--idempotency-key <key>`",
+                    "new takes one <name> and an optional `--idempotency-key <key>`",
                 ));
             }
         }
     }
-    if let (Some(flag), None) = (sized, &from) {
-        return Err(CliError::usage(
-            "cli.needs_from",
-            format!("`{flag}` sizes the starter `--from <recording>` writes"),
-        ));
-    }
     Ok(Command::New {
         name,
         idempotency_key,
-        from,
     })
 }
 
@@ -299,7 +273,7 @@ mod tests {
     #[test]
     fn each_argument_mistake_answers_its_own_code_naming_the_text() {
         let render = |tail: &[&'static str]| [&["render", "@a"][..], tail].concat();
-        let cases: [(Vec<&str>, &str, &str); 14] = [
+        let cases: [(Vec<&str>, &str, &str); 13] = [
             (
                 render(&["--representation", "spectre"]),
                 "query.unknown_representation",
@@ -329,11 +303,6 @@ mod tests {
                 render(&["--representation", "spectrum(peaks=8"]),
                 "query.malformed",
                 "`spectrum(peaks=8`",
-            ),
-            (
-                render(&["--representation", "exact-envelope"]),
-                "query.retired",
-                "`exact-envelope`",
             ),
             (
                 render(&["--representation", "a=x,b=x"]),
@@ -413,7 +382,6 @@ mod tests {
             Command::New {
                 name: "song1".to_string(),
                 idempotency_key: None,
-                from: None,
             }
         );
     }

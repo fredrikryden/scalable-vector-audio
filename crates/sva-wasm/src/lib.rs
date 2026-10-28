@@ -14,7 +14,6 @@ mod threads;
 pub use analyze::analyze;
 pub use describe::{outline, readings};
 pub use opfs::DirectoryHandle;
-pub use solve::seed;
 pub use stats::{subscribe, unsubscribe};
 pub use threads::start_threads;
 

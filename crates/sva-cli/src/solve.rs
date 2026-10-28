@@ -6,11 +6,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use sva_core::solve::atoms::{DIRECTORY, SCORE, files_at, sounded};
-use sva_core::solve::fit::{Options, Resume, fit, mono};
-use sva_core::solve::optimize::TOLERANCE;
-use sva_core::solve::report::{answer, progress};
 use sva_core::{Abandon, CliError, success_envelope};
+use sva_solve::TOLERANCE;
+use sva_solve::fit::{Options, Resume, fit, mono};
+use sva_solve::report::{answer, progress};
+use sva_solve::sources::{DIRECTORY, SCORE, files_at, sounded};
 
 use crate::args::SolveArgs;
 use crate::recording::read_recording;
@@ -21,7 +21,7 @@ fn io(path: &Path, e: std::io::Error) -> CliError {
     CliError::Io(format!("{}: {e}", path.display()))
 }
 
-/// The fit of `args.path` under `args.out`: `pass-001.wav` and on (the atoms each pass leaves,
+/// The fit of `args.path` under `args.out`: `pass-001.wav` and on (the sources each pass leaves,
 /// rendered as it ends), its composition, `final.wav` (its render), and `clip-grid.wav` and
 /// `fit-grid.wav` (both coarse grids sounded alike); resumed from `args.from` where named.
 pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
@@ -70,7 +70,7 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
             if line.geometry.is_some() || failed.is_some() {
                 return;
             }
-            let files = files_at(&line.atoms, &line.shared, &line.clip, gain_db);
+            let files = files_at(&line.sources, &line.shared, &line.clip, gain_db);
             let wav = args.out.join(format!("pass-{:03}.wav", line.pass));
             let written = sounded(files, &line.clip).and_then(|heard| {
                 let samples: Vec<f32> = heard.iter().map(|s| *s as f32).collect();
@@ -90,7 +90,12 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
     if let Some(e) = failed {
         return Err(e);
     }
-    let composition = files_at(&fitted.atoms, &fitted.shared, &fitted.clip, fitted.gain_db);
+    let composition = files_at(
+        &fitted.sources,
+        &fitted.shared,
+        &fitted.clip,
+        fitted.gain_db,
+    );
     for (path, body) in &composition {
         let file = args.out.join(path);
         if let Some(parent) = file.parent() {

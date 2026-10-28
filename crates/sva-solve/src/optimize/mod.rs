@@ -1,15 +1,21 @@
-// Concern: the blind optimizer: passes of the best DL drop, the stop rule, kept things, shared variables, the ledger pricing moves, a resume | Non-concern: sound | IO: (Problem, State) -> State, End
+// Concern: the blind optimizer: passes of the best DL drop, the stop rule, kept things, shared variables, the ledger pricing moves | Non-concern: sound, threads | IO: (Problem, State) -> State, End
 
-pub mod code;
+pub(crate) mod code;
 
+use std::future::Future;
 use std::num::NonZeroUsize;
-
-use sva_engine::{Abandon, each};
+use std::pin::Pin;
 
 use code::{Price, count};
 
-/// What the optimizer reaches a problem through.
-pub trait Problem: Sync + Sized {
+/// How many candidates one turn fits, how a turn runs them, and whether the run is stopped.
+pub(crate) trait Pace {
+    fn width(&self) -> NonZeroUsize;
+    fn each<T: Send, R: Send>(&self, tasks: Vec<T>, run: impl Fn(T) -> R + Sync) -> Vec<R>;
+    fn stopped(&self) -> Pin<Box<dyn Future<Output = bool> + '_>>;
+}
+
+pub(crate) trait Problem: Sync + Sized {
     type Thing: Clone + Send + Sync;
     type Draft: Send;
     type Label: Copy + Send;
@@ -18,7 +24,6 @@ pub trait Problem: Sync + Sized {
 
     fn missed(&self, kept: &[Self::Thing], shared: &[Shared]) -> f64;
     fn price(&self, thing: &Self::Thing) -> Price;
-    /// The shared variables `thing` references.
     fn attached(&self, thing: &Self::Thing) -> Vec<usize>;
     /// One unused spare of each kind of shared variable, the kind its index.
     fn spares(&self) -> Vec<Shared>;
@@ -26,7 +31,7 @@ pub trait Problem: Sync + Sized {
     fn price_shared(&self, s: usize, kept: &[Self::Thing]) -> Price;
     fn read(&self, kept: &[Self::Thing], shared: &[Shared]) -> Self::Reading;
     fn propose(&self, kept: &[Self::Thing], reading: &Self::Reading) -> Vec<Self::Candidate>;
-    /// `candidate`'s moves, each priced by `ledger`, or a candidate fitted next round in its place.
+    /// `candidate`'s moves, each priced by `ledger`.
     fn fit(
         &self,
         kept: &[Self::Thing],
@@ -34,40 +39,40 @@ pub trait Problem: Sync + Sized {
         reading: &Self::Reading,
         key: u64,
         candidate: Self::Candidate,
-    ) -> Fitting<Self>;
+    ) -> Vec<Scored<Self>>;
     fn make(&self, reading: &Self::Reading, key: u64, draft: Self::Draft) -> Self::Thing;
     /// A move whose thing is not admitted is skipped for the next best.
     fn admits(&self, thing: &Self::Thing) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Edit<A, T, L> {
+pub(crate) enum Edit<A, T, L> {
     Add(A),
     Replace(usize, T, L),
     Remove(usize, L),
 }
 
 /// The edit a pass made, its things left out.
-pub type Moved<L> = Edit<(), (), L>;
+pub(crate) type Moved<L> = Edit<(), (), L>;
 
 /// A list of numbers several things reference, each thing its own attachment numbers in its
 /// own price; its kind the index of the spare `Problem::spares` gives.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Shared {
-    pub kind: usize,
-    pub numbers: Vec<f64>,
+pub(crate) struct Shared {
+    pub(crate) kind: usize,
+    pub(crate) numbers: Vec<f64>,
 }
 
 /// An add beside what its fit also sets: shared variables' numbers, and kept things other than
 /// it in their attachment numbers.
-pub struct Added<P: Problem> {
-    pub draft: P::Draft,
-    pub shared: Vec<(usize, Shared)>,
-    pub others: Vec<(usize, P::Thing)>,
+pub(crate) struct Added<P: Problem> {
+    pub(crate) draft: P::Draft,
+    pub(crate) shared: Vec<(usize, Shared)>,
+    pub(crate) others: Vec<(usize, P::Thing)>,
 }
 
 impl<P: Problem> Added<P> {
-    pub fn alone(draft: P::Draft) -> Added<P> {
+    pub(crate) fn alone(draft: P::Draft) -> Added<P> {
         Added {
             draft,
             shared: Vec::new(),
@@ -76,31 +81,26 @@ impl<P: Problem> Added<P> {
     }
 }
 
-pub struct Scored<P: Problem> {
-    pub change: f64,
-    pub edit: Edit<Added<P>, P::Thing, P::Label>,
-}
-
-pub enum Fitting<P: Problem> {
-    Moves(Vec<Scored<P>>),
-    Again(P::Candidate),
+pub(crate) struct Scored<P: Problem> {
+    pub(crate) change: f64,
+    pub(crate) edit: Edit<Added<P>, P::Thing, P::Label>,
 }
 
 /// An edit: each thing beside the shared variables it references, and shared variables'
 /// prices after it.
 #[derive(Default)]
-pub struct Change<'a> {
-    pub added: Option<(&'a Price, &'a [usize])>,
-    pub removed: Option<usize>,
-    pub replaced: Vec<(usize, &'a Price, &'a [usize])>,
-    pub shared: Vec<(usize, &'a Price)>,
+pub(crate) struct Change<'a> {
+    pub(crate) added: Option<(&'a Price, &'a [usize])>,
+    pub(crate) removed: Option<usize>,
+    pub(crate) replaced: Vec<(usize, &'a Price, &'a [usize])>,
+    pub(crate) shared: Vec<(usize, &'a Price)>,
 }
 
 /// The one place a move's DL change is priced: the things' count and prices; per kind the
 /// count of active shared variables, each thing's choice of none or one, each active one's
 /// price once, a spare 0 bits. `missed` is the problem's change in the missed bits.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Ledger {
+pub(crate) struct Ledger {
     bits: Vec<f64>,
     uses: Vec<Vec<usize>>,
     shared: Vec<(usize, f64)>,
@@ -146,12 +146,12 @@ impl Ledger {
         refs
     }
 
-    pub fn bits(&self) -> f64 {
+    fn bits(&self) -> f64 {
         let priced = self.bits.iter().sum();
         self.total(self.bits.len(), priced, &self.refs(), &self.shared)
     }
 
-    pub fn changed(&self, change: &Change, missed: f64) -> f64 {
+    pub(crate) fn changed(&self, change: &Change, missed: f64) -> f64 {
         let (mut things, mut priced) = (self.bits.len(), 0.0);
         let mut refs = self.refs();
         let mut shared = self.shared.clone();
@@ -189,7 +189,7 @@ impl Ledger {
         self.total(things, after, &refs, &shared) - before + missed
     }
 
-    pub fn added(&self, price: &Price, missed: f64) -> f64 {
+    pub(crate) fn added(&self, price: &Price, missed: f64) -> f64 {
         let change = Change {
             added: Some((price, &[])),
             ..Change::default()
@@ -197,24 +197,7 @@ impl Ledger {
         self.changed(&change, missed)
     }
 
-    pub fn removed(&self, a: usize, missed: f64) -> f64 {
-        let change = Change {
-            removed: Some(a),
-            ..Change::default()
-        };
-        self.changed(&change, missed)
-    }
-
-    pub fn replaced(&self, a: usize, after: &Price, missed: f64) -> f64 {
-        let change = Change {
-            replaced: vec![(a, after, &self.uses[a])],
-            ..Change::default()
-        };
-        self.changed(&change, missed)
-    }
-
-    /// The ledger with thing `a` gone.
-    pub fn without(&self, a: usize) -> Ledger {
+    pub(crate) fn without(&self, a: usize) -> Ledger {
         let mut out = self.clone();
         out.bits.remove(a);
         out.uses.remove(a);
@@ -222,7 +205,7 @@ impl Ledger {
     }
 }
 
-pub struct State<P: Problem> {
+pub(crate) struct State<P: Problem> {
     kept: Vec<P::Thing>,
     shared: Vec<Shared>,
     born: u64,
@@ -249,7 +232,7 @@ impl<P: Problem> Clone for State<P> {
 }
 
 impl<P: Problem> State<P> {
-    pub fn of(
+    pub(crate) fn of(
         problem: &P,
         kept: Vec<P::Thing>,
         shared: Vec<Shared>,
@@ -270,35 +253,35 @@ impl<P: Problem> State<P> {
         state
     }
 
-    pub fn kept(&self) -> &[P::Thing] {
+    pub(crate) fn kept(&self) -> &[P::Thing] {
         &self.kept
     }
 
-    pub fn shared(&self) -> &[Shared] {
+    pub(crate) fn shared(&self) -> &[Shared] {
         &self.shared
     }
 
-    pub fn passes(&self) -> usize {
+    pub(crate) fn passes(&self) -> usize {
         self.passes
     }
 
-    pub fn thing_bits(&self) -> f64 {
+    pub(crate) fn thing_bits(&self) -> f64 {
         self.ledger.bits()
     }
 
-    pub fn missed_bits(&self) -> f64 {
+    pub(crate) fn missed_bits(&self) -> f64 {
         self.missed_bits
     }
 
-    pub fn moved(&self) -> Option<Moved<P::Label>> {
+    pub(crate) fn moved(&self) -> Option<Moved<P::Label>> {
         self.moved
     }
 
-    pub fn skipped(&self) -> &[P::Thing] {
+    pub(crate) fn skipped(&self) -> &[P::Thing] {
         &self.skipped
     }
 
-    pub fn dl(&self) -> f64 {
+    pub(crate) fn dl(&self) -> f64 {
         self.thing_bits() + self.missed_bits
     }
 
@@ -348,52 +331,33 @@ impl End {
     }
 }
 
+/// `tasks` run `pace.width()` at a time; `None` if `pace` stops before a turn.
 async fn paced<T: Send, R: Send>(
-    threads: NonZeroUsize,
-    stop: &dyn Abandon,
+    pace: &impl Pace,
     tasks: Vec<T>,
     run: impl Fn(T) -> R + Sync,
 ) -> Option<Vec<R>> {
     let mut tasks = tasks.into_iter().peekable();
     let mut out = Vec::new();
     while tasks.peek().is_some() {
-        if stop.abandoned().await {
+        if pace.stopped().await {
             return None;
         }
-        let turn: Vec<T> = tasks.by_ref().take(threads.get()).collect();
-        out.extend(each(threads, turn, &run));
+        let turn: Vec<T> = tasks.by_ref().take(pace.width().get()).collect();
+        out.extend(pace.each(turn, &run));
     }
     Some(out)
 }
 
-/// One pass: the move lowering the DL most, ties in the moves' order; `None` if `stop` ends it.
-async fn pass<P: Problem>(
-    problem: &P,
-    state: &State<P>,
-    threads: NonZeroUsize,
-    stop: &dyn Abandon,
-) -> Option<State<P>> {
+/// One pass: the move lowering the DL most, ties in the moves' order; `None` if `pace` stops it.
+async fn pass<P: Problem>(problem: &P, state: &State<P>, pace: &impl Pace) -> Option<State<P>> {
     let (kept, key, ledger) = (&state.kept[..], state.born, &state.ledger);
     let reading = problem.read(kept, &state.shared);
-    let mut round: Vec<(usize, P::Candidate)> = problem
-        .propose(kept, &reading)
-        .into_iter()
-        .enumerate()
-        .collect();
-    let mut fitted: Vec<Vec<Scored<P>>> = round.iter().map(|_| Vec::new()).collect();
-    while !round.is_empty() {
-        let fits = paced(threads, stop, round, |(i, candidate)| {
-            (i, problem.fit(kept, ledger, &reading, key, candidate))
-        })
-        .await?;
-        round = Vec::new();
-        for (i, fitting) in fits {
-            match fitting {
-                Fitting::Moves(moves) => fitted[i] = moves,
-                Fitting::Again(candidate) => round.push((i, candidate)),
-            }
-        }
-    }
+    let candidates = problem.propose(kept, &reading);
+    let fitted = paced(pace, candidates, |candidate| {
+        problem.fit(kept, ledger, &reading, key, candidate)
+    })
+    .await?;
     let mut ranked: Vec<Scored<P>> = fitted
         .into_iter()
         .flatten()
@@ -466,25 +430,24 @@ async fn pass<P: Problem>(
     Some(next)
 }
 
-pub type Heard<'a, P> = dyn FnMut(&State<P>, &State<P>, f64) + 'a;
+pub(crate) type Heard<'a, P> = dyn FnMut(&State<P>, &State<P>, f64) + 'a;
 
 /// Passes till one makes no move, drops the DL by no more than `tolerance` times the larger of
-/// the DL before and after it and 1, or `stop` ends it.
-pub async fn run<P: Problem>(
+/// the DL before and after it and 1, or `pace` stops it.
+pub(crate) async fn run<P: Problem>(
     problem: &P,
     mut state: State<P>,
     tolerance: f64,
-    threads: NonZeroUsize,
-    stop: &dyn Abandon,
+    pace: &impl Pace,
     clock: &dyn Fn() -> f64,
     heard: &mut Heard<'_, P>,
 ) -> (State<P>, End) {
     let ended = loop {
-        if stop.abandoned().await {
+        if pace.stopped().await {
             break End::Stopped;
         }
         let began = clock();
-        let Some(next) = pass(problem, &state, threads, stop).await else {
+        let Some(next) = pass(problem, &state, pace).await else {
             break End::Stopped;
         };
         if next.moved.is_none() {

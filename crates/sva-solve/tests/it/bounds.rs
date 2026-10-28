@@ -1,12 +1,12 @@
-// Concern: states that the fit meets every hard clip by fitting it or refusing it under a stable code, never a panic | Non-concern: which atoms it finds (solve_fit.rs) | IO: (a clip) -> a fit or a code
+// Concern: states that the fit meets every hard clip by fitting it or refusing it under a stable code, never a panic | Non-concern: which sources it finds (fit.rs) | IO: (a clip) -> a fit or a code
 
 use std::cell::Cell;
 use std::f64::consts::TAU;
 use std::pin::Pin;
 
 use sva_core::CliError;
-use sva_core::solve::fit::{Fit, Line, Options, SPL_DB, fit, mono};
 use sva_engine::{Abandon, Never};
+use sva_solve::fit::{Fit, Line, Options, SPL_DB, fit, mono};
 
 fn now<F: Future>(future: F) -> F::Output {
     let mut future = std::pin::pin!(future);
@@ -43,7 +43,7 @@ fn met(samples: &[f64], rate: u32) -> Result<Fit, String> {
     ));
     let dl: Vec<f64> = lines
         .iter()
-        .map(|l| l.atom_bits + l.residual_bits)
+        .map(|l| l.source_bits + l.residual_bits)
         .collect();
     assert!(dl.iter().all(|v| v.is_finite()), "{dl:?}");
     assert!(dl.windows(2).all(|w| w[1] < w[0]), "{dl:?}");
@@ -53,7 +53,7 @@ fn met(samples: &[f64], rate: u32) -> Result<Fit, String> {
 /// `samples` at `rate` fits, its DL finite.
 fn fits(samples: &[f64], rate: u32) -> Fit {
     let fit = met(samples, rate).unwrap_or_else(|code| panic!("the clip fits: {code}"));
-    assert!((fit.atom_bits + fit.residual_bits).is_finite());
+    assert!((fit.source_bits + fit.residual_bits).is_finite());
     fit
 }
 
@@ -90,9 +90,9 @@ fn white(len: usize) -> Vec<f64> {
 const RATE: u32 = 16_000;
 
 #[test]
-fn silence_fits_with_no_atom() {
+fn silence_fits_with_no_source() {
     let fit = fits(&vec![0.0; secs(RATE, 0.5)], RATE);
-    assert!(fit.atoms.is_empty(), "{:?}", fit.atoms);
+    assert!(fit.sources.is_empty(), "{:?}", fit.sources);
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn a_full_scale_square_wave_fits() {
         .map(|s| if *s >= 0.0 { 1.0 } else { -1.0 })
         .collect();
     let fit = fits(&square, RATE);
-    assert!(!fit.atoms.is_empty());
+    assert!(!fit.sources.is_empty());
 }
 
 #[test]
@@ -123,14 +123,14 @@ fn a_stereo_clip_fits_its_channels_averaged() {
         .map(|(hz, a)| sine(RATE, len, *hz, *a).iter().map(|s| *s as f32).collect())
         .collect();
     let fit = fits(&mono(&planes), RATE);
-    assert!(!fit.atoms.is_empty());
+    assert!(!fit.sources.is_empty());
 }
 
 #[test]
 fn a_clip_fits_at_each_common_rate() {
     for rate in [22_050, 44_100, 48_000, 96_000] {
         let fit = fits(&sine(rate, secs(rate, 0.5), 440.0, 0.3), rate);
-        assert!(!fit.atoms.is_empty(), "at {rate} Hz");
+        assert!(!fit.sources.is_empty(), "at {rate} Hz");
     }
 }
 
@@ -138,7 +138,7 @@ fn a_clip_fits_at_each_common_rate() {
 fn white_noise_fits() {
     let noise: Vec<f64> = white(secs(RATE, 0.5)).iter().map(|s| 0.1 * s).collect();
     let fit = fits(&noise, RATE);
-    assert!(!fit.atoms.is_empty());
+    assert!(!fit.sources.is_empty());
 }
 
 #[test]

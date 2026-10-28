@@ -1,4 +1,4 @@
-// Concern: freezes `solve`'s refusals, progress lines, files written, a resume, `new --from`'s stub | Non-concern: the atoms found (sva-core's solve_fit) | IO: (argv, a clip) -> envelope, stderr, files
+// Concern: freezes `solve`'s refusals, progress lines, files written, a resume | Non-concern: the sources found (sva-solve's fit suite) | IO: (argv, a clip) -> envelope, stderr, files
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -281,45 +281,4 @@ fn a_solve_resumes_from_the_fit_it_wrote() {
         3,
     );
     let _ = std::fs::remove_dir_all(&root);
-}
-
-/// `new --from` refuses under its stub code and writes nothing; a node reading `repr.` is
-/// told nothing takes it now, naming what does.
-#[test]
-fn new_from_refuses_as_unbuilt_and_a_node_reading_repr_is_told_why() {
-    let dir = scratch("solve-unbuilt");
-    let out = sva(&dir, &["new", "fit", "--from", "clip.wav"]);
-    let answer = json(&out);
-    assert_eq!(out.status.code(), Some(3), "{answer}");
-    let codes = items(&answer["error"]["details"]["codes"]);
-    assert!(codes.iter().any(|c| c == "seed.unbuilt"), "{answer}");
-    assert!(!dir.join("fit").exists(), "nothing is written");
-    put(
-        &dir,
-        "tone",
-        "; Models: a tone | Neglects: all | IO: (t) -> amplitude | Tags: fixture\nsin(2*pi*220*t)\n",
-    );
-    put(
-        &dir,
-        "reads-repr",
-        "; Models: a node reading a representation | Neglects: all | IO: (t) -> amplitude | Tags: fixture\nrepr.envelope(@tone)\n",
-    );
-    let answer = json(&sva(
-        &dir,
-        &[
-            "render",
-            "@reads-repr",
-            "--cache",
-            "none",
-            "--representation",
-            "loudness",
-        ],
-    ));
-    let helps = items(&answer["data"]["diagnostics"]).iter().any(|d| {
-        d["help"]
-            .as_str()
-            .is_some_and(|h| h.contains("sva-cli solve <recording>"))
-    });
-    assert!(helps, "{answer:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }

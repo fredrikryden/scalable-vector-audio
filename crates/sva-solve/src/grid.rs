@@ -1,14 +1,14 @@
-// Concern: the coarse grid: octave bands by 48 ms frames, sine and band templates, phaseless resynthesis | Non-concern: the fit (fit.rs) | IO: (Spectrogram) -> Grid, samples
+// Concern: the coarse grid: octave bands by 48 ms frames, sine and band templates, phaseless resynthesis | Non-concern: the fit (fit/) | IO: (Spectrogram) -> Grid, samples
 
 use std::num::NonZeroUsize;
 
 use sva_engine::{each, fft};
 
-use super::add::{Spectrogram, span_hz};
-use super::atoms::phase;
+use crate::analysis::{Spectrogram, span_hz};
+use crate::sources::phase;
 
 pub const MODEL: &str = "the coarse grid, the smallest thumbnail of the clip: the analysis \
-     spectrogram (add.rs: 64 ms periodic Hann, 1 ms hop) read only at hops whose window lies \
+     spectrogram (analysis.rs: 64 ms periodic Hann, 1 ms hop) read only at hops whose window lies \
      wholly inside the clip, as zero padding past an edge is a jump the clip does not hold; \
      pooled to frames of three quarter-windows (48 ms at 64 ms), the quarter-window being the \
      hop at which the squared Hann sums to a constant, three the whole count nearest 50 ms: \
@@ -17,7 +17,7 @@ pub const MODEL: &str = "the coarse grid, the smallest thumbnail of the clip: th
      an end piece under half an octave joining its neighbour, so 8 bands at 16 kHz and above; \
      a unit-amplitude sine at f puts |W(b - f)|^2 / 4 in bin b (W the window's transform, in \
      closed form from three Dirichlet kernels, sidelobes included), summed over each band's \
-     bins; a band [lo, hi) of unit power (variance one half, add.rs's noise level) puts its \
+     bins; a band [lo, hi) of unit power (variance one half, analysis.rs's noise level) puts its \
      expected periodogram in bin b: the sum over lags m of the window's autocorrelation \
      times the band's, sin(2 pi hi m / fs) - sin(2 pi lo m / fs) over 2 pi (hi - lo) m / fs, \
      halved, times cos(2 pi b m / n), exactly, by one transform of the lags folded mod n, so \

@@ -286,14 +286,10 @@ fn internal_prints_each_channels_bands_and_their_elements() {
     }
 }
 
-/// The codes a caller branches on: a reading gone, a value it cannot read, an argument a
-/// reading does not take.
+/// The codes a caller branches on: a value a reading cannot read, an argument it does not take.
 #[test]
 fn the_hits_and_perceptual_readings_refuse_with_stable_codes() {
     for (asked, code) in [
-        ("onsets", "query.retired"),
-        ("score", "query.retired"),
-        ("panel", "query.retired"),
         ("sharpness(spl=loud)", "query.bad_value"),
         ("loudness_pattern(spl=90)", "query.bad_value"),
         ("hits(frame=10ms)", "query.unknown_argument"),

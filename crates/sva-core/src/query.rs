@@ -12,20 +12,6 @@ use sva_engine::{
 
 use crate::cli_error::CliError;
 
-pub const RETIRED: [(&str, &str); 5] = [
-    ("exact-envelope", "envelope, symbolic on a closed form"),
-    ("exact-derivative", "derivative, symbolic on a closed form"),
-    ("onsets", "hits, each hit's `at_secs`"),
-    (
-        "score",
-        "hits, each hit's onset, span and band energy; pitch, the peaks sounding",
-    ),
-    (
-        "panel",
-        "sharpness,beating,envelope(frame=10ms),pitch(frame=100ms, peaks=1)",
-    ),
-];
-
 /// One reading written as a call, `spectrum(peaks=8, frame=50ms)=out.json`: its name, its
 /// arguments as written, and where it goes.
 #[derive(Clone, Debug, PartialEq)]
@@ -74,24 +60,6 @@ pub fn is_wav(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("wav"))
 }
 
-pub fn retired(name: &str) -> Option<&'static str> {
-    RETIRED
-        .iter()
-        .find(|(gone, _)| *gone == name)
-        .map(|(_, write)| *write)
-}
-
-/// A reading that left the language refused, naming what to write instead.
-pub fn refuse_retired(name: &str) -> Result<(), CliError> {
-    match retired(name) {
-        Some(write) => Err(CliError::usage(
-            "query.retired",
-            format!("`{name}` left the language; write `{write}`"),
-        )),
-        None => Ok(()),
-    }
-}
-
 /// A comma list of calls; a comma inside a call's parentheses separates its arguments, and
 /// one in an `alsa:` device name, `hw:1,0`, stays there if no reading follows it.
 pub fn calls(text: &str) -> Result<Vec<Call>, CliError> {
@@ -117,7 +85,7 @@ fn names_a_device(call: &str) -> bool {
 
 fn names_a_reading(text: &str) -> bool {
     let head = text[..text.find(['(', '=']).unwrap_or(text.len())].trim();
-    READINGS.iter().any(|row| row.name == head) || retired(head).is_some()
+    READINGS.iter().any(|row| row.name == head)
 }
 
 /// `name`, `name(k=v, ...)`, either followed by `=path`.
@@ -450,7 +418,6 @@ impl Asked {
 /// The reading a call names, each argument read as that reading takes it.
 pub fn asked(call: &Call) -> Result<Asked, CliError> {
     let name = call.name.as_str();
-    refuse_retired(name)?;
     let Some(row) = READINGS.iter().find(|row| row.name == name) else {
         let names: Vec<&str> = READINGS.iter().map(|row| row.name).collect();
         return Err(CliError::usage(

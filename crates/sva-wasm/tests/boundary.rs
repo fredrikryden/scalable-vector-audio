@@ -1578,10 +1578,9 @@ fn object(pairs: &[(&str, JsValue)]) -> js_sys::Object {
     object
 }
 
-/// While the starter is rebuilt, `seed` throws its stub code as the CLI refuses it; an option
-/// no solve takes refuses by name.
+/// An option no solve takes refuses by name.
 #[wasm_bindgen_test]
-fn seed_throws_unbuilt_and_solve_refuses_an_unknown_option() {
+fn solve_refuses_an_unknown_option() {
     let code = |refused: JsValue| {
         let envelope = as_text(&field(&refused, "refusal"));
         assert_eq!(
@@ -1592,21 +1591,14 @@ fn seed_throws_unbuilt_and_solve_refuses_an_unknown_option() {
         envelope
     };
     let (rate, channels) = sine_clip();
-    let clip = object(&[
-        ("rate", JsValue::from(rate)),
-        ("channels", channels.clone().into()),
-    ]);
-    for retired in ["spiral", "levels"] {
-        let unknown = object(&[(retired, JsValue::from(1))]);
+    let clip = object(&[("rate", JsValue::from(rate)), ("channels", channels.into())]);
+    for unknown in ["spiral", "levels"] {
+        let unknown = object(&[(unknown, JsValue::from(1))]);
         let refused = now(page().solve(clip.clone().into(), unknown.into()))
             .err()
             .unwrap_or_else(|| unreachable!("an unknown option refuses"));
         assert!(code(refused).contains("wasm.bad_argument"));
     }
-    let refused = sva_wasm::seed(rate, channels, "clip.wav", None)
-        .err()
-        .unwrap_or_else(|| unreachable!("seed refuses"));
-    assert!(code(refused).contains("seed.unbuilt"));
 }
 
 /// A clip solves pass by pass: a start line holding the grid's shape, then one line per pass

@@ -1,4 +1,4 @@
-// Concern: the analysis a fit reads: the spectrogram, the floor a sine is heard over, the harmonic sieve | Non-concern: choosing atoms (fit.rs) | IO: (samples) -> Spectrogram; (peaks) -> f0, members
+// Concern: the analysis a fit reads: the spectrogram, the floor a sine is heard over, the harmonic sieve | Non-concern: choosing sources (fit/) | IO: (samples) -> Spectrogram; (peaks) -> f0, members
 
 use std::f64::consts::TAU;
 use std::num::NonZeroUsize;
@@ -8,7 +8,7 @@ use sva_engine::hearing::{
 };
 use sva_engine::{each, fft};
 
-use super::atoms::{Atom, Trajectory};
+use crate::sources::{Sound, Source, Trajectory};
 
 pub const MODEL: &str = "the analysis: a periodic Hann window as long as the ear's longest at \
      s = 1 (64 ms), its DFT zero-padded to the next power of two, a frame every 1 ms (the ear's \
@@ -26,12 +26,12 @@ pub const MODEL: &str = "the analysis: a periodic Hann window as long as the ear
 /// Power per bin `0..=n/2` of each frame every `hop` samples, centred on the frame's sample,
 /// each frame computed where it is read, so no clip holds every frame at once.
 pub struct Spectrogram {
-    pub(super) rate: f64,
-    pub(super) n: usize,
-    pub(super) long: usize,
-    pub(super) hop: usize,
-    pub(super) sum_w: f64,
-    pub(super) sum_w2: f64,
+    pub(crate) rate: f64,
+    pub(crate) n: usize,
+    pub(crate) long: usize,
+    pub(crate) hop: usize,
+    pub(crate) sum_w: f64,
+    pub(crate) sum_w2: f64,
     window: Vec<f64>,
     twiddle: Vec<(f64, f64)>,
     samples: Vec<f64>,
@@ -60,12 +60,12 @@ impl Spectrogram {
     }
 
     /// How many frames it holds.
-    pub(super) fn frames(&self) -> usize {
+    pub(crate) fn frames(&self) -> usize {
         self.samples.len() / self.hop + 1
     }
 
     /// Frame `m`'s power per bin.
-    pub(super) fn power(&self, m: usize) -> Vec<f64> {
+    pub(crate) fn power(&self, m: usize) -> Vec<f64> {
         let n = self.n;
         let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
         let from = (m * self.hop) as i64 - (self.long / 2) as i64;
@@ -86,14 +86,14 @@ pub fn floor_db(hz: f64, spl_db: f64) -> f64 {
 }
 
 /// The Hz the feasible set spans at `rate`.
-pub(super) fn span_hz(rate: f64) -> (f64, f64) {
+pub(crate) fn span_hz(rate: f64) -> (f64, f64) {
     (cam_hz(CAM_FIRST), cam_hz(CAM_LAST).min(rate / 2.0))
 }
 
 /// A peak the residual holds: its Hz, start and end.
-pub(super) struct Track {
-    pub(super) hz: f64,
-    pub(super) span: (f64, f64),
+pub(crate) struct Track {
+    pub(crate) hz: f64,
+    pub(crate) span: (f64, f64),
 }
 
 impl Track {
@@ -102,32 +102,36 @@ impl Track {
     }
 }
 
-/// The numbers a steady atom of `harmonics` harmonics with one level knot writes, as born; a
+/// The numbers a fixed source of `harmonics` harmonics with one level knot writes, as born; a
 /// partial's at 1.
 fn written(harmonics: usize) -> usize {
     let level = Trajectory {
         base: 0.0,
         knots: vec![(0.0, 0.0)],
     };
-    match harmonics {
-        1 => Atom::partial(0, 0.0, Trajectory::steady(0.0), level),
-        _ => Atom::harmonic(
-            0,
-            0.0,
-            (Trajectory::steady(0.0), 0.0),
-            vec![level; harmonics],
-        ),
-    }
-    .values()
-    .len()
+    let sound = match harmonics {
+        1 => Sound::Partial {
+            hz: 0.0,
+            glide: 0.0,
+        },
+        count => Sound::Harmonic {
+            hz: 0.0,
+            stretch: 0.0,
+            count,
+            glide: 0.0,
+        },
+    };
+    Source::new(0, 0.0, sound, vec![level; harmonics])
+        .values()
+        .len()
 }
 
 /// A harmonic's members as (track, harmonic number).
-pub(super) type Members = Vec<(usize, usize)>;
+pub(crate) type Members = Vec<(usize, usize)>;
 
 /// The fundamental whose sieve over `pool` scores most, as `MODEL` states, beside its members
 /// as (track, harmonic number), on at most `threads`; `None` where no fundamental saves numbers.
-pub(super) fn sieved(
+pub(crate) fn sieved(
     tracks: &[Track],
     pool: &[usize],
     analysis_hz: f64,
