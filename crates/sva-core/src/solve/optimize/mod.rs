@@ -1,4 +1,4 @@
-// Concern: the blind optimizer: one move per pass, the best DL drop winning, the stop rule, the kept things and their bits, a resume | Non-concern: sound (fit.rs) | IO: (Problem, State) -> State, End
+// Concern: the blind optimizer: passes of the best DL drop, the stop rule, the kept things, the ledger pricing moves, a resume | Non-concern: sound | IO: (Problem, State) -> State, End
 
 pub mod code;
 
@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 
 use sva_engine::{Abandon, each};
 
-use code::Price;
+use code::{Price, count};
 
 /// What the optimizer reaches a problem through.
 pub trait Problem: Sync + Sized {
@@ -20,30 +20,29 @@ pub trait Problem: Sync + Sized {
     fn price(&self, thing: &Self::Thing) -> Price;
     fn read(&self, kept: &[Self::Thing]) -> Self::Reading;
     fn propose(&self, kept: &[Self::Thing], reading: &Self::Reading) -> Vec<Self::Candidate>;
-    /// `candidate`'s moves, or a candidate fitted next round in its place.
+    /// `candidate`'s moves, each priced by `ledger`, or a candidate fitted next round in its place.
     fn fit(
         &self,
         kept: &[Self::Thing],
+        ledger: &Ledger,
         reading: &Self::Reading,
         key: u64,
         candidate: Self::Candidate,
     ) -> Fitting<Self>;
-    fn make(
-        &self,
-        kept: &[Self::Thing],
-        reading: &Self::Reading,
-        key: u64,
-        draft: Self::Draft,
-    ) -> Self::Thing;
+    fn make(&self, reading: &Self::Reading, key: u64, draft: Self::Draft) -> Self::Thing;
     /// A move whose thing is not admitted is skipped for the next best.
     fn admits(&self, thing: &Self::Thing) -> bool;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Edit<A, T, L> {
     Add(A),
     Replace(usize, T, L),
     Remove(usize, L),
 }
+
+/// The edit a pass made, its things left out.
+pub type Moved<L> = Edit<(), (), L>;
 
 pub struct Scored<P: Problem> {
     pub change: f64,
@@ -55,21 +54,48 @@ pub enum Fitting<P: Problem> {
     Again(P::Candidate),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Moved<L> {
-    Add,
-    Replace(usize, L),
-    Remove(usize, L),
+/// The kept things' prices: the one place a move's DL change is priced. `missed` is the change
+/// in the missed bits the problem works out.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ledger {
+    prices: Vec<Price>,
+}
+
+impl Ledger {
+    pub fn bits(&self) -> f64 {
+        code::bits(&self.prices)
+    }
+
+    pub fn added(&self, price: &Price, missed: f64) -> f64 {
+        let n = self.prices.len();
+        price.bits() + count(n + 1) - count(n) + missed
+    }
+
+    pub fn removed(&self, a: usize, missed: f64) -> f64 {
+        let n = self.prices.len();
+        count(n - 1) - count(n) - self.prices[a].bits() + missed
+    }
+
+    pub fn replaced(&self, a: usize, after: &Price, missed: f64) -> f64 {
+        after.bits() - self.prices[a].bits() + missed
+    }
+
+    /// The ledger with thing `a` gone.
+    pub fn without(&self, a: usize) -> Ledger {
+        let mut prices = self.prices.clone();
+        prices.remove(a);
+        Ledger { prices }
+    }
 }
 
 pub struct State<P: Problem> {
-    pub kept: Vec<P::Thing>,
-    pub born: u64,
-    pub passes: usize,
-    pub thing_bits: f64,
-    pub missed_bits: f64,
-    pub moved: Option<Moved<P::Label>>,
-    pub skipped: Vec<P::Thing>,
+    kept: Vec<P::Thing>,
+    born: u64,
+    passes: usize,
+    ledger: Ledger,
+    missed_bits: f64,
+    moved: Option<Moved<P::Label>>,
+    skipped: Vec<P::Thing>,
 }
 
 impl<P: Problem> Clone for State<P> {
@@ -78,7 +104,7 @@ impl<P: Problem> Clone for State<P> {
             kept: self.kept.clone(),
             born: self.born,
             passes: self.passes,
-            thing_bits: self.thing_bits,
+            ledger: self.ledger.clone(),
             missed_bits: self.missed_bits,
             moved: self.moved,
             skipped: self.skipped.clone(),
@@ -92,7 +118,7 @@ impl<P: Problem> State<P> {
             kept,
             born,
             passes,
-            thing_bits: 0.0,
+            ledger: Ledger { prices: Vec::new() },
             missed_bits: 0.0,
             moved: None,
             skipped: Vec::new(),
@@ -101,13 +127,38 @@ impl<P: Problem> State<P> {
         state
     }
 
+    pub fn kept(&self) -> &[P::Thing] {
+        &self.kept
+    }
+
+    pub fn passes(&self) -> usize {
+        self.passes
+    }
+
+    pub fn thing_bits(&self) -> f64 {
+        self.ledger.bits()
+    }
+
+    pub fn missed_bits(&self) -> f64 {
+        self.missed_bits
+    }
+
+    pub fn moved(&self) -> Option<Moved<P::Label>> {
+        self.moved
+    }
+
+    pub fn skipped(&self) -> &[P::Thing] {
+        &self.skipped
+    }
+
     pub fn dl(&self) -> f64 {
-        self.thing_bits + self.missed_bits
+        self.thing_bits() + self.missed_bits
     }
 
     fn price(&mut self, problem: &P) {
-        let prices: Vec<Price> = self.kept.iter().map(|t| problem.price(t)).collect();
-        self.thing_bits = code::bits(&prices);
+        self.ledger = Ledger {
+            prices: self.kept.iter().map(|t| problem.price(t)).collect(),
+        };
         self.missed_bits = problem.missed(&self.kept);
     }
 }
@@ -156,7 +207,7 @@ async fn pass<P: Problem>(
     threads: NonZeroUsize,
     stop: &dyn Abandon,
 ) -> Option<State<P>> {
-    let (kept, key) = (&state.kept[..], state.born);
+    let (kept, key, ledger) = (&state.kept[..], state.born, &state.ledger);
     let reading = problem.read(kept);
     let mut round: Vec<(usize, P::Candidate)> = problem
         .propose(kept, &reading)
@@ -166,7 +217,7 @@ async fn pass<P: Problem>(
     let mut fitted: Vec<Vec<Scored<P>>> = round.iter().map(|_| Vec::new()).collect();
     while !round.is_empty() {
         let fits = paced(threads, stop, round, |(i, candidate)| {
-            (i, problem.fit(kept, &reading, key, candidate))
+            (i, problem.fit(kept, ledger, &reading, key, candidate))
         })
         .await?;
         round = Vec::new();
@@ -190,7 +241,7 @@ async fn pass<P: Problem>(
     let mut best = None;
     for Scored { edit, .. } in ranked {
         let made = match edit {
-            Edit::Add(draft) => Edit::Add(problem.make(kept, &reading, key, draft)),
+            Edit::Add(draft) => Edit::Add(problem.make(&reading, key, draft)),
             Edit::Replace(a, thing, label) => Edit::Replace(a, thing, label),
             Edit::Remove(a, label) => Edit::Remove(a, label),
         };
@@ -211,15 +262,15 @@ async fn pass<P: Problem>(
         Edit::Add(thing) => {
             next.kept.push(thing);
             next.born += 1;
-            Moved::Add
+            Edit::Add(())
         }
         Edit::Replace(a, thing, label) => {
             next.kept[a] = thing;
-            Moved::Replace(a, label)
+            Edit::Replace(a, (), label)
         }
         Edit::Remove(a, label) => {
             next.kept.remove(a);
-            Moved::Remove(a, label)
+            Edit::Remove(a, label)
         }
     };
     next.price(problem);

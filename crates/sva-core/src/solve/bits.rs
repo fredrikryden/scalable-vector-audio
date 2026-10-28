@@ -104,12 +104,11 @@ pub fn price(atom: &Atom, priced: &Priced) -> Price {
     };
     let levels = atom
         .levels()
-        .iter()
-        .map(|l| Count::From1(l.knots.len() as u64))
-        .collect();
+        .into_iter()
+        .map(|l| Count::From1(l.knots.len() as u64));
     Price {
         alternatives: 6,
-        counts: vec![shape, levels],
+        counts: shape.into_iter().chain(levels).collect(),
         numbers: numbers
             .iter()
             .zip(&priced.deltas)

@@ -1,4 +1,4 @@
-// Concern: bits: Rissanen's code for counts, a number's cells at its precision, a price, the things' bits, a move's DL change | Non-concern: what a number means (the problem) | IO: (Price) -> bits
+// Concern: bits: Rissanen's code for counts, a number's cells at its precision, a price, the things' bits | Non-concern: what a number means, a move's DL change (the ledger) | IO: (Price) -> bits
 
 pub const NORMALISER: f64 = 2.865_108_415_839_907;
 
@@ -50,21 +50,16 @@ pub struct Number {
     pub delta: f64,
 }
 
-/// Count groups are summed apart, then together: B(x)'s order of addition.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Price {
     pub alternatives: usize,
-    pub counts: Vec<Vec<Count>>,
+    pub counts: Vec<Count>,
     pub numbers: Vec<Number>,
 }
 
 impl Price {
     pub fn bits(&self) -> f64 {
-        let counts: f64 = self
-            .counts
-            .iter()
-            .map(|group| group.iter().map(|c| c.bits()).sum::<f64>())
-            .sum();
+        let counts: f64 = self.counts.iter().map(|c| c.bits()).sum();
         let written = self
             .numbers
             .iter()
@@ -77,17 +72,4 @@ pub fn bits(prices: &[Price]) -> f64 {
     prices
         .iter()
         .fold(count(prices.len()), |sum, p| sum + p.bits())
-}
-
-/// `missed`: the change in the missed bits.
-pub fn added(bits: f64, n: usize, missed: f64) -> f64 {
-    bits + count(n + 1) - count(n) + missed
-}
-
-pub fn removed(bits: f64, n: usize, missed: f64) -> f64 {
-    count(n - 1) - count(n) - bits + missed
-}
-
-pub fn replaced(after: f64, before: f64, missed: f64) -> f64 {
-    after - before + missed
 }
