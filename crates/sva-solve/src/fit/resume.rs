@@ -26,7 +26,7 @@ impl Resume {
             CliError::usage(
                 "solve.from_unread",
                 format!(
-                    "the composition to resume holds no `{}` of atoms a fit wrote",
+                    "the composition to resume holds no `{}` of sources a fit wrote",
                     sources::SCORE
                 ),
             )
@@ -34,7 +34,7 @@ impl Resume {
         let shared = sources::shared(files, &read).ok_or_else(|| {
             CliError::usage(
                 "solve.from_unread",
-                "the composition to resume lacks a shared node its atoms reference",
+                "the composition to resume lacks a shared node its sources reference",
             )
         })?;
         Ok(Resume {
@@ -89,20 +89,20 @@ pub(super) fn resumed(p: &Problem, from: &Resume, gain_db: f64) -> Result<State,
     for source in &from.sources {
         if source.on != 0.0 || source.end() != secs {
             return Err(mismatch(format!(
-                "atom {} spans {}s to {}s, this clip 0s to {secs}s",
+                "source {} spans {}s to {}s, this clip 0s to {secs}s",
                 source.key,
                 source.on,
                 source.end()
             )));
         }
         if from.sources.iter().filter(|a| a.key == source.key).count() > 1 {
-            return Err(unread("two atoms of one key"));
+            return Err(unread("two sources of one key"));
         }
         if !source.values().iter().all(|v| v.is_finite()) {
             return Err(unread("a number that is not finite"));
         }
         if !written(&source.sound) {
-            return Err(unread("an atom of a shape"));
+            return Err(unread("a source of a shape"));
         }
         let step = match source.sound.glide() != 0.0 {
             true => {

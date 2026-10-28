@@ -88,7 +88,7 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_pass() {
     assert!(fit["partials"].as_u64().is_some_and(|n| n >= 1), "{fit}");
     for key in [
         "dl_bits",
-        "atom_bits",
+        "source_bits",
         "residual_bits",
         "gain_db",
         "secs",
@@ -117,7 +117,7 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_pass() {
         "{fit}"
     );
     assert_eq!(lines[0]["action"], "start", "{}", lines[0]);
-    assert!(lines[0]["atom"].is_null());
+    assert!(lines[0]["source"].is_null());
     for key in ["rate_hz", "frame_secs", "band_edges_hz", "band_floor_db"] {
         assert!(!lines[0][key].is_null(), "the start line holds `{key}`");
     }
@@ -126,7 +126,7 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_pass() {
     for (k, line) in lines.iter().enumerate() {
         assert_eq!(line["pass"].as_u64(), Some(k as u64), "{line}");
         let total = line["dl_bits"].as_f64().expect("a total");
-        let parts = ["atom_bits", "residual_bits"].map(|p| line[p].as_f64().expect("a part"));
+        let parts = ["source_bits", "residual_bits"].map(|p| line[p].as_f64().expect("a part"));
         assert!(
             (total - parts[0] - parts[1]).abs() <= 1e-6 * total.abs(),
             "{line}"
@@ -139,7 +139,7 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_pass() {
             );
             let wav = root.join("fit").join(format!("pass-{k:03}.wav"));
             assert!(wav.is_file(), "{} written", wav.display());
-            assert!(line["atom"]["kind"].is_string(), "{line}");
+            assert!(line["source"]["kind"].is_string(), "{line}");
             let delta = line["delta_dl_bits"].as_f64().expect("a change");
             assert!((delta - (total - dl)).abs() <= 1e-6 * dl.abs(), "{line}");
             assert!(total < dl, "the description length falls: {line}");
@@ -155,7 +155,7 @@ fn a_solve_writes_its_fit_and_hears_a_line_per_pass() {
             assert!(
                 line["move"]
                     .as_str()
-                    .is_some_and(|m| m.ends_with(line["atom"]["kind"].as_str().unwrap_or("?"))),
+                    .is_some_and(|m| m.ends_with(line["source"]["kind"].as_str().unwrap_or("?"))),
                 "{line}"
             );
             assert!(line["pass_secs"].is_number(), "{line}");

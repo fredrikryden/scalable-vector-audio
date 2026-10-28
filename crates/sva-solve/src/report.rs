@@ -83,7 +83,7 @@ fn shared(sources: &[Source], shared: &[(usize, Shared)]) -> String {
             })
             .collect();
         format!(
-            "{{ \"id\": {to}, \"kind\": \"{}\", {}, \"atoms\": [{}] }}",
+            "{{ \"id\": {to}, \"kind\": \"{}\", {}, \"sources\": [{}] }}",
             node.kind.name(),
             numbers.join(", "),
             each.join(", ")
@@ -140,9 +140,9 @@ pub fn progress(line: &Line) -> String {
         false => NONE.to_string(),
     };
     format!(
-        "{{ \"pass\": {}, \"action\": \"{}\", \"adjust\": {}, \"move\": {}, \"atom\": {}, \"from_db\": {}, \"to_db\": {}, \
+        "{{ \"pass\": {}, \"action\": \"{}\", \"adjust\": {}, \"move\": {}, \"source\": {}, \"from_db\": {}, \"to_db\": {}, \
          \"delta_dl_bits\": {}, \"drop_bits\": {}, \"total_drop_bits\": {}, \"share\": {share}, \
-         \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \
+         \"dl_bits\": {}, \"source_bits\": {}, \"residual_bits\": {}, \
          \"residual_db\": [{}], \"envelopes\": {}, \"shared\": {}, \"skipped\": {}, \"seconds\": {}, \"pass_secs\": {}{geometry} }}",
         line.pass,
         line.action.name(),
@@ -194,9 +194,9 @@ pub fn answer(
     format!(
         "{{ \"fit\": {{ \"rate_hz\": {}, \"passes\": {}, \"adds\": {}, \"adjusts\": {}, \
          \"adjusts_by\": {{ {} }}, \"partials\": {}, \"harmonics\": {}, \"noises\": {}, \"shaped\": {}, \"dl_bits\": {}, \
-         \"atom_bits\": {}, \"residual_bits\": {}, \"gain_db\": {}, \"from_pass\": {}, \"tolerance\": {}, \
+         \"source_bits\": {}, \"residual_bits\": {}, \"gain_db\": {}, \"from_pass\": {}, \"tolerance\": {}, \
          \"ended\": \"{}\", \"stopped\": {}, \"secs\": {}, \
-         \"atoms\": {}, \"shared\": {}, \"wrote\": {} }}{files} }}",
+         \"sources\": {}, \"shared\": {}, \"wrote\": {} }}{files} }}",
         fit.clip.rate,
         fit.passes,
         fit.adds,

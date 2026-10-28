@@ -139,7 +139,7 @@ fn ordinals_and_harmonic_levels_read_back_from_the_written_rows() {
     assert!(harmonic.contains("harmonic_h4_f0_l2-1-2-1_n"), "{harmonic}");
     let lone = vec![(
         SCORE.to_string(),
-        "{\"at\": \"0s\", \"node\": \"@../atoms/partial_f0_l1_n0\"}\n".to_string(),
+        "{\"at\": \"0s\", \"node\": \"@../sources/partial_f0_l1_n0\"}\n".to_string(),
     )];
     assert_eq!(read(&lone), None);
 }
@@ -163,10 +163,10 @@ fn each_kind_knot_count_and_level_plays_one_node() {
     assert_eq!(
         names,
         [
-            "atoms/harmonic_h4_f0_l3-1-2-1",
-            "atoms/noise_l1",
-            "atoms/partial_f0_l2",
-            "atoms/partial_f0_l2"
+            "sources/harmonic_h4_f0_l3-1-2-1",
+            "sources/noise_l1",
+            "sources/partial_f0_l2",
+            "sources/partial_f0_l2"
         ]
     );
     let mut twin = sources[3].clone();
@@ -182,7 +182,7 @@ fn each_kind_knot_count_and_level_plays_one_node() {
     let mut longer = sources[3].clone();
     longer.levels[0].knots.push((0.45, -9.0));
     assert!(
-        longer.node().starts_with("atoms/partial_f0_l3_n"),
+        longer.node().starts_with("sources/partial_f0_l3_n"),
         "a knot more is the next count's node"
     );
 }
@@ -241,7 +241,7 @@ fn a_shaped_noise_reads_back_and_sounds() {
         },
         vec![knots(-20.0, &[(0.25, -3.0), (0.5, 0.0)])],
     );
-    assert!(shaped.node().starts_with("atoms/shaped_b2_l2_n"));
+    assert!(shaped.node().starts_with("sources/shaped_b2_l2_n"));
     assert!(shaped.writes(&CLIP));
     let written = files(std::slice::from_ref(&shaped));
     assert_eq!(read(&written), Some(vec![shaped.clone()]), "{written:?}");
@@ -272,8 +272,12 @@ fn a_glide_reads_back_and_sounds_its_closed_form() {
         },
         vec![knots(-30.0, &[(0.5, 0.0)]); 3],
     );
-    assert!(partial.node().starts_with("atoms/partial_f0_g1_l1_n"));
-    assert!(voice.node().starts_with("atoms/harmonic_h3_f0_g1_l1-1-1_n"));
+    assert!(partial.node().starts_with("sources/partial_f0_g1_l1_n"));
+    assert!(
+        voice
+            .node()
+            .starts_with("sources/harmonic_h3_f0_g1_l1-1-1_n")
+    );
     let both = vec![partial.clone(), voice];
     let written = files(&both);
     assert_eq!(read(&written), Some(both), "{written:?}");

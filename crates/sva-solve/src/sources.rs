@@ -13,7 +13,7 @@ use sva_engine::hearing::{CAM_FIRST, CAM_LAST, cam_hz};
 /// Every node writes these bits, so the model reads the same.
 pub const NEPER_PER_DB: f64 = LN_10 / 20.0;
 
-pub const DIRECTORY: &str = "atoms";
+pub const DIRECTORY: &str = "sources";
 
 /// Its duration is the noise period.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -140,7 +140,7 @@ impl Shared {
     pub fn node_text(&self) -> String {
         let (what, body) = match self.kind {
             SharedKind::Periodic => (
-                "a level in dB moving periodically, its depth each referencing atom's own",
+                "a level in dB moving periodically, its depth each referencing source's own",
                 "sin(2*pi*rate*t + phase)",
             ),
         };
@@ -152,7 +152,7 @@ impl Shared {
             .map(|(n, v)| format!("{n} = {}\n", num(*v)))
             .collect();
         format!(
-            "; Models: {what} | Neglects: the atoms, each its own row | IO: (t) -> value | \
+            "; Models: {what} | Neglects: the sources, each its own row | IO: (t) -> value | \
              Tags: shared\n{}{body}\n",
             bound.concat()
         )
@@ -451,7 +451,7 @@ impl Source {
             .collect();
         format!(
             "; Models: {what}, its level in dBFS through {l} knots, the last ending it{shared} | \
-             Neglects: every other atom, each its own row | IO: (t) -> amplitude | Tags: atom\n\
+             Neglects: every other source, each its own row | IO: (t) -> amplitude | Tags: source\n\
              crop({body}, on, on + {end})\n"
         )
     }
@@ -685,8 +685,8 @@ fn tables(text: &str) -> Option<Vec<Vec<(f64, f64)>>> {
 /// One row each in birth order.
 pub fn score(sources: &[Source]) -> String {
     let mut out = String::from(
-        "{\"annotation\": \"Models: the clip's atoms, one row each in birth order | Neglects: \
-         what no atom explains | IO: (t) -> amplitude | Tags: score\"}\n",
+        "{\"annotation\": \"Models: the clip's sources, one row each in birth order | Neglects: \
+         what no source explains | IO: (t) -> amplitude | Tags: score\"}\n",
     );
     let mut born: Vec<&Source> = sources.iter().collect();
     born.sort_by_key(|a| a.key);

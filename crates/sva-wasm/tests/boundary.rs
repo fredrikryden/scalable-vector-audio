@@ -1677,7 +1677,7 @@ async fn a_clip_solves_with_a_line_per_step() {
         heard
             .iter()
             .any(|l| field(&l, "action").as_string().as_deref() == Some("add")),
-        "an atom is added"
+        "a source is added"
     );
     let mut fresh = Composition::new(Some("a-fit".to_string()));
     for file in items(&data, "files").iter() {
@@ -1751,7 +1751,7 @@ async fn a_signal_aborted_mid_pass_drops_that_pass() {
     assert_eq!(heard.length(), 1, "the start line alone");
 }
 
-/// A solve continued `from` an answer starts from its atoms and description length, numbers its
+/// A solve continued `from` an answer starts from its sources and description length, numbers its
 /// passes on from that answer's, and passes on past the threshold till no move lowers it.
 #[wasm_bindgen_test]
 async fn a_solve_continues_from_an_answer() {

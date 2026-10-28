@@ -56,7 +56,7 @@ const SOLVE_PROGRESS: &str = r#"
 /** A solve's `progress` line: the start, then one per pass. */
 export type SolveProgress = SolveStart | SolveStep;
 /** What a pass added or adjusted; `null` where its kind has none. */
-export interface SolveAtom {
+export interface SolveSource {
     key: number;
     kind: "partial" | "harmonic" | "noise" | "shaped";
     hz: number | null;
@@ -78,7 +78,7 @@ export interface SolveShared {
     kind: "periodic";
     rate: number;
     phase: number;
-    atoms: { key: number; depth: number }[];
+    sources: { key: number; depth: number }[];
 }
 /**
  * One pass, one move: `action` an add of a new source or an adjust of a kept one, `adjust` what
@@ -87,7 +87,7 @@ export interface SolveShared {
  * after (null where it was not, or an adjust to nought removed it); `delta_dl_bits` the
  * pass's change to the description length, `drop_bits` its negation, `total_drop_bits` the
  * drop from the empty fit's description length to `dl_bits`, `share` the pass's drop over that
- * (null where it is none), `dl_bits` the total, `atom_bits` plus
+ * (null where it is none), `dl_bits` the total, `source_bits` plus
  * `residual_bits`; `residual_db[frame][band]` the power
  * the fit leaves in each octave band in dB, null where none; `envelopes` each kept source's
  * written level per frame in dB; `shared` the shared variables its sources reference;
@@ -101,7 +101,7 @@ export interface SolveStep {
     action: "start" | "add" | "adjust";
     adjust: "level" | "remove" | "frequency" | "rethin" | null;
     move: string;
-    atom: SolveAtom | null;
+    source: SolveSource | null;
     from_db: number | null;
     to_db: number | null;
     delta_dl_bits: number;
@@ -109,12 +109,12 @@ export interface SolveStep {
     total_drop_bits: number;
     share: number | null;
     dl_bits: number;
-    atom_bits: number;
+    source_bits: number;
     residual_bits: number;
     residual_db: (number | null)[][];
     envelopes: { items: { key: number; db: number[] }[] };
     shared: { items: SolveShared[] };
-    skipped: { items: SolveAtom[] };
+    skipped: { items: SolveSource[] };
     seconds: number;
     pass_secs: number;
     files: { items: SolveFile[] };
@@ -142,7 +142,7 @@ export interface SolveAnswer {
         noises: number;
         shaped: number;
         dl_bits: number;
-        atom_bits: number;
+        source_bits: number;
         residual_bits: number;
         gain_db: number;
         /** The pass it resumed from, 0 for a fresh fit; `passes` the last it made. */
@@ -151,7 +151,7 @@ export interface SolveAnswer {
         ended: "converged" | "tolerance" | "stopped";
         stopped: boolean;
         secs: number;
-        atoms: { items: SolveAtom[] };
+        sources: { items: SolveSource[] };
         shared: { items: SolveShared[] };
         wrote: string[];
     };

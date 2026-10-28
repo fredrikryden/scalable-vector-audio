@@ -142,7 +142,7 @@ fn stale(out: &Path, after: usize) -> Result<(), CliError> {
 }
 
 /// The fit an earlier solve wrote under `dir`: its composition (`master`, its score, the
-/// nodes under `atoms/`) and its passes, the last pass render there.
+/// nodes under `sources/`) and its passes, the last pass render there.
 fn resume(dir: &Path) -> Result<Resume, CliError> {
     let read = |file: &Path| std::fs::read_to_string(file).map_err(|e| io(file, e));
     let listed = |at: &Path| -> Result<Vec<PathBuf>, CliError> {
