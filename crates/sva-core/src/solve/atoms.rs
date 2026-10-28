@@ -1,4 +1,4 @@
-// Concern: the four atom kinds solve writes: numbers, ranges, rows, nodes, keys, and their render through the engine | Non-concern: fitting them (fit.rs) | IO: (Atom) -> numbers, row, node, samples
+// Concern: the four atom kinds solve writes, the shared nodes they read: numbers, ranges, rows, nodes, keys, their render | Non-concern: fitting them (fit.rs) | IO: (Atom) -> numbers, row, node, samples
 
 use std::collections::HashMap;
 use std::f64::consts::{LN_10, TAU};
@@ -86,14 +86,103 @@ pub enum Sound {
     },
 }
 
+/// A kind of shared node: numbers several atoms reference, each atom its own beside them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SharedKind {
+    /// A level in dB moving as `depth sin(2 pi rate t + phase)`, `depth` each atom's own.
+    Periodic,
+}
+
+/// Name, the letter naming a referencing node, its numbers, the referencing atom's own.
+type Named = (
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+);
+const SHARED: [Named; 1] = [("periodic", "p", &["rate", "phase"], &["depth"])];
+
+impl SharedKind {
+    pub const ALL: [SharedKind; 1] = [SharedKind::Periodic];
+
+    fn named(self) -> Named {
+        SHARED[self as usize]
+    }
+
+    pub fn name(self) -> &'static str {
+        self.named().0
+    }
+
+    pub fn numbers(self) -> &'static [&'static str] {
+        self.named().2
+    }
+
+    pub fn own(self) -> &'static [&'static str] {
+        self.named().3
+    }
+
+    pub fn node(self, to: usize) -> String {
+        format!("{DIRECTORY}/{}_{to}", self.name())
+    }
+
+    /// What a referencing atom's node multiplies its amplitude by.
+    fn factor(self, to: usize) -> String {
+        match self {
+            SharedKind::Periodic => {
+                format!("exp({}*depth*@{}_{to}(t))", num(NEPER_PER_DB), self.name())
+            }
+        }
+    }
+}
+
+/// A shared node: its kind and its numbers, in the order its kind names them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shared {
+    pub kind: SharedKind,
+    pub numbers: Vec<f64>,
+}
+
+impl Shared {
+    pub fn node_text(&self) -> String {
+        let (what, body) = match self.kind {
+            SharedKind::Periodic => (
+                "a level in dB moving periodically, its depth each referencing atom's own",
+                "sin(2*pi*rate*t + phase)",
+            ),
+        };
+        let bound: Vec<String> = self
+            .kind
+            .numbers()
+            .iter()
+            .zip(&self.numbers)
+            .map(|(n, v)| format!("{n} = {}\n", num(*v)))
+            .collect();
+        format!(
+            "; Models: {what} | Neglects: the atoms, each its own row | IO: (t) -> value | \
+             Tags: shared\n{}{body}\n",
+            bound.concat()
+        )
+    }
+}
+
+/// An atom's reference to shared node `to` of its kind, beside the atom's own numbers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Link {
+    pub to: usize,
+    pub kind: SharedKind,
+    pub own: Vec<f64>,
+}
+
 /// A level in dBFS whose last knot ends the atom; a noise's is its band's power, density times
-/// `hi - lo`. `key` is its ordinal, every phase and the noise seed drawn from it.
+/// `hi - lo`. `key` is its ordinal, every phase and the noise seed drawn from it. `links` the
+/// shared nodes it references, its amplitude times each one's factor.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Atom {
     pub key: u64,
     pub on: f64,
     pub sound: Sound,
     pub level: Trajectory,
+    pub links: Vec<Link>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +195,8 @@ pub enum Quantity {
     Stretch,
     Glide,
     Edge,
+    /// A periodic level's depth in dB.
+    Depth,
 }
 
 /// Line `k`'s phase, the draw noise keyed `key` gives its own line `k`, so no number is written.
@@ -213,6 +304,9 @@ impl Atom {
             }
         }
         knots(&mut out, &self.level);
+        for link in &self.links {
+            out.extend(&link.own);
+        }
         out
     }
 
@@ -222,6 +316,7 @@ impl Atom {
             on,
             sound: Sound::Partial { hz, glide: 0.0 },
             level,
+            links: Vec::new(),
         }
     }
 
@@ -244,6 +339,7 @@ impl Atom {
                 levels: levels.collect(),
             },
             level,
+            links: Vec::new(),
         }
     }
 
@@ -271,6 +367,7 @@ impl Atom {
             on,
             sound: Sound::Noise { lo, hi },
             level,
+            links: Vec::new(),
         }
     }
 
@@ -281,6 +378,7 @@ impl Atom {
             on,
             sound: Sound::Shaped { bands },
             level,
+            links: Vec::new(),
         }
     }
 
@@ -322,6 +420,11 @@ impl Atom {
             }
         }
         knots(&mut out, &self.level, (Quantity::Db, Quantity::DbDeviation));
+        for link in &self.links {
+            out.extend(link.own.iter().map(|_| match link.kind {
+                SharedKind::Periodic => Quantity::Depth,
+            }));
+        }
         out.into_iter().zip(self.values()).collect()
     }
 
@@ -337,8 +440,14 @@ impl Atom {
         };
         let tables: Vec<String> = self.levels().iter().map(|t| literal(t)).collect();
         let key = fnv(&tables.join("\n"));
+        let linked: String = self
+            .links
+            .iter()
+            .map(|k| format!("_{}{}", k.kind.named().1, k.to))
+            .collect();
+        let key = format!("{linked}_n{key}");
         match &self.sound {
-            Sound::Partial { .. } => format!("{DIRECTORY}/partial_f{f}{g}_l{l}_n{key}"),
+            Sound::Partial { .. } => format!("{DIRECTORY}/partial_f{f}{g}_l{l}{key}"),
             Sound::Harmonic { .. } => {
                 let each: Vec<String> = self
                     .levels()
@@ -346,14 +455,14 @@ impl Atom {
                     .map(|t| t.knots.len().to_string())
                     .collect();
                 format!(
-                    "{DIRECTORY}/harmonic_h{}_f{f}{g}_l{}_n{key}",
+                    "{DIRECTORY}/harmonic_h{}_f{f}{g}_l{}{key}",
                     self.harmonics(),
                     each.join("-")
                 )
             }
-            Sound::Noise { .. } => format!("{DIRECTORY}/noise_l{l}_n{key}"),
+            Sound::Noise { .. } => format!("{DIRECTORY}/noise_l{l}{key}"),
             Sound::Shaped { bands } => {
-                format!("{DIRECTORY}/shaped_b{}_l{l}_n{key}", bands.len())
+                format!("{DIRECTORY}/shaped_b{}_l{l}{key}", bands.len())
             }
         }
     }
@@ -461,9 +570,21 @@ impl Atom {
                 )
             }
         };
+        let body = match self.links.is_empty() {
+            true => body,
+            false => {
+                let factors: Vec<String> = self.links.iter().map(|k| k.kind.factor(k.to)).collect();
+                format!("({body}) * {}", factors.join(" * "))
+            }
+        };
+        let shared: String = self
+            .links
+            .iter()
+            .map(|k| format!(", times the {} node {} it references", k.kind.name(), k.to))
+            .collect();
         format!(
-            "; Models: {what}, its level in dBFS through {l} knots, the last ending it | Neglects: \
-             every other atom, each its own row | IO: (t) -> amplitude | Tags: atom\n\
+            "; Models: {what}, its level in dBFS through {l} knots, the last ending it{shared} | \
+             Neglects: every other atom, each its own row | IO: (t) -> amplitude | Tags: atom\n\
              crop({body}, on, on + {end})\n"
         )
     }
@@ -521,6 +642,11 @@ impl Atom {
             }
         }
         fields.push(("level".to_string(), num(self.level.base)));
+        for link in &self.links {
+            for (name, v) in link.kind.own().iter().zip(&link.own) {
+                fields.push((name.to_string(), num(*v)));
+            }
+        }
         let written: Vec<String> = fields
             .iter()
             .map(|(k, v)| format!("\"{k}\": {v}"))
@@ -616,15 +742,59 @@ impl Atom {
         if tables.next().is_some() {
             return None;
         }
+        let mut links = Vec::new();
+        for kind in SharedKind::ALL {
+            let Some(to) = counts.get(kind.named().1) else {
+                continue;
+            };
+            let [to] = to.as_slice() else {
+                return None;
+            };
+            links.push(Link {
+                to: *to,
+                kind,
+                own: kind.own().iter().map(|n| get(n)).collect::<Option<_>>()?,
+            });
+        }
         let atom = Atom {
             key,
             on,
             sound,
             level,
+            links,
         };
         let knots: usize = atom.levels().iter().map(|t| t.knots.len()).sum();
         (atom.values().len() + 1 == numbers.len() + 2 * knots).then_some(atom)
     }
+}
+
+/// Each shared node `atoms` reference, by index; `None` where one is missing.
+pub fn shared(files: &[(String, String)], atoms: &[Atom]) -> Option<Vec<(usize, Shared)>> {
+    let mut out: Vec<(usize, Shared)> = Vec::new();
+    for link in atoms.iter().flat_map(|a| &a.links) {
+        if out.iter().any(|(to, _)| *to == link.to) {
+            continue;
+        }
+        let path = link.kind.node(link.to);
+        let (_, text) = files.iter().find(|(p, _)| *p == path)?;
+        let bound: HashMap<&str, f64> = text
+            .lines()
+            .filter_map(|l| {
+                let (name, value) = l.split_once(" = ")?;
+                Some((name.trim(), value.trim().parse().ok()?))
+            })
+            .collect();
+        let numbers = link.kind.numbers().iter().map(|n| bound.get(n).copied());
+        let numbers = numbers.collect::<Option<_>>()?;
+        out.push((
+            link.to,
+            Shared {
+                kind: link.kind,
+                numbers,
+            },
+        ));
+    }
+    Some(out)
 }
 
 /// A level's deviations from its base as a knot table of literals, which no token bound counts.
@@ -737,9 +907,13 @@ pub const SCORE: &str = "score/clip.jsonl";
 pub const MASTER: &str = "; Models: the clip | Neglects: nothing | IO: (t) -> amplitude | \
      Tags: master\n@score/clip(t)\n";
 
-/// Every file a composition of `atoms` holds: its nodes, its score and its master.
-pub fn files(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
+/// Every file a composition of `atoms` holds: its nodes, the `shared` nodes they reference by
+/// index, its score and its master.
+pub fn files(atoms: &[Atom], shared: &[(usize, Shared)], clip: &Clip) -> Vec<(String, String)> {
     let mut out = nodes(atoms, clip);
+    for (to, node) in shared {
+        out.push((node.kind.node(*to), node.node_text()));
+    }
     out.push((SCORE.to_string(), score(atoms)));
     out.push(("master".to_string(), MASTER.to_string()));
     out
@@ -747,8 +921,13 @@ pub fn files(atoms: &[Atom], clip: &Clip) -> Vec<(String, String)> {
 
 /// Every file a composition of `atoms` holds, its master scaling the score by one gain of
 /// `gain_db` dB.
-pub fn files_at(atoms: &[Atom], clip: &Clip, gain_db: f64) -> Vec<(String, String)> {
-    let mut out = files(atoms, clip);
+pub fn files_at(
+    atoms: &[Atom],
+    shared: &[(usize, Shared)],
+    clip: &Clip,
+    gain_db: f64,
+) -> Vec<(String, String)> {
+    let mut out = files(atoms, shared, clip);
     out.retain(|(path, _)| path != "master");
     let master = format!(
         "; Models: the clip at one master gain in dB | Neglects: nothing | IO: (t) -> \

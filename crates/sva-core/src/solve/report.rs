@@ -1,6 +1,6 @@
-// Concern: a fit's progress lines and its answer as JSON, the shapes sva-portal's page reads | Non-concern: running it (fit.rs), where a line goes | IO: (Line | Fit) -> JSON
+// Concern: a fit's progress lines and its answer as JSON, its shared variables listed, the shapes sva-portal's page reads | Non-concern: running it (fit.rs), where a line goes | IO: (Line | Fit) -> JSON
 
-use super::atoms::{Atom, Sound};
+use super::atoms::{Atom, Shared, Sound};
 use super::fit::{Action, Fit, Line, Tweak};
 use super::optimize::End;
 use crate::json::{NONE, escape, list, num, strings};
@@ -58,6 +58,40 @@ fn atom(atom: &Atom) -> String {
     )
 }
 
+/// The `shared` variables `atoms` reference, each its index, kind, numbers by name, and each
+/// referencing atom's key beside its own numbers by name.
+fn shared(atoms: &[Atom], shared: &[(usize, Shared)]) -> String {
+    list(shared, |(to, node)| {
+        let numbers: Vec<String> = node
+            .kind
+            .numbers()
+            .iter()
+            .zip(&node.numbers)
+            .map(|(n, v)| format!("\"{n}\": {}", num(*v)))
+            .collect();
+        let each: Vec<String> = atoms
+            .iter()
+            .flat_map(|a| a.links.iter().filter(|l| l.to == *to).map(move |l| (a, l)))
+            .map(|(a, l)| {
+                let own: Vec<String> = l
+                    .kind
+                    .own()
+                    .iter()
+                    .zip(&l.own)
+                    .map(|(n, v)| format!(", \"{n}\": {}", num(*v)))
+                    .collect();
+                format!("{{ \"key\": {}{} }}", a.key, own.concat())
+            })
+            .collect();
+        format!(
+            "{{ \"id\": {to}, \"kind\": \"{}\", {}, \"atoms\": [{}] }}",
+            node.kind.name(),
+            numbers.join(", "),
+            each.join(", ")
+        )
+    })
+}
+
 /// A pass's move in words: `start`, `add <kind>`, or `<adjust> <kind>`.
 fn moved(line: &Line) -> String {
     let kind = line.atom.as_ref().map_or("", |a| a.kind());
@@ -110,7 +144,7 @@ pub fn progress(line: &Line) -> String {
         "{{ \"pass\": {}, \"action\": \"{}\", \"adjust\": {}, \"move\": {}, \"atom\": {}, \"from_db\": {}, \"to_db\": {}, \
          \"delta_dl_bits\": {}, \"drop_bits\": {}, \"total_drop_bits\": {}, \"share\": {share}, \
          \"dl_bits\": {}, \"atom_bits\": {}, \"residual_bits\": {}, \
-         \"residual_db\": [{}], \"envelopes\": {}, \"skipped\": {}, \"seconds\": {}, \"pass_secs\": {}{geometry} }}",
+         \"residual_db\": [{}], \"envelopes\": {}, \"shared\": {}, \"skipped\": {}, \"seconds\": {}, \"pass_secs\": {}{geometry} }}",
         line.pass,
         line.action.name(),
         line.tweak
@@ -130,6 +164,7 @@ pub fn progress(line: &Line) -> String {
             let rows: Vec<String> = db.iter().map(|row| numbers(row)).collect();
             format!("{{ \"key\": {key}, \"db\": [{}] }}", rows.join(", "))
         }),
+        shared(&line.atoms, &line.shared),
         list(&line.skipped, atom),
         num(line.seconds),
         num(line.pass_secs)
@@ -160,7 +195,7 @@ pub fn answer(
          \"adjusts_by\": {{ {} }}, \"partials\": {}, \"harmonics\": {}, \"noises\": {}, \"shaped\": {}, \"dl_bits\": {}, \
          \"atom_bits\": {}, \"residual_bits\": {}, \"gain_db\": {}, \"from_pass\": {}, \"tolerance\": {}, \
          \"ended\": \"{}\", \"stopped\": {}, \"secs\": {}, \
-         \"atoms\": {}, \"wrote\": {} }}{files} }}",
+         \"atoms\": {}, \"shared\": {}, \"wrote\": {} }}{files} }}",
         fit.clip.rate,
         fit.passes,
         fit.adds,
@@ -185,6 +220,7 @@ pub fn answer(
         fit.ended == End::Stopped,
         num(secs),
         list(&fit.atoms, atom),
+        shared(&fit.atoms, &fit.shared),
         strings(wrote)
     )
 }

@@ -71,6 +71,15 @@ export interface SolveAtom {
     /** A shaped noise's bands, each its gain in dB over its one shared level. */
     bands: { lo_hz: number; hi_hz: number; gain_db: number }[] | null;
 }
+/** A shared variable the atoms reference: a periodic level, its rate in Hz and phase shared,
+ * each atom's level moved by its own `depth` in dB times sin(2 pi rate t + phase). */
+export interface SolveShared {
+    id: number;
+    kind: "periodic";
+    rate: number;
+    phase: number;
+    atoms: { key: number; depth: number }[];
+}
 /**
  * One pass, one move: `action` an add of a new atom or an adjust of a kept one, `adjust` what
  * that adjust changed (null for an add), `move` both in words (`"add partial"`, `"level
@@ -81,9 +90,10 @@ export interface SolveAtom {
  * (null where it is none), `dl_bits` the total, `atom_bits` plus
  * `residual_bits`; `residual_db[frame][band]` the power
  * the fit leaves in each octave band in dB, null where none; `envelopes` each kept atom's
- * written level per frame in dB; `skipped` the atoms of better moves passed over, their nodes
- * refused; `seconds` the clock since the solve began as it ended, `pass_secs` its pass's own
- * time; `files` the composition it leaves, as the answer's `files`, to render as it arrives.
+ * written level per frame in dB; `shared` the shared variables its atoms reference;
+ * `skipped` the atoms of better moves passed over, their nodes refused; `seconds` the clock
+ * since the solve began as it ended, `pass_secs` its pass's own time; `files` the
+ * composition it leaves, as the answer's `files`, to render as it arrives.
  * `pass` counts from 1, a fresh start's 0, a resumed start's the pass it resumes from.
  */
 export interface SolveStep {
@@ -103,6 +113,7 @@ export interface SolveStep {
     residual_bits: number;
     residual_db: (number | null)[][];
     envelopes: { items: { key: number; db: number[] }[] };
+    shared: { items: SolveShared[] };
     skipped: { items: SolveAtom[] };
     seconds: number;
     pass_secs: number;
@@ -141,6 +152,7 @@ export interface SolveAnswer {
         stopped: boolean;
         secs: number;
         atoms: { items: SolveAtom[] };
+        shared: { items: SolveShared[] };
         wrote: string[];
     };
     files: { items: SolveFile[] };
@@ -274,7 +286,7 @@ pub(crate) async fn solved(clip: &JsValue, options_js: &JsValue) -> Result<JsVal
             }
             if let Some(hear) = &hear {
                 let line_js = parse(&progress(line)).unwrap_or(JsValue::NULL);
-                let files = files_at(&line.atoms, &line.clip, gain_db);
+                let files = files_at(&line.atoms, &line.shared, &line.clip, gain_db);
                 let files = parse(&composition(&files)).unwrap_or(JsValue::NULL);
                 let _ = js_sys::Reflect::set(&line_js, &"files".into(), &files);
                 let _ = hear.call1(&JsValue::NULL, &line_js);
@@ -285,7 +297,7 @@ pub(crate) async fn solved(clip: &JsValue, options_js: &JsValue) -> Result<JsVal
     )
     .await
     .map_err(|e| thrown(&e))?;
-    let files = files_at(&fitted.atoms, &fitted.clip, fitted.gain_db);
+    let files = files_at(&fitted.atoms, &fitted.shared, &fitted.clip, fitted.gain_db);
     parse(&success_envelope(
         &answer(&fitted, clock(), &[], Some(&files)),
         &[],

@@ -1,4 +1,4 @@
-// Concern: FIT: one sound as the optimizer's problem: grid, weights, the adds and adjusts it proposes and fits | Non-concern: the pass loop (optimize/), JSON | IO: (samples, rate, spl) -> Fit, Lines
+// Concern: FIT: one sound as the optimizer's problem: grid, weights, the adds and adjusts it fits | Non-concern: the pass loop (optimize/), JSON, shared levels | IO: (samples, rate, spl) -> Fit, Lines
 
 use std::f64::consts::LOG2_E;
 use std::num::NonZeroUsize;
@@ -8,12 +8,18 @@ use sva_engine::hearing::{CAM_FIRST, CAM_LAST, cam, cam_hz, erb_hz, level_jnd_db
 use sva_engine::{Abandon, default_threads, each, fft};
 
 use super::add::{Members, Spectrogram, Track, floor_db, sieved, span_hz};
-use super::atoms::{Atom, Clip, Feasible, Quantity, Sound, Trajectory, birth};
+use super::atoms::{
+    self, Atom, Clip, Feasible, Link, Quantity, SharedKind, Sound, Trajectory, birth,
+};
 use super::bits::{self, Look, Priced, frequency_delta, level_delta};
 use super::grid::Grid;
 use super::optimize::code::Price;
-use super::optimize::{self, Edit, End, Fitting, Ledger, Scored, TOLERANCE};
+use super::optimize::{self, Added, Edit, End, Fitting, Ledger, Scored, TOLERANCE};
 use crate::cli_error::CliError;
+
+mod shared;
+
+use shared::{PERIODIC, active, attach, kernel, shared_price, swapped};
 
 pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate descent on the atoms' levels and frequencies beside matching pursuit for new atoms (Mallat and Zhang 1993, doi 10.1109/78.258082); \
      DL = B(x) (bits.rs) plus the residual's bits, the one objective; \
@@ -70,6 +76,12 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      a voice's f0 at the JND at f0, its B where its highest harmonic moves by that harmonic's JND; a glide at its precision; \
      a time at the frame, a noise band's edge one of the grid's band edges; \
      a key one past the last born; \
+     a shared variable numbers several atoms reference, each atom its own numbers beside them (optimize/); one kind, a periodic level: its rate and phase shared, each referencing atom's depth in dB its own, its level moved by depth sin(2 pi rate t + phase), written as a shared node each referencing atom's node reads; \
+     a frame's power of an atom so moved its level's power times that factor's mean under the frame's kernel, the squared window over each hop the frame pools at the analysis hop; \
+     an add also scored attached to each active periodic level and to the spare, the atoms attached already set beside it, their levels held: per frame each atom's level in dB the weighted correlation of the residual, those atoms added back, with its template at its level (a new atom's at its columns' mean gains) over its weighted energy; \
+     the rate started at the peak of those levels' summed modulation spectrum, each less its least-squares line, at a whole count of cycles over the frames' span to their Nyquist, then by golden section a cycle over the span either side to its precision; \
+     at a rate each atom's line, sine and cosine by least squares, the phase the direction their sine and cosine pairs share most, each depth its pair along it over the kernel's attenuation at that rate; the new atom's gains over the factor written as an add's; the whole edit priced by the ledger; \
+     a periodic level's rate from 0 to the frames' Nyquist and its phase over a turn, the phase at the finest of its atoms' depth precisions over their depths, the rate at that phase over the clip; a depth at its atom's level precision; \
      each pass reported as it ends: its move and what an adjust changed, the atom's level before and after, the DL's drop and total, the residual's grid, the moves it skipped";
 
 /// A full-scale sine at 103.95 dB SPL by default (SMPTE RP 200: -20 dBFS pink noise at 83 dB
@@ -204,6 +216,8 @@ pub struct Line {
     /// The empty fit's DL.
     pub start_bits: f64,
     pub atoms: Vec<Atom>,
+    /// The shared nodes the atoms reference, by index.
+    pub shared: Vec<(usize, atoms::Shared)>,
     pub clip: Clip,
     /// The atoms of the moves better than its own it skipped, their nodes refused.
     pub skipped: Vec<Atom>,
@@ -213,6 +227,8 @@ pub struct Line {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resume {
     pub atoms: Vec<Atom>,
+    /// The shared nodes its atoms reference, by index.
+    pub shared: Vec<(usize, atoms::Shared)>,
     pub passes: usize,
     pub gain_db: Option<f64>,
 }
@@ -229,8 +245,15 @@ impl Resume {
                 ),
             )
         })?;
+        let shared = super::atoms::shared(files, &atoms).ok_or_else(|| {
+            CliError::usage(
+                "solve.from_unread",
+                "the composition to resume lacks a shared node its atoms reference",
+            )
+        })?;
         Ok(Resume {
             atoms,
+            shared,
             passes,
             gain_db: super::atoms::gain_of(files),
         })
@@ -263,6 +286,7 @@ impl Default for Options {
 pub struct Fit {
     pub clip: Clip,
     pub atoms: Vec<Atom>,
+    pub shared: Vec<(usize, atoms::Shared)>,
     pub gain_db: f64,
     pub spl_db: f64,
     pub atom_bits: f64,
@@ -482,6 +506,8 @@ struct Problem {
     times: Vec<f64>,
     window: Vec<f64>,
     twiddle: Vec<(f64, f64)>,
+    /// The share of a frame's power each time from its centre holds, as `MODEL` states.
+    kernel: Vec<(f64, f64)>,
     threads: NonZeroUsize,
 }
 
@@ -516,10 +542,11 @@ impl Problem {
             .map(|f| f.iter().map(|h| looks / (h * mean)).collect())
             .collect();
         let times = (0..grid.power.len()).map(|f| grid.centre_secs(f)).collect();
-        let window = (0..grid.long)
+        let window: Vec<f64> = (0..grid.long)
             .map(|k| 0.5 - 0.5 * libm::cos(std::f64::consts::TAU * k as f64 / grid.long as f64))
             .collect();
         let twiddle = fft::twiddles(grid.n);
+        let kernel = kernel(&grid, &window);
         Problem {
             grid,
             clip,
@@ -533,6 +560,7 @@ impl Problem {
             times,
             window,
             twiddle,
+            kernel,
             threads,
         }
     }
@@ -693,8 +721,18 @@ fn db(power: f64) -> f64 {
     10.0 * libm::log10(power)
 }
 
-/// `kind` keyed `key` written from `fitted`, each column's gain per frame, as `MODEL` states.
-fn write(p: &Problem, kind: &Kind, key: u64, fitted: &[Vec<f64>]) -> Written {
+/// An atom's links beside the shared variables they index.
+type Linked<'a> = (&'a [Link], &'a [optimize::Shared]);
+
+/// `kind` keyed `key` written from `fitted`, each column's gain per frame before `links`'
+/// factor, referencing `links`, as `MODEL` states.
+fn write(
+    p: &Problem,
+    kind: &Kind,
+    key: u64,
+    fitted: &[Vec<f64>],
+    (links, shared): Linked,
+) -> Written {
     let secs = p.clip.secs();
     let floors = p.columns(kind).floors;
     let trajectories: Vec<Trajectory> = fitted
@@ -706,20 +744,33 @@ fn write(p: &Problem, kind: &Kind, key: u64, fitted: &[Vec<f64>]) -> Written {
             thinned((0.0, secs), &p.times, &held, level_jnd_db(peak - floor))
         })
         .collect();
-    rewrite(p, kind, key, trajectories)
+    rewrite(p, kind, key, trajectories, (links, shared))
 }
 
-/// `kind` keyed `key` written at each column's level `trajectories`.
-fn rewrite(p: &Problem, kind: &Kind, key: u64, trajectories: Vec<Trajectory>) -> Written {
+/// `kind` keyed `key` written at each column's level `trajectories`, referencing `links`, its
+/// gains their factor's.
+fn rewrite(
+    p: &Problem,
+    kind: &Kind,
+    key: u64,
+    trajectories: Vec<Trajectory>,
+    (links, shared): Linked,
+) -> Written {
     let columns = p.columns(kind);
     let glide = kind.glide();
     let levels: Vec<Vec<f64>> = trajectories
         .iter()
         .map(|t| levels_at(t, &p.times))
         .collect();
+    let factor = p.factor(links, shared);
     let gains = levels
         .iter()
-        .map(|l| l.iter().map(|l| libm::pow(10.0, l / 10.0)).collect())
+        .map(|l| {
+            l.iter()
+                .zip(&factor)
+                .map(|(l, m)| libm::pow(10.0, l / 10.0) * m)
+                .collect()
+        })
         .collect();
     let mut trajectories = trajectories.into_iter();
     let first = trajectories.next().expect("a column");
@@ -744,6 +795,10 @@ fn rewrite(p: &Problem, kind: &Kind, key: u64, trajectories: Vec<Trajectory>) ->
                 .collect(),
             first,
         ),
+    };
+    let atom = Atom {
+        links: links.to_vec(),
+        ..atom
     };
     let price = match kind {
         Kind::Shaped { bands } => shaped_price(p, &atom, bands, &levels[0], columns.floors[0]),
@@ -824,6 +879,7 @@ fn priced(
             Quantity::Stretch => steps().1,
             Quantity::Glide => glide_step,
             Quantity::Edge => edge_step(p, &feasible),
+            Quantity::Depth => level_deltas[0],
         });
     }
     bits::price(atom, &Priced { feasible, deltas })
@@ -1049,6 +1105,10 @@ struct Held {
 }
 
 impl Held {
+    fn links(&self) -> &[Link] {
+        &self.written.atom.links
+    }
+
     fn model(&self, p: &Problem, f: usize) -> Vec<f64> {
         let mut u = vec![0.0; p.range.len()];
         for (t, g) in self.templates.iter().zip(&self.written.gains) {
@@ -1129,10 +1189,10 @@ fn scaled(
     p: &Problem,
     kept: &[Held],
     ledger: &Ledger,
-    residual: &[Vec<f64>],
+    reading: &Reading,
     a: usize,
 ) -> (f64, Tweak, Option<Held>) {
-    let held = &kept[a];
+    let (held, residual) = (&kept[a], &reading.residual);
     let (energy, pull) = (0..p.frames()).fold((0.0, 0.0), |(e, c), f| {
         held.model(p, f)
             .iter()
@@ -1141,7 +1201,14 @@ fn scaled(
             .fold((e, c), |(e, c), ((u, r), w)| (e + w * u * u, c + w * u * r))
     });
     // Removing it changes the residual by +u: sum w (u^2 + 2 r u).
-    let gone = ledger.removed(a, 0.5 * LOG2_E * (energy + 2.0 * pull));
+    let gone = swapped(
+        p,
+        kept,
+        ledger,
+        a,
+        None,
+        0.5 * LOG2_E * (energy + 2.0 * pull),
+    );
     let gain = match energy > 0.0 {
         true => 1.0 + pull / energy,
         false => 1.0,
@@ -1159,17 +1226,21 @@ fn scaled(
             knots: t.knots.clone(),
         })
         .collect();
-    let written = rewrite(p, &held.kind, held.written.atom.key, trajectories);
+    let written = rewrite(
+        p,
+        &held.kind,
+        held.written.atom.key,
+        trajectories,
+        (held.links(), &reading.shared),
+    );
     // The residual changes by -(gain - 1) u: sum w (d^2 u^2 - 2 d r u).
     let d = gain - 1.0;
-    let rescaled = ledger.replaced(
-        a,
-        &written.price,
-        0.5 * LOG2_E * (d * d * energy - 2.0 * d * pull),
-    );
+    let after = rewritten(held, written);
+    let missed = 0.5 * LOG2_E * (d * d * energy - 2.0 * d * pull);
+    let rescaled = swapped(p, kept, ledger, a, Some(&after), missed);
     match gone < rescaled {
         true => (gone, Tweak::Remove, None),
-        false => (rescaled, Tweak::Level, Some(rewritten(held, written))),
+        false => (rescaled, Tweak::Level, Some(after)),
     }
 }
 
@@ -1178,11 +1249,12 @@ fn rethinned(
     p: &Problem,
     kept: &[Held],
     ledger: &Ledger,
-    residual: &[Vec<f64>],
+    reading: &Reading,
     a: usize,
 ) -> (f64, Held) {
-    let held = &kept[a];
+    let (held, residual) = (&kept[a], &reading.residual);
     let before = &held.written.gains;
+    let factor = p.factor(held.links(), &reading.shared);
     let fitted: Vec<Vec<f64>> = held
         .templates
         .iter()
@@ -1191,15 +1263,17 @@ fn rethinned(
             (0..p.frames())
                 .map(|f| {
                     let (energy, pull) = p.moments(f, t.at(f), &residual[f]);
-                    match energy > 0.0 {
+                    let free = match energy > 0.0 {
                         true => (g[f] + pull / energy).max(0.0),
                         false => g[f],
-                    }
+                    };
+                    free / factor[f]
                 })
                 .collect()
         })
         .collect();
-    let written = write(p, &held.kind, held.written.atom.key, &fitted);
+    let key = held.written.atom.key;
+    let written = write(p, &held.kind, key, &fitted, (held.links(), &reading.shared));
     let delta = |f: usize| {
         let mut u = vec![0.0; p.range.len()];
         for ((t, after), before) in held.templates.iter().zip(&written.gains).zip(before) {
@@ -1210,12 +1284,9 @@ fn rethinned(
         }
         u
     };
-    let rethinned = ledger.replaced(
-        a,
-        &written.price,
-        0.5 * LOG2_E * change(p, residual, &delta),
-    );
-    (rethinned, rewritten(held, written))
+    let missed = 0.5 * LOG2_E * change(p, residual, &delta);
+    let after = rewritten(held, written);
+    (swapped(p, kept, ledger, a, Some(&after), missed), after)
 }
 
 /// The Hz at the clip's start a track of `(t, ln hz)` gives at `rate`.
@@ -1230,10 +1301,10 @@ fn retuned(
     p: &Problem,
     kept: &[Held],
     ledger: &Ledger,
-    residual: &[Vec<f64>],
+    reading: &Reading,
     a: usize,
 ) -> Option<(f64, Held)> {
-    let held = &kept[a];
+    let (held, residual) = (&kept[a], &reading.residual);
     if matches!(held.kind, Kind::Noise { .. } | Kind::Shaped { .. }) {
         return None;
     }
@@ -1252,7 +1323,8 @@ fn retuned(
     let trajectories: Vec<Trajectory> = held.written.atom.levels().into_iter().cloned().collect();
     let score = |kind: &Kind| -> (f64, Held) {
         let templates = p.templates(kind);
-        let written = rewrite(p, kind, key, trajectories.clone());
+        let linked = (held.links(), &reading.shared[..]);
+        let written = rewrite(p, kind, key, trajectories.clone(), linked);
         let delta = |f: usize| {
             let mut u = vec![0.0; p.range.len()];
             for ((after, before), g) in templates.iter().zip(&held.templates).zip(&written.gains) {
@@ -1262,17 +1334,13 @@ fn retuned(
             }
             u
         };
-        let v = ledger.replaced(
-            a,
-            &written.price,
-            0.5 * LOG2_E * change(p, residual, &delta),
-        );
+        let missed = 0.5 * LOG2_E * change(p, residual, &delta);
         let held = Held {
             kind: kind.clone(),
             templates,
             written,
         };
-        (v, held)
+        (swapped(p, kept, ledger, a, Some(&held), missed), held)
     };
     let value = |kind: &Kind| score(kind).0;
     let current = held.kind.glide();
@@ -1545,12 +1613,20 @@ fn gliding(
     })
 }
 
-/// What a pass reads off the kept atoms: the residual, its mean over the frames, and each
-/// kept atom's lines.
+/// What a pass reads off the kept atoms: the residual, its mean over the frames, each kept
+/// atom's lines, and the periodic levels an add may attach to: every active one and a spare.
 struct Reading {
     residual: Vec<Vec<f64>>,
     mean: Vec<f64>,
     lines: Vec<Vec<Vec<f64>>>,
+    shared: Vec<optimize::Shared>,
+    targets: Vec<usize>,
+}
+
+/// A new atom, or one its fit made beside what it set.
+enum Draft {
+    Kind(Kind),
+    Made(Box<Held>),
 }
 
 /// A candidate: an add of a kind; that add's gliding variant beside its fixed kind, refined,
@@ -1586,22 +1662,21 @@ fn adjusts(
     reading: &Reading,
     a: usize,
 ) -> Vec<Scored<Problem>> {
-    let residual = &reading.residual;
-    let (change, tweak, held) = scaled(p, kept, ledger, residual, a);
+    let (change, tweak, held) = scaled(p, kept, ledger, reading, a);
     let edit = match held {
         Some(held) => Edit::Replace(a, held, tweak),
         None => Edit::Remove(a, tweak),
     };
     let mut out = vec![Scored { change, edit }];
     let retune =
-        retuned(p, kept, ledger, residual, a).filter(|(_, h)| p.apart(reading, &h.kind, Some(a)));
+        retuned(p, kept, ledger, reading, a).filter(|(_, h)| p.apart(reading, &h.kind, Some(a)));
     if let Some((change, held)) = retune {
         out.push(Scored {
             change,
             edit: Edit::Replace(a, held, Tweak::Frequency),
         });
     }
-    let (change, held) = rethinned(p, kept, ledger, residual, a);
+    let (change, held) = rethinned(p, kept, ledger, reading, a);
     out.push(Scored {
         change,
         edit: Edit::Replace(a, held, Tweak::Rethin),
@@ -1611,7 +1686,7 @@ fn adjusts(
 
 impl optimize::Problem for Problem {
     type Thing = Held;
-    type Draft = Kind;
+    type Draft = Draft;
     type Label = Tweak;
     type Candidate = Candidate;
     type Reading = Reading;
@@ -1630,12 +1705,38 @@ impl optimize::Problem for Problem {
         thing.written.price.clone()
     }
 
-    fn read(&self, kept: &[Held]) -> Reading {
+    fn attached(&self, thing: &Held) -> Vec<usize> {
+        thing.links().iter().map(|l| l.to).collect()
+    }
+
+    fn spares(&self) -> Vec<optimize::Shared> {
+        SharedKind::ALL
+            .iter()
+            .map(|kind| optimize::Shared {
+                kind: *kind as usize,
+                numbers: vec![0.0; kind.numbers().len()],
+            })
+            .collect()
+    }
+
+    fn price_shared(&self, s: usize, kept: &[Held]) -> Price {
+        shared_price(self, kept.iter(), s)
+    }
+
+    fn read(&self, kept: &[Held], shared: &[optimize::Shared]) -> Reading {
         let residual = self.residual(kept);
+        let used: Vec<usize> = kept.iter().flat_map(|h| self.attached(h)).collect();
+        let periodic = |s: &usize| shared[*s].kind == PERIODIC;
+        let mut targets: Vec<usize> = (0..shared.len())
+            .filter(|s| periodic(s) && used.contains(s))
+            .collect();
+        targets.extend((0..shared.len()).find(|s| periodic(s) && !used.contains(s)));
         Reading {
             mean: averaged(self, &residual),
             lines: kept.iter().map(|h| lines(self, &h.kind)).collect(),
             residual,
+            shared: shared.to_vec(),
+            targets,
         }
     }
 
@@ -1651,7 +1752,8 @@ impl optimize::Problem for Problem {
     }
 
     /// An add refined, then its gliding variant where it has one, kept where its DL is the
-    /// lower and its lines lie apart; no add where they do not.
+    /// lower and its lines lie apart, beside it attached to each periodic level it may; no add
+    /// where they do not.
     fn fit(
         &self,
         kept: &[Held],
@@ -1662,14 +1764,22 @@ impl optimize::Problem for Problem {
     ) -> Fitting<Problem> {
         let residual = &reading.residual;
         let add = |kind: Kind, change: f64| {
-            let apart = self.apart(reading, &kind, None);
-            Fitting::Moves(match apart {
-                true => vec![Scored {
+            if !self.apart(reading, &kind, None) {
+                return Fitting::Moves(Vec::new());
+            }
+            let mut moves: Vec<Scored<Problem>> = reading
+                .targets
+                .iter()
+                .filter_map(|s| attach(self, kept, ledger, reading, key, &kind, *s))
+                .collect();
+            moves.insert(
+                0,
+                Scored {
                     change,
-                    edit: Edit::Add(kind),
-                }],
-                false => Vec::new(),
-            })
+                    edit: Edit::Add(Added::alone(Draft::Kind(kind))),
+                },
+            );
+            Fitting::Moves(moves)
         };
         match candidate {
             Candidate::Add(kind) => {
@@ -1698,12 +1808,17 @@ impl optimize::Problem for Problem {
         }
     }
 
-    fn make(&self, reading: &Reading, key: u64, kind: Kind) -> Held {
-        let (_, written) = adding(self, &reading.residual, &kind, key);
-        Held {
-            templates: self.templates(&kind),
-            kind,
-            written,
+    fn make(&self, reading: &Reading, key: u64, draft: Draft) -> Held {
+        match draft {
+            Draft::Kind(kind) => {
+                let (_, written) = adding(self, &reading.residual, &kind, key);
+                Held {
+                    templates: self.templates(&kind),
+                    kind,
+                    written,
+                }
+            }
+            Draft::Made(held) => *held,
         }
     }
 
@@ -1985,7 +2100,7 @@ fn adding(p: &Problem, residual: &[Vec<f64>], kind: &Kind, key: u64) -> (f64, Wr
                 .collect()
         })
         .collect();
-    let written = write(p, kind, key, &fitted);
+    let written = write(p, kind, key, &fitted, (&[], &[]));
     // One column's drop in closed form, sum w (2 r g t - g^2 t^2) = 2 g pull - g^2 energy.
     let drop: f64 = match &moments[..] {
         [m] => m
@@ -2073,6 +2188,7 @@ fn line(p: &Problem, state: &State, before: &State, start_bits: f64) -> Line {
         pass_secs: 0.0,
         start_bits,
         atoms: atoms(state.kept()),
+        shared: active(state),
         clip: p.clip,
         skipped: atoms(state.skipped()),
     }
@@ -2109,6 +2225,13 @@ fn resumed(p: &Problem, from: &Resume, gain_db: f64) -> Result<State, CliError> 
         )));
     }
     let secs = p.clip.secs();
+    let spares = <Problem as optimize::Problem>::spares(p);
+    let top = from.shared.iter().map(|(to, _)| to + 1).max().unwrap_or(0);
+    let mut shared: Vec<optimize::Shared> = (0..top).map(|_| spares[PERIODIC].clone()).collect();
+    for (to, node) in &from.shared {
+        shared[*to].kind = node.kind as usize;
+        shared[*to].numbers = node.numbers.clone();
+    }
     let mut held = Vec::new();
     for atom in &from.atoms {
         if atom.on != 0.0 || atom.end() != secs {
@@ -2144,14 +2267,14 @@ fn resumed(p: &Problem, from: &Resume, gain_db: f64) -> Result<State, CliError> 
             }
             false => kind,
         };
-        let written = rewrite(p, &kind, atom.key, trajectories);
+        let written = rewrite(p, &kind, atom.key, trajectories, (&atom.links, &shared));
         held.push(Held {
             templates: p.templates(&kind),
             kind,
             written,
         });
     }
-    Ok(State::of(p, held, birth(&from.atoms), from.passes))
+    Ok(State::of(p, held, shared, birth(&from.atoms), from.passes))
 }
 
 /// The kind `atom` is written from, `None` for a shape no fit writes.
@@ -2254,10 +2377,10 @@ pub async fn fit(
         ));
     }
     let p = Problem::of(grid, clip, heard_at, gain_db, options.threads);
-    let start_bits = State::of(&p, Vec::new(), 0, 0).dl();
+    let start_bits = State::of(&p, Vec::new(), Vec::new(), 0, 0).dl();
     let (state, from_pass) = match &options.from {
         Some(from) => (resumed(&p, from, gain_db)?, from.passes),
-        None => (State::of(&p, Vec::new(), 0, 0), 0),
+        None => (State::of(&p, Vec::new(), Vec::new(), 0, 0), 0),
     };
     let mut first = line(&p, &state, &state, start_bits);
     first.geometry = Some(Geometry {
@@ -2307,6 +2430,7 @@ pub async fn fit(
     Ok(Fit {
         clip,
         atoms: atoms(state.kept()),
+        shared: active(&state),
         gain_db,
         spl_db: heard_at,
         atom_bits: state.thing_bits(),

@@ -70,7 +70,7 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
             if line.geometry.is_some() || failed.is_some() {
                 return;
             }
-            let files = files_at(&line.atoms, &line.clip, gain_db);
+            let files = files_at(&line.atoms, &line.shared, &line.clip, gain_db);
             let wav = args.out.join(format!("pass-{:03}.wav", line.pass));
             let written = sounded(files, &line.clip).and_then(|heard| {
                 let samples: Vec<f32> = heard.iter().map(|s| *s as f32).collect();
@@ -90,7 +90,7 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
     if let Some(e) = failed {
         return Err(e);
     }
-    let composition = files_at(&fitted.atoms, &fitted.clip, fitted.gain_db);
+    let composition = files_at(&fitted.atoms, &fitted.shared, &fitted.clip, fitted.gain_db);
     for (path, body) in &composition {
         let file = args.out.join(path);
         if let Some(parent) = file.parent() {

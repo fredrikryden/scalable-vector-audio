@@ -25,7 +25,9 @@ pub const MODEL: &str = "B(x) in bits: the atom count n by Rissanen's (1983, doi
      precision its caller states (fit.rs); a stretch from 0 to where the highest harmonic \
      meets the top of the feasible set; a glide over minus to plus the rate that moves the \
      feasible set's lowest Hz to its highest over the clip; keys and phases are the ordinal's, \
-     0 bits; a deviation's range is minus to plus its quantity's width";
+     0 bits; a deviation's range is minus to plus its quantity's width, a periodic level's depth \
+     a level deviation's; which shared variable, if any, an atom references the ledger's \
+     (optimize/)";
 
 /// One frame a number moves: the atom's own excitation peak over threshold in dB, and its
 /// trajectory's frequency there.
@@ -72,7 +74,7 @@ pub fn range(atom: &Atom, feasible: &Feasible, quantity: Quantity) -> f64 {
         }
         Quantity::Glide => 2.0 * libm::log(feasible.hz.1 / feasible.hz.0) / width(feasible.secs),
         Quantity::Db => width(feasible.db),
-        Quantity::DbDeviation => 2.0 * feasible.offset(),
+        Quantity::DbDeviation | Quantity::Depth => 2.0 * feasible.offset(),
         Quantity::Edge => width(feasible.hz),
     }
 }

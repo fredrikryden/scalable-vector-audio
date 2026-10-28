@@ -1,4 +1,4 @@
-// Concern: the blind optimizer: passes of the best DL drop, the stop rule, the kept things, the ledger pricing moves, a resume | Non-concern: sound | IO: (Problem, State) -> State, End
+// Concern: the blind optimizer: passes of the best DL drop, the stop rule, kept things, shared variables, the ledger pricing moves, a resume | Non-concern: sound | IO: (Problem, State) -> State, End
 
 pub mod code;
 
@@ -18,7 +18,13 @@ pub trait Problem: Sync + Sized {
 
     fn missed(&self, kept: &[Self::Thing]) -> f64;
     fn price(&self, thing: &Self::Thing) -> Price;
-    fn read(&self, kept: &[Self::Thing]) -> Self::Reading;
+    /// The shared variables `thing` references.
+    fn attached(&self, thing: &Self::Thing) -> Vec<usize>;
+    /// One unused spare of each kind of shared variable, the kind its index.
+    fn spares(&self) -> Vec<Shared>;
+    /// Shared variable `s`'s price, `kept` the things.
+    fn price_shared(&self, s: usize, kept: &[Self::Thing]) -> Price;
+    fn read(&self, kept: &[Self::Thing], shared: &[Shared]) -> Self::Reading;
     fn propose(&self, kept: &[Self::Thing], reading: &Self::Reading) -> Vec<Self::Candidate>;
     /// `candidate`'s moves, each priced by `ledger`, or a candidate fitted next round in its place.
     fn fit(
@@ -44,9 +50,35 @@ pub enum Edit<A, T, L> {
 /// The edit a pass made, its things left out.
 pub type Moved<L> = Edit<(), (), L>;
 
+/// A list of numbers several things reference, each thing its own attachment numbers in its
+/// own price; its kind the index of the spare `Problem::spares` gives.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shared {
+    pub kind: usize,
+    pub numbers: Vec<f64>,
+}
+
+/// An add beside what its fit also sets: shared variables' numbers, and kept things other than
+/// it in their attachment numbers, every thing attached to a variable set among them.
+pub struct Added<P: Problem> {
+    pub draft: P::Draft,
+    pub shared: Vec<(usize, Shared)>,
+    pub others: Vec<(usize, P::Thing)>,
+}
+
+impl<P: Problem> Added<P> {
+    pub fn alone(draft: P::Draft) -> Added<P> {
+        Added {
+            draft,
+            shared: Vec::new(),
+            others: Vec::new(),
+        }
+    }
+}
+
 pub struct Scored<P: Problem> {
     pub change: f64,
-    pub edit: Edit<P::Draft, P::Thing, P::Label>,
+    pub edit: Edit<Added<P>, P::Thing, P::Label>,
 }
 
 pub enum Fitting<P: Problem> {
@@ -54,42 +86,145 @@ pub enum Fitting<P: Problem> {
     Again(P::Candidate),
 }
 
-/// The kept things' prices: the one place a move's DL change is priced. `missed` is the change
-/// in the missed bits the problem works out.
+/// An edit: each thing beside the shared variables it references, and shared variables'
+/// prices after it.
+#[derive(Default)]
+pub struct Change<'a> {
+    pub added: Option<(&'a Price, &'a [usize])>,
+    pub removed: Option<usize>,
+    pub replaced: Vec<(usize, &'a Price, &'a [usize])>,
+    pub shared: Vec<(usize, &'a Price)>,
+}
+
+/// The one place a move's DL change is priced: the things' count and prices; per kind the
+/// count of active shared variables, each thing's choice of none or one, each active one's
+/// price once, a spare 0 bits. `missed` is the problem's change in the missed bits.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ledger {
-    prices: Vec<Price>,
+    bits: Vec<f64>,
+    uses: Vec<Vec<usize>>,
+    shared: Vec<(usize, f64)>,
+    kinds: usize,
 }
 
 impl Ledger {
+    fn of(
+        prices: &[Price],
+        uses: Vec<Vec<usize>>,
+        shared: Vec<(usize, f64)>,
+        kinds: usize,
+    ) -> Ledger {
+        Ledger {
+            bits: prices.iter().map(Price::bits).collect(),
+            uses,
+            shared,
+            kinds,
+        }
+    }
+
+    fn total(&self, things: usize, priced: f64, refs: &[usize], shared: &[(usize, f64)]) -> f64 {
+        let mut active = vec![0; self.kinds];
+        let mut held = 0.0;
+        for ((kind, bits), n) in shared.iter().zip(refs) {
+            if *n > 0 {
+                active[*kind] += 1;
+                held += bits;
+            }
+        }
+        let chosen: f64 = active
+            .iter()
+            .map(|n| count(*n) + things as f64 * libm::log2(*n as f64 + 1.0))
+            .sum();
+        count(things) + priced + chosen + held
+    }
+
+    fn refs(&self) -> Vec<usize> {
+        let mut refs = vec![0; self.shared.len()];
+        for s in self.uses.iter().flatten() {
+            refs[*s] += 1;
+        }
+        refs
+    }
+
     pub fn bits(&self) -> f64 {
-        code::bits(&self.prices)
+        let priced = self.bits.iter().sum();
+        self.total(self.bits.len(), priced, &self.refs(), &self.shared)
+    }
+
+    pub fn changed(&self, change: &Change, missed: f64) -> f64 {
+        let (mut things, mut priced) = (self.bits.len(), 0.0);
+        let mut refs = self.refs();
+        let mut shared = self.shared.clone();
+        let mut drop = |a: usize, refs: &mut Vec<usize>| {
+            priced -= self.bits[a];
+            for s in &self.uses[a] {
+                refs[*s] -= 1;
+            }
+        };
+        if let Some(a) = change.removed {
+            drop(a, &mut refs);
+            things -= 1;
+        }
+        for (a, _, _) in &change.replaced {
+            drop(*a, &mut refs);
+        }
+        let mut take = |price: &Price, uses: &[usize], refs: &mut Vec<usize>| {
+            priced += price.bits();
+            for s in uses {
+                refs[*s] += 1;
+            }
+        };
+        for (_, price, uses) in &change.replaced {
+            take(price, uses, &mut refs);
+        }
+        if let Some((price, uses)) = change.added {
+            take(price, uses, &mut refs);
+            things += 1;
+        }
+        for (s, price) in &change.shared {
+            shared[*s].1 = price.bits();
+        }
+        let before = self.bits();
+        let after = self.bits.iter().sum::<f64>() + priced;
+        self.total(things, after, &refs, &shared) - before + missed
     }
 
     pub fn added(&self, price: &Price, missed: f64) -> f64 {
-        let n = self.prices.len();
-        price.bits() + count(n + 1) - count(n) + missed
+        let change = Change {
+            added: Some((price, &[])),
+            ..Change::default()
+        };
+        self.changed(&change, missed)
     }
 
     pub fn removed(&self, a: usize, missed: f64) -> f64 {
-        let n = self.prices.len();
-        count(n - 1) - count(n) - self.prices[a].bits() + missed
+        let change = Change {
+            removed: Some(a),
+            ..Change::default()
+        };
+        self.changed(&change, missed)
     }
 
     pub fn replaced(&self, a: usize, after: &Price, missed: f64) -> f64 {
-        after.bits() - self.prices[a].bits() + missed
+        let change = Change {
+            replaced: vec![(a, after, &self.uses[a])],
+            ..Change::default()
+        };
+        self.changed(&change, missed)
     }
 
     /// The ledger with thing `a` gone.
     pub fn without(&self, a: usize) -> Ledger {
-        let mut prices = self.prices.clone();
-        prices.remove(a);
-        Ledger { prices }
+        let mut out = self.clone();
+        out.bits.remove(a);
+        out.uses.remove(a);
+        out
     }
 }
 
 pub struct State<P: Problem> {
     kept: Vec<P::Thing>,
+    shared: Vec<Shared>,
     born: u64,
     passes: usize,
     ledger: Ledger,
@@ -102,6 +237,7 @@ impl<P: Problem> Clone for State<P> {
     fn clone(&self) -> State<P> {
         State {
             kept: self.kept.clone(),
+            shared: self.shared.clone(),
             born: self.born,
             passes: self.passes,
             ledger: self.ledger.clone(),
@@ -113,12 +249,19 @@ impl<P: Problem> Clone for State<P> {
 }
 
 impl<P: Problem> State<P> {
-    pub fn of(problem: &P, kept: Vec<P::Thing>, born: u64, passes: usize) -> State<P> {
+    pub fn of(
+        problem: &P,
+        kept: Vec<P::Thing>,
+        shared: Vec<Shared>,
+        born: u64,
+        passes: usize,
+    ) -> State<P> {
         let mut state = State {
             kept,
+            shared,
             born,
             passes,
-            ledger: Ledger { prices: Vec::new() },
+            ledger: Ledger::of(&[], Vec::new(), Vec::new(), 0),
             missed_bits: 0.0,
             moved: None,
             skipped: Vec::new(),
@@ -129,6 +272,10 @@ impl<P: Problem> State<P> {
 
     pub fn kept(&self) -> &[P::Thing] {
         &self.kept
+    }
+
+    pub fn shared(&self) -> &[Shared] {
+        &self.shared
     }
 
     pub fn passes(&self) -> usize {
@@ -155,10 +302,29 @@ impl<P: Problem> State<P> {
         self.thing_bits() + self.missed_bits
     }
 
+    /// The ledger afresh, a spare added of each kind none is free of.
     fn price(&mut self, problem: &P) {
-        self.ledger = Ledger {
-            prices: self.kept.iter().map(|t| problem.price(t)).collect(),
-        };
+        let uses: Vec<Vec<usize>> = self.kept.iter().map(|t| problem.attached(t)).collect();
+        let spares = problem.spares();
+        for (kind, spare) in spares.iter().enumerate() {
+            let free = (0..self.shared.len())
+                .any(|s| self.shared[s].kind == kind && !uses.iter().flatten().any(|u| *u == s));
+            if !free {
+                self.shared.push(spare.clone());
+            }
+        }
+        let shared = (0..self.shared.len())
+            .map(|s| {
+                let held = uses.iter().flatten().any(|u| *u == s);
+                let bits = match held {
+                    true => problem.price_shared(s, &self.kept).bits(),
+                    false => 0.0,
+                };
+                (self.shared[s].kind, bits)
+            })
+            .collect();
+        let prices: Vec<Price> = self.kept.iter().map(|t| problem.price(t)).collect();
+        self.ledger = Ledger::of(&prices, uses, shared, spares.len());
         self.missed_bits = problem.missed(&self.kept);
     }
 }
@@ -208,7 +374,7 @@ async fn pass<P: Problem>(
     stop: &dyn Abandon,
 ) -> Option<State<P>> {
     let (kept, key, ledger) = (&state.kept[..], state.born, &state.ledger);
-    let reading = problem.read(kept);
+    let reading = problem.read(kept, &state.shared);
     let mut round: Vec<(usize, P::Candidate)> = problem
         .propose(kept, &reading)
         .into_iter()
@@ -241,13 +407,20 @@ async fn pass<P: Problem>(
     let mut best = None;
     for Scored { edit, .. } in ranked {
         let made = match edit {
-            Edit::Add(draft) => Edit::Add(problem.make(&reading, key, draft)),
+            Edit::Add(added) => Edit::Add((
+                problem.make(&reading, key, added.draft),
+                added.shared,
+                added.others,
+            )),
             Edit::Replace(a, thing, label) => Edit::Replace(a, thing, label),
             Edit::Remove(a, label) => Edit::Remove(a, label),
         };
         match made {
-            Edit::Add(thing) | Edit::Replace(_, thing, _) if !problem.admits(&thing) => {
+            Edit::Add((thing, ..)) | Edit::Replace(_, thing, _) if !problem.admits(&thing) => {
                 next.skipped.push(thing);
+            }
+            Edit::Add((_, _, others)) if others.iter().any(|(_, t)| !problem.admits(t)) => {
+                next.skipped.extend(others.into_iter().map(|(_, t)| t));
             }
             made => {
                 best = Some(made);
@@ -259,7 +432,21 @@ async fn pass<P: Problem>(
         return Some(next);
     };
     let moved = match made {
-        Edit::Add(thing) => {
+        Edit::Add((thing, shared, others)) => {
+            let set: Vec<usize> = shared.iter().map(|(s, _)| *s).collect();
+            assert!(
+                state.kept.iter().enumerate().all(|(a, t)| {
+                    !problem.attached(t).iter().any(|s| set.contains(s))
+                        || others.iter().any(|(o, _)| *o == a)
+                }),
+                "every thing attached to a variable set is set beside it"
+            );
+            for (a, other) in others {
+                next.kept[a] = other;
+            }
+            for (s, to) in shared {
+                next.shared[s] = to;
+            }
             next.kept.push(thing);
             next.born += 1;
             Edit::Add(())

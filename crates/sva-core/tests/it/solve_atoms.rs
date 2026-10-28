@@ -100,7 +100,7 @@ fn ordinals_and_harmonic_levels_read_back_from_the_written_rows() {
     let text = score(&atoms);
     let mut born = atoms.clone();
     born.sort_by_key(|a| a.key);
-    assert_eq!(read(&files(&atoms, &CLIP)), Some(born), "{text}");
+    assert_eq!(read(&files(&atoms, &[], &CLIP)), Some(born), "{text}");
     let harmonic = text
         .lines()
         .find(|r| r.contains("\"key\": 4"))
@@ -196,7 +196,7 @@ fn a_long_envelope_voice_writes_and_sounds() {
         (1..=19).map(curve).collect(),
     );
     assert!(voice.writes(&CLIP), "{}", voice.node_text(&CLIP));
-    let written = files(std::slice::from_ref(&voice), &CLIP);
+    let written = files(std::slice::from_ref(&voice), &[], &CLIP);
     assert_eq!(read(&written), Some(vec![voice.clone()]));
     let heard = sounded(written, &CLIP).expect("the atoms render");
     let power = heard.iter().map(|s| s * s).sum::<f64>() / heard.len() as f64;
@@ -214,9 +214,9 @@ fn a_shaped_noise_reads_back_and_sounds() {
     );
     assert!(shaped.node().starts_with("atoms/shaped_b2_l2_n"));
     assert!(shaped.writes(&CLIP));
-    let written = files(std::slice::from_ref(&shaped), &CLIP);
+    let written = files(std::slice::from_ref(&shaped), &[], &CLIP);
     assert_eq!(read(&written), Some(vec![shaped.clone()]), "{written:?}");
-    let heard = sounded(files(&[shaped], &CLIP), &CLIP).expect("the atom renders");
+    let heard = sounded(files(&[shaped], &[], &CLIP), &CLIP).expect("the atom renders");
     let power = heard.iter().map(|s| s * s).sum::<f64>() / heard.len() as f64;
     assert!(power > 0.0, "{power}");
 }
@@ -247,10 +247,10 @@ fn a_glide_reads_back_and_sounds_its_closed_form() {
             .starts_with("atoms/harmonic_h3_f0_g1_l1-1-1_n")
     );
     let both = vec![partial.clone(), harmonic];
-    let written = files(&both, &CLIP);
+    let written = files(&both, &[], &CLIP);
     assert_eq!(read(&written), Some(both), "{written:?}");
-    let heard =
-        sounded(files(std::slice::from_ref(&partial), &CLIP), &CLIP).expect("the atom renders");
+    let heard = sounded(files(std::slice::from_ref(&partial), &[], &CLIP), &CLIP)
+        .expect("the atom renders");
     let rate = f64::from(CLIP.rate);
     let worst = heard
         .iter()

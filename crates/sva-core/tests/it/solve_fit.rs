@@ -588,7 +588,7 @@ fn a_resumed_fit_goes_on_from_the_composition_it_reads() {
     let samples = piano();
     let (cut, lines) = fitted_with(&samples, &Options::default());
     let (whole, _) = fitted(&samples);
-    let files = files_at(&cut.atoms, &cut.clip, cut.gain_db);
+    let files = files_at(&cut.atoms, &cut.shared, &cut.clip, cut.gain_db);
     let from = Resume::of(&files, cut.passes).expect("the composition reads back");
     assert_eq!(from.atoms, cut.atoms);
     let (resumed, heard) = fitted_with(
@@ -658,7 +658,7 @@ fn a_resume_from_another_clip_refuses_by_name() {
             Err(e) => usage(&e),
         }
     };
-    let files = files_at(&cut.atoms, &cut.clip, cut.gain_db);
+    let files = files_at(&cut.atoms, &cut.shared, &cut.clip, cut.gain_db);
     let from = Resume::of(&files, cut.passes).expect("the composition reads back");
     assert_eq!(
         refused(&samples[..samples.len() / 2], from.clone()),
@@ -715,4 +715,67 @@ fn a_late_second_tone_is_added_second_by_its_lowest_line() {
     assert!(adds.len() >= 2, "{shown:?}");
     assert!((lowest(adds[0]) - 261.63).abs() < 2.0, "{shown:?}");
     assert!((lowest(adds[1]) - 329.63).abs() < 2.0, "{shown:?}");
+}
+
+/// A C major triad of four-harmonic voices over 2 s at 48 kHz, each note's level moving by its
+/// depth in dB times one 5 Hz sine they share, the depths 3, 6 and 9 dB, holds one periodic
+/// level near 5 Hz that every note's atoms reference, each near its note's depth, and its
+/// composition reads back.
+#[test]
+fn a_triad_moving_at_one_rate_shares_one_periodic_level_at_each_notes_depth() {
+    const RATE: u32 = 48_000;
+    let notes = [(261.63, 3.0), (329.63, 6.0), (392.0, 9.0)];
+    let samples: Vec<f64> = (0..2 * RATE as usize)
+        .map(|n| {
+            let t = n as f64 / f64::from(RATE);
+            let mut sum = 0.0;
+            for (i, (f0, depth)) in notes.iter().enumerate() {
+                let level = libm::pow(10.0, depth * libm::sin(TAU * 5.0 * t) / 20.0);
+                for k in 1..=4 {
+                    let phase = hashed((4 * i + k) as u64);
+                    sum += 0.05 * level * libm::sin(TAU * k as f64 * f0 * t + phase) / k as f64;
+                }
+            }
+            sum
+        })
+        .collect();
+    let fit = now(fit(
+        &samples,
+        RATE,
+        SPL_DB,
+        &Options::default(),
+        &mut |_| {},
+        &Never,
+        &|| 0.0,
+    ))
+    .expect("the clip fits");
+    let [(to, shared)] = fit.shared.as_slice() else {
+        panic!("{:?} {:?}", fit.shared, fit.atoms);
+    };
+    let rate = shared.numbers[0];
+    assert!((rate - 5.0).abs() < 0.1, "{rate} Hz");
+    let files = files_at(&fit.atoms, &fit.shared, &fit.clip, fit.gain_db);
+    let from = Resume::of(&files, fit.passes).expect("the composition reads back");
+    assert_eq!((&from.atoms, &from.shared), (&fit.atoms, &fit.shared));
+    // Each atom is the note it lies nearest a harmonic of.
+    let miss = |hz: f64, f0: f64| (hz / (libm::round(hz / f0).max(1.0) * f0) - 1.0).abs();
+    for (f0, depth) in notes {
+        let of = |a: &&Atom| {
+            let hz = a.hz().expect("a tonal atom").base;
+            notes.iter().all(|(g, _)| miss(hz, f0) <= miss(hz, *g))
+        };
+        let held: Vec<&Atom> = fit.atoms.iter().filter(of).collect();
+        assert!(!held.is_empty(), "{f0} Hz: {:?}", fit.atoms);
+        for atom in held {
+            let [link] = atom.links.as_slice() else {
+                panic!("{f0} Hz unattached: {atom:?}");
+            };
+            assert_eq!(link.to, *to);
+            assert!(
+                (link.own[0] - depth).abs() < 1.0,
+                "{f0} Hz at {:?} dB",
+                link.own
+            );
+        }
+    }
 }

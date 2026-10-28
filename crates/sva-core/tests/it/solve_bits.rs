@@ -90,7 +90,7 @@ fn priced(atom: &Atom) -> Priced {
             Quantity::Glide => 0.05,
             Quantity::Time => 0.003,
             Quantity::Hz | Quantity::HzDeviation | Quantity::Edge => 2.9,
-            Quantity::Db | Quantity::DbDeviation => 0.4,
+            Quantity::Db | Quantity::DbDeviation | Quantity::Depth => 0.4,
         })
         .collect();
     Priced {
@@ -142,7 +142,7 @@ fn written(atom: &Atom, i: usize) -> f64 {
         Quantity::Hz => hz,
         Quantity::HzDeviation => 2.0 * hz,
         Quantity::Db => db,
-        Quantity::DbDeviation => 2.0 * db,
+        Quantity::DbDeviation | Quantity::Depth => 2.0 * db,
         Quantity::Edge => f.hz.1 - f.hz.0,
         Quantity::Glide => 2.0 * libm::log(f.hz.1 / f.hz.0) / CLIP.secs(),
         Quantity::Stretch => {
