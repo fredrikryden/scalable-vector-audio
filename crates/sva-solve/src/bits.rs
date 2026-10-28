@@ -97,7 +97,7 @@ pub(crate) fn price(source: &Source, priced: &Priced) -> Price {
     );
     let shape = match &source.sound {
         Sound::Partial { .. } => vec![Count::From0(0)],
-        Sound::Harmonic { count, .. } => vec![Count::From1(*count as u64), Count::From0(0)],
+        Sound::Harmonic { .. } => vec![Count::From1(source.harmonics() as u64), Count::From0(0)],
         Sound::Noise { .. } => Vec::new(),
         Sound::Shaped { bands } => vec![Count::From1(bands.len() as u64)],
     };
@@ -191,7 +191,6 @@ mod tests {
                 Sound::Harmonic {
                     hz: 110.0,
                     stretch: 0.0,
-                    count: 4,
                     glide: 0.0,
                 },
                 vec![

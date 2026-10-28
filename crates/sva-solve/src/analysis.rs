@@ -37,13 +37,17 @@ pub struct Spectrogram {
     samples: Vec<f64>,
 }
 
+pub(crate) fn hann(long: usize) -> Vec<f64> {
+    (0..long)
+        .map(|k| 0.5 - 0.5 * libm::cos(TAU * k as f64 / long as f64))
+        .collect()
+}
+
 impl Spectrogram {
     pub fn of(samples: &[f64], rate: u32) -> Spectrogram {
         let rate_hz = f64::from(rate);
         let long = libm::round(WINDOW_SECS[0] * rate_hz) as usize;
-        let window: Vec<f64> = (0..long)
-            .map(|k| 0.5 - 0.5 * libm::cos(TAU * k as f64 / long as f64))
-            .collect();
+        let window = hann(long);
         let n = long.next_power_of_two();
         let hop = (libm::round(HOP_SECS * rate_hz) as usize).max(1);
         Spectrogram {
@@ -114,10 +118,9 @@ fn written(harmonics: usize) -> usize {
             hz: 0.0,
             glide: 0.0,
         },
-        count => Sound::Harmonic {
+        _ => Sound::Harmonic {
             hz: 0.0,
             stretch: 0.0,
-            count,
             glide: 0.0,
         },
     };

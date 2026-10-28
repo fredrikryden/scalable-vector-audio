@@ -3,7 +3,7 @@
 use sva_engine::hearing::level_jnd_db;
 
 use super::problem::Problem;
-use super::render::{Columns, centre, db};
+use super::render::{Columns, Proposal, centre, db};
 use crate::analysis::floor_db;
 use crate::bits::{self, Look, Priced, frequency_delta, level_delta};
 use crate::optimize::code::Price;
@@ -20,16 +20,16 @@ pub(super) struct Written {
     pub(super) price: Price,
 }
 
-/// `sound` written from `fitted`, each column's own gain per frame, as `MODEL` states.
+/// `proposal` written from `fitted`, each column's own gain per frame, as `MODEL` states.
 pub(super) fn write(
     p: &Problem,
-    (sound, step): (&Sound, f64),
+    (proposal, step): (&Proposal, f64),
     key: u64,
     fitted: &[Vec<f64>],
     links: &[Link],
 ) -> Written {
     let secs = p.clip.secs();
-    let floors = p.columns(sound).floors;
+    let floors = p.columns(proposal).floors;
     let trajectories: Vec<Trajectory> = fitted
         .iter()
         .zip(&floors)
@@ -39,17 +39,17 @@ pub(super) fn write(
             thinned((0.0, secs), &p.times, &held, level_jnd_db(peak - floor))
         })
         .collect();
-    rewrite(p, (sound, step), key, trajectories, links)
+    rewrite(p, (proposal, step), key, trajectories, links)
 }
 
 pub(super) fn rewrite(
     p: &Problem,
-    (sound, step): (&Sound, f64),
+    (proposal, step): (&Proposal, f64),
     key: u64,
     trajectories: Vec<Trajectory>,
     links: &[Link],
 ) -> Written {
-    let columns = p.columns(sound);
+    let columns = p.columns(proposal);
     let levels: Vec<Vec<f64>> = trajectories
         .iter()
         .map(|t| levels_at(t, &p.times))
@@ -60,9 +60,9 @@ pub(super) fn rewrite(
         .collect();
     let source = Source {
         links: links.to_vec(),
-        ..Source::new(key, 0.0, sound.clone(), trajectories)
+        ..Source::new(key, 0.0, proposal.sound.clone(), trajectories)
     };
-    let price = match sound {
+    let price = match &proposal.sound {
         Sound::Shaped { bands } => shaped_price(p, &source, bands, &levels[0], columns.floors[0]),
         _ => priced(p, &source, &columns, &levels, step),
     };

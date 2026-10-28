@@ -5,6 +5,7 @@ use std::ops::Range;
 use sva_engine::hearing::{cam, cam_hz};
 
 use super::problem::Problem;
+use super::render::Proposal;
 use super::render::db;
 use crate::analysis::floor_db;
 use crate::grid::Grid;
@@ -132,16 +133,16 @@ fn lobe_hz(p: &Problem) -> f64 {
     p.lobes.half as f64 * p.grid.rate / p.grid.n as f64
 }
 
-pub(super) fn lines(p: &Problem, sound: &Sound) -> Vec<Vec<f64>> {
-    match sound {
+pub(super) fn lines(p: &Problem, proposal: &Proposal) -> Vec<Vec<f64>> {
+    match proposal.sound {
         Sound::Noise { .. } | Sound::Shaped { .. } => Vec::new(),
-        Sound::Partial { .. } | Sound::Harmonic { .. } => p.columns(sound).paths,
+        Sound::Partial { .. } | Sound::Harmonic { .. } => p.columns(proposal).paths,
     }
 }
 
-pub(super) fn moves(p: &Problem, sound: &Sound) -> bool {
+pub(super) fn moves(p: &Problem, proposal: &Proposal) -> bool {
     let lobe = lobe_hz(p);
-    lines(p, sound).iter().any(|path| {
+    lines(p, proposal).iter().any(|path| {
         let (lo, hi) = path
             .iter()
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), hz| {

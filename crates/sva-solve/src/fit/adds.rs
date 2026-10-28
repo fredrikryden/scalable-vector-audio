@@ -1,4 +1,4 @@
-// Concern: an add: a sound refined against the residual, gliding where its tracks glide, scored in closed form, attached | Non-concern: proposing it (proposals.rs) | IO: (Problem, Sound) -> Scored
+// Concern: an add: a sound refined against the residual, gliding where its tracks glide, scored in closed form, attached | Non-concern: proposing it (proposals.rs) | IO: (Problem, Proposal) -> Scored
 
 use std::f64::consts::LOG2_E;
 
@@ -7,7 +7,7 @@ use sva_engine::each;
 use super::peaks::{moves, searched};
 use super::problem::{Draft, Problem, Reading};
 use super::proposals::stretched;
-use super::render::{Columns, Held, Template, glided, hzs};
+use super::render::{Columns, Held, Proposal, Template, glided, hzs};
 use super::shared::{self, linked};
 use super::written::{Written, frequency_steps, write};
 use crate::optimize::{self, Added, Edit, Ledger, Scored};
@@ -57,11 +57,11 @@ pub(super) fn golden(
     best
 }
 
-/// One number's standard deviation under the weights, its sound at it less and plus `h` being
-/// `below` and `above`: `(sum w (du/dx)^2)^-1/2`, `u` its expected power through `links`.
+/// One number's standard deviation under the weights, its proposal at it less and plus `h`
+/// being `below` and `above`: `(sum w (du/dx)^2)^-1/2`, `u` its expected power through `links`.
 pub(super) fn spread(
     p: &Problem,
-    (below, above): (&Sound, &Sound),
+    (below, above): (&Proposal, &Proposal),
     h: f64,
     gains: &[Vec<f64>],
     (links, shared): (&[Link], &[optimize::Shared]),
@@ -94,14 +94,14 @@ pub(super) fn refined(
     p: &Problem,
     ledger: &Ledger,
     residual: &[Vec<f64>],
-    (sound, step): (Sound, f64),
+    (proposal, step): (Proposal, f64),
     key: u64,
-) -> (Sound, f64) {
+) -> (Proposal, f64) {
     let bin = p.grid.rate / p.grid.n as f64;
-    let score = |s: &Sound| scored(p, ledger, residual, (s, step), key).0;
-    let (best, written) = scored(p, ledger, residual, (&sound, step), key);
-    let glide = sound.glide();
-    let partial_at = |hz: f64| Sound::Partial { hz, glide };
+    let score = |s: &Proposal| scored(p, ledger, residual, (s, step), key).0;
+    let (best, written) = scored(p, ledger, residual, (&proposal, step), key);
+    let glide = proposal.sound.glide();
+    let partial_at = |hz: f64| Proposal::one(Sound::Partial { hz, glide });
     // Harmonic `c` at `hz` refined as a partial: its Hz, score and standard deviation.
     let partial = |c: usize, hz: f64, held: f64| {
         let h = bin * libm::cbrt(f64::EPSILON);
@@ -114,14 +114,14 @@ pub(super) fn refined(
         let (to, v) = golden(&at, range, written_step.min(sigma), (hz, held));
         (to, v, sigma)
     };
-    match sound {
+    match proposal.sound {
         Sound::Partial { hz, .. } => {
             let (hz, v, _) = partial(0, hz, best);
             (partial_at(hz), v)
         }
-        Sound::Harmonic { count, .. } => {
-            let hzs = hzs(&sound);
-            let refined = each(p.threads, (0..count).collect(), |c| {
+        Sound::Harmonic { .. } => {
+            let hzs = hzs(&proposal);
+            let refined = each(p.threads, (0..proposal.columns).collect(), |c| {
                 let held = score(&partial_at(hzs[c]));
                 let (to, _, sigma) = partial(c, hzs[c], held);
                 let k = (c + 1) as f64;
@@ -131,22 +131,20 @@ pub(super) fn refined(
             });
             let points: Vec<(usize, f64, f64)> = refined.into_iter().flatten().collect();
             if points.len() < 2 {
-                return (sound, best);
+                return (proposal, best);
             }
             let (hz, stretch) = stretched(&points);
-            let fitted = Sound::Harmonic {
-                hz,
-                stretch,
-                count,
-                glide,
+            let fitted = Proposal {
+                sound: Sound::Harmonic { hz, stretch, glide },
+                columns: proposal.columns,
             };
             let v = score(&fitted);
             match v < best {
                 true => (fitted, v),
-                false => (sound, best),
+                false => (proposal, best),
             }
         }
-        Sound::Noise { .. } | Sound::Shaped { .. } => (sound, best),
+        Sound::Noise { .. } | Sound::Shaped { .. } => (proposal, best),
     }
 }
 
@@ -209,26 +207,29 @@ pub(super) fn slope(tracks: &[Vec<(f64, f64)>], floor: f64) -> Glide {
     }
 }
 
-/// The fixed `sound` gliding where its peak tracks glide, beside the glide's precision, as
+/// The fixed `proposal` gliding where its peak tracks glide, beside the glide's precision, as
 /// `MODEL` states.
 fn gliding(
     p: &Problem,
     ledger: &Ledger,
     residual: &[Vec<f64>],
     mean: &[f64],
-    sound: &Sound,
+    proposal: &Proposal,
     key: u64,
-) -> Option<(Sound, f64)> {
-    if matches!(sound, Sound::Noise { .. } | Sound::Shaped { .. }) {
+) -> Option<(Proposal, f64)> {
+    if matches!(proposal.sound, Sound::Noise { .. } | Sound::Shaped { .. }) {
         return None;
     }
-    let tracks: Vec<Vec<(f64, f64)>> = hzs(sound)
+    let tracks: Vec<Vec<(f64, f64)>> = hzs(proposal)
         .iter()
         .map(|hz| searched(p, residual, mean, *hz))
         .collect();
-    let (_, written) = scored(p, ledger, residual, (sound, 0.0), key);
-    let glide = slope(&tracks, rate_floor(p, &p.columns(sound), &written.levels));
-    if glide.rate == 0.0 || !moves(p, &glided(sound, glide.rate, p.middle())) {
+    let (_, written) = scored(p, ledger, residual, (proposal, 0.0), key);
+    let glide = slope(
+        &tracks,
+        rate_floor(p, &p.columns(proposal), &written.levels),
+    );
+    if glide.rate == 0.0 || !moves(p, &glided(proposal, glide.rate, p.middle())) {
         return None;
     }
     let starts: Vec<(usize, f64, f64)> = tracks
@@ -236,47 +237,47 @@ fn gliding(
         .enumerate()
         .filter_map(|(c, t)| start(t, glide.rate).map(|s| (c + 1, s, 1.0)))
         .collect();
-    let moved = glided(sound, glide.rate, p.middle());
-    let sound = match (&moved, &starts[..]) {
+    let moved = glided(proposal, glide.rate, p.middle());
+    let sound = match (&moved.sound, &starts[..]) {
         (Sound::Partial { .. }, [(_, hz, _), ..]) => Sound::Partial {
             hz: *hz,
             glide: glide.rate,
         },
-        (Sound::Harmonic { count, .. }, [_, _, ..]) => {
+        (Sound::Harmonic { .. }, [_, _, ..]) => {
             let (hz, stretch) = stretched(&starts);
             Sound::Harmonic {
                 hz,
                 stretch,
-                count: *count,
                 glide: glide.rate,
             }
         }
-        _ => moved,
+        _ => moved.sound,
     };
-    Some((sound, glide.step))
+    let columns = moved.columns;
+    Some((Proposal { sound, columns }, glide.step))
 }
 
 fn scored(
     p: &Problem,
     ledger: &Ledger,
     residual: &[Vec<f64>],
-    (sound, step): (&Sound, f64),
+    (proposal, step): (&Proposal, f64),
     key: u64,
 ) -> (f64, Written) {
-    let (missed, written) = adding(p, residual, sound, step, key);
+    let (missed, written) = adding(p, residual, proposal, step, key);
     (ledger.added(&written.price, missed), written)
 }
 
-/// `sound` keyed `key`, its glide at `step`, written against `residual` beside the change in the
-/// missed bits adding it makes, in closed form, as `MODEL` states.
+/// `proposal` keyed `key`, its glide at `step`, written against `residual` beside the change in
+/// the missed bits adding it makes, in closed form, as `MODEL` states.
 pub(super) fn adding(
     p: &Problem,
     residual: &[Vec<f64>],
-    sound: &Sound,
+    proposal: &Proposal,
     step: f64,
     key: u64,
 ) -> (f64, Written) {
-    let templates = p.templates(sound);
+    let templates = p.templates(proposal);
     // Each column's weighted energy and correlation with the residual, frame by frame.
     let moments: Vec<Vec<(f64, f64)>> = templates
         .iter()
@@ -297,7 +298,7 @@ pub(super) fn adding(
                 .collect()
         })
         .collect();
-    let written = write(p, (sound, step), key, &fitted, &[]);
+    let written = write(p, (proposal, step), key, &fitted, &[]);
     // One column's drop in closed form, sum w (2 r g t - g^2 t^2) = 2 g pull - g^2 energy.
     let drop: f64 = match &moments[..] {
         [m] => m
@@ -324,19 +325,19 @@ pub(super) fn adding(
     (-0.5 * LOG2_E * drop, written)
 }
 
-/// The fixed `sound` refined, or its gliding variant where that is lower, alone and attached to
-/// each shared variable it may.
+/// The fixed `proposal` refined, or its gliding variant where that is lower, alone and attached
+/// to each shared variable it may.
 pub(super) fn add(
     p: &Problem,
     kept: &[Held],
     ledger: &Ledger,
     reading: &Reading,
     key: u64,
-    sound: Sound,
+    proposal: Proposal,
 ) -> Vec<Scored<Problem>> {
     let residual = &reading.residual;
-    let (fixed, change) = refined(p, ledger, residual, (sound, 0.0), key);
-    let (sound, step, change) = match gliding(p, ledger, residual, &reading.mean, &fixed, key) {
+    let (fixed, change) = refined(p, ledger, residual, (proposal, 0.0), key);
+    let (proposal, step, change) = match gliding(p, ledger, residual, &reading.mean, &fixed, key) {
         Some((glide, step)) => {
             let (glide, glided) = refined(p, ledger, residual, (glide, step), key);
             match glided < change && p.apart(reading, &glide, None) {
@@ -346,16 +347,16 @@ pub(super) fn add(
         }
         None => (fixed, 0.0, change),
     };
-    if !p.apart(reading, &sound, None) {
+    if !p.apart(reading, &proposal, None) {
         return Vec::new();
     }
     let attached = reading
         .targets
         .iter()
-        .filter_map(|s| shared::attach(p, kept, ledger, reading, key, (&sound, step), *s));
+        .filter_map(|s| shared::attach(p, kept, ledger, reading, key, (&proposal, step), *s));
     let alone = Scored {
         change,
-        edit: Edit::Add(Added::alone(Draft::Sound(sound.clone(), step))),
+        edit: Edit::Add(Added::alone(Draft::Proposed(proposal.clone(), step))),
     };
     std::iter::once(alone).chain(attached).collect()
 }

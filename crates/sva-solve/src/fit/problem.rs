@@ -11,13 +11,13 @@ use super::adds::{add, adding};
 use super::adjusts::adjusts;
 use super::peaks::{Lobes, collide, lines};
 use super::proposals::{averaged, candidates};
-use super::render::Held;
-use super::shared::{self, kernel};
-use crate::analysis::{floor_db, span_hz};
+use super::render::{Held, Proposal};
+use super::shared;
+use crate::analysis::{floor_db, hann, span_hz};
 use crate::grid::Grid;
 use crate::optimize::code::Price;
 use crate::optimize::{self, Ledger, Scored};
-use crate::sources::{Clip, SharedKind, Sound};
+use crate::sources::{Clip, SharedKind};
 
 pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate descent on the sources' levels and frequencies beside matching pursuit for new sources (Mallat and Zhang 1993, doi 10.1109/78.258082); \
      DL = B(x) (bits.rs) plus the residual's bits, the one objective; \
@@ -143,11 +143,9 @@ impl Problem {
             .map(|f| f.iter().map(|h| looks / (h * mean)).collect())
             .collect();
         let times = (0..grid.power.len()).map(|f| grid.centre_secs(f)).collect();
-        let window: Vec<f64> = (0..grid.long)
-            .map(|k| 0.5 - 0.5 * libm::cos(std::f64::consts::TAU * k as f64 / grid.long as f64))
-            .collect();
+        let window = hann(grid.long);
         let twiddle = fft::twiddles(grid.n);
-        let kernel = kernel(&grid, &window);
+        let kernel = grid.kernel();
         Problem {
             grid,
             clip,
@@ -174,9 +172,9 @@ impl Problem {
         self.times.iter().sum::<f64>() / self.times.len().max(1) as f64
     }
 
-    /// Whether `sound`'s lines lie apart from every kept source's but source `but`'s.
-    pub(super) fn apart(&self, reading: &Reading, sound: &Sound, but: Option<usize>) -> bool {
-        let mine = lines(self, sound);
+    /// Whether `proposal`'s lines lie apart from every kept source's but source `but`'s.
+    pub(super) fn apart(&self, reading: &Reading, proposal: &Proposal, but: Option<usize>) -> bool {
+        let mine = lines(self, proposal);
         reading
             .lines
             .iter()
@@ -203,15 +201,16 @@ pub(super) struct Reading {
     pub(super) targets: Vec<usize>,
 }
 
-/// A new source, its sound beside its glide's precision, or one its fit made beside what it set.
+/// A new source, its proposal beside its glide's precision, or one its fit made beside what it
+/// set.
 pub(super) enum Draft {
-    Sound(Sound, f64),
+    Proposed(Proposal, f64),
     Made(Box<Held>),
 }
 
-/// A candidate: an add of a sound, or a kept source's adjusts.
+/// A candidate: an add of a proposal, or a kept source's adjusts.
 pub(super) enum Candidate {
-    Add(Sound),
+    Add(Proposal),
     Adjust(usize),
 }
 
@@ -266,7 +265,7 @@ impl optimize::Problem for Problem {
         }
         Reading {
             mean: averaged(self, &residual),
-            lines: kept.iter().map(|h| lines(self, h.sound())).collect(),
+            lines: kept.iter().map(|h| lines(self, &h.proposal())).collect(),
             residual,
             shared: shared.to_vec(),
             targets,
@@ -278,7 +277,7 @@ impl optimize::Problem for Problem {
     fn propose(&self, kept: &[Held], reading: &Reading) -> Vec<Candidate> {
         candidates(self, kept, &reading.residual)
             .into_iter()
-            .filter(|sound| self.apart(reading, sound, None))
+            .filter(|proposal| self.apart(reading, proposal, None))
             .map(Candidate::Add)
             .chain((0..kept.len()).map(Candidate::Adjust))
             .collect()
@@ -293,16 +292,16 @@ impl optimize::Problem for Problem {
         candidate: Candidate,
     ) -> Vec<Scored<Problem>> {
         match candidate {
-            Candidate::Add(sound) => add(self, kept, ledger, reading, key, sound),
+            Candidate::Add(proposal) => add(self, kept, ledger, reading, key, proposal),
             Candidate::Adjust(a) => adjusts(self, kept, ledger, reading, a),
         }
     }
 
     fn make(&self, reading: &Reading, key: u64, draft: Draft) -> Held {
         match draft {
-            Draft::Sound(sound, step) => {
-                let (_, written) = adding(self, &reading.residual, &sound, step, key);
-                Held::new(self, self.templates(&sound), written)
+            Draft::Proposed(proposal, step) => {
+                let (_, written) = adding(self, &reading.residual, &proposal, step, key);
+                Held::new(self, self.templates(&proposal), written)
             }
             Draft::Made(held) => *held,
         }

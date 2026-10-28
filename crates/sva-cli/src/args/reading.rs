@@ -80,10 +80,7 @@ pub(super) fn render_args(rest: &[String]) -> Result<Command, CliError> {
             }
             "--set" => sets.push(sva_core::set(&value(&mut it, "--set")?)?),
             "--cache" => {
-                cache = match value(&mut it, "--cache")?.as_str() {
-                    "none" => CacheAt::Off,
-                    path => CacheAt::Path(PathBuf::from(path)),
-                };
+                cache = CacheAt::named(&value(&mut it, "--cache")?);
             }
             other => {
                 return Err(CliError::usage(

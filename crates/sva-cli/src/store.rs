@@ -66,29 +66,16 @@ pub fn warning(code: &str, message: String) -> Diagnostic {
         .helped("pass `--cache <path>` elsewhere, or `--cache none` to keep no store")
 }
 
-/// The process's one memory tier, opened once, over the store on `at`; a signal persists it
-/// before the process exits. One whose store cannot open is memory alone.
+/// The process's one memory tier over the store on `at`, memory alone where it cannot open; a
+/// signal persists it before the process exits.
 pub fn opened(
     at: &CacheAt,
     warnings: &mut Vec<Diagnostic>,
 ) -> Result<&'static Tier<Directory>, CliError> {
-    let path = match at {
-        CacheAt::Off => return Ok(OPEN.get_or_init(|| Tier::alone(MEMORY_BYTES))),
-        CacheAt::Path(path) => path.clone(),
-        CacheAt::Platform => platform()?,
-    };
-    let backend = Directory::at(path.clone());
-    let tier = match wait(Store::open(backend, DEFAULT_STORE_BYTES)) {
-        Ok(store) => OPEN.get_or_init(|| Tier::over(store, MEMORY_BYTES)),
-        Err(why) => {
-            let message = format!(
-                "the cache at `{}` is unusable, so this render kept none: {why}",
-                path.display()
-            );
-            warnings.push(warning("store.unusable", message));
-            return Ok(OPEN.get_or_init(|| Tier::alone(MEMORY_BYTES)));
-        }
-    };
+    let (tier, stored) = tier(at, warnings)?;
+    if !stored {
+        return Ok(tier);
+    }
     match signal_hook::iterator::Signals::new([
         signal_hook::consts::SIGINT,
         signal_hook::consts::SIGTERM,
@@ -106,6 +93,33 @@ pub fn opened(
         )),
     }
     Ok(tier)
+}
+
+/// `opened`'s tier with no signal hook, beside whether a store is beneath it.
+pub fn tier(
+    at: &CacheAt,
+    warnings: &mut Vec<Diagnostic>,
+) -> Result<(&'static Tier<Directory>, bool), CliError> {
+    let alone = || (OPEN.get_or_init(|| Tier::alone(MEMORY_BYTES)), false);
+    let path = match at {
+        CacheAt::Off => return Ok(alone()),
+        CacheAt::Path(path) => path.clone(),
+        CacheAt::Platform => platform()?,
+    };
+    match wait(Store::open(
+        Directory::at(path.clone()),
+        DEFAULT_STORE_BYTES,
+    )) {
+        Ok(store) => Ok((OPEN.get_or_init(|| Tier::over(store, MEMORY_BYTES)), true)),
+        Err(why) => {
+            let message = format!(
+                "the cache at `{}` is unusable, so this render kept none: {why}",
+                path.display()
+            );
+            warnings.push(warning("store.unusable", message));
+            Ok(alone())
+        }
+    }
 }
 
 fn interrupted(tier: &Tier<Directory>, signal: i32) -> ! {

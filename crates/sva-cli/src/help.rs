@@ -371,7 +371,7 @@ REPRESENTATIONS:
 
 SOLVE:
   sva-cli solve <recording> [--spl <dB>] [--tolerance <share>] [--from <dir>]
-    [--out <dir>] [--confirm]
+    [--out <dir>] [--confirm] [--cache <path|none>]
 
   Fits one sound of sources (partials, harmonic voices, noise bands and shaped
   noises, each spanning the clip, only its level moving) to a recording, read
@@ -404,6 +404,8 @@ SOLVE:
   `fit-grid.wav`, the clip's and the fit's octave bands by 48 ms frames sounded
   alike; an out directory already holding files refuses as a conflict unless
   `--confirm`; a resumed fit there keeps the pass renders up to its own.
+  Every pass render and `final.wav` read through one store, `--cache` as
+  RENDER takes it, persisted once the fit ends.
   Stderr carries one JSON line per pass: `pass` (0 for the start, a resumed
   start's the pass it resumes from), `action` (`start`, then `add` or
   `adjust`), `move` (both in words, as `add partial`), `source` (`key`, `kind`,

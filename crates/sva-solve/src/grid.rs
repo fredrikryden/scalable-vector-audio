@@ -1,10 +1,10 @@
-// Concern: the coarse grid: octave bands by 48 ms frames, sine and band templates, phaseless resynthesis | Non-concern: the fit (fit/) | IO: (Spectrogram) -> Grid, samples
+// Concern: the coarse grid: octave bands by 48 ms frames, their kernel, sine and band templates, phaseless resynthesis | Non-concern: the fit (fit/) | IO: (Spectrogram) -> Grid, samples
 
 use std::num::NonZeroUsize;
 
 use sva_engine::{each, fft};
 
-use crate::analysis::{Spectrogram, span_hz};
+use crate::analysis::{Spectrogram, hann, span_hz};
 use crate::sources::phase;
 
 pub const MODEL: &str = "the coarse grid, the smallest thumbnail of the clip: the analysis \
@@ -15,6 +15,8 @@ pub const MODEL: &str = "the coarse grid, the smallest thumbnail of the clip: th
      each frame the mean power of the hops it holds; and summed over octave bands, edges at \
      1 kHz times powers of two inside the feasible set (Cam 1.8 to 38.9, under the Nyquist), \
      an end piece under half an octave joining its neighbour, so 8 bands at 16 kHz and above; \
+     a frame's kernel the share of its power each time from its centre holds, at the analysis \
+     hop: the squared window over each hop the frame pools; \
      a unit-amplitude sine at f puts |W(b - f)|^2 / 4 in bin b (W the window's transform, in \
      closed form from three Dirichlet kernels, sidelobes included), summed over each band's \
      bins; a band [lo, hi) of unit power (variance one half, analysis.rs's noise level) puts its \
@@ -78,9 +80,7 @@ impl Grid {
                 .collect()
         });
         let long = spectrogram.long;
-        let window: Vec<f64> = (0..long)
-            .map(|k| 0.5 - 0.5 * libm::cos(std::f64::consts::TAU * k as f64 / long as f64))
-            .collect();
+        let window = hann(long);
         let autocorrelation = (0..long)
             .map(|m| (0..long - m).map(|k| window[k] * window[k + m]).sum())
             .collect();
@@ -172,6 +172,31 @@ impl Grid {
     /// A band's level in dBFS whose bins hold `power` in all.
     pub fn band_db(&self, power: f64) -> f64 {
         10.0 * libm::log10(power / self.band_unit())
+    }
+
+    /// The share of a frame's power each time from its centre holds, at the analysis hop: the
+    /// squared window over each hop the frame pools, as `MODEL` states.
+    pub fn kernel(&self) -> Vec<(f64, f64)> {
+        let pooled = (self.hop / self.step).max(1);
+        let step = self.step as f64;
+        let middle = (pooled - 1) as f64 / 2.0;
+        let window = hann(self.long);
+        let mut shares: Vec<(i64, f64)> = Vec::new();
+        for j in 0..pooled {
+            for (k, w) in window.iter().enumerate() {
+                let at = (j as f64 - middle) * step + k as f64 - (self.long / 2) as f64;
+                let cell = libm::round(at / step) as i64;
+                match shares.binary_search_by_key(&cell, |(c, _)| *c) {
+                    Ok(i) => shares[i].1 += w * w,
+                    Err(i) => shares.insert(i, (cell, w * w)),
+                }
+            }
+        }
+        let total: f64 = shares.iter().map(|(_, v)| v).sum();
+        shares
+            .iter()
+            .map(|(c, v)| (*c as f64 * step / self.rate, v / total))
+            .collect()
     }
 
     /// The octave bands, each its Hz.
@@ -268,9 +293,7 @@ impl Grid {
     /// `len` samples whose frames hold this grid's power, every phase drawn, as `MODEL` states.
     pub fn sounded(&self, len: usize) -> Vec<f64> {
         let twiddle = fft::twiddles(self.n);
-        let window: Vec<f64> = (0..self.long)
-            .map(|k| 0.5 - 0.5 * libm::cos(std::f64::consts::TAU * k as f64 / self.long as f64))
-            .collect();
+        let window = hann(self.long);
         let from = |f: usize| self.centre(f) as i64 - (self.long / 2) as i64;
         let mut norm = vec![0.0; len];
         for f in 0..self.power.len() {

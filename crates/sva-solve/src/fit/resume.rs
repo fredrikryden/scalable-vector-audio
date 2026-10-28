@@ -4,7 +4,7 @@ use sva_core::CliError;
 
 use super::adds::rate_floor;
 use super::problem::{Problem, State};
-use super::render::Held;
+use super::render::{Held, Proposal};
 use super::written::{levels_at, rewrite};
 use crate::optimize::{self, Problem as _};
 use crate::sources::{self, Shared, Sound, Source, birth};
@@ -104,6 +104,7 @@ pub(super) fn resumed(p: &Problem, from: &Resume, gain_db: f64) -> Result<State,
         if !written(&source.sound) {
             return Err(unread("a source of a shape"));
         }
+        let proposal = Proposal::of(source);
         let step = match source.sound.glide() != 0.0 {
             true => {
                 let levels: Vec<Vec<f64>> = source
@@ -111,13 +112,13 @@ pub(super) fn resumed(p: &Problem, from: &Resume, gain_db: f64) -> Result<State,
                     .iter()
                     .map(|t| levels_at(t, &p.times))
                     .collect();
-                rate_floor(p, &p.columns(&source.sound), &levels)
+                rate_floor(p, &p.columns(&proposal), &levels)
             }
             false => 0.0,
         };
-        let at = (&source.sound, step);
+        let at = (&proposal, step);
         let written = rewrite(p, at, source.key, source.levels.clone(), &source.links);
-        held.push(Held::new(p, p.templates(&source.sound), written));
+        held.push(Held::new(p, p.templates(&proposal), written));
     }
     Ok(State::of(
         p,

@@ -1,8 +1,8 @@
-// Concern: the adds a residual proposes: a partial per peak, each voice a sieve finds, a noise per band, a shaped noise | Non-concern: refining or scoring them (adds.rs) | IO: (residual) -> Sounds
+// Concern: the adds a residual proposes: a partial per peak, each voice a sieve finds, a noise per band, a shaped noise | Non-concern: refining or scoring them (adds.rs) | IO: (residual) -> Proposals
 
 use super::peaks::qifft;
 use super::problem::Problem;
-use super::render::{Held, db};
+use super::render::{Held, Proposal, db};
 use crate::analysis::{Members, Track, floor_db, sieved, span_hz};
 use crate::sources::{Sound, Source, Trajectory};
 
@@ -91,7 +91,7 @@ fn assigned(tracks: &[Track], pool: &[usize], (f0, b): (f64, f64), p: &Problem) 
 }
 
 /// Every voice the sieve finds among `tracks`, its stretch fitted, as `MODEL` states.
-fn voices(p: &Problem, tracks: &[Track]) -> Vec<Sound> {
+fn voices(p: &Problem, tracks: &[Track]) -> Vec<Proposal> {
     let bin = p.grid.rate / p.grid.n as f64;
     let mut pool: Vec<usize> = (0..tracks.len()).collect();
     let mut out = Vec::new();
@@ -108,20 +108,19 @@ fn voices(p: &Problem, tracks: &[Track]) -> Vec<Sound> {
             fitted = stiffness(tracks, &members);
         }
         pool.retain(|t| !members.iter().any(|(m, _)| m == t));
-        let count = members.iter().map(|(_, k)| *k).max().unwrap_or(0);
-        let voice = |count: usize| Sound::Harmonic {
+        let columns = members.iter().map(|(_, k)| *k).max().unwrap_or(0);
+        let sound = Sound::Harmonic {
             hz: fitted.0,
             stretch: fitted.1,
-            count,
             glide: 0.0,
         };
         let level = Trajectory {
             base: 0.0,
             knots: vec![(p.clip.secs(), 0.0)],
         };
-        let probe = Source::new(0, 0.0, voice(count.max(1)), vec![level; count.max(1)]);
-        if count >= 2 && probe.writes(&p.clip) {
-            out.push(voice(count));
+        let probe = Source::new(0, 0.0, sound.clone(), vec![level; columns]);
+        if columns >= 2 && probe.writes(&p.clip) {
+            out.push(Proposal { sound, columns });
         }
     }
     out
@@ -133,14 +132,16 @@ pub(super) fn averaged(p: &Problem, residual: &[Vec<f64>]) -> Vec<f64> {
         .collect()
 }
 
-pub(super) fn candidates(p: &Problem, kept: &[Held], residual: &[Vec<f64>]) -> Vec<Sound> {
+pub(super) fn candidates(p: &Problem, kept: &[Held], residual: &[Vec<f64>]) -> Vec<Proposal> {
     let mean = averaged(p, residual);
     let found = peaks(p, &mean);
-    let mut out: Vec<Sound> = found
+    let mut out: Vec<Proposal> = found
         .iter()
-        .map(|(t, _)| Sound::Partial {
-            hz: t.hz,
-            glide: 0.0,
+        .map(|(t, _)| {
+            Proposal::one(Sound::Partial {
+                hz: t.hz,
+                glide: 0.0,
+            })
         })
         .collect();
     let (_, tonal) = p.lobes.floor(&mean, p.looks * p.frames() as f64);
@@ -153,10 +154,10 @@ pub(super) fn candidates(p: &Problem, kept: &[Held], residual: &[Vec<f64>]) -> V
     for (lo, hi) in p.grid.bands() {
         let held = kept.iter().any(|h| *h.sound() == Sound::Noise { lo, hi });
         if !held {
-            out.push(Sound::Noise { lo, hi });
+            out.push(Proposal::one(Sound::Noise { lo, hi }));
         }
     }
-    out.extend(shaped(p, residual));
+    out.extend(shaped(p, residual).map(Proposal::one));
     out
 }
 

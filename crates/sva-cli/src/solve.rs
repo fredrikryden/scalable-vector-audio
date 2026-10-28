@@ -6,15 +6,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use sva_core::{Abandon, CliError, success_envelope};
+use sva_core::{Abandon, CliError, Tier, success_envelope};
 use sva_solve::TOLERANCE;
 use sva_solve::fit::{Options, Resume, fit, mono};
 use sva_solve::report::{answer, progress};
 use sva_solve::sources::{DIRECTORY, SCORE, files_at, sounded};
 
 use crate::args::SolveArgs;
+use crate::directory::Directory;
 use crate::recording::read_recording;
-use crate::store::wait;
+use crate::store::{persisted, tier, wait};
 use crate::wav::{SampleEncoding, write_wav};
 
 fn io(path: &Path, e: std::io::Error) -> CliError {
@@ -23,8 +24,18 @@ fn io(path: &Path, e: std::io::Error) -> CliError {
 
 /// The fit of `args.path` under `args.out`: `pass-001.wav` and on (the sources each pass leaves,
 /// rendered as it ends), its composition, `final.wav` (its render), and `clip-grid.wav` and
-/// `fit-grid.wav` (both coarse grids sounded alike); resumed from `args.from` where named.
+/// `fit-grid.wav` (both coarse grids sounded alike); resumed from `args.from` where named, every
+/// render through the tier `args.cache` opens.
 pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
+    let mut warnings = Vec::new();
+    let (tier, _) = tier(&args.cache, &mut warnings)?;
+    let solved = fitted(args, tier);
+    persisted(tier, &mut warnings);
+    solved.map(|data| success_envelope(&data, &warnings))
+}
+
+/// The solve's `data`.
+fn fitted(args: &SolveArgs, tier: &Tier<Directory>) -> Result<String, CliError> {
     let (planes, rate) = read_recording(&args.path)?;
     let from = args.from.as_deref().map(resume).transpose()?;
     let options = Options {
@@ -72,7 +83,7 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
             }
             let files = files_at(&line.sources, &line.shared, &line.clip, gain_db);
             let wav = args.out.join(format!("pass-{:03}.wav", line.pass));
-            let written = sounded(files, &line.clip).and_then(|heard| {
+            let written = wait(sounded(files, &line.clip, tier)).and_then(|heard| {
                 let samples: Vec<f32> = heard.iter().map(|s| *s as f32).collect();
                 write_wav(&samples, line.clip.rate, &wav, SampleEncoding::Float)
             });
@@ -107,7 +118,11 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
     let len = fitted.clip.len;
     let back = libm::pow(10.0, fitted.gain_db / 20.0);
     for (name, heard, gain) in [
-        ("final.wav", sounded(composition, &fitted.clip)?, 1.0),
+        (
+            "final.wav",
+            wait(sounded(composition, &fitted.clip, tier))?,
+            1.0,
+        ),
         ("clip-grid.wav", fitted.clip_grid.sounded(len), back),
         ("fit-grid.wav", fitted.fit_grid.sounded(len), back),
     ] {
@@ -117,7 +132,7 @@ pub fn solve(args: &SolveArgs) -> Result<String, CliError> {
         wrote.push(wav.display().to_string());
     }
     let secs = started.elapsed().as_secs_f64();
-    Ok(success_envelope(&answer(&fitted, secs, &wrote, None), &[]))
+    Ok(answer(&fitted, secs, &wrote, None))
 }
 
 /// The pass a render named `name` holds, where it is one.

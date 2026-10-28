@@ -3,12 +3,11 @@
 mod periodic;
 
 use super::problem::{Problem, Reading, State};
-use super::render::Held;
+use super::render::{Held, Proposal};
 use super::written::Written;
-use crate::grid::Grid;
 use crate::optimize::code::Price;
 use crate::optimize::{self, Ledger, Scored};
-use crate::sources::{self, Link, SharedKind, Sound};
+use crate::sources::{self, Link, SharedKind};
 
 trait Variable: Sync {
     /// A link of `own` numbers to a variable at `numbers` transforms a source's `render`.
@@ -21,7 +20,7 @@ trait Variable: Sync {
         &self,
         at: (&Problem, &[Held], &Ledger, &Reading),
         key: u64,
-        sound: (&Sound, f64),
+        proposal: (&Proposal, f64),
         s: usize,
     ) -> Option<Scored<Problem>>;
 }
@@ -30,10 +29,6 @@ fn of(kind: SharedKind) -> &'static dyn Variable {
     match kind {
         SharedKind::Periodic => &periodic::Periodic,
     }
-}
-
-pub(super) fn kernel(grid: &Grid, window: &[f64]) -> Vec<(f64, f64)> {
-    periodic::kernel(grid, window)
 }
 
 pub(super) fn linked(
@@ -81,11 +76,11 @@ pub(super) fn attach(
     ledger: &Ledger,
     reading: &Reading,
     key: u64,
-    sound: (&Sound, f64),
+    proposal: (&Proposal, f64),
     s: usize,
 ) -> Option<Scored<Problem>> {
     let kind = SharedKind::ALL[reading.shared[s].kind];
-    of(kind).attach((p, kept, ledger, reading), key, sound, s)
+    of(kind).attach((p, kept, ledger, reading), key, proposal, s)
 }
 
 fn members(kept: &[Held], s: usize) -> Vec<usize> {

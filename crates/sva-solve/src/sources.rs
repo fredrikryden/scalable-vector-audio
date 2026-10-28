@@ -7,7 +7,9 @@ use sva_ast::Composition;
 use sva_ast::score::Item;
 use sva_ast::{Expr, Literal};
 use sva_core::json::num;
-use sva_core::{CliError, Job, Output, Representation, Tier, asked, call, execute};
+use sva_core::{
+    Backend, CliError, Job, Output, Representation, Session, Tier, asked, call, execute_over,
+};
 use sva_engine::hearing::{CAM_FIRST, CAM_LAST, cam_hz};
 
 /// Every node writes these bits, so the model reads the same.
@@ -45,12 +47,11 @@ pub enum Sound {
         hz: f64,
         glide: f64,
     },
-    /// `count` harmonics, harmonic `k` turning `k sqrt(1 + stretch k^2)` times as fast as `hz`
-    /// (a stiff string's partials; Fletcher 1964), each at its own level.
+    /// Harmonics, one per level its source holds, harmonic `k` turning `k sqrt(1 + stretch k^2)`
+    /// times as fast as `hz` (a stiff string's partials; Fletcher 1964).
     Harmonic {
         hz: f64,
         stretch: f64,
-        count: usize,
         glide: f64,
     },
     Noise {
@@ -65,14 +66,6 @@ pub enum Sound {
 }
 
 impl Sound {
-    /// How many levels it holds: a harmonic's one per harmonic, any other's one.
-    pub fn columns(&self) -> usize {
-        match self {
-            Sound::Harmonic { count, .. } => *count,
-            Sound::Partial { .. } | Sound::Noise { .. } | Sound::Shaped { .. } => 1,
-        }
-    }
-
     pub fn glide(&self) -> f64 {
         match self {
             Sound::Partial { glide, .. } | Sound::Harmonic { glide, .. } => *glide,
@@ -206,7 +199,6 @@ pub fn birth(sources: &[Source]) -> u64 {
 impl Source {
     /// `sound` keyed `key` from `on` at `levels`, one per column, referencing nothing.
     pub fn new(key: u64, on: f64, sound: Sound, levels: Vec<Trajectory>) -> Source {
-        assert_eq!(levels.len(), sound.columns(), "a level per column");
         Source {
             key,
             on,
@@ -242,7 +234,7 @@ impl Source {
     }
 
     pub fn harmonics(&self) -> usize {
-        self.sound.columns()
+        self.levels.len()
     }
 
     /// Every number but the key, in the order `numbers` names them: a harmonic's levels after
@@ -327,14 +319,15 @@ impl Source {
         // `f0`: no frequency knot, which the name counts.
         match &self.sound {
             Sound::Partial { .. } => format!("{DIRECTORY}/partial_f0{g}_l{l}{key}"),
-            Sound::Harmonic { count, .. } => {
+            Sound::Harmonic { .. } => {
                 let each: Vec<String> = self
                     .levels
                     .iter()
                     .map(|t| t.knots.len().to_string())
                     .collect();
                 format!(
-                    "{DIRECTORY}/harmonic_h{count}_f0{g}_l{}{key}",
+                    "{DIRECTORY}/harmonic_h{}_f0{g}_l{}{key}",
+                    self.harmonics(),
                     each.join("-")
                 )
             }
@@ -392,7 +385,7 @@ impl Source {
                 format!("one partial, its frequency through 0 knots{gliding}"),
                 format!("{} * {level}", line(1)),
             ),
-            Sound::Harmonic { count, .. } => {
+            Sound::Harmonic { .. } => {
                 let mut lines = vec![format!("{level}*{}", stretched(1))];
                 for (i, held) in self.levels[1..].iter().enumerate() {
                     let k = i + 2;
@@ -404,8 +397,9 @@ impl Source {
                 }
                 (
                     format!(
-                        "{count} harmonics of one fundamental through 0 knots{gliding}, harmonic k \
-                         at k sqrt(1 + b k^2) times it, each at its own level, the first's"
+                        "{} harmonics of one fundamental through 0 knots{gliding}, harmonic k at \
+                         k sqrt(1 + b k^2) times it, each at its own level, the first's",
+                        self.harmonics()
                     ),
                     lines.join(" + "),
                 )
@@ -568,7 +562,6 @@ impl Source {
                 Sound::Harmonic {
                     hz: hz()?,
                     stretch: get("b")?,
-                    count: held.len(),
                     glide: glide()?,
                 }
             }
@@ -795,7 +788,11 @@ impl Feasible {
     }
 }
 
-pub fn sounded(files: Vec<(String, String)>, clip: &Clip) -> Result<Vec<f64>, CliError> {
+pub async fn sounded<B: Backend>(
+    files: Vec<(String, String)>,
+    clip: &Clip,
+    tier: &Tier<B>,
+) -> Result<Vec<f64>, CliError> {
     let mut held = Composition::new();
     for (path, text) in files {
         held.insert(path, text);
@@ -807,7 +804,7 @@ pub fn sounded(files: Vec<(String, String)>, clip: &Clip) -> Result<Vec<f64>, Cl
         rate: Some(clip.rate),
         ..Job::over(&held, &target)
     };
-    let rendered = execute(job, &Tier::default())?;
+    let rendered = execute_over(job, tier, &mut Session::default()).await?;
     let answer = rendered.answer(&rendered.target, Representation::Samples)?;
     let Output::Samples(buffer) = answer.value else {
         unreachable!("samples answer samples")

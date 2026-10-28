@@ -4,13 +4,12 @@ use std::f64::consts::{LOG2_E, TAU};
 
 use super::super::adds::golden;
 use super::super::problem::{Draft, Problem, Reading};
-use super::super::render::{Held, change, db};
+use super::super::render::{Held, Proposal, change, db};
 use super::super::written::{Written, rewrite, write};
 use super::{Variable, members};
-use crate::grid::Grid;
 use crate::optimize::code::{Number, Price};
 use crate::optimize::{self, Added, Change, Edit, Ledger, Scored};
-use crate::sources::{Link, Quantity, SharedKind, Sound};
+use crate::sources::{Link, Quantity, SharedKind};
 
 /// A level in dB moving as `depth sin(2 pi rate t + phase)`, its numbers rate and phase, each
 /// referencing source's own its depth.
@@ -31,30 +30,6 @@ fn factor(p: &Problem, numbers: &[f64], depth: f64) -> Vec<f64> {
                 })
                 .sum::<f64>()
         })
-        .collect()
-}
-
-/// The share of a frame's power each time from its centre holds, at the analysis hop: the
-/// squared window over each hop the frame pools, as `MODEL` states.
-pub(super) fn kernel(grid: &Grid, window: &[f64]) -> Vec<(f64, f64)> {
-    let pooled = (grid.hop / grid.step).max(1);
-    let step = grid.step as f64;
-    let middle = (pooled - 1) as f64 / 2.0;
-    let mut shares: Vec<(i64, f64)> = Vec::new();
-    for j in 0..pooled {
-        for (k, w) in window.iter().enumerate() {
-            let at = (j as f64 - middle) * step + k as f64 - (grid.long / 2) as f64;
-            let cell = libm::round(at / step) as i64;
-            match shares.binary_search_by_key(&cell, |(c, _)| *c) {
-                Ok(i) => shares[i].1 += w * w,
-                Err(i) => shares.insert(i, (cell, w * w)),
-            }
-        }
-    }
-    let total: f64 = shares.iter().map(|(_, v)| v).sum();
-    shares
-        .iter()
-        .map(|(c, v)| (*c as f64 * step / grid.rate, v / total))
         .collect()
 }
 
@@ -217,7 +192,7 @@ impl Variable for Periodic {
         &self,
         (p, kept, ledger, reading): (&Problem, &[Held], &Ledger, &Reading),
         key: u64,
-        (sound, step): (&Sound, f64),
+        (proposal, step): (&Proposal, f64),
         s: usize,
     ) -> Option<Scored<Problem>> {
         let residual = &reading.residual;
@@ -231,7 +206,7 @@ impl Variable for Periodic {
                 r.iter_mut().zip(u).for_each(|(r, u)| *r += u);
             }
         }
-        let templates = p.templates(sound);
+        let templates = p.templates(proposal);
         let free: Vec<Vec<f64>> = templates
             .iter()
             .map(|t| {
@@ -273,7 +248,7 @@ impl Variable for Periodic {
                 .iter()
                 .map(|g| g.iter().zip(&factor).map(|(g, m)| g / m).collect())
                 .collect();
-            let written = write(p, (sound, step), key, &fitted, &links);
+            let written = write(p, (proposal, step), key, &fitted, &links);
             let new = Held::new(p, templates.clone(), written);
             let others: Vec<(usize, Held)> = old
                 .iter()
@@ -288,7 +263,7 @@ impl Variable for Periodic {
                         .chain(std::iter::once(link(*d)))
                         .collect();
                     let levels = held.written.source.levels.clone();
-                    let at = (held.sound(), held.written.step);
+                    let at = (&held.proposal(), held.written.step);
                     let written = rewrite(p, at, held.key(), levels, &links);
                     (*a, held.relinked(written))
                 })

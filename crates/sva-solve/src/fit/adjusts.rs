@@ -6,7 +6,7 @@ use super::Tweak;
 use super::adds::{Glide, golden, rate_floor, refined, slope, spread};
 use super::peaks::{moves, pathed};
 use super::problem::{Problem, Reading};
-use super::render::{Held, Template, change, db, glided};
+use super::render::{Held, Proposal, Template, change, db, glided};
 use super::shared::{self, linked};
 use super::written::{Written, frequency_steps, rewrite, write};
 use crate::optimize::code::Price;
@@ -88,7 +88,7 @@ fn scaled(
         .collect();
     let written = rewrite(
         p,
-        (held.sound(), held.written.step),
+        (&held.proposal(), held.written.step),
         held.key(),
         trajectories,
         held.links(),
@@ -143,8 +143,13 @@ fn rethinned(
                 .collect()
         })
         .collect();
-    let step = (held.sound(), held.written.step);
-    let written = write(p, step, held.key(), &fitted, held.links());
+    let written = write(
+        p,
+        (&held.proposal(), held.written.step),
+        held.key(),
+        &fitted,
+        held.links(),
+    );
     let mut delta = p.summed(&held.templates, &|c, f| written.gains[c][f] - before[c][f]);
     linked(p, held.links(), &reading.shared, &mut delta);
     let missed = 0.5 * LOG2_E * change(p, residual, &delta);
@@ -171,16 +176,17 @@ fn retuned(
         .zip(render.iter())
         .map(|(r, u)| r.iter().zip(u).map(|(r, u)| r + u).collect())
         .collect();
-    let columns = p.columns(held.sound());
+    let proposal = held.proposal();
+    let columns = p.columns(&proposal);
     let tracks: Vec<Vec<(f64, f64)>> = columns
         .paths
         .iter()
         .map(|path| pathed(p, &alone, path))
         .collect();
     let trajectories = &held.written.source.levels;
-    let score = |sound: &Sound, step: f64| -> (f64, Written, Vec<Template>) {
-        let templates = p.templates(sound);
-        let written = rewrite(p, (sound, step), key, trajectories.clone(), links);
+    let score = |proposal: &Proposal, step: f64| -> (f64, Written, Vec<Template>) {
+        let templates = p.templates(proposal);
+        let written = rewrite(p, (proposal, step), key, trajectories.clone(), links);
         let mut delta: Vec<Vec<f64>> = (0..p.frames())
             .map(|f| {
                 let mut u = vec![0.0; p.range.len()];
@@ -199,7 +205,7 @@ fn retuned(
         let change = swapped(p, kept, ledger, a, Some(&written), missed);
         (change, written, templates)
     };
-    let value = |sound: &Sound, step: f64| score(sound, step).0;
+    let value = |proposal: &Proposal, step: f64| score(proposal, step).0;
     let current = Glide {
         rate: held.sound().glide(),
         step: held.written.step,
@@ -207,7 +213,7 @@ fn retuned(
     let fitted = slope(&tracks, rate_floor(p, &columns, &held.written.levels));
     let mut glides = vec![current];
     for g in [Glide::default(), fitted] {
-        let heard = g.rate == 0.0 || moves(p, &glided(held.sound(), g.rate, p.middle()));
+        let heard = g.rate == 0.0 || moves(p, &glided(&proposal, g.rate, p.middle()));
         if heard && !glides.iter().any(|h| h.rate == g.rate) {
             glides.push(g);
         }
@@ -216,11 +222,12 @@ fn retuned(
     let (change, written, templates) = glides
         .into_iter()
         .map(|glide| {
-            let sound = match glided(held.sound(), glide.rate, p.middle()) {
+            let moved = glided(&proposal, glide.rate, p.middle());
+            let moved = match moved.sound {
                 Sound::Partial { hz, .. } => tuned(p, hz, glide, &value, held, shared),
-                voice => refined(p, &others, &alone, (voice, glide.step), key).0,
+                _ => refined(p, &others, &alone, (moved, glide.step), key).0,
             };
-            score(&sound, glide.step)
+            score(&moved, glide.step)
         })
         .min_by(|x, y| x.0.total_cmp(&y.0))?;
     Some((change, Held::new(p, templates, written)))
@@ -232,15 +239,17 @@ fn tuned(
     p: &Problem,
     hz: f64,
     glide: Glide,
-    value: &dyn Fn(&Sound, f64) -> f64,
+    value: &dyn Fn(&Proposal, f64) -> f64,
     held: &Held,
     shared: &[optimize::Shared],
-) -> Sound {
+) -> Proposal {
     let bin = p.grid.rate / p.grid.n as f64;
     let h = bin * libm::cbrt(f64::EPSILON);
-    let at = |hz: f64| Sound::Partial {
-        hz,
-        glide: glide.rate,
+    let at = |hz: f64| {
+        Proposal::one(Sound::Partial {
+            hz,
+            glide: glide.rate,
+        })
     };
     let written = &held.written;
     let step = frequency_steps(p, &p.columns(&at(hz)), &written.levels).0;
@@ -265,8 +274,8 @@ pub(super) fn adjusts(
         None => Edit::Remove(a, tweak),
     };
     let mut out = vec![Scored { change, edit }];
-    let retune =
-        retuned(p, kept, ledger, reading, a).filter(|(_, h)| p.apart(reading, h.sound(), Some(a)));
+    let retune = retuned(p, kept, ledger, reading, a)
+        .filter(|(_, h)| p.apart(reading, &h.proposal(), Some(a)));
     if let Some((change, held)) = retune {
         out.push(Scored {
             change,

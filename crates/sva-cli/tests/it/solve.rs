@@ -7,9 +7,11 @@ use serde_json::Value;
 
 use crate::helpers::{put, scratch};
 
+/// `args` run in `dir`, its renders' store under `dir` too.
 fn sva(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_sva-cli"))
         .current_dir(dir)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
         .args(args)
         .output()
         .expect("sva-cli runs")

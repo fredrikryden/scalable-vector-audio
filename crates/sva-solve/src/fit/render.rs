@@ -42,14 +42,32 @@ pub(super) fn power(db: f64) -> f64 {
     libm::pow(10.0, db / 10.0)
 }
 
+/// A sound beside its column count, which a kept source's levels hold instead.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Proposal {
+    pub(super) sound: Sound,
+    pub(super) columns: usize,
+}
+
+impl Proposal {
+    pub(super) fn of(source: &Source) -> Proposal {
+        Proposal {
+            sound: source.sound.clone(),
+            columns: source.harmonics(),
+        }
+    }
+
+    pub(super) fn one(sound: Sound) -> Proposal {
+        Proposal { sound, columns: 1 }
+    }
+}
+
 /// Each column's Hz at the clip's start: a noise band's its geometric centre, a shaped noise's
 /// its first band's.
-pub(super) fn hzs(sound: &Sound) -> Vec<f64> {
-    match sound {
+pub(super) fn hzs(proposal: &Proposal) -> Vec<f64> {
+    match &proposal.sound {
         Sound::Partial { hz, .. } => vec![*hz],
-        Sound::Harmonic {
-            hz, stretch, count, ..
-        } => (1..=*count)
+        Sound::Harmonic { hz, stretch, .. } => (1..=proposal.columns)
             .map(|k| {
                 let k = k as f64;
                 hz * k * libm::sqrt(1.0 + stretch * k * k)
@@ -62,27 +80,30 @@ pub(super) fn hzs(sound: &Sound) -> Vec<f64> {
 
 /// This partial or voice gliding at `rate`, its Hz at the start moved so its path holds at
 /// `middle`.
-pub(super) fn glided(sound: &Sound, rate: f64, middle: f64) -> Sound {
+pub(super) fn glided(proposal: &Proposal, rate: f64, middle: f64) -> Proposal {
+    let sound = &proposal.sound;
     let moved = |hz: f64| hz * sva_formula::exp((sound.glide() - rate) * middle);
-    match sound {
+    let sound = match sound {
         Sound::Partial { hz, .. } => Sound::Partial {
             hz: moved(*hz),
             glide: rate,
         },
-        Sound::Harmonic {
-            hz, stretch, count, ..
-        } => Sound::Harmonic {
+        Sound::Harmonic { hz, stretch, .. } => Sound::Harmonic {
             hz: moved(*hz),
             stretch: *stretch,
-            count: *count,
             glide: rate,
         },
         Sound::Noise { .. } | Sound::Shaped { .. } => sound.clone(),
+    };
+    Proposal {
+        sound,
+        columns: proposal.columns,
     }
 }
 
 impl Problem {
-    pub(super) fn templates(&self, sound: &Sound) -> Vec<Template> {
+    pub(super) fn templates(&self, proposal: &Proposal) -> Vec<Template> {
+        let sound = &proposal.sound;
         match sound {
             Sound::Noise { lo, hi } => vec![Template(vec![
                 self.grid.noise_bins((*lo, *hi))[self.range.clone()].to_vec(),
@@ -104,7 +125,7 @@ impl Problem {
                     true => self.bent(rate),
                     false => Vec::new(),
                 };
-                hzs(sound)
+                hzs(proposal)
                     .iter()
                     .map(|hz| {
                         Template(match rate != 0.0 {
@@ -149,9 +170,10 @@ impl Problem {
             .collect()
     }
 
-    pub(super) fn columns(&self, sound: &Sound) -> Columns {
+    pub(super) fn columns(&self, proposal: &Proposal) -> Columns {
+        let sound = &proposal.sound;
         let rate = sound.glide();
-        let hzs = hzs(sound);
+        let hzs = hzs(proposal);
         let heard: Vec<f64> = hzs
             .iter()
             .map(|hz| hz * sva_formula::exp(rate * self.middle()))
@@ -287,6 +309,10 @@ impl Held {
 
     pub(super) fn sound(&self) -> &Sound {
         &self.written.source.sound
+    }
+
+    pub(super) fn proposal(&self) -> Proposal {
+        Proposal::of(&self.written.source)
     }
 
     pub(super) fn links(&self) -> &[Link] {

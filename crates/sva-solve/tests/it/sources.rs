@@ -2,7 +2,6 @@
 
 use sva_solve::sources::{
     Clip, SCORE, Sound, Source, Trajectory, birth, files_at, nodes, phase as phase_of, read, score,
-    sounded,
 };
 
 const CLIP: Clip = Clip {
@@ -17,6 +16,20 @@ fn knots(base: f64, knots: &[(f64, f64)]) -> Trajectory {
     }
 }
 
+/// `files` rendered over `CLIP` through a memory tier, which answers at once.
+fn sounded(files: Vec<(String, String)>) -> Result<Vec<f64>, sva_core::CliError> {
+    let tier = sva_core::Tier::default();
+    let mut future = std::pin::pin!(sva_solve::sources::sounded(files, &CLIP, &tier));
+    let waker = std::task::Waker::noop();
+    match future
+        .as_mut()
+        .poll(&mut std::task::Context::from_waker(waker))
+    {
+        std::task::Poll::Ready(out) => out,
+        std::task::Poll::Pending => panic!("a memory tier waits on nothing"),
+    }
+}
+
 /// The files a composition of `sources` holds at unit gain.
 fn files(sources: &[Source]) -> Vec<(String, String)> {
     files_at(sources, &[], &CLIP, 0.0)
@@ -26,11 +39,10 @@ fn partial(hz: f64) -> Sound {
     Sound::Partial { hz, glide: 0.0 }
 }
 
-fn harmonic(hz: f64, stretch: f64, count: usize) -> Sound {
+fn harmonic(hz: f64, stretch: f64) -> Sound {
     Sound::Harmonic {
         hz,
         stretch,
-        count,
         glide: 0.0,
     }
 }
@@ -47,7 +59,7 @@ fn unheld() -> Vec<Source> {
         Source::new(
             1,
             -0.1,
-            harmonic(4000.0, 0.0, 4),
+            harmonic(4000.0, 0.0),
             vec![
                 knots(-50.0, &[(0.4, 80.0), (0.35, -10.0), (0.7, 0.0)]),
                 knots(-40.0, &[(0.7, 0.0)]),
@@ -109,14 +121,14 @@ fn ordinals_and_harmonic_levels_read_back_from_the_written_rows() {
         Source::new(
             7,
             0.01,
-            harmonic(110.0, 0.0, 1),
+            harmonic(110.0, 0.0),
             vec![knots(-30.0, &[(0.2, 0.0)])],
         ),
     );
     sources.push(Source::new(
         4,
         0.125,
-        harmonic(220.0, 4e-4, 4),
+        harmonic(220.0, 4e-4),
         vec![
             knots(-12.5, &[(0.3, -3.25), (0.45, 1.0 / 3.0)]),
             knots(0.1 + 0.2, &[(0.45, 1e-17)]),
@@ -193,7 +205,7 @@ fn a_harmonic_writes_until_its_node_nests_past_the_parser() {
         Source::new(
             0,
             0.1,
-            harmonic(30.0, 1e-4, count),
+            harmonic(30.0, 1e-4),
             vec![knots(-20.0, &[(0.5, 0.0)]); count],
         )
     };
@@ -219,13 +231,13 @@ fn a_long_envelope_voice_writes_and_sounds() {
     let voice = Source::new(
         9,
         0.05,
-        harmonic(110.0, 1e-4, 19),
+        harmonic(110.0, 1e-4),
         (1..=19).map(curve).collect(),
     );
     assert!(voice.writes(&CLIP), "{}", voice.node_text(&CLIP));
     let written = files(std::slice::from_ref(&voice));
     assert_eq!(read(&written), Some(vec![voice.clone()]));
-    let heard = sounded(written, &CLIP).expect("the sources render");
+    let heard = sounded(written).expect("the sources render");
     let power = heard.iter().map(|s| s * s).sum::<f64>() / heard.len() as f64;
     assert!(power > 0.0 && power.is_finite(), "{power}");
 }
@@ -245,7 +257,7 @@ fn a_shaped_noise_reads_back_and_sounds() {
     assert!(shaped.writes(&CLIP));
     let written = files(std::slice::from_ref(&shaped));
     assert_eq!(read(&written), Some(vec![shaped.clone()]), "{written:?}");
-    let heard = sounded(written, &CLIP).expect("the source renders");
+    let heard = sounded(written).expect("the source renders");
     let power = heard.iter().map(|s| s * s).sum::<f64>() / heard.len() as f64;
     assert!(power > 0.0, "{power}");
 }
@@ -267,7 +279,6 @@ fn a_glide_reads_back_and_sounds_its_closed_form() {
         Sound::Harmonic {
             hz: 200.0,
             stretch: 1e-4,
-            count: 3,
             glide: -glide,
         },
         vec![knots(-30.0, &[(0.5, 0.0)]); 3],
@@ -281,7 +292,7 @@ fn a_glide_reads_back_and_sounds_its_closed_form() {
     let both = vec![partial.clone(), voice];
     let written = files(&both);
     assert_eq!(read(&written), Some(both), "{written:?}");
-    let heard = sounded(files(std::slice::from_ref(&partial)), &CLIP).expect("the source renders");
+    let heard = sounded(files(std::slice::from_ref(&partial))).expect("the source renders");
     let rate = f64::from(CLIP.rate);
     let worst = heard
         .iter()

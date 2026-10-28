@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use super::{Command, value};
+use super::{CacheAt, Command, value};
 use sva_core::CliError;
 use sva_solve::TOLERANCE;
 use sva_solve::fit::SPL_DB;
@@ -20,6 +20,8 @@ pub struct SolveArgs {
     pub out: PathBuf,
     /// A directory that holds files may be written over.
     pub confirm: bool,
+    /// Where the store the pass renders and `final.wav` read through lives.
+    pub cache: CacheAt,
 }
 
 pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
@@ -37,6 +39,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
         from: None,
         out: PathBuf::from(OUT),
         confirm: false,
+        cache: CacheAt::Platform,
     };
     while let Some(flag) = it.next() {
         match flag.as_str() {
@@ -74,6 +77,9 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
             "--from" => args.from = Some(PathBuf::from(value(&mut it, "--from")?)),
             "--out" => args.out = PathBuf::from(value(&mut it, "--out")?),
             "--confirm" => args.confirm = true,
+            "--cache" => {
+                args.cache = CacheAt::named(&value(&mut it, "--cache")?);
+            }
             other => {
                 return Err(CliError::usage(
                     "cli.unknown_argument",

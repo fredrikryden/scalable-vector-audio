@@ -38,6 +38,16 @@ pub enum CacheAt {
     Off,
 }
 
+impl CacheAt {
+    /// What `--cache` names: `none`, or the store's path.
+    fn named(raw: &str) -> CacheAt {
+        match raw {
+            "none" => CacheAt::Off,
+            path => CacheAt::Path(PathBuf::from(path)),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct AnalyzeArgs {
     pub path: PathBuf,
