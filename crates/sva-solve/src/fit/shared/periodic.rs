@@ -31,17 +31,19 @@ fn shape(numbers: &[f64], t: f64) -> f64 {
 /// `depth`, as `MODEL` states: its mean under the frame's kernel.
 fn factor(p: &Problem, numbers: &[f64], depth: f64) -> Vec<f64> {
     (0..p.frames())
-        .map(|f| {
-            p.view(f)
-                .kernel
-                .iter()
-                .map(|(at, share)| {
-                    let level = depth * shape(numbers, p.times[f] + at);
-                    share * libm::pow(10.0, level / 10.0)
-                })
-                .sum::<f64>()
-        })
+        .map(|f| factor_at(p, numbers, depth, f))
         .collect()
+}
+
+fn factor_at(p: &Problem, numbers: &[f64], depth: f64, f: usize) -> f64 {
+    p.view(f)
+        .kernel
+        .iter()
+        .map(|(at, share)| {
+            let level = depth * shape(numbers, p.times[f] + at);
+            share * libm::pow(10.0, level / 10.0)
+        })
+        .sum()
 }
 
 /// The frames any of `home`'s columns is read in, in order.
@@ -199,29 +201,23 @@ fn rank_one(rows: &[Vec<f64>]) -> Option<(Vec<f64>, Vec<f64>)> {
     Some((weights, shared))
 }
 
-/// A periodic level's numbers at `rate` with `harmonics` harmonics, the fundamental's among
-/// them, and each of `series`' depths, as `MODEL` states.
-fn periodic_at(
+/// A frame's level in dB a periodic level at `numbers` puts on a source at `depth`, as
+/// `MODEL` states: the dB of `factor`'s.
+fn exact_db(p: &Problem, numbers: &[f64], depth: f64, f: usize) -> f64 {
+    db(factor_at(p, numbers, depth, f))
+}
+
+/// One linear fit of `series` at `rate`: each source's line, its depth and the shared numbers,
+/// as `MODEL` states.
+type Linear = (Vec<[f64; 2]>, Vec<f64>, Vec<f64>);
+
+fn linear_at(
     p: &Problem,
+    attenuation: &[Vec<f64>],
     series: &[Vec<(usize, f64)>],
     rate: f64,
-    harmonics: usize,
-) -> Option<(Vec<f64>, Vec<f64>)> {
-    let attenuation: Vec<Vec<f64>> = p
-        .views
-        .iter()
-        .map(|v| {
-            (1..=harmonics)
-                .map(|k| {
-                    let k = k as f64;
-                    v.kernel
-                        .iter()
-                        .map(|(at, share)| share * libm::cos(TAU * k * rate * at))
-                        .sum()
-                })
-                .collect()
-        })
-        .collect();
+) -> Option<Linear> {
+    let mut lines = Vec::new();
     let mut pairs = Vec::new();
     for s in series {
         let rows: Vec<(Vec<f64>, f64)> = s
@@ -236,7 +232,9 @@ fn periodic_at(
                 (row, *y)
             })
             .collect();
-        pairs.push(least_squares(&rows)?[2..].to_vec());
+        let fitted = least_squares(&rows)?;
+        lines.push([fitted[0], fitted[1]]);
+        pairs.push(fitted[2..].to_vec());
     }
     let (mut depths, shared) = rank_one(&pairs)?;
     let fundamental = libm::hypot(shared[0], shared[1]);
@@ -259,7 +257,77 @@ fn periodic_at(
         }
         numbers.push((libm::atan2(cos, sin) + turned).rem_euclid(TAU));
     }
-    Some((numbers, depths))
+    Some((lines, depths, numbers))
+}
+
+/// A periodic level's numbers at `rate` with `harmonics` harmonics, the fundamental's among
+/// them, and each of `series`' depths, as `MODEL` states: the linear fit, and where `exact`,
+/// each frame's value then less the gap between the level's exact dB and its linear one,
+/// refitted while the misfit to the exact dB falls.
+fn periodic_at(
+    p: &Problem,
+    series: &[Vec<(usize, f64)>],
+    (rate, harmonics): (f64, usize),
+    exact: bool,
+) -> Option<(Vec<f64>, Vec<f64>)> {
+    let attenuation: Vec<Vec<f64>> = p
+        .views
+        .iter()
+        .map(|v| {
+            (1..=harmonics)
+                .map(|k| {
+                    let k = k as f64;
+                    v.kernel
+                        .iter()
+                        .map(|(at, share)| share * libm::cos(TAU * k * rate * at))
+                        .sum()
+                })
+                .collect()
+        })
+        .collect();
+    let linear_db = |numbers: &[f64], depth: f64, f: usize| {
+        let (turn, held) = (TAU * rate * p.times[f], &attenuation[p.of[f]]);
+        let harmonics = numbers[2..]
+            .chunks(2)
+            .enumerate()
+            .map(|(i, h)| held[i + 1] * h[0] * libm::sin((i + 2) as f64 * turn + h[1]));
+        depth * (held[0] * libm::sin(turn + numbers[1]) + harmonics.sum::<f64>())
+    };
+    if !exact {
+        return linear_at(p, &attenuation, series, rate).map(|(_, d, n)| (n, d));
+    }
+    let mut read = series.to_vec();
+    let mut best = None;
+    let mut held = f64::INFINITY;
+    while let Some((lines, depths, numbers)) = linear_at(p, &attenuation, &read, rate) {
+        let exact: Vec<Vec<f64>> = series
+            .iter()
+            .zip(&depths)
+            .map(|(s, d)| {
+                s.iter()
+                    .map(|(f, _)| exact_db(p, &numbers, *d, *f))
+                    .collect()
+            })
+            .collect();
+        let mut misfit = 0.0;
+        for ((s, line), e) in series.iter().zip(&lines).zip(&exact) {
+            for ((f, y), e) in s.iter().zip(e) {
+                let at = line[0] + line[1] * p.times[*f] + e;
+                misfit += (y - at) * (y - at);
+            }
+        }
+        if misfit >= held {
+            break;
+        }
+        held = misfit;
+        for (((r, s), depth), e) in read.iter_mut().zip(series).zip(&depths).zip(&exact) {
+            for (((_, v), (f, y)), e) in r.iter_mut().zip(s).zip(e) {
+                *v = y - (e - linear_db(&numbers, *depth, *f));
+            }
+        }
+        best = Some((numbers, depths));
+    }
+    best
 }
 
 fn depth_step(written: &Written) -> f64 {
@@ -383,8 +451,8 @@ impl Variable for Periodic {
         }
         let top = nyquist(p, &homes);
         let (start, rate_step) = modulation_peak(p, &all, top)?;
-        let build = |rate: f64, harmonics: usize| -> Option<(f64, Attached, f64)> {
-            let (numbers, depths) = periodic_at(p, &all, rate, harmonics)?;
+        let build = |at: (f64, usize), exact: bool| -> Option<(f64, Attached, f64)> {
+            let (numbers, depths) = periodic_at(p, &all, at, exact)?;
             let mut after = reading.shared.clone();
             after[s].numbers = numbers.clone();
             let link = |d: f64| Link {
@@ -456,17 +524,29 @@ impl Variable for Periodic {
                 .is_finite()
                 .then_some((change, (new, others, variable), precision))
         };
-        let (_, _, precision) = build(start, 1)?;
-        let score = |rate: f64| build(rate, 1).map_or(f64::INFINITY, |(v, ..)| v);
-        let range = (start - rate_step, start + rate_step);
-        let (rate, _) = golden(&score, range, precision, (start, score(start)));
-        let mut best = build(rate, 1)?;
+        // Harmonic `harmonics` stays under the frame Nyquist at every rate searched.
+        let refit = |harmonics: usize, from: f64| {
+            let range = (
+                start - rate_step,
+                (start + rate_step).min(top / harmonics as f64),
+            );
+            let (_, _, precision) = build((from, harmonics), false)?;
+            let score = |rate: f64| match harmonics as f64 * rate < top {
+                true => build((rate, harmonics), false).map_or(f64::INFINITY, |b| b.0),
+                false => f64::INFINITY,
+            };
+            let (rate, _) = golden(&score, range, precision, (from, score(from)));
+            (harmonics as f64 * rate < top)
+                .then(|| build((rate, harmonics), true).map(|b| (rate, b)))
+                .flatten()
+        };
+        let (mut rate, mut best) = refit(1, start)?;
         for harmonics in 2.. {
             if harmonics as f64 * rate >= top {
                 break;
             }
-            match build(rate, harmonics) {
-                Some(more) if more.0 < best.0 => best = more,
+            match refit(harmonics, rate) {
+                Some((at, more)) if more.0 < best.0 => (rate, best) = (at, more),
                 _ => break,
             }
         }

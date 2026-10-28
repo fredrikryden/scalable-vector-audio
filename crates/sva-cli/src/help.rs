@@ -382,9 +382,10 @@ SOLVE:
   that shortens the description length most. A move adds a new source off the
   residual at its best level (a partial at each peak, a voice at each
   fundamental a harmonic sieve finds, its stretch B fitted, a noise band per
-  octave band, and one shaped noise: a gain per octave band times one envelope
-  over time), or adjusts a kept source's level per frame by the exact best
-  amount for it alone, up or down, to nought removing it. It stops where no
+  grid band, the feasible Hz cut at the ladder's edges below, and one shaped
+  noise: a gain per grid band times one envelope over time), or adjusts a kept
+  source's level per frame by the exact best amount for it alone, up or down,
+  to nought removing it. It stops where no
   move shortens it, so the description length falls at every pass, or after
   the first pass whose drop is no more than `--tolerance` (default
   {tolerance}) times the larger of the description length before and after it
@@ -399,7 +400,8 @@ SOLVE:
   sample not finite as `solve.not_finite`, one whose rate puts no bin in the
   feasible set as `solve.rate_too_low`.
   `--windows <secs>:<below_hz>,...,<secs>` reads each frequency band with its
-  own Hann window on a 1 ms hop, pooled to frames of three quarter-windows:
+  own Hann window on a 1 ms hop (a quarter-window where shorter), pooled to
+  frames of one quarter-window:
   each band reads the Hz from the edge before it (0 for the first) up to its
   own, the last on to the top, naming none. Without it one band reads
   the clip at 64 ms. The hearing model's ladder:
@@ -414,7 +416,7 @@ SOLVE:
   (default `{out}`) it writes `pass-001.wav` and on (the sources each pass
   leaves, rendered as it ends), the composition (its levels thinned at the
   level JND), `final.wav` (its render), and `clip-grid.wav` and
-  `fit-grid.wav`, the clip's and the fit's octave bands by their frames sounded
+  `fit-grid.wav`, the clip's and the fit's grid bands by their frames sounded
   alike; an out directory already holding files refuses as a conflict unless
   `--confirm`; a resumed fit there keeps the pass renders up to its own.
   Every pass render and `final.wav` read through one store, `--cache` as
@@ -428,7 +430,7 @@ SOLVE:
   negation), `total_drop_bits` (the drop from the empty fit's description
   length so far), `share` (the pass's drop over that), `dl_bits`,
   `source_bits` and `residual_bits` (the total and its parts), `residual_db`
-  (per frame, each octave band's power the fit leaves, in dB, null where
+  (per frame, each grid band's power the fit leaves, in dB, null where
   none), `envelopes` (each kept source's `key` and written level per frame in
   dB), `skipped` (the sources of better moves passed over, their nodes
   refused), `seconds` (the clock as it ended) and `pass_secs` (its pass's own

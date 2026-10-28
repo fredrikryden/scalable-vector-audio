@@ -1,20 +1,21 @@
-// Concern: the coarse grid: octave bands by frames of three quarter-windows, their kernel, templates, phaseless resynthesis | Non-concern: the fit (fit/) | IO: (Spectrogram) -> Grid, samples
+// Concern: the coarse grid: the ladder's bands by frames of a quarter-window, their kernel, templates, phaseless resynthesis | Non-concern: the fit (fit/) | IO: (Spectrogram) -> Grid, samples
 
 use std::num::NonZeroUsize;
 
+use sva_engine::hearing::WINDOW_SPLITS_HZ;
 use sva_engine::{each, fft};
 
 use crate::analysis::{Spectrogram, hann, span_hz};
 use crate::sources::phase;
 
 pub const MODEL: &str = "the coarse grid, the smallest thumbnail of the clip under one window: \
-     the analysis spectrogram (analysis.rs: a periodic Hann, 1 ms hop) read only at hops whose \
-     window lies wholly inside the clip, as zero padding past an edge is a jump the clip does \
-     not hold; pooled to frames of three quarter-windows (48 ms at 64 ms), the quarter-window \
-     being the hop at which the squared Hann sums to a constant, in whole analysis hops, at \
-     least one: each frame the mean power of the hops it holds; and summed over octave bands, edges at \
-     1 kHz times powers of two inside the feasible set (Cam 1.8 to 38.9, under the Nyquist), \
-     an end piece under half an octave joining its neighbour, so 8 bands at 16 kHz and above; \
+     the analysis spectrogram (analysis.rs: a periodic Hann, a 1 ms hop or a quarter-window's) \
+     read only at hops whose window lies wholly inside the clip, as zero padding past an edge \
+     is a jump the clip does not hold; pooled to frames of one quarter-window, the hop at which the squared Hann sums \
+     to a constant, in whole analysis hops, at least one: each frame the mean power of the \
+     hops it holds; and summed over bands, the feasible set (Cam 1.8 to 38.9, under the \
+     Nyquist) cut at whichever of the hearing model's window splits (hearing.rs's \
+     WINDOW_SPLITS_HZ) fall inside it, whatever windows the fit reads it with; \
      a frame's kernel the share of its power each time from its centre holds, at the analysis \
      hop: the squared window over each hop the frame pools; \
      a unit-amplitude sine at f puts |W(b - f)|^2 / 4 in bin b (W the window's transform, in \
@@ -33,9 +34,6 @@ pub const MODEL: &str = "the coarse grid, the smallest thumbnail of the clip und
      normalised for incoherent frames); grids of one clip under several windows, each nought \
      outside its band, sounded each and summed";
 
-/// The quarter-windows one frame pools, as `MODEL` states.
-const QUARTERS: usize = 3;
-
 /// The power of `spectrogram` pooled to frames, as `MODEL` states.
 pub struct Grid {
     pub rate: f64,
@@ -50,7 +48,7 @@ pub struct Grid {
     pub sum_w2: f64,
     /// The window's autocorrelation at each lag from nought.
     pub autocorrelation: Vec<f64>,
-    /// The octave bands, each its Hz, as `MODEL` states.
+    /// The bands, each its Hz, as `MODEL` states.
     pub bands: Vec<(f64, f64)>,
     pub power: Vec<Vec<f64>>,
 }
@@ -59,8 +57,7 @@ impl Grid {
     /// `spectrogram` of a clip `len` samples long, as `MODEL` states, on at most `threads`.
     pub fn of(spectrogram: &Spectrogram, len: usize, threads: NonZeroUsize) -> Grid {
         let step = spectrogram.hop;
-        let pooled =
-            QUARTERS * (libm::round(spectrogram.long as f64 / 4.0 / step as f64) as usize).max(1);
+        let pooled = (libm::round(spectrogram.long as f64 / 4.0 / step as f64) as usize).max(1);
         let half = spectrogram.long / 2;
         let hops = spectrogram.frames();
         let inside = half.div_ceil(step)..(len.saturating_sub(half) / step + 1).min(hops);
@@ -98,7 +95,7 @@ impl Grid {
             bands: Vec::new(),
             power,
         };
-        grid.bands = grid.octaves();
+        grid.bands = grid.held();
         grid
     }
 
@@ -199,14 +196,14 @@ impl Grid {
             .collect()
     }
 
-    /// The octave bands, each its Hz.
+    /// The bands, each its Hz.
     pub fn bands(&self) -> Vec<(f64, f64)> {
         self.bands.clone()
     }
 
-    /// The octave bands holding a bin of this grid, as `MODEL` states.
-    fn octaves(&self) -> Vec<(f64, f64)> {
-        octaves(self.rate)
+    /// The bands holding a bin of this grid, as `MODEL` states.
+    fn held(&self) -> Vec<(f64, f64)> {
+        bands_at(self.rate)
             .into_iter()
             .filter(|e| !self.bins_of(*e).is_empty())
             .collect()
@@ -325,24 +322,17 @@ impl Grid {
     }
 }
 
-/// The octave bands at `rate`, as `MODEL` states, bins aside.
-pub(crate) fn octaves(rate: f64) -> Vec<(f64, f64)> {
+/// The bands at `rate`, as `MODEL` states, bins aside.
+pub(crate) fn bands_at(rate: f64) -> Vec<(f64, f64)> {
     let (lo, hi) = span_hz(rate);
     let mut edges = vec![lo];
     edges.extend(
-        (-10..10)
-            .map(|k| 1000.0 * libm::pow(2.0, f64::from(k)))
+        WINDOW_SPLITS_HZ
+            .iter()
+            .copied()
             .filter(|e| lo < *e && *e < hi),
     );
     edges.push(hi);
-    let octaves = |a: f64, b: f64| libm::log2(b / a);
-    if edges.len() > 2 && octaves(edges[0], edges[1]) < 0.5 {
-        edges.remove(1);
-    }
-    let last = edges.len() - 1;
-    if edges.len() > 2 && octaves(edges[last - 1], edges[last]) < 0.5 {
-        edges.remove(last - 1);
-    }
     edges.windows(2).map(|e| (e[0], e[1])).collect()
 }
 

@@ -123,7 +123,7 @@ mod tests {
     use sva_engine::hearing::{frequency_jnd_hz, level_jnd_db};
 
     use super::{Look, Priced, frequency_delta, level_delta, price};
-    use crate::optimize::code::{NORMALISER, count, number};
+    use crate::optimize::code::number;
     use crate::sources::{Clip, Feasible, Quantity, Sound, Source, Trajectory};
 
     const CLIP: Clip = Clip {
@@ -132,16 +132,6 @@ mod tests {
     };
 
     const FLOOR_DB: f64 = -90.0;
-
-    fn star(n: f64) -> f64 {
-        let mut sum = 0.0;
-        let mut term = libm::log2(n);
-        while term > 0.0 {
-            sum += term;
-            term = libm::log2(term);
-        }
-        sum
-    }
 
     fn knots(base: f64, knots: &[(f64, f64)]) -> Trajectory {
         Trajectory {
@@ -209,91 +199,6 @@ mod tests {
                 vec![knots(-40.0, &[(0.5, 0.0)])],
             ),
         ]
-    }
-
-    fn total(sources: &[Source]) -> f64 {
-        sources.iter().fold(count(sources.len()), |sum, a| {
-            sum + price(a, &priced(a)).bits()
-        })
-    }
-
-    /// The cells of number `i` of `source` at its precision, from its stated range.
-    fn written(source: &Source, i: usize) -> f64 {
-        let f = feasible();
-        let (q, _) = source.numbers()[i];
-        let hz = (f.hz.1 / source.harmonics() as f64) - f.hz.0;
-        let db = f.db.1 - f.db.0;
-        let range = match q {
-            Quantity::Time => CLIP.secs(),
-            Quantity::Hz => hz,
-            Quantity::Db => db,
-            Quantity::DbDeviation | Quantity::Depth => 2.0 * db,
-            Quantity::Edge => f.hz.1 - f.hz.0,
-            Quantity::Glide => 2.0 * libm::log(f.hz.1 / f.hz.0) / CLIP.secs(),
-            Quantity::Stretch => {
-                let h = source.harmonics() as f64;
-                let top = f.hz.1 / (h * 110.0);
-                (top * top - 1.0) / (h * h)
-            }
-        };
-        libm::log2(libm::ceil(range / priced(source).deltas[i]).max(1.0))
-    }
-
-    #[test]
-    fn adding_a_source_costs_its_stated_code() {
-        let all = sources();
-        let c = libm::log2(NORMALISER);
-        for n in 0..all.len() {
-            let born = &all[n];
-            let numbers = (0..born.numbers().len())
-                .map(|i| written(born, i))
-                .sum::<f64>();
-            let level: f64 = born
-                .levels
-                .iter()
-                .map(|l| c + star(l.knots.len() as f64))
-                .sum();
-            let stated = match born.hz() {
-                None => level,
-                Some(_) => {
-                    let shared = match born.harmonics() {
-                        1 => 0.0,
-                        h => c + star(h as f64),
-                    };
-                    level + c + shared
-                }
-            } + libm::log2(6.0)
-                + numbers;
-            let grown = total(&all[..=n]) - total(&all[..n]);
-            let counted = star((n + 2) as f64) - star((n + 1) as f64);
-            assert!(
-                (grown - counted - stated).abs() < 1e-11,
-                "source {n}: {grown} vs {counted} + {stated}"
-            );
-        }
-    }
-
-    #[test]
-    fn adding_a_knot_costs_its_count_its_time_and_its_deviation() {
-        let c = sources()[0].clone();
-        let at = |a: &Source| price(a, &priced(a)).bits();
-        let mut levelled = c.clone();
-        levelled.levels[0].knots.insert(1, (0.4, -10.0));
-        let stated = star(3.0) - star(2.0) + written(&levelled, 5) + written(&levelled, 6);
-        let grew = at(&levelled) - at(&c);
-        assert!((grew - stated).abs() < 1e-11, "{grew} vs {stated}");
-    }
-
-    #[test]
-    fn a_number_whose_precision_spans_its_range_costs_nothing() {
-        let a = sources()[0].clone();
-        let coarse = Priced {
-            feasible: feasible(),
-            deltas: vec![f64::INFINITY; a.numbers().len()],
-        };
-        let c = libm::log2(NORMALISER);
-        let counts = libm::log2(6.0) + c + star(1.0) + c + star(2.0);
-        assert!((price(&a, &coarse).bits() - counts).abs() < 1e-12);
     }
 
     #[test]

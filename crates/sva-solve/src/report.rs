@@ -187,6 +187,8 @@ pub fn answer(
     files: Option<&[(String, String)]>,
 ) -> String {
     let count = |kind: &str| fit.sources.iter().filter(|a| a.kind() == kind).count();
+    let adjusts: usize = fit.tweaks.iter().sum();
+    let adds = fit.passes - fit.from_pass - adjusts;
     let files = files.map_or_else(String::new, |files| {
         format!(", \"files\": {}", composition(files))
     });
@@ -198,8 +200,8 @@ pub fn answer(
          \"sources\": {}, \"shared\": {}, \"wrote\": {} }}{files} }}",
         fit.clip.rate,
         fit.passes,
-        fit.adds,
-        fit.adjusts,
+        adds,
+        adjusts,
         Tweak::ALL
             .iter()
             .zip(fit.tweaks)

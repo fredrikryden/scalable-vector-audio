@@ -101,7 +101,7 @@ export interface SolveShared {
  * drop from the empty fit's description length to `dl_bits`, `share` the pass's drop over that
  * (null where it is none), `dl_bits` the total, `source_bits` plus
  * `residual_bits`; `residual_db[frame][band]` the power
- * the fit leaves in each octave band in dB, null where none; `envelopes` each kept source's
+ * the fit leaves in each grid band in dB, null where none; `envelopes` each kept source's
  * written level per frame in dB; `shared` the shared variables its sources reference;
  * `skipped` the sources of better moves passed over, their nodes refused; `seconds` the clock
  * since the solve began as it ended, `pass_secs` its pass's own time; `files` the

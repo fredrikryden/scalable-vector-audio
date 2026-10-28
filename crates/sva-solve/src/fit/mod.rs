@@ -135,7 +135,7 @@ impl Default for Options {
 
 /// A fit: the clip it read, its sources in unit-RMS space, the master gain bringing them back,
 /// the SPL that space is heard at, its DL's parts, the pass it resumed from and its last, this
-/// run's adds and adjusts, these by `Tweak::ALL`, its threshold, why it ended, and both
+/// run's adjusts by `Tweak::ALL` (its adds the rest of its passes), its threshold, why it ended, and both
 /// coarse grids, each band's power spread flat.
 pub struct Fit {
     pub clip: Clip,
@@ -147,8 +147,6 @@ pub struct Fit {
     pub residual_bits: f64,
     pub from_pass: usize,
     pub passes: usize,
-    pub adds: usize,
-    pub adjusts: usize,
     pub tweaks: [usize; 4],
     pub tolerance: f64,
     pub ended: End,
@@ -190,7 +188,7 @@ fn unmeant(windows: &[Window], clip: &Clip) -> Option<CliError> {
             "solve.window_not_positive",
             format!(
                 "a window is a finite length holding two samples or more at the fit's {rate} \
-                 Hz, not {}s",
+                 Hz, not {}s; a correctness limit, with no override",
                 w.secs
             ),
         );
@@ -218,7 +216,8 @@ fn unmeant(windows: &[Window], clip: &Clip) -> Option<CliError> {
         refuse(
             "solve.window_too_long",
             format!(
-                "a window of {}s is longer than the {}s clip, so no frame of it lies inside",
+                "a window of {}s is longer than the {}s clip, so no frame of it lies inside; \
+                 a correctness limit, with no override",
                 w.secs,
                 clip.secs()
             ),
@@ -260,7 +259,7 @@ pub async fn fit(
         rate: to,
         len: samples.len(),
     };
-    let square = samples.iter().map(|s| s * s).sum::<f64>() / samples.len().max(1) as f64;
+    let square = samples.iter().map(|s| s * s).sum::<f64>() / samples.len() as f64;
     let rms = match square > 0.0 {
         true => libm::sqrt(square),
         false => 1.0,
@@ -299,18 +298,13 @@ pub async fn fit(
     let mut first = first_line(&p, &state, start_bits, gain_db);
     first.seconds = clock();
     hear(&first);
-    let (mut adds, mut adjusts) = (0, 0);
     let mut tweaks = [0; 4];
     let mut heard = |before: &State, next: &State, began: f64| {
-        match next.moved() {
-            Some(Edit::Replace(_, (), tweak) | Edit::Remove(_, tweak)) => {
-                adjusts += 1;
-                tweaks[Tweak::ALL
-                    .iter()
-                    .position(|t| *t == tweak)
-                    .expect("a tweak")] += 1;
-            }
-            _ => adds += 1,
+        if let Some(Edit::Replace(_, (), tweak) | Edit::Remove(_, tweak)) = next.moved() {
+            tweaks[Tweak::ALL
+                .iter()
+                .position(|t| *t == tweak)
+                .expect("a tweak")] += 1;
         }
         let mut heard = line(&p, next, before, start_bits);
         heard.seconds = clock();
@@ -334,8 +328,6 @@ pub async fn fit(
         residual_bits: state.missed_bits(),
         from_pass,
         passes: state.passes(),
-        adds,
-        adjusts,
         tweaks,
         tolerance: options.tolerance,
         ended,

@@ -88,7 +88,7 @@ pub struct Line {
     pub skipped: Vec<Source>,
 }
 
-/// Per reported frame each octave band's level in dB `residual` leaves, as `MODEL` states: each
+/// Per reported frame each grid band's level in dB `residual` leaves, as `MODEL` states: each
 /// view's band power over its unit band's, its frames averaged at the nearest reported one.
 fn banded(p: &Problem, residual: &[Vec<f64>]) -> Vec<Vec<Option<f64>>> {
     let at = p.reported();

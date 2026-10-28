@@ -16,7 +16,7 @@ use super::render::{Held, Proposal};
 use super::shared;
 use super::written::levels_at;
 use crate::analysis::{floor_db, hann, span_hz};
-use crate::grid::{Grid, octaves};
+use crate::grid::{Grid, bands_at};
 use crate::optimize::code::Price;
 use crate::optimize::{self, Ledger, Scored};
 use crate::sources::{Clip, SharedKind, Trajectory};
@@ -27,7 +27,7 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      every source spans the clip; a partial's or voice's Hz f(t) = f(0) e^(glide t), glide 0 a fixed tone (sources.rs); \
      the clip read at its rate over the largest whole factor keeping Cam 38.9 under the Nyquist; \
      scaled to unit RMS, one master gain in dB bringing it back, every floor read at the SPL plus that gain; \
-     the residual on each view's frames by its analysis bins, octave bands being too coarse to tell a sine from noise inside one: a view one band of the fit's windows (fit/mod.rs; none given, one band at 64 ms), its coarse grid (grid.rs) read over the feasible bins of the Hz from the edge before it to its own, a band holding no bin giving its Hz to the next and the last reading on to the top, a guard of a main lobe's width either side, the span the tonal test reads about a peak, rendered and weighed nought so a line at its edge peaks inside it; \
+     the residual on each view's frames by its analysis bins, the grid's bands (grid.rs) being too coarse to tell a sine from noise inside one: a view one band of the fit's windows (fit/mod.rs; none given, one band at 64 ms), its coarse grid (grid.rs) read over the feasible bins of the Hz from the edge before it to its own, a band holding no bin giving its Hz to the next and the last reading on to the top, a guard of a main lobe's width either side, the span the tonal test reads about a peak, rendered and weighed nought so a line at its edge peaks inside it; \
      a cell's power P the averaged periodogram of K looks, K its view's frame over half its window times the window over the padded transform (Welch 1967); \
      a cell's heard power P' = P + F, the floor F a noise the ear's own; \
      the tonal lobes the voices' sieve reads (below) against a local noise floor: a bin's median over one Cam (at least a main lobe's width either side of its own lobe), outside the tonal lobes, on each side of the bin's own main lobe, over the median's share of the mean of K looks, (1 - 1/(9K))^3 (Wilson and Hilferty 1931), the higher side; \
@@ -60,8 +60,8 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      a voice's harmonic k at k f0 sqrt(1 + B k^2) (Fletcher 1964), f0 and B by least squares of (f_k / k)^2 = f0^2 + f0^2 B k^2 over its member peaks, B at least 0; \
      members reassigned within half an analysis bin of the stretched Hz and refitted till the set repeats; \
      every harmonic to the highest member its own column and its own level; \
-     one noise band per octave band no kept noise band holds; \
-     one shaped noise: a gain per octave band times one envelope over the frames (rank 1), both at least 0, by alternating least squares against the residual from a flat envelope till an alternation no longer lowers the weighted misfit, which never rises, its bands' cross terms left out of the alternation and in its score; a band whose gain falls to 0 carved out, the rest's gains over the highest's written in dB; \
+     one noise band per grid band no kept noise band holds; \
+     one shaped noise: a gain per grid band times one envelope over the frames (rank 1), both at least 0, by alternating least squares against the residual from a flat envelope till an alternation no longer lowers the weighted misfit, which never rises, its bands' cross terms left out of the alternation and in its score; a band whose gain falls to 0 carved out, the rest's gains over the highest's written in dB; \
      an add scored in closed form: each column's gain per frame its weighted correlation with the residual over its weighted energy, at least 0, written, the DL drop those gains give less its bits; \
      each partial's and voice's frequencies refined against the residual as it is scored, its glide held: a partial's Hz by golden section (Kiefer 1953) over half an analysis bin of its peak to the finer of the precision it is written at and its standard deviation under the weights, sigma = (sum w (du/dx)^2)^-1/2, u its expected power, du/dx by central difference at the cube root of epsilon; a voice's harmonics each so as a partial, then f0 and B by that least squares weighted by the inverse variance of (f_k / k)^2, (2 f_k sigma_k / k^2)^-2, kept where the voice's score falls; \
      an adjust changes one kept source in its own written numbers, three for each: \
@@ -76,16 +76,16 @@ pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate
      the DL the written sources': levels at the level JND by looks, frequencies at the frequency JND by looks (bits.rs), every frame its column is read in a look at its level over its floor, as long as its frame; \
      a shaped noise's band gain at the level JND by looks of that band's level over its own floor, its envelope by its looks over the envelope's floor; \
      a voice's f0 at the JND at f0, its B where its highest harmonic moves by that harmonic's JND; a glide at its precision; \
-     a time at the shortest frame its column is read in, a noise band's edge one of the octave band edges; \
+     a time at the shortest frame its column is read in, a noise band's edge one of the grid band edges; \
      a key one past the last born; \
      a shared variable numbers several sources reference, each source its own numbers beside them (optimize/); one kind, a periodic level: its rate, phase and shape shared, each referencing source's depth in dB its own, its level moved by depth times sin(2 pi rate t + phase) plus each harmonic k >= 2's a_k sin(2 pi k rate t + phi_k), written as a shared node each referencing source's node reads; \
      a frame's power of a source so moved its level's power times that factor's mean under its view's frame kernel (grid.rs); \
      an add also scored attached to each active periodic level and to the spare, the sources attached already set beside it, their levels held: per frame each source's columns are read in, each source's level in dB the weighted correlation of the residual, those sources added back, with its template at its level (a new source's at its columns' mean gains over their frames) over its weighted energy; \
-     the rate started at the peak of those levels' summed modulation spectrum, each less its least-squares line, at a whole count of cycles over the frames' span under the frame Nyquist of the coarsest view those sources are read in, then by golden section a cycle over the span either side to its precision, the fundamental alone; \
-     at a rate and a count of harmonics each source's line and each harmonic's sine and cosine, each attenuated by its frame's kernel at k times the rate, by least squares; those harmonics' pairs across the sources their rank-1 factor, depth times shape, by alternating least squares from the largest source's pairs till the misfit no longer falls, scaled so the fundamental's amplitude is 1 and turned so the depths sum positive; \
-     at the rate found, harmonics 2, 3, ... added while each lowers the DL and k times the rate stays under that Nyquist, a correctness limit; the new source's gains over the factor written as an add's; the whole edit priced by the ledger; \
+     the rate started at the peak of those levels' summed modulation spectrum, each less its least-squares line, at a whole count of cycles over the frames' span under the frame Nyquist of the coarsest view those sources are read in, then at each count of harmonics by golden section a cycle over the span either side to its precision, from the rate the count before found, scored on the linear fit below; \
+     at a rate and a count of harmonics each source's line and each harmonic's sine and cosine, each attenuated by its frame's kernel at k times the rate, by least squares; those harmonics' pairs across the sources their rank-1 factor, depth times shape, by alternating least squares from the largest source's pairs till the misfit no longer falls, scaled so the fundamental's amplitude is 1 and turned so the depths sum positive; at the rate found, each frame's level then less the gap between the exact dB the level puts on it (the dB of its factor below) and that linear fit's, and fitted again while the misfit to the exact dB falls, so a deep level's depth and shape are not bent by the kernel's mean of its power; \
+     harmonics 2, 3, ... added while each lowers the DL, the rate refitted at each count and k times the rate stays under that Nyquist, a correctness limit; the new source's gains over the factor written as an add's; the whole edit priced by the ledger; \
      a periodic level's harmonic count from 1 as Rissanen's code, its rate from 0 to that Nyquist, its phase and each harmonic's over a turn, each harmonic's amplitude over the narrowest range its sources leave a level deviation, twice their top over their floor over their depth; the phase at the finest of its sources' depth precisions over their depths, an amplitude at that, a harmonic's phase at that over its amplitude, the rate at that over the clip and over the largest k a_k, 1 the fundamental's; a depth at its source's level precision; \
-     each pass reported as it ends: its move and what an adjust changed, the source's level before and after, the DL's drop and total, the residual's octave bands and each source's levels on the frames of the view of the longest frame, every view's frames read at the one each centre lies nearest, the moves it skipped";
+     each pass reported as it ends: its move and what an adjust changed, the source's level before and after, the DL's drop and total, the residual's grid bands and each source's levels on the frames of the view of the longest frame, every view's frames read at the one each centre lies nearest, the moves it skipped";
 
 /// One band of the analysis: its window's grid, the Hz it reads, its feasible bins there
 /// (`inner`) within those it renders (`range`, a guard of a main lobe's width either side,
@@ -127,7 +127,7 @@ impl View {
 /// frame by frame, the frames view after view.
 pub(super) struct Problem {
     pub(super) views: Vec<View>,
-    /// The octave bands, as `MODEL` states.
+    /// The grid's bands, as `MODEL` states.
     pub(super) bands: Vec<(f64, f64)>,
     pub(super) clip: Clip,
     pub(super) spl_db: f64,
@@ -245,7 +245,7 @@ impl Problem {
                     .collect()
             })
             .collect();
-        let bands = octaves(f64::from(clip.rate))
+        let bands = bands_at(f64::from(clip.rate))
             .into_iter()
             .filter(|b| views.iter().any(|v| !v.grid.bins_of(*b).is_empty()))
             .collect();

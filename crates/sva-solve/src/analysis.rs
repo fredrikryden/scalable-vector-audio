@@ -12,7 +12,7 @@ use crate::sources::{Sound, Source, Trajectory};
 
 pub const MODEL: &str = "the analysis: a periodic Hann window as long as the fit's window for \
      the band read (fit/mod.rs), its DFT zero-padded to the next power of two, a frame every \
-     1 ms (the ear's hop at s = 1), each bin's power |X|^2; a sine at f is heard where its level in dBFS plus \
+     1 ms (the ear's hop at s = 1), or every quarter-window where that is shorter, each bin's power |X|^2; a sine at f is heard where its level in dBFS plus \
      the SPL of full scale plus the ear's gain reaches the threshold excitation at f \
      (hearing.rs), that level its floor; peaks group into a harmonic by a harmonic sieve \
      (Duifhuis, Willems and Sluyter 1982, JASA 71(6) 1568-1580): each peak's Hz over k = 1, \
@@ -49,7 +49,7 @@ impl Spectrogram {
         let long = libm::round(secs * rate_hz) as usize;
         let window = hann(long);
         let n = long.next_power_of_two();
-        let hop = (libm::round(HOP_SECS * rate_hz) as usize).max(1);
+        let hop = (libm::round(HOP_SECS.min(secs / 4.0) * rate_hz) as usize).max(1);
         Spectrogram {
             rate: rate_hz,
             n,
