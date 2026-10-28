@@ -15,15 +15,15 @@ const READINGS: [&str; 12] = [
     "voice_leading",
     "tonal_distance",
     "inharmonicity",
-    "periodicity",
-    "modulation",
+    "periodicity(window=2s)",
+    "modulation(window=2s)",
     "self_similarity",
 ];
 
 /// Struck about twice a second and swelling at 3 Hz, so every reading has onsets and motion;
 /// its strikes wobble and it grows, so no two windows tie for a maximum.
 fn tone(gain: f64) -> Vec<f64> {
-    (0..10 * RATE as usize)
+    (0..2 * RATE as usize)
         .map(|n| {
             let t = n as f64 / f64::from(RATE);
             let wobbled = t + 0.02 * libm::sin(std::f64::consts::TAU * 0.37 * t);

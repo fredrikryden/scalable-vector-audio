@@ -5,7 +5,7 @@ use std::f64::consts::TAU;
 use std::pin::Pin;
 
 use sva_core::CliError;
-use sva_engine::{Abandon, Never};
+use sva_engine::Abandon;
 use sva_solve::fit::{Fit, Line, Options, SPL_DB, fit, mono};
 
 fn now<F: Future>(future: F) -> F::Output {
@@ -28,17 +28,21 @@ fn code(e: &CliError) -> String {
     }
 }
 
-/// `samples` at `rate` fitted at the default threshold, or the code it refuses under; each
-/// pass it made lowering the DL.
+/// `samples` at `rate` through its first pass, or the code it refuses under; that pass
+/// lowering the DL.
 fn met(samples: &[f64], rate: u32) -> Result<Fit, String> {
     let mut lines: Vec<Line> = Vec::new();
+    let passed = Cell::new(false);
     let fitted = now(fit(
         samples,
         rate,
         SPL_DB,
         &Options::default(),
-        &mut |line| lines.push(line.clone()),
-        &Never,
+        &mut |line| {
+            passed.set(line.pass >= 1);
+            lines.push(line.clone());
+        },
+        &Once(&passed),
         &|| 0.0,
     ));
     let dl: Vec<f64> = lines
