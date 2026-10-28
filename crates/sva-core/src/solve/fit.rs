@@ -721,18 +721,9 @@ fn db(power: f64) -> f64 {
     10.0 * libm::log10(power)
 }
 
-/// An atom's links beside the shared variables they index.
-type Linked<'a> = (&'a [Link], &'a [optimize::Shared]);
-
-/// `kind` keyed `key` written from `fitted`, each column's gain per frame before `links`'
-/// factor, referencing `links`, as `MODEL` states.
-fn write(
-    p: &Problem,
-    kind: &Kind,
-    key: u64,
-    fitted: &[Vec<f64>],
-    (links, shared): Linked,
-) -> Written {
+/// `kind` keyed `key` written from `fitted`, each column's own gain per frame, referencing
+/// `links`, as `MODEL` states.
+fn write(p: &Problem, kind: &Kind, key: u64, fitted: &[Vec<f64>], links: &[Link]) -> Written {
     let secs = p.clip.secs();
     let floors = p.columns(kind).floors;
     let trajectories: Vec<Trajectory> = fitted
@@ -744,17 +735,17 @@ fn write(
             thinned((0.0, secs), &p.times, &held, level_jnd_db(peak - floor))
         })
         .collect();
-    rewrite(p, kind, key, trajectories, (links, shared))
+    rewrite(p, kind, key, trajectories, links)
 }
 
 /// `kind` keyed `key` written at each column's level `trajectories`, referencing `links`, its
-/// gains their factor's.
+/// gains its own, the links' factor applied where it is heard.
 fn rewrite(
     p: &Problem,
     kind: &Kind,
     key: u64,
     trajectories: Vec<Trajectory>,
-    (links, shared): Linked,
+    links: &[Link],
 ) -> Written {
     let columns = p.columns(kind);
     let glide = kind.glide();
@@ -762,15 +753,9 @@ fn rewrite(
         .iter()
         .map(|t| levels_at(t, &p.times))
         .collect();
-    let factor = p.factor(links, shared);
     let gains = levels
         .iter()
-        .map(|l| {
-            l.iter()
-                .zip(&factor)
-                .map(|(l, m)| libm::pow(10.0, l / 10.0) * m)
-                .collect()
-        })
+        .map(|l| l.iter().map(|l| libm::pow(10.0, l / 10.0)).collect())
         .collect();
     let mut trajectories = trajectories.into_iter();
     let first = trajectories.next().expect("a column");
@@ -1109,10 +1094,14 @@ impl Held {
         &self.written.atom.links
     }
 
-    fn model(&self, p: &Problem, f: usize) -> Vec<f64> {
+    /// Its expected power at frame `f`, its links' factor at `shared` on its own gains.
+    fn model(&self, p: &Problem, shared: &[optimize::Shared], f: usize) -> Vec<f64> {
+        let m = p.factor_at(self.links(), shared, f);
         let mut u = vec![0.0; p.range.len()];
         for (t, g) in self.templates.iter().zip(&self.written.gains) {
-            u.iter_mut().zip(t.at(f)).for_each(|(u, t)| *u += g[f] * t);
+            u.iter_mut()
+                .zip(t.at(f))
+                .for_each(|(u, t)| *u += m * g[f] * t);
         }
         u
     }
@@ -1126,12 +1115,14 @@ fn atoms(kept: &[Held]) -> Vec<Atom> {
 }
 
 impl Problem {
-    /// The clip's power less `kept`'s per feasible bin, frame by frame.
-    fn residual(&self, kept: &[Held]) -> Vec<Vec<f64>> {
+    /// The clip's power less `kept`'s per feasible bin, frame by frame, at `shared`.
+    fn residual(&self, kept: &[Held], shared: &[optimize::Shared]) -> Vec<Vec<f64>> {
         let mut out = self.power.clone();
         for h in kept {
+            let factor = self.factor(h.links(), shared);
             for (t, g) in h.templates.iter().zip(&h.written.gains) {
                 for (f, (r, g)) in out.iter_mut().zip(g).enumerate() {
+                    let g = factor[f] * g;
                     r.iter_mut().zip(t.at(f)).for_each(|(r, t)| *r -= g * t);
                 }
             }
@@ -1139,9 +1130,9 @@ impl Problem {
         out
     }
 
-    /// `kept`'s expected power per feasible bin, frame by frame.
-    fn model(&self, kept: &[Held]) -> Vec<Vec<f64>> {
-        self.residual(kept)
+    /// `kept`'s expected power per feasible bin, frame by frame, at `shared`.
+    fn model(&self, kept: &[Held], shared: &[optimize::Shared]) -> Vec<Vec<f64>> {
+        self.residual(kept, shared)
             .iter()
             .zip(&self.power)
             .map(|(r, y)| y.iter().zip(r).map(|(y, r)| y - r).collect())
@@ -1194,7 +1185,7 @@ fn scaled(
 ) -> (f64, Tweak, Option<Held>) {
     let (held, residual) = (&kept[a], &reading.residual);
     let (energy, pull) = (0..p.frames()).fold((0.0, 0.0), |(e, c), f| {
-        held.model(p, f)
+        held.model(p, &reading.shared, f)
             .iter()
             .zip(&residual[f])
             .zip(&p.weight[f])
@@ -1231,7 +1222,7 @@ fn scaled(
         &held.kind,
         held.written.atom.key,
         trajectories,
-        (held.links(), &reading.shared),
+        held.links(),
     );
     // The residual changes by -(gain - 1) u: sum w (d^2 u^2 - 2 d r u).
     let d = gain - 1.0;
@@ -1263,9 +1254,10 @@ fn rethinned(
             (0..p.frames())
                 .map(|f| {
                     let (energy, pull) = p.moments(f, t.at(f), &residual[f]);
+                    let heard = g[f] * factor[f];
                     let free = match energy > 0.0 {
-                        true => (g[f] + pull / energy).max(0.0),
-                        false => g[f],
+                        true => (heard + pull / energy).max(0.0),
+                        false => heard,
                     };
                     free / factor[f]
                 })
@@ -1273,11 +1265,11 @@ fn rethinned(
         })
         .collect();
     let key = held.written.atom.key;
-    let written = write(p, &held.kind, key, &fitted, (held.links(), &reading.shared));
+    let written = write(p, &held.kind, key, &fitted, held.links());
     let delta = |f: usize| {
         let mut u = vec![0.0; p.range.len()];
         for ((t, after), before) in held.templates.iter().zip(&written.gains).zip(before) {
-            let d = after[f] - before[f];
+            let d = (after[f] - before[f]) * factor[f];
             if d != 0.0 {
                 u.iter_mut().zip(t.at(f)).for_each(|(u, t)| *u += d * t);
             }
@@ -1312,7 +1304,12 @@ fn retuned(
     let alone: Vec<Vec<f64>> = residual
         .iter()
         .enumerate()
-        .map(|(f, r)| r.iter().zip(held.model(p, f)).map(|(r, u)| r + u).collect())
+        .map(|(f, r)| {
+            r.iter()
+                .zip(held.model(p, &reading.shared, f))
+                .map(|(r, u)| r + u)
+                .collect()
+        })
         .collect();
     let columns = p.columns(&held.kind);
     let tracks: Vec<Vec<(f64, f64)>> = columns
@@ -1321,15 +1318,15 @@ fn retuned(
         .map(|path| pathed(p, &alone, path))
         .collect();
     let trajectories: Vec<Trajectory> = held.written.atom.levels().into_iter().cloned().collect();
+    let factor = p.factor(held.links(), &reading.shared);
     let score = |kind: &Kind| -> (f64, Held) {
         let templates = p.templates(kind);
-        let linked = (held.links(), &reading.shared[..]);
-        let written = rewrite(p, kind, key, trajectories.clone(), linked);
+        let written = rewrite(p, kind, key, trajectories.clone(), held.links());
         let delta = |f: usize| {
             let mut u = vec![0.0; p.range.len()];
             for ((after, before), g) in templates.iter().zip(&held.templates).zip(&written.gains) {
                 for ((u, x), y) in u.iter_mut().zip(after.at(f)).zip(before.at(f)) {
-                    *u += g[f] * (x - y);
+                    *u += factor[f] * g[f] * (x - y);
                 }
             }
             u
@@ -1357,7 +1354,7 @@ fn retuned(
         .into_iter()
         .map(|glide| {
             let kind = match held.kind.glided(glide, p.middle()) {
-                Kind::Partial { hz, glide } => tuned(p, hz, glide, &value, &held.written),
+                Kind::Partial { hz, glide } => tuned(p, hz, glide, &value, &held.written, &factor),
                 voice => refined(p, &others, &alone, voice, key).0,
             };
             score(&kind)
@@ -1373,12 +1370,18 @@ fn tuned(
     glide: Glide,
     value: &dyn Fn(&Kind) -> f64,
     written: &Written,
+    factor: &[f64],
 ) -> Kind {
     let bin = p.grid.rate / p.grid.n as f64;
     let h = bin * libm::cbrt(f64::EPSILON);
     let at = |hz: f64| Kind::Partial { hz, glide };
     let step = frequency_steps(p, &p.columns(&at(hz)), &written.levels).0;
-    let sigma = spread(p, (&at(hz - h), &at(hz + h)), h, &written.gains);
+    let heard: Vec<Vec<f64>> = written
+        .gains
+        .iter()
+        .map(|g| g.iter().zip(factor).map(|(g, m)| g * m).collect())
+        .collect();
+    let sigma = spread(p, (&at(hz - h), &at(hz + h)), h, &heard);
     let score = |hz: f64| value(&at(hz));
     let range = (hz - bin / 2.0, hz + bin / 2.0);
     at(golden(&score, range, step.min(sigma), (hz, score(hz))).0)
@@ -1691,10 +1694,10 @@ impl optimize::Problem for Problem {
     type Candidate = Candidate;
     type Reading = Reading;
 
-    fn missed(&self, kept: &[Held]) -> f64 {
+    fn missed(&self, kept: &[Held], shared: &[optimize::Shared]) -> f64 {
         0.5 * LOG2_E
             * self
-                .residual(kept)
+                .residual(kept, shared)
                 .iter()
                 .zip(&self.weight)
                 .map(|(r, w)| r.iter().zip(w).map(|(r, w)| w * r * r).sum::<f64>())
@@ -1724,7 +1727,7 @@ impl optimize::Problem for Problem {
     }
 
     fn read(&self, kept: &[Held], shared: &[optimize::Shared]) -> Reading {
-        let residual = self.residual(kept);
+        let residual = self.residual(kept, shared);
         let used: Vec<usize> = kept.iter().flat_map(|h| self.attached(h)).collect();
         let periodic = |s: &usize| shared[*s].kind == PERIODIC;
         let mut targets: Vec<usize> = (0..shared.len())
@@ -2100,7 +2103,7 @@ fn adding(p: &Problem, residual: &[Vec<f64>], kind: &Kind, key: u64) -> (f64, Wr
                 .collect()
         })
         .collect();
-    let written = write(p, kind, key, &fitted, (&[], &[]));
+    let written = write(p, kind, key, &fitted, &[]);
     // One column's drop in closed form, sum w (2 r g t - g^2 t^2) = 2 g pull - g^2 energy.
     let drop: f64 = match &moments[..] {
         [m] => m
@@ -2131,7 +2134,7 @@ fn adding(p: &Problem, residual: &[Vec<f64>], kind: &Kind, key: u64) -> (f64, Wr
 fn line(p: &Problem, state: &State, before: &State, start_bits: f64) -> Line {
     let grid = &p.grid;
     let residual_db = p
-        .residual(state.kept())
+        .residual(state.kept(), state.shared())
         .iter()
         .map(|r| {
             let mut full = vec![0.0; grid.bins()];
@@ -2267,7 +2270,7 @@ fn resumed(p: &Problem, from: &Resume, gain_db: f64) -> Result<State, CliError> 
             }
             false => kind,
         };
-        let written = rewrite(p, &kind, atom.key, trajectories, (&atom.links, &shared));
+        let written = rewrite(p, &kind, atom.key, trajectories, &atom.links);
         held.push(Held {
             templates: p.templates(&kind),
             kind,
@@ -2426,7 +2429,7 @@ pub async fn fit(
         &mut heard,
     )
     .await;
-    let model = full(&p, &p.model(state.kept()));
+    let model = full(&p, &p.model(state.kept(), state.shared()));
     Ok(Fit {
         clip,
         atoms: atoms(state.kept()),

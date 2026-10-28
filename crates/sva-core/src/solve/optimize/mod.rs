@@ -16,7 +16,7 @@ pub trait Problem: Sync + Sized {
     type Candidate: Send;
     type Reading: Sync;
 
-    fn missed(&self, kept: &[Self::Thing]) -> f64;
+    fn missed(&self, kept: &[Self::Thing], shared: &[Shared]) -> f64;
     fn price(&self, thing: &Self::Thing) -> Price;
     /// The shared variables `thing` references.
     fn attached(&self, thing: &Self::Thing) -> Vec<usize>;
@@ -59,7 +59,7 @@ pub struct Shared {
 }
 
 /// An add beside what its fit also sets: shared variables' numbers, and kept things other than
-/// it in their attachment numbers, every thing attached to a variable set among them.
+/// it in their attachment numbers.
 pub struct Added<P: Problem> {
     pub draft: P::Draft,
     pub shared: Vec<(usize, Shared)>,
@@ -325,7 +325,7 @@ impl<P: Problem> State<P> {
             .collect();
         let prices: Vec<Price> = self.kept.iter().map(|t| problem.price(t)).collect();
         self.ledger = Ledger::of(&prices, uses, shared, spares.len());
-        self.missed_bits = problem.missed(&self.kept);
+        self.missed_bits = problem.missed(&self.kept, &self.shared);
     }
 }
 
@@ -433,14 +433,6 @@ async fn pass<P: Problem>(
     };
     let moved = match made {
         Edit::Add((thing, shared, others)) => {
-            let set: Vec<usize> = shared.iter().map(|(s, _)| *s).collect();
-            assert!(
-                state.kept.iter().enumerate().all(|(a, t)| {
-                    !problem.attached(t).iter().any(|s| set.contains(s))
-                        || others.iter().any(|(o, _)| *o == a)
-                }),
-                "every thing attached to a variable set is set beside it"
-            );
             for (a, other) in others {
                 next.kept[a] = other;
             }

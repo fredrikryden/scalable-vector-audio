@@ -16,30 +16,32 @@ impl Problem {
     /// The power factor per frame `links` put on an atom's level, as `MODEL` states, each
     /// link indexing `shared`.
     pub(super) fn factor(&self, links: &[Link], shared: &[optimize::Shared]) -> Vec<f64> {
-        self.times
-            .iter()
-            .map(|t| {
-                links
-                    .iter()
-                    .inspect(|link| {
-                        assert_eq!(link.kind as usize, shared[link.to].kind, "a link's kind");
-                    })
-                    .map(|link| match link.kind {
-                        SharedKind::Periodic => {
-                            let (rate, phase) =
-                                (shared[link.to].numbers[0], shared[link.to].numbers[1]);
-                            self.kernel
-                                .iter()
-                                .map(|(at, share)| {
-                                    let turn = TAU * rate * (t + at) + phase;
-                                    share * libm::pow(10.0, link.own[0] * libm::sin(turn) / 10.0)
-                                })
-                                .sum::<f64>()
-                        }
-                    })
-                    .product()
-            })
+        (0..self.times.len())
+            .map(|f| self.factor_at(links, shared, f))
             .collect()
+    }
+
+    /// That factor at frame `f`.
+    pub(super) fn factor_at(&self, links: &[Link], shared: &[optimize::Shared], f: usize) -> f64 {
+        let t = self.times[f];
+        links
+            .iter()
+            .inspect(|link| {
+                assert_eq!(link.kind as usize, shared[link.to].kind, "a link's kind");
+            })
+            .map(|link| match link.kind {
+                SharedKind::Periodic => {
+                    let (rate, phase) = (shared[link.to].numbers[0], shared[link.to].numbers[1]);
+                    self.kernel
+                        .iter()
+                        .map(|(at, share)| {
+                            let turn = TAU * rate * (t + at) + phase;
+                            share * libm::pow(10.0, link.own[0] * libm::sin(turn) / 10.0)
+                        })
+                        .sum::<f64>()
+                }
+            })
+            .product()
     }
 }
 
@@ -265,7 +267,7 @@ pub(super) fn attach(
     for a in &old {
         for (f, r) in back.iter_mut().enumerate() {
             r.iter_mut()
-                .zip(kept[*a].model(p, f))
+                .zip(kept[*a].model(p, &reading.shared, f))
                 .for_each(|(r, u)| *r += u);
         }
     }
@@ -324,7 +326,7 @@ pub(super) fn attach(
         let new = Held {
             kind: kind.clone(),
             templates: templates.clone(),
-            written: write(p, kind, key, &fitted, (&links, &after)),
+            written: write(p, kind, key, &fitted, &links),
         };
         let others: Vec<(usize, Held)> = old
             .iter()
@@ -340,16 +342,16 @@ pub(super) fn attach(
                     .collect();
                 let trajectories = held.written.atom.levels().into_iter().cloned().collect();
                 let key = held.written.atom.key;
-                let written = rewrite(p, &held.kind, key, trajectories, (&links, &after));
+                let written = rewrite(p, &held.kind, key, trajectories, &links);
                 (*a, rewritten(held, written))
             })
             .collect();
         let delta = |f: usize| {
-            let mut u = new.model(p, f);
+            let mut u = new.model(p, &after, f);
             for (a, held) in &others {
-                let after = held.model(p, f);
-                let before = kept[*a].model(p, f);
-                for ((u, x), y) in u.iter_mut().zip(after).zip(before) {
+                let now = held.model(p, &after, f);
+                let before = kept[*a].model(p, &reading.shared, f);
+                for ((u, x), y) in u.iter_mut().zip(now).zip(before) {
                     *u += x - y;
                 }
             }
