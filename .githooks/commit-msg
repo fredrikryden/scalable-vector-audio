@@ -20,6 +20,7 @@ git agent-verdict "$1" standards --model sonnet \
   --rule "An analysis that follows refs is a per-node fold over the node graph, stored per node; never a recursion per path." \
   --rule $'The solve verb has no tuning constants.\nThe following tuning variables are exempt:\n- the stopping threshold on the relative improvement of the cost per pass' \
   --rule "State that can disagree is refactored to one canonical owner and derived, never kept in sync; a cache is still compliant with this rule if every source change evicts it." \
+  --rule "The solver's optimizer module imports nothing from the solver's sound layer or from any audio crate." \
   --path .
 
 git agent-verdict "$1" standards --model sonnet \
