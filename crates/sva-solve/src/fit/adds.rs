@@ -69,7 +69,7 @@ pub(super) fn spread(
     let (lo, hi): (Vec<Template>, Vec<Template>) = (p.templates(below), p.templates(above));
     let mut du: Vec<Vec<f64>> = (0..p.frames())
         .map(|f| {
-            (0..p.range.len())
+            (0..p.power[f].len())
                 .map(|b| {
                     lo.iter()
                         .zip(&hi)
@@ -97,13 +97,13 @@ pub(super) fn refined(
     (proposal, step): (Proposal, f64),
     key: u64,
 ) -> (Proposal, f64) {
-    let bin = p.grid.rate / p.grid.n as f64;
     let score = |s: &Proposal| scored(p, ledger, residual, (s, step), key).0;
     let (best, written) = scored(p, ledger, residual, (&proposal, step), key);
     let glide = proposal.sound.glide();
     let partial_at = |hz: f64| Proposal::one(Sound::Partial { hz, glide });
     // Harmonic `c` at `hz` refined as a partial: its Hz, score and standard deviation.
     let partial = |c: usize, hz: f64, held: f64| {
+        let bin = p.at_hz(hz).bin_hz();
         let h = bin * libm::cbrt(f64::EPSILON);
         let near = (&partial_at(hz - h), &partial_at(hz + h));
         let sigma = spread(p, near, h, &written.gains[c..=c], (&[], &[]));
@@ -155,8 +155,7 @@ fn start(track: &[(f64, f64)], rate: f64) -> Option<f64> {
 }
 
 pub(super) fn rate_floor(p: &Problem, columns: &Columns, levels: &[Vec<f64>]) -> f64 {
-    let span = p.times.last().copied().unwrap_or(0.0) - p.times.first().copied().unwrap_or(0.0);
-    frequency_steps(p, columns, levels).0 / columns.starts[0] / span
+    frequency_steps(p, columns, levels).0 / columns.starts[0] / p.span()
 }
 
 /// The glide `tracks` of `(t, ln hz)` give, as `MODEL` states: one slope of ln Hz on time by
@@ -213,7 +212,7 @@ fn gliding(
     p: &Problem,
     ledger: &Ledger,
     residual: &[Vec<f64>],
-    mean: &[f64],
+    mean: &[Vec<f64>],
     proposal: &Proposal,
     key: u64,
 ) -> Option<(Proposal, f64)> {
@@ -308,7 +307,7 @@ pub(super) fn adding(
             .sum(),
         _ => (0..p.frames())
             .map(|f| {
-                let mut u = vec![0.0; p.range.len()];
+                let mut u = vec![0.0; p.power[f].len()];
                 for (t, g) in templates.iter().zip(&written.gains) {
                     for (u, t) in u.iter_mut().zip(t.at(f)) {
                         *u += g[f] * t;

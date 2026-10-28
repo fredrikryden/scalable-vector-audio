@@ -5,8 +5,8 @@ use std::num::NonZeroUsize;
 
 use sva_core::CliError;
 use sva_engine::Never;
-use sva_solve::fit::{Action, Fit, Line, Options, Resume, SPL_DB, Tweak, fit};
-use sva_solve::report::progress;
+use sva_solve::fit::{Action, Fit, Line, Options, Resume, SPL_DB, Tweak, cited, fit};
+use sva_solve::report::{answer, progress};
 use sva_solve::sources::{Sound, Source, files_at};
 use sva_solve::{End, TOLERANCE};
 
@@ -783,4 +783,93 @@ fn a_triad_moving_at_one_rate_shares_one_periodic_level_at_each_notes_depth() {
             );
         }
     }
+}
+
+/// FNV-1a over `text`.
+fn fnv(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// A voice, a partial, a rising sine and a noise band at the default windows: its lines, its
+/// answer with its files, and both grids sounded hash to the bits 6eb8f78's one grid gave.
+#[test]
+fn the_default_windows_fit_as_the_one_window_before_them() {
+    let mut parts = voice(220.0, 0.0, 6, 0.4);
+    parts.push((1500.0, 0.05));
+    let rise = libm::log(2.0) / 0.3;
+    let samples: Vec<f64> = tones(&parts)
+        .iter()
+        .zip(band(4000.0, 8000.0, 0.3))
+        .enumerate()
+        .map(|(n, (a, b))| {
+            let phase = TAU * 600.0 * (sva_formula::exp(rise * t(n)) - 1.0) / rise;
+            a + b + 0.3 * libm::sin(phase)
+        })
+        .collect();
+    let (fit, lines) = fitted(&samples);
+    let files = files_at(&fit.sources, &fit.shared, &fit.clip, fit.gain_db);
+    let lines: Vec<String> = lines.iter().map(progress).collect();
+    let grids: Vec<String> = [&fit.clip_grid, &fit.fit_grid]
+        .iter()
+        .map(|g| format!("{:?}", g.sounded(fit.clip.len)))
+        .collect();
+    let parts = [
+        ("progress lines", lines.join("\n"), 0x8dc4_eb96_9ae1_3fba),
+        (
+            "answer",
+            answer(&fit, 0.0, &[], Some(&files)),
+            0x024b_1a69_ed2e_8fa0,
+        ),
+        ("sounded grids", grids.join("\n"), 0x67a0_db13_5a8d_8b0a),
+    ];
+    for (part, text, held) in parts {
+        assert_eq!(fnv(&text), held, "the {part} moved from 6eb8f78's:\n{text}");
+    }
+}
+
+/// C3, E4 and G5 over 2 s at 48 kHz, each level moving by its depth in dB (2, 3, 4) times one
+/// pulse `sin(2 pi 5 t) + 0.5 sin(2 pi 10 t + 1)`, fitted on the cited ladder: one periodic
+/// level near 5 Hz holds harmonic 2 near half the first. Each note is a main lobe from the rest.
+#[test]
+fn a_triad_on_a_two_harmonic_pulse_keeps_its_second_harmonic_at_its_ratio() {
+    const RATE: u32 = 48_000;
+    let notes = [(130.81, 2.0), (329.63, 3.0), (783.99, 4.0)];
+    let pulse = |t: f64| libm::sin(TAU * 5.0 * t) + 0.5 * libm::sin(TAU * 10.0 * t + 1.0);
+    let samples: Vec<f64> = (0..2 * RATE as usize)
+        .map(|n| {
+            let t = n as f64 / f64::from(RATE);
+            notes
+                .iter()
+                .enumerate()
+                .map(|(i, (hz, depth))| {
+                    let level = libm::pow(10.0, depth * pulse(t) / 20.0);
+                    0.05 * level * libm::sin(TAU * hz * t + hashed(i as u64))
+                })
+                .sum()
+        })
+        .collect();
+    let options = Options {
+        windows: Some(cited()),
+        ..Options::default()
+    };
+    let fit = now(fit(
+        &samples,
+        RATE,
+        SPL_DB,
+        &options,
+        &mut |_| {},
+        &Never,
+        &|| 0.0,
+    ))
+    .expect("the clip fits");
+    let [(_, shared)] = fit.shared.as_slice() else {
+        panic!("{:?} {:?}", fit.shared, fit.sources);
+    };
+    let [rate, _, a2, ..] = shared.numbers[..] else {
+        panic!("no second harmonic: {:?}", shared.numbers);
+    };
+    assert!((rate - 5.0).abs() < 0.1, "{rate} Hz");
+    assert!((a2 - 0.5).abs() < 0.05, "a2 {a2}");
 }

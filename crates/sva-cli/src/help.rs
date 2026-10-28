@@ -29,6 +29,7 @@ pub fn help_text() -> String {
     let unreadable = crate::recording::UNREADABLE;
     let (spl, out) = (sva_solve::fit::SPL_DB, crate::args::OUT);
     let tolerance = sva_solve::TOLERANCE;
+    let cited = crate::args::spelled(&sva_solve::fit::cited());
     format!(
         r#"USAGE:
   sva-cli (render | analyze | solve | lint | trace | builtins | outline | new) [arguments]
@@ -371,7 +372,7 @@ REPRESENTATIONS:
 
 SOLVE:
   sva-cli solve <recording> [--spl <dB>] [--tolerance <share>] [--from <dir>]
-    [--out <dir>] [--confirm] [--cache <path|none>]
+    [--windows <bands>] [--out <dir>] [--confirm] [--cache <path|none>]
 
   Fits one sound of sources (partials, harmonic voices, noise bands and shaped
   noises, each spanning the clip, only its level moving) to a recording, read
@@ -382,7 +383,7 @@ SOLVE:
   residual at its best level (a partial at each peak, a voice at each
   fundamental a harmonic sieve finds, its stretch B fitted, a noise band per
   octave band, and one shaped noise: a gain per octave band times one envelope
-  over time), or adjusts a kept source's level per 48 ms frame by the exact best
+  over time), or adjusts a kept source's level per frame by the exact best
   amount for it alone, up or down, to nought removing it. It stops where no
   move shortens it, so the description length falls at every pass, or after
   the first pass whose drop is no more than `--tolerance` (default
@@ -397,11 +398,23 @@ SOLVE:
   A recording of no sample refuses as `solve.empty_clip`, one holding a
   sample not finite as `solve.not_finite`, one whose rate puts no bin in the
   feasible set as `solve.rate_too_low`.
+  `--windows <secs>:<below_hz>,...,<secs>` reads each frequency band with its
+  own Hann window on a 1 ms hop, pooled to frames of three quarter-windows:
+  each band reads the Hz from the edge before it (0 for the first) up to its
+  own, the last on to the top, naming none. Without it one band reads
+  the clip at 64 ms. The hearing model's ladder:
+    {cited}
+  A window not positive or under two samples at the fit's rate refuses as
+  `solve.window_not_positive`, edges that do not rise from 0 or an edge on the
+  last band as `solve.windows_out_of_order`, a window longer than the clip as
+  `solve.window_too_long`, a list naming no band as `solve.no_window`. A
+  source's level curve follows the frames of the band it lies in; `--from`
+  goes on from a fit at other windows.
   `--spl` is a full-scale sine's level in dB SPL (default {spl}). Under `<out>`
   (default `{out}`) it writes `pass-001.wav` and on (the sources each pass
   leaves, rendered as it ends), the composition (its levels thinned at the
   level JND), `final.wav` (its render), and `clip-grid.wav` and
-  `fit-grid.wav`, the clip's and the fit's octave bands by 48 ms frames sounded
+  `fit-grid.wav`, the clip's and the fit's octave bands by their frames sounded
   alike; an out directory already holding files refuses as a conflict unless
   `--confirm`; a resumed fit there keeps the pass renders up to its own.
   Every pass render and `final.wav` read through one store, `--cache` as

@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use sva_engine::hearing::{cam, cam_hz};
 
-use super::problem::Problem;
+use super::problem::{Problem, View};
 use super::render::Proposal;
 use super::render::db;
 use crate::analysis::floor_db;
@@ -20,8 +20,12 @@ pub(super) struct Lobes {
 }
 
 impl Lobes {
+    pub(super) fn half(grid: &Grid) -> usize {
+        (2 * grid.n).div_ceil(grid.long)
+    }
+
     pub(super) fn of(grid: &Grid, range: &Range<usize>) -> Lobes {
-        let half = (2 * grid.n).div_ceil(grid.long);
+        let half = Lobes::half(grid);
         let count = range.len();
         let windows = (0..count)
             .map(|i| {
@@ -97,7 +101,7 @@ impl Lobes {
     }
 }
 
-pub(super) fn qifft(p: &Problem, power: &[f64], i: usize) -> (f64, f64) {
+pub(super) fn qifft(view: &View, power: &[f64], i: usize) -> (f64, f64) {
     let dbs = |v: f64| db(v.max(f64::MIN_POSITIVE));
     let (a, c, e) = (dbs(power[i - 1]), dbs(power[i]), dbs(power[i + 1]));
     let curve = a - 2.0 * c + e;
@@ -105,32 +109,33 @@ pub(super) fn qifft(p: &Problem, power: &[f64], i: usize) -> (f64, f64) {
         true => 0.5 * (a - e) / curve,
         false => 0.0,
     };
-    let hz = p.grid.hz(p.range.start + i) + shift * p.grid.rate / p.grid.n as f64;
+    let hz = view.grid.hz(view.range.start + i) + shift * view.bin_hz();
     let peak = libm::pow(10.0, (c - 0.25 * (a - e) * shift) / 10.0);
     (
         hz,
-        20.0 * libm::log10(2.0 * libm::sqrt(peak) / p.grid.sum_w),
+        20.0 * libm::log10(2.0 * libm::sqrt(peak) / view.grid.sum_w),
     )
 }
 
-fn maxima(p: &Problem, power: &[f64], bins: Range<usize>) -> Vec<(f64, f64)> {
+fn maxima(p: &Problem, view: &View, power: &[f64], bins: Range<usize>) -> Vec<(f64, f64)> {
     let bins = bins.start.max(1)..bins.end.min(power.len().saturating_sub(1));
     bins.filter(|i| power[*i] > power[i - 1] && power[*i] >= power[i + 1])
-        .map(|i| (qifft(p, power, i), power[i]))
+        .map(|i| (qifft(view, power, i), power[i]))
         .filter(|((hz, level), _)| *level > floor_db(*hz, p.spl_db))
         .map(|((hz, _), power)| (hz, power))
         .collect()
 }
 
-fn bins_of(p: &Problem, (lo, hi): (f64, f64)) -> Range<usize> {
-    let local = |hz: f64| p.grid.bin_of(hz) - p.range.start as f64;
+fn bins_of(view: &View, (lo, hi): (f64, f64)) -> Range<usize> {
+    let local = |hz: f64| view.grid.bin_of(hz) - view.range.start as f64;
     let first = libm::ceil(local(lo)).max(0.0) as usize;
     let last = libm::floor(local(hi)).max(-1.0) + 1.0;
-    first..(last.max(0.0) as usize).min(p.range.len())
+    first..(last.max(0.0) as usize).min(view.range.len())
 }
 
-fn lobe_hz(p: &Problem) -> f64 {
-    p.lobes.half as f64 * p.grid.rate / p.grid.n as f64
+fn lobe_hz(p: &Problem, hz: f64) -> f64 {
+    let view = p.at_hz(hz);
+    view.lobes.half as f64 * view.bin_hz()
 }
 
 pub(super) fn lines(p: &Problem, proposal: &Proposal) -> Vec<Vec<f64>> {
@@ -141,35 +146,36 @@ pub(super) fn lines(p: &Problem, proposal: &Proposal) -> Vec<Vec<f64>> {
 }
 
 pub(super) fn moves(p: &Problem, proposal: &Proposal) -> bool {
-    let lobe = lobe_hz(p);
     lines(p, proposal).iter().any(|path| {
         let (lo, hi) = path
             .iter()
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), hz| {
                 (lo.min(*hz), hi.max(*hz))
             });
-        hi - lo >= lobe
+        hi - lo >= lobe_hz(p, lo)
     })
 }
 
 /// Whether lines of `a` and `b` lie too near for their powers to add, as `MODEL` states.
 pub(super) fn collide(p: &Problem, a: &[Vec<f64>], b: &[Vec<f64>]) -> bool {
-    let lobe = lobe_hz(p);
     a.iter().any(|x| {
-        b.iter()
-            .any(|y| x.iter().zip(y).any(|(x, y)| (x - y).abs() < lobe))
+        b.iter().any(|y| {
+            x.iter()
+                .zip(y)
+                .any(|(x, y)| (x - y).abs() < lobe_hz(p, *x).max(lobe_hz(p, *y)))
+        })
     })
 }
 
 /// The peak nearest each frame's Hz on `path` in Cam within a main lobe of it, as
-/// `(t, ln hz)`.
+/// `(t, ln hz)`, in frames whose view reads it.
 pub(super) fn pathed(p: &Problem, power: &[Vec<f64>], path: &[f64]) -> Vec<(f64, f64)> {
-    let lobe = lobe_hz(p);
     path.iter()
         .enumerate()
+        .filter(|(f, hz)| p.view(*f).holds(**hz))
         .filter_map(|(f, hz)| {
-            let target = cam(*hz);
-            maxima(p, &power[f], bins_of(p, (hz - lobe, hz + lobe)))
+            let (view, lobe, target) = (p.view(f), lobe_hz(p, *hz), cam(*hz));
+            maxima(p, view, &power[f], bins_of(view, (hz - lobe, hz + lobe)))
                 .into_iter()
                 .map(|(h, _)| h)
                 .min_by(|a, b| {
@@ -182,11 +188,11 @@ pub(super) fn pathed(p: &Problem, power: &[Vec<f64>], path: &[f64]) -> Vec<(f64,
         .collect()
 }
 
-/// The basin of `mean` about the bin nearest `hz`: from the local maximum it climbs to, down
-/// to the local minimum on each side.
-fn basin(p: &Problem, mean: &[f64], hz: f64) -> Range<usize> {
-    let bin = libm::round(p.grid.bin_of(hz)) as usize;
-    let mut i = bin.clamp(p.range.start, p.range.end - 1) - p.range.start;
+/// The basin of `view`'s `mean` about the bin nearest `hz`: from the local maximum it climbs to,
+/// down to the local minimum on each side.
+fn basin(view: &View, mean: &[f64], hz: f64) -> Range<usize> {
+    let bin = libm::round(view.grid.bin_of(hz)) as usize;
+    let mut i = bin.clamp(view.range.start, view.range.end - 1) - view.range.start;
     loop {
         let up = [i.checked_sub(1), (i + 1 < mean.len()).then_some(i + 1)]
             .into_iter()
@@ -208,13 +214,21 @@ fn basin(p: &Problem, mean: &[f64], hz: f64) -> Range<usize> {
     lo..hi + 1
 }
 
-/// The peak track a candidate at `hz` holds through `power`, as `MODEL` states: in each frame
-/// the highest local maximum over its floor in the basin of `mean` about `hz`, as `(t, ln hz)`.
-pub(super) fn searched(p: &Problem, power: &[Vec<f64>], mean: &[f64], hz: f64) -> Vec<(f64, f64)> {
-    let bins = basin(p, mean, hz);
-    (0..p.frames())
+/// The peak track a candidate at `hz` holds through `power`, as `MODEL` states: in each frame of
+/// the view reading `hz` the highest local maximum over its floor in that basin, `(t, ln hz)`.
+pub(super) fn searched(
+    p: &Problem,
+    power: &[Vec<f64>],
+    mean: &[Vec<f64>],
+    hz: f64,
+) -> Vec<(f64, f64)> {
+    let v = p.reading(hz);
+    let view = &p.views[v];
+    let bins = basin(view, &mean[v], hz);
+    view.frames
+        .clone()
         .filter_map(|f| {
-            maxima(p, &power[f], bins.clone())
+            maxima(p, view, &power[f], bins.clone())
                 .into_iter()
                 .max_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(h, _)| (p.times[f], libm::log(h)))

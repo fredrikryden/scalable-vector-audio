@@ -16,9 +16,7 @@ use crate::sources::{Link, Sound, Trajectory};
 /// The DL change replacing kept source `a` by `after`, or removing it where `None`, each shared
 /// variable it references repriced.
 fn swapped(
-    p: &Problem,
-    kept: &[Held],
-    ledger: &Ledger,
+    (p, kept, ledger, shared): (&Problem, &[Held], &Ledger, &[optimize::Shared]),
     a: usize,
     after: Option<&Written>,
     missed: f64,
@@ -30,7 +28,7 @@ fn swapped(
     let prices: Vec<(usize, Price)> = kept[a]
         .links()
         .iter()
-        .map(|l| (l.to, shared::price(p, rest(), l.kind, l.to)))
+        .map(|l| (l.to, shared::price(p, rest(), &shared[l.to], l.to)))
         .collect();
     let uses: Vec<usize> =
         after.map_or_else(Vec::new, |w| w.source.links.iter().map(|l| l.to).collect());
@@ -62,9 +60,7 @@ fn scaled(
     });
     // Removing it changes the residual by +u: sum w (u^2 + 2 r u).
     let gone = swapped(
-        p,
-        kept,
-        ledger,
+        (p, kept, ledger, &reading.shared),
         a,
         None,
         0.5 * LOG2_E * (energy + 2.0 * pull),
@@ -96,7 +92,12 @@ fn scaled(
     // The residual changes by -(gain - 1) u: sum w (d^2 u^2 - 2 d r u).
     let d = gain - 1.0;
     let missed = 0.5 * LOG2_E * (d * d * energy - 2.0 * d * pull);
-    let rescaled = swapped(p, kept, ledger, a, Some(&written), missed);
+    let rescaled = swapped(
+        (p, kept, ledger, &reading.shared),
+        a,
+        Some(&written),
+        missed,
+    );
     match gone < rescaled {
         true => (gone, Tweak::Remove, None),
         false => (
@@ -112,7 +113,7 @@ fn heard(p: &Problem, held: &Held, shared: &[optimize::Shared], c: usize) -> Tem
     let t = &held.templates[c];
     let mut each: Vec<Vec<f64>> = (0..p.frames()).map(|f| t.at(f).to_vec()).collect();
     linked(p, held.links(), shared, &mut each);
-    Template(each)
+    p.framed(each)
 }
 
 /// Source `a`'s rethin, as `MODEL` states: its DL change beside the source it leaves.
@@ -153,7 +154,12 @@ fn rethinned(
     let mut delta = p.summed(&held.templates, &|c, f| written.gains[c][f] - before[c][f]);
     linked(p, held.links(), &reading.shared, &mut delta);
     let missed = 0.5 * LOG2_E * change(p, residual, &delta);
-    let change = swapped(p, kept, ledger, a, Some(&written), missed);
+    let change = swapped(
+        (p, kept, ledger, &reading.shared),
+        a,
+        Some(&written),
+        missed,
+    );
     (change, Held::new(p, held.templates.clone(), written))
 }
 
@@ -189,7 +195,7 @@ fn retuned(
         let written = rewrite(p, (proposal, step), key, trajectories.clone(), links);
         let mut delta: Vec<Vec<f64>> = (0..p.frames())
             .map(|f| {
-                let mut u = vec![0.0; p.range.len()];
+                let mut u = vec![0.0; p.power[f].len()];
                 for ((after, before), g) in
                     templates.iter().zip(&held.templates).zip(&written.gains)
                 {
@@ -202,7 +208,12 @@ fn retuned(
             .collect();
         linked(p, links, shared, &mut delta);
         let missed = 0.5 * LOG2_E * change(p, residual, &delta);
-        let change = swapped(p, kept, ledger, a, Some(&written), missed);
+        let change = swapped(
+            (p, kept, ledger, &reading.shared),
+            a,
+            Some(&written),
+            missed,
+        );
         (change, written, templates)
     };
     let value = |proposal: &Proposal, step: f64| score(proposal, step).0;
@@ -243,7 +254,7 @@ fn tuned(
     held: &Held,
     shared: &[optimize::Shared],
 ) -> Proposal {
-    let bin = p.grid.rate / p.grid.n as f64;
+    let bin = p.at_hz(hz).bin_hz();
     let h = bin * libm::cbrt(f64::EPSILON);
     let at = |hz: f64| {
         Proposal::one(Sound::Partial {

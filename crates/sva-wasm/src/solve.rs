@@ -1,10 +1,10 @@
-// Concern: a solve's JS shapes and run over a page's clip, fresh or resumed, a composition per pass | Non-concern: the method's binding (lib.rs) | IO: (clip, options) -> `data`
+// Concern: a solve's JS shapes and run over a page's clip, fresh or resumed, at its windows, a composition per pass | Non-concern: the method's binding (lib.rs) | IO: (clip, options) -> `data`
 
 use std::pin::Pin;
 
 use sva_core::{Abandon, success_envelope};
 use sva_solve::TOLERANCE;
-use sva_solve::fit::{Options, Resume, SPL_DB, fit, mono};
+use sva_solve::fit::{Options, Resume, SPL_DB, Window, cited, fit, mono};
 use sva_solve::report::{answer, composition, progress};
 use sva_solve::sources::files_at;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -27,7 +27,11 @@ export interface SolveClip {
  * larger of its value before and after (and 1), `ended` then `"tolerance"`; default 0.001, a
  * resumed fit's 0, so it passes on till no move lowers it or the page stops it;
  * `from`, the fit to continue, as `--from`: a previous answer's `data` as it stands, or its
- * files and the passes that made them, the pass numbers going on from there;
+ * files and the passes that made them, the pass numbers going on from there, at any windows;
+ * `windows`, the analysis bands low to high, as `--windows`: each reads the Hz from the edge
+ * before it (0 for the first) up to its `below_hz` with a Hann window `secs` long, the last,
+ * naming none, on to the top; default one band at 64 ms; `solveWindows()` the hearing
+ * model's ladder;
  * `progress` hears each line the CLI prints on stderr, one per pass, each beside the
  * composition that pass leaves; `signal`, read before each pass and between its moves once
  * the page has had its turn: aborted, the fit ends there, the pass under way dropped,
@@ -37,8 +41,14 @@ export interface SolveOptions {
     spl?: number;
     tolerance?: number;
     from?: SolveFrom;
+    windows?: SolveWindow[];
     progress?: (line: SolveProgress) => void;
     signal?: AbortSignal;
+}
+/** One band of a solve's analysis. */
+export interface SolveWindow {
+    below_hz?: number;
+    secs: number;
 }
 /** One file of a composition. */
 export interface SolveFile {
@@ -71,13 +81,15 @@ export interface SolveSource {
     /** A shaped noise's bands, each its gain in dB over its one shared level. */
     bands: { lo_hz: number; hi_hz: number; gain_db: number }[] | null;
 }
-/** A shared variable the sources reference: a periodic level, its rate in Hz and phase shared,
- * each source's level moved by its own `depth` in dB times sin(2 pi rate t + phase). */
+/** A shared variable the sources reference: a periodic level, its rate in Hz, phase and each
+ * harmonic k's `a{k}` and `phi{k}` shared, each source's level moved by its own `depth` in dB
+ * times sin(2 pi rate t + phase) + a{k} sin(2 pi k rate t + phi{k}) for each k from 2. */
 export interface SolveShared {
     id: number;
     kind: "periodic";
     rate: number;
     phase: number;
+    [harmonic: `a${number}` | `phi${number}`]: number;
     sources: { key: number; depth: number }[];
 }
 /**
@@ -182,6 +194,50 @@ fn get(object: &JsValue, key: &str) -> JsValue {
     js_sys::Reflect::get(object, &key.into()).unwrap_or(JsValue::UNDEFINED)
 }
 
+/// The hearing model's ladder of windows, each band as `SolveWindow` states.
+#[wasm_bindgen(js_name = solveWindows, unchecked_return_type = "SolveWindow[]")]
+pub fn solve_windows() -> js_sys::Array {
+    cited()
+        .iter()
+        .map(|w| {
+            let band = js_sys::Object::new();
+            if let Some(hz) = w.below_hz {
+                let _ = js_sys::Reflect::set(&band, &"below_hz".into(), &hz.into());
+            }
+            let _ = js_sys::Reflect::set(&band, &"secs".into(), &w.secs.into());
+            JsValue::from(band)
+        })
+        .collect()
+}
+
+/// The bands `windows` names, as `SolveWindow` states.
+fn windows(windows: &JsValue) -> Result<Vec<Window>, JsValue> {
+    let help = "pass `[{ below_hz, secs }, ..., { secs }]`, as `solveWindows()` gives";
+    if !js_sys::Array::is_array(windows) {
+        return Err(refuse("`windows` is no list of bands".into(), help));
+    }
+    js_sys::Array::from(windows)
+        .iter()
+        .map(|band| {
+            let below = get(&band, "below_hz");
+            let below_hz = match below.is_undefined() {
+                true => None,
+                false => Some(below.as_f64()?),
+            };
+            Some(Window {
+                below_hz,
+                secs: get(&band, "secs").as_f64()?,
+            })
+        })
+        .collect::<Option<_>>()
+        .ok_or_else(|| {
+            refuse(
+                "a band in `windows` is no `{ below_hz, secs }`".into(),
+                help,
+            )
+        })
+}
+
 /// The fit `from` names, as `SolveFrom` states.
 fn resume(from: &JsValue) -> Result<Resume, JsValue> {
     let help = "pass a previous answer's `data`, or `{ files, passes }`";
@@ -261,9 +317,14 @@ pub(crate) async fn solved(clip: &JsValue, options_js: &JsValue) -> Result<JsVal
                 )
             })?,
     };
+    let windows_js = get(options_js, "windows");
     let options = Options {
         tolerance,
         from,
+        windows: match windows_js.is_undefined() {
+            true => None,
+            false => Some(windows(&windows_js)?),
+        },
         threads: crate::threads::limit(None),
     };
     let hear = js_sys::Reflect::get(options_js, &"progress".into())

@@ -18,8 +18,8 @@ pub const MODEL: &str = "B(x) in bits: the source count n by Rissanen's (1983, d
      as log2 c + log*(0 + 1), a harmonic's H >= 1 as log2 c + log*(H), a shaped noise's \
      band count n >= 1 as log2 c + log*(n); a number by a uniform \
      code over its range in cells of its precision delta, log2 max(1, ceil(range/delta)); a \
-     level or level deviation at delta = (sum_m (h/T_J) DL_J(SL_m)^-2)^-1/2 and a \
-     partial's frequency at the same form in Wier's DLF(F_m, SL_m) \
+     level or level deviation at delta = (sum_m (h_m/T_J) DL_J(SL_m)^-2)^-1/2, h_m frame m's \
+     length, and a partial's frequency at the same form in Wier's DLF(F_m, SL_m) \
      over T_W, multiple looks (Viemeister and Wakefield 1991, doi 10.1121/1.401953) over the \
      frames m the number moves, a frame with SL_m <= 0 no look; every other number at the \
      precision its caller states (fit/); a stretch from 0 to where the highest harmonic \
@@ -29,33 +29,32 @@ pub const MODEL: &str = "B(x) in bits: the source count n by Rissanen's (1983, d
      a level deviation's; which shared variable, if any, a source references the ledger's \
      (optimize/)";
 
-/// One frame a number moves: the source's own excitation peak over threshold in dB, and its
-/// trajectory's frequency there.
+/// One frame a number moves: the source's own excitation peak over threshold in dB, its
+/// trajectory's frequency there, and the frame's length.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Look {
     pub(crate) sl_db: f64,
     pub(crate) hz: f64,
+    pub(crate) secs: f64,
 }
 
-fn looked(hop_secs: f64, tone_secs: f64, looks: &[Look], jnd: impl Fn(&Look) -> f64) -> f64 {
+fn looked(tone_secs: f64, looks: &[Look], jnd: impl Fn(&Look) -> f64) -> f64 {
     let information = looks
         .iter()
         .filter(|look| look.sl_db > 0.0)
         .fold(0.0, |sum, look| {
             let step = jnd(look);
-            sum + hop_secs / tone_secs / (step * step)
+            sum + look.secs / tone_secs / (step * step)
         });
     1.0 / libm::sqrt(information)
 }
 
-pub(crate) fn level_delta(hop_secs: f64, looks: &[Look]) -> f64 {
-    looked(hop_secs, JESTEADT_TONE_SECS, looks, |look| {
-        level_jnd_db(look.sl_db)
-    })
+pub(crate) fn level_delta(looks: &[Look]) -> f64 {
+    looked(JESTEADT_TONE_SECS, looks, |look| level_jnd_db(look.sl_db))
 }
 
-pub(crate) fn frequency_delta(hop_secs: f64, looks: &[Look]) -> f64 {
-    looked(hop_secs, WIER_TONE_SECS, looks, |look| {
+pub(crate) fn frequency_delta(looks: &[Look]) -> f64 {
+    looked(WIER_TONE_SECS, looks, |look| {
         frequency_jnd_hz(look.hz, look.sl_db)
     })
 }
@@ -321,12 +320,13 @@ mod tests {
         let looks = vec![
             Look {
                 sl_db: 40.0,
-                hz: 1000.0
+                hz: 1000.0,
+                secs: hop,
             };
             500
         ];
-        let level = level_delta(hop, &looks);
-        let frequency = frequency_delta(hop, &looks);
+        let level = level_delta(&looks);
+        let frequency = frequency_delta(&looks);
         assert!(
             (level / level_jnd_db(40.0) - 1.0).abs() < 1e-13,
             "{level} dB"
@@ -335,7 +335,7 @@ mod tests {
             (frequency / frequency_jnd_hz(1000.0, 40.0) - 1.0).abs() < 1e-13,
             "{frequency} Hz"
         );
-        let quarter = level_delta(hop, &looks[..125]);
+        let quarter = level_delta(&looks[..125]);
         assert!(
             (quarter / level - 2.0).abs() < 1e-13,
             "a quarter the looks, twice the step"
@@ -348,26 +348,34 @@ mod tests {
             Look {
                 sl_db: 12.0,
                 hz: 300.0,
+                secs: 0.001,
             },
             Look {
                 sl_db: 55.0,
                 hz: 310.0,
+                secs: 0.001,
             },
         ];
         let mut with = heard.to_vec();
         for (i, sl_db) in [(0, 0.0), (2, -15.0), (3, -0.0)] {
-            with.insert(i, Look { sl_db, hz: 305.0 });
+            let hz = 305.0;
+            with.insert(
+                i,
+                Look {
+                    sl_db,
+                    hz,
+                    secs: 0.001,
+                },
+            );
         }
-        assert_eq!(level_delta(0.001, &with), level_delta(0.001, &heard));
-        assert_eq!(
-            frequency_delta(0.001, &with),
-            frequency_delta(0.001, &heard)
-        );
+        assert_eq!(level_delta(&with), level_delta(&heard));
+        assert_eq!(frequency_delta(&with), frequency_delta(&heard));
         let silent = [Look {
             sl_db: 0.0,
             hz: 300.0,
+            secs: 0.001,
         }];
-        assert_eq!(level_delta(0.001, &silent), f64::INFINITY);
-        assert_eq!(number(96.0, frequency_delta(0.001, &silent)), 0.0);
+        assert_eq!(level_delta(&silent), f64::INFINITY);
+        assert_eq!(number(96.0, frequency_delta(&silent)), 0.0);
     }
 }

@@ -44,6 +44,7 @@ fn fitted(args: &SolveArgs, tier: &Tier<Directory>) -> Result<String, CliError> 
             None => TOLERANCE,
         }),
         from,
+        windows: args.windows.clone(),
         threads: sva_engine::default_threads(),
     };
     let after = options.from.as_ref().map_or(0, |r| r.passes);

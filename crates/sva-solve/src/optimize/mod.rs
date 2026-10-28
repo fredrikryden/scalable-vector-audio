@@ -27,8 +27,8 @@ pub(crate) trait Problem: Sync + Sized {
     fn attached(&self, thing: &Self::Thing) -> Vec<usize>;
     /// One unused spare of each kind of shared variable, the kind its index.
     fn spares(&self) -> Vec<Shared>;
-    /// Shared variable `s`'s price, `kept` the things.
-    fn price_shared(&self, s: usize, kept: &[Self::Thing]) -> Price;
+    /// Shared variable `s`'s price at `variable`, `kept` the things.
+    fn price_shared(&self, s: usize, variable: &Shared, kept: &[Self::Thing]) -> Price;
     fn read(&self, kept: &[Self::Thing], shared: &[Shared]) -> Self::Reading;
     fn propose(&self, kept: &[Self::Thing], reading: &Self::Reading) -> Vec<Self::Candidate>;
     /// `candidate`'s moves, each priced by `ledger`.
@@ -300,7 +300,7 @@ impl<P: Problem> State<P> {
             .map(|s| {
                 let held = uses.iter().flatten().any(|u| *u == s);
                 let bits = match held {
-                    true => problem.price_shared(s, &self.kept).bits(),
+                    true => problem.price_shared(s, &self.shared[s], &self.kept).bits(),
                     false => 0.0,
                 };
                 (self.shared[s].kind, bits)

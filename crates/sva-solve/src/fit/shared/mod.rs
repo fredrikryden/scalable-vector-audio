@@ -13,7 +13,8 @@ trait Variable: Sync {
     /// A link of `own` numbers to a variable at `numbers` transforms a source's `render`.
     fn transform(&self, p: &Problem, numbers: &[f64], own: &[f64], render: &mut [Vec<f64>]);
 
-    fn price(&self, p: &Problem, uses: &[(&Written, &Link)]) -> Price;
+    /// The price of a variable at `numbers` its `uses` reference.
+    fn price(&self, p: &Problem, numbers: &[f64], uses: &[(&Written, &Link)]) -> Price;
 
     /// `None` where the clip holds no such variable.
     fn attach(
@@ -47,7 +48,7 @@ pub(super) fn linked(
 pub(super) fn price<'a>(
     p: &Problem,
     written: impl Iterator<Item = &'a Written>,
-    kind: SharedKind,
+    variable: &optimize::Shared,
     s: usize,
 ) -> Price {
     let uses: Vec<(&Written, &Link)> = written
@@ -59,15 +60,7 @@ pub(super) fn price<'a>(
                 .map(move |l| (w, l))
         })
         .collect();
-    of(kind).price(p, &uses)
-}
-
-pub(super) fn kind_of(kept: &[Held], s: usize) -> SharedKind {
-    kept.iter()
-        .flat_map(|h| h.links())
-        .find(|l| l.to == s)
-        .expect("a referenced variable")
-        .kind
+    of(SharedKind::ALL[variable.kind]).price(p, &variable.numbers, &uses)
 }
 
 pub(super) fn attach(

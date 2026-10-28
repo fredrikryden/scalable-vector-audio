@@ -77,7 +77,8 @@ impl Sound {
 /// A kind of shared node: numbers several sources reference, each source its own beside them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SharedKind {
-    /// A level in dB moving as `depth sin(2 pi rate t + phase)`, `depth` each source's own.
+    /// A level in dB moving as `depth` times `sin(2 pi rate t + phase)` plus each harmonic
+    /// `k >= 2`'s `a_k sin(2 pi k rate t + phi_k)`, `depth` each source's own.
     Periodic,
 }
 
@@ -130,16 +131,28 @@ pub struct Shared {
 }
 
 impl Shared {
+    /// Each number's name: its kind's, then each harmonic `k`'s `a{k}` and `phi{k}`.
+    pub fn names(&self) -> Vec<String> {
+        let fixed = self.kind.numbers();
+        let harmonics = (2..).flat_map(|k| [format!("a{k}"), format!("phi{k}")]);
+        let names = fixed.iter().map(|n| n.to_string()).chain(harmonics);
+        names.take(self.numbers.len()).collect()
+    }
+
     pub fn node_text(&self) -> String {
         let (what, body) = match self.kind {
-            SharedKind::Periodic => (
-                "a level in dB moving periodically, its depth each referencing source's own",
-                "sin(2*pi*rate*t + phase)",
-            ),
+            SharedKind::Periodic => {
+                let harmonics: String = (2..2 + (self.numbers.len() - 2) / 2)
+                    .map(|k| format!(" + a{k}*sin({k}*2*pi*rate*t + phi{k})"))
+                    .collect();
+                (
+                    "a level in dB moving periodically, its depth each referencing source's own",
+                    format!("sin(2*pi*rate*t + phase){harmonics}"),
+                )
+            }
         };
         let bound: Vec<String> = self
-            .kind
-            .numbers()
+            .names()
             .iter()
             .zip(&self.numbers)
             .map(|(n, v)| format!("{n} = {}\n", num(*v)))
@@ -627,8 +640,15 @@ pub fn shared(files: &[(String, String)], sources: &[Source]) -> Option<Vec<(usi
                 Some((name.trim(), value.trim().parse().ok()?))
             })
             .collect();
-        let numbers = link.kind.numbers().iter().map(|n| bound.get(n).copied());
-        let numbers = numbers.collect::<Option<_>>()?;
+        let fixed = link.kind.numbers().iter().map(|n| bound.get(n).copied());
+        let mut numbers: Vec<f64> = fixed.collect::<Option<_>>()?;
+        for k in 2.. {
+            match (bound.get(&*format!("a{k}")), bound.get(&*format!("phi{k}"))) {
+                (Some(a), Some(phi)) => numbers.extend([*a, *phi]),
+                (None, None) => break,
+                _ => return None,
+            }
+        }
         out.push((
             link.to,
             Shared {

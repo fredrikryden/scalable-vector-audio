@@ -1,23 +1,24 @@
 // Concern: the adds a residual proposes: a partial per peak, each voice a sieve finds, a noise per band, a shaped noise | Non-concern: refining or scoring them (adds.rs) | IO: (residual) -> Proposals
 
 use super::peaks::qifft;
-use super::problem::Problem;
+use super::problem::{Problem, View};
 use super::render::{Held, Proposal, db};
 use crate::analysis::{Members, Track, floor_db, sieved, span_hz};
 use crate::sources::{Sound, Source, Trajectory};
 
-/// The bins `power` peaks at over their floor, each a track spanning the clip beside its bin,
-/// as `MODEL` states.
-fn peaks(p: &Problem, power: &[f64]) -> Vec<(Track, usize)> {
+/// The bins `power`, `view`'s, peaks at over their floor, each a track spanning the clip beside
+/// its bin, as `MODEL` states.
+fn peaks(p: &Problem, view: &View, power: &[f64]) -> Vec<(Track, usize)> {
     let span = (0.0, p.clip.secs());
     let mut out = Vec::new();
     for i in 1..power.len().saturating_sub(1) {
         if power[i] <= power[i - 1] || power[i] < power[i + 1] {
             continue;
         }
-        let (hz, level) = qifft(p, power, i);
-        if level > floor_db(hz, p.spl_db) {
-            out.push((Track { hz, span }, i));
+        let (hz, level) = qifft(view, power, i);
+        if view.holds(hz) && level > floor_db(hz, p.spl_db) {
+            let bin = view.bin_hz();
+            out.push((Track { hz, span, bin }, i));
         }
     }
     out
@@ -67,10 +68,10 @@ pub(super) fn stretched(points: &[(usize, f64, f64)]) -> (f64, f64) {
     }
 }
 
-/// The members at the stretched Hz of `(f0, B)` among `pool`: the nearest track within half an
+/// The members at the stretched Hz of `(f0, B)` among `pool`: the nearest track within half its
 /// analysis bin of each harmonic's, as `MODEL` states.
 fn assigned(tracks: &[Track], pool: &[usize], (f0, b): (f64, f64), p: &Problem) -> Members {
-    let (bin, top) = (p.grid.rate / p.grid.n as f64, span_hz(p.grid.rate).1);
+    let top = span_hz(f64::from(p.clip.rate)).1;
     let mut out = Vec::new();
     for k in 1.. {
         let kf = k as f64;
@@ -81,7 +82,7 @@ fn assigned(tracks: &[Track], pool: &[usize], (f0, b): (f64, f64), p: &Problem) 
         let near = pool
             .iter()
             .map(|t| (*t, (tracks[*t].hz - hz).abs()))
-            .filter(|(_, miss)| 2.0 * miss <= bin)
+            .filter(|(t, miss)| 2.0 * miss <= tracks[*t].bin)
             .min_by(|x, y| x.1.total_cmp(&y.1).then(x.0.cmp(&y.0)));
         if let Some((t, _)) = near {
             out.push((t, k));
@@ -92,10 +93,10 @@ fn assigned(tracks: &[Track], pool: &[usize], (f0, b): (f64, f64), p: &Problem) 
 
 /// Every voice the sieve finds among `tracks`, its stretch fitted, as `MODEL` states.
 fn voices(p: &Problem, tracks: &[Track]) -> Vec<Proposal> {
-    let bin = p.grid.rate / p.grid.n as f64;
+    let span = span_hz(f64::from(p.clip.rate));
     let mut pool: Vec<usize> = (0..tracks.len()).collect();
     let mut out = Vec::new();
-    while let Some((_, found)) = sieved(tracks, &pool, bin, span_hz(p.grid.rate), p.threads) {
+    while let Some((_, found)) = sieved(tracks, &pool, span, p.threads) {
         let mut members = found;
         let mut seen: Vec<Members> = Vec::new();
         let mut fitted = stiffness(tracks, &members);
@@ -126,32 +127,42 @@ fn voices(p: &Problem, tracks: &[Track]) -> Vec<Proposal> {
     out
 }
 
-pub(super) fn averaged(p: &Problem, residual: &[Vec<f64>]) -> Vec<f64> {
-    (0..p.range.len())
-        .map(|b| residual.iter().map(|r| r[b]).sum::<f64>() / residual.len() as f64)
+/// Each view's residual averaged over its frames.
+pub(super) fn averaged(p: &Problem, residual: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    p.views
+        .iter()
+        .map(|v| {
+            let held = &residual[v.frames.clone()];
+            (0..v.range.len())
+                .map(|b| held.iter().map(|r| r[b]).sum::<f64>() / held.len() as f64)
+                .collect()
+        })
         .collect()
 }
 
 pub(super) fn candidates(p: &Problem, kept: &[Held], residual: &[Vec<f64>]) -> Vec<Proposal> {
-    let mean = averaged(p, residual);
-    let found = peaks(p, &mean);
-    let mut out: Vec<Proposal> = found
-        .iter()
-        .map(|(t, _)| {
+    let mut out = Vec::new();
+    let mut tracks: Vec<Track> = Vec::new();
+    for (view, mean) in p.views.iter().zip(averaged(p, residual)) {
+        let found = peaks(p, view, &mean);
+        out.extend(found.iter().map(|(t, _)| {
             Proposal::one(Sound::Partial {
                 hz: t.hz,
                 glide: 0.0,
             })
-        })
-        .collect();
-    let (_, tonal) = p.lobes.floor(&mean, p.looks * p.frames() as f64);
-    let tracks: Vec<Track> = found
-        .into_iter()
-        .filter(|(_, i)| tonal.binary_search(i).is_ok())
-        .map(|(t, _)| t)
-        .collect();
+        }));
+        let (_, tonal) = view
+            .lobes
+            .floor(&mean, view.looks * view.frames.len() as f64);
+        tracks.extend(
+            found
+                .into_iter()
+                .filter(|(_, i)| tonal.binary_search(i).is_ok())
+                .map(|(t, _)| t),
+        );
+    }
     out.extend(voices(p, &tracks));
-    for (lo, hi) in p.grid.bands() {
+    for &(lo, hi) in &p.bands {
         let held = kept.iter().any(|h| *h.sound() == Sound::Noise { lo, hi });
         if !held {
             out.push(Proposal::one(Sound::Noise { lo, hi }));
@@ -163,14 +174,17 @@ pub(super) fn candidates(p: &Problem, kept: &[Held], residual: &[Vec<f64>]) -> V
 
 /// The shaped noise `residual` proposes, as `MODEL` states, `None` where every gain is 0.
 fn shaped(p: &Problem, residual: &[Vec<f64>]) -> Option<Sound> {
-    let bands = p.grid.bands();
+    let bands = p.bands.clone();
     // Each band's weighted energy and correlation with the residual, frame by frame.
     let moments: Vec<Vec<(f64, f64)>> = bands
         .iter()
         .map(|band| {
-            let t = &p.grid.noise_bins(*band)[p.range.clone()];
+            let t = &p.templates(&Proposal::one(Sound::Noise {
+                lo: band.0,
+                hi: band.1,
+            }))[0];
             (0..p.frames())
-                .map(|f| p.moments(f, t, &residual[f]))
+                .map(|f| p.moments(f, t.at(f), &residual[f]))
                 .collect()
         })
         .collect();

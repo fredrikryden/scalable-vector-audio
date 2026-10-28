@@ -88,23 +88,49 @@ pub struct Line {
     pub skipped: Vec<Source>,
 }
 
-pub(super) fn line(p: &Problem, state: &State, before: &State, start_bits: f64) -> Line {
-    let grid = &p.grid;
-    let residual_db = p
-        .residual(state.kept(), state.shared())
-        .iter()
-        .map(|r| {
+/// Per reported frame each octave band's level in dB `residual` leaves, as `MODEL` states: each
+/// view's band power over its unit band's, its frames averaged at the nearest reported one.
+fn banded(p: &Problem, residual: &[Vec<f64>]) -> Vec<Vec<Option<f64>>> {
+    let at = p.reported();
+    let centres = &p.times[at.frames.clone()];
+    let nearest = |t: f64| {
+        (0..centres.len())
+            .min_by(|i, j| (centres[*i] - t).abs().total_cmp(&(centres[*j] - t).abs()))
+            .expect("a frame")
+    };
+    let mut sums = vec![vec![0.0; p.bands.len()]; centres.len()];
+    for view in &p.views {
+        let grid = &view.grid;
+        let mut held = vec![(vec![0.0; p.bands.len()], 0usize); centres.len()];
+        for f in view.frames.clone() {
             let mut full = vec![0.0; grid.bins()];
-            for (i, r) in r.iter().enumerate() {
-                full[p.range.start + i] = r.max(0.0);
+            for (i, r) in residual[f][view.weighed()].iter().enumerate() {
+                full[view.inner.start + i] = r.max(0.0);
             }
-            grid.pooled(&full)
-                .iter()
-                .map(|v| (*v > 0.0).then(|| grid.band_db(*v)))
+            let (sum, count) = &mut held[nearest(p.times[f])];
+            for (s, band) in sum.iter_mut().zip(&p.bands) {
+                *s += full[grid.bins_of(*band)].iter().sum::<f64>();
+            }
+            *count += 1;
+        }
+        for (i, (sum, count)) in held.into_iter().enumerate() {
+            for (total, s) in sums[i].iter_mut().zip(sum) {
+                *total += s / count.max(1) as f64 / grid.band_unit();
+            }
+        }
+    }
+    sums.iter()
+        .map(|row| {
+            row.iter()
+                .map(|v| (*v > 0.0).then(|| 10.0 * libm::log10(*v)))
                 .collect()
         })
-        .collect();
-    let level = |h: &Held| Some(level_db(&h.written));
+        .collect()
+}
+
+pub(super) fn line(p: &Problem, state: &State, before: &State, start_bits: f64) -> Line {
+    let residual_db = banded(p, &p.residual(state.kept(), state.shared()));
+    let level = |h: &Held| Some(level_db(p, &h.written));
     let source = |h: &Held| Some(h.written.source.clone());
     let (action, tweak, source, from_db, to_db) = match state.moved() {
         None => (Action::Start, None, None, None, None),
@@ -141,7 +167,11 @@ pub(super) fn line(p: &Problem, state: &State, before: &State, start_bits: f64) 
         envelopes: state
             .kept()
             .iter()
-            .map(|h| (h.key(), h.written.levels.clone()))
+            .map(|h| {
+                let at = p.reported().frames.clone();
+                let levels = h.written.levels.iter().map(|l| l[at.clone()].to_vec());
+                (h.key(), levels.collect())
+            })
             .collect(),
         geometry: None,
         seconds: 0.0,
@@ -155,16 +185,16 @@ pub(super) fn line(p: &Problem, state: &State, before: &State, start_bits: f64) 
 }
 pub(super) fn first_line(p: &Problem, state: &State, start_bits: f64, gain_db: f64) -> Line {
     let mut first = line(p, state, state, start_bits);
+    let at = p.reported();
     first.geometry = Some(Geometry {
         rate_hz: p.clip.rate,
-        frame_secs: p.grid.frame_secs(),
-        first_centre_secs: p.grid.centre_secs(0),
-        band_edges_hz: p.grid.bands(),
+        frame_secs: at.grid.frame_secs(),
+        first_centre_secs: at.grid.centre_secs(0),
+        band_edges_hz: p.bands.clone(),
         band_floor_db: p
-            .grid
-            .band_centres()
+            .bands
             .iter()
-            .map(|hz| floor_db(*hz, p.spl_db))
+            .map(|(lo, hi)| floor_db(libm::sqrt(lo * hi), p.spl_db))
             .collect(),
         gain_db,
     });

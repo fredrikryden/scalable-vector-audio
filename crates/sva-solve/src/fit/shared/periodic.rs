@@ -1,45 +1,70 @@
-// Concern: the periodic level: its factor on a render, its rate, phase and depths off a residual, its price, an add attached | Non-concern: the other kinds | IO: (Problem, Reading, Sound) -> Scored
+// Concern: the periodic level: its factor, its rate, phase and shape off a residual, its price, an add attached | Non-concern: the other kinds | IO: (Problem, Reading, Proposal) -> Scored
 
-use std::f64::consts::{LOG2_E, TAU};
+use std::f64::consts::{LOG2_E, PI, TAU};
 
 use super::super::adds::golden;
 use super::super::problem::{Draft, Problem, Reading};
 use super::super::render::{Held, Proposal, change, db};
 use super::super::written::{Written, rewrite, write};
 use super::{Variable, members};
-use crate::optimize::code::{Number, Price};
+use crate::optimize::code::{Count, Number, Price};
 use crate::optimize::{self, Added, Change, Edit, Ledger, Scored};
 use crate::sources::{Link, Quantity, SharedKind};
 
-/// A level in dB moving as `depth sin(2 pi rate t + phase)`, its numbers rate and phase, each
-/// referencing source's own its depth.
+/// A level in dB moving as `depth` times its shape, `sin(2 pi rate t + phase)` plus each
+/// harmonic `k >= 2`'s `a_k sin(2 pi k rate t + phi_k)`: its numbers rate, phase, then each
+/// harmonic's `a_k` and `phi_k`, each referencing source's own its depth.
 pub(super) struct Periodic;
 
-/// The power factor per frame a periodic level at `(rate, phase)` puts on a source's level at
+/// The shape `numbers` give at `t`.
+fn shape(numbers: &[f64], t: f64) -> f64 {
+    let (rate, phase) = (numbers[0], numbers[1]);
+    let turn = TAU * rate * t;
+    let harmonics = numbers[2..].chunks(2).enumerate().map(|(i, h)| {
+        let k = (i + 2) as f64;
+        h[0] * libm::sin(k * turn + h[1])
+    });
+    libm::sin(turn + phase) + harmonics.sum::<f64>()
+}
+
+/// The power factor per frame a periodic level at `numbers` puts on a source's level at
 /// `depth`, as `MODEL` states: its mean under the frame's kernel.
 fn factor(p: &Problem, numbers: &[f64], depth: f64) -> Vec<f64> {
-    let (rate, phase) = (numbers[0], numbers[1]);
-    p.times
-        .iter()
-        .map(|t| {
-            p.kernel
+    (0..p.frames())
+        .map(|f| {
+            p.view(f)
+                .kernel
                 .iter()
                 .map(|(at, share)| {
-                    let turn = TAU * rate * (t + at) + phase;
-                    share * libm::pow(10.0, depth * libm::sin(turn) / 10.0)
+                    let level = depth * shape(numbers, p.times[f] + at);
+                    share * libm::pow(10.0, level / 10.0)
                 })
                 .sum::<f64>()
         })
         .collect()
 }
 
-/// Per frame its time beside the level in dB by which `back` holds `base`'s power: their
-/// weighted correlation over `base`'s weighted energy, frames where it is not positive left out.
-fn series(p: &Problem, back: &[Vec<f64>], base: &[Vec<f64>]) -> Vec<(f64, f64)> {
-    (0..p.frames())
+/// The frames any of `home`'s columns is read in, in order.
+fn read(home: &[Vec<usize>]) -> Vec<usize> {
+    let mut frames: Vec<usize> = home.concat();
+    frames.sort_unstable();
+    frames.dedup();
+    frames
+}
+
+/// Per frame of `frames` the level in dB by which `back` holds `base`'s power: their weighted
+/// correlation over `base`'s weighted energy, frames where it is not positive left out.
+fn series(
+    p: &Problem,
+    frames: &[usize],
+    back: &[Vec<f64>],
+    base: &[Vec<f64>],
+) -> Vec<(usize, f64)> {
+    frames
+        .iter()
         .filter_map(|f| {
-            let (energy, pull) = p.moments(f, &base[f], &back[f]);
-            (energy > 0.0 && pull > 0.0).then(|| (p.times[f], db(pull / energy)))
+            let (energy, pull) = p.moments(*f, &base[*f], &back[*f]);
+            (energy > 0.0 && pull > 0.0).then(|| (*f, db(pull / energy)))
         })
         .collect()
 }
@@ -77,21 +102,34 @@ fn least_squares(rows: &[(Vec<f64>, f64)]) -> Option<Vec<f64>> {
     out.iter().all(|v| v.is_finite()).then_some(out)
 }
 
-/// The peak of the modulation spectrum of `series`, as `MODEL` states, beside its rate step.
-fn modulation_peak(p: &Problem, series: &[Vec<(f64, f64)>]) -> Option<(f64, f64)> {
-    let span = p.times.last()? - p.times.first()?;
+/// The highest rate a periodic level may move at whose sources' columns are read in `homes`'
+/// frames, as `MODEL` states: the frame Nyquist of the coarsest view among them, a correctness
+/// limit.
+fn nyquist(p: &Problem, homes: &[Vec<usize>]) -> f64 {
+    homes
+        .iter()
+        .flatten()
+        .map(|f| 1.0 / (2.0 * p.view(*f).grid.frame_secs()))
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// The peak of the modulation spectrum of `series` under `top`, as `MODEL` states, beside its
+/// rate step.
+fn modulation_peak(p: &Problem, series: &[Vec<(usize, f64)>], top: f64) -> Option<(f64, f64)> {
     let mut detrended = Vec::new();
     for s in series {
-        let rows: Vec<(Vec<f64>, f64)> = s.iter().map(|(t, y)| (vec![1.0, *t], *y)).collect();
+        let rows: Vec<(Vec<f64>, f64)> = s
+            .iter()
+            .map(|(f, y)| (vec![1.0, p.times[*f]], *y))
+            .collect();
         let line = least_squares(&rows)?;
         detrended.push(
             s.iter()
-                .map(|(t, y)| (*t, y - line[0] - line[1] * t))
+                .map(|(f, y)| (p.times[*f], y - line[0] - line[1] * p.times[*f]))
                 .collect::<Vec<_>>(),
         );
     }
-    let step = 1.0 / span;
-    let top = 1.0 / (2.0 * p.grid.frame_secs());
+    let step = 1.0 / p.span();
     let power = |rate: f64| -> f64 {
         detrended
             .iter()
@@ -104,45 +142,124 @@ fn modulation_peak(p: &Problem, series: &[Vec<(f64, f64)>]) -> Option<(f64, f64)
             })
             .sum()
     };
-    let rates = (1..).map(|k| k as f64 * step).take_while(|r| *r <= top);
+    let rates = (1..).map(|k| k as f64 * step).take_while(|r| *r < top);
     rates
         .map(|r| (r, power(r)))
         .max_by(|x, y| x.1.total_cmp(&y.1))
         .map(|(r, _)| (r, step))
 }
 
-/// A periodic level's phase at `rate` and each of `series`' depths, as `MODEL` states.
-fn periodic_at(p: &Problem, series: &[Vec<(f64, f64)>], rate: f64) -> Option<(f64, Vec<f64>)> {
-    let attenuation: f64 = p
-        .kernel
+/// The rank-1 factor of `rows` by alternating least squares, as `MODEL` states: each row's
+/// weight beside the shared row; `None` where it is nought.
+fn rank_one(rows: &[Vec<f64>]) -> Option<(Vec<f64>, Vec<f64>)> {
+    let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
+    let mut shared = rows
         .iter()
-        .map(|(at, share)| share * libm::cos(TAU * rate * at))
-        .sum();
+        .max_by(|a, b| dot(a, a).total_cmp(&dot(b, b)))?
+        .clone();
+    let mut weights;
+    let mut held = f64::INFINITY;
+    loop {
+        let norm = dot(&shared, &shared);
+        if norm == 0.0 {
+            return None;
+        }
+        weights = rows
+            .iter()
+            .map(|r| dot(r, &shared) / norm)
+            .collect::<Vec<f64>>();
+        let total = dot(&weights, &weights);
+        if total == 0.0 {
+            return None;
+        }
+        shared = (0..shared.len())
+            .map(|j| {
+                rows.iter()
+                    .zip(&weights)
+                    .map(|(r, w)| w * r[j])
+                    .sum::<f64>()
+                    / total
+            })
+            .collect();
+        let misfit: f64 = rows
+            .iter()
+            .zip(&weights)
+            .map(|(r, w)| {
+                r.iter()
+                    .zip(&shared)
+                    .map(|(x, u)| (x - w * u).powi(2))
+                    .sum::<f64>()
+            })
+            .sum();
+        if misfit >= held {
+            break;
+        }
+        held = misfit;
+    }
+    Some((weights, shared))
+}
+
+/// A periodic level's numbers at `rate` with `harmonics` harmonics, the fundamental's among
+/// them, and each of `series`' depths, as `MODEL` states.
+fn periodic_at(
+    p: &Problem,
+    series: &[Vec<(usize, f64)>],
+    rate: f64,
+    harmonics: usize,
+) -> Option<(Vec<f64>, Vec<f64>)> {
+    let attenuation: Vec<Vec<f64>> = p
+        .views
+        .iter()
+        .map(|v| {
+            (1..=harmonics)
+                .map(|k| {
+                    let k = k as f64;
+                    v.kernel
+                        .iter()
+                        .map(|(at, share)| share * libm::cos(TAU * k * rate * at))
+                        .sum()
+                })
+                .collect()
+        })
+        .collect();
     let mut pairs = Vec::new();
     for s in series {
         let rows: Vec<(Vec<f64>, f64)> = s
             .iter()
-            .map(|(t, y)| {
-                let (sin, cos) = libm::sincos(TAU * rate * t);
-                (vec![1.0, *t, sin, cos], *y)
+            .map(|(f, y)| {
+                let (t, held) = (p.times[*f], &attenuation[p.of[*f]]);
+                let mut row = vec![1.0, t];
+                for (k, a) in held.iter().enumerate() {
+                    let (sin, cos) = libm::sincos(TAU * (k + 1) as f64 * rate * t);
+                    row.extend([a * sin, a * cos]);
+                }
+                (row, *y)
             })
             .collect();
-        let c = least_squares(&rows)?;
-        pairs.push((c[2], c[3]));
+        pairs.push(least_squares(&rows)?[2..].to_vec());
     }
-    let (xx, xy, yy) = pairs.iter().fold((0.0, 0.0, 0.0), |(xx, xy, yy), (a, b)| {
-        (xx + a * a, xy + a * b, yy + b * b)
-    });
-    let mut phase = 0.5 * libm::atan2(2.0 * xy, xx - yy);
-    let mut depths: Vec<f64> = pairs
-        .iter()
-        .map(|(a, b)| (a * libm::cos(phase) + b * libm::sin(phase)) / attenuation)
-        .collect();
-    if depths.iter().sum::<f64>() < 0.0 {
-        phase += std::f64::consts::PI;
-        depths.iter_mut().for_each(|d| *d = -*d);
+    let (mut depths, shared) = rank_one(&pairs)?;
+    let fundamental = libm::hypot(shared[0], shared[1]);
+    if fundamental == 0.0 {
+        return None;
     }
-    Some((phase.rem_euclid(TAU), depths))
+    depths.iter_mut().for_each(|d| *d *= fundamental);
+    let turned = match depths.iter().sum::<f64>() < 0.0 {
+        true => {
+            depths.iter_mut().for_each(|d| *d = -*d);
+            PI
+        }
+        false => 0.0,
+    };
+    let mut numbers = vec![rate];
+    for (k, h) in shared.chunks(2).enumerate() {
+        let (sin, cos) = (h[0] / fundamental, h[1] / fundamental);
+        if k > 0 {
+            numbers.push(libm::hypot(sin, cos));
+        }
+        numbers.push((libm::atan2(cos, sin) + turned).rem_euclid(TAU));
+    }
+    Some((numbers, depths))
 }
 
 fn depth_step(written: &Written) -> f64 {
@@ -166,24 +283,46 @@ impl Variable for Periodic {
     }
 
     /// As `MODEL` states.
-    fn price(&self, p: &Problem, uses: &[(&Written, &Link)]) -> Price {
-        let phase = uses
+    fn price(&self, p: &Problem, numbers: &[f64], uses: &[(&Written, &Link)]) -> Price {
+        let (mut phase, mut amplitude, mut homes) = (f64::INFINITY, f64::INFINITY, Vec::new());
+        for (w, l) in uses {
+            let depth = l.own[0].abs();
+            phase = phase.min(depth_step(w) / depth);
+            let columns = p.columns(&Proposal::of(&w.source));
+            let lowest = columns.floors.iter().copied().fold(f64::INFINITY, f64::min);
+            amplitude = amplitude.min(2.0 * (p.top_db - lowest) / depth);
+            homes.extend(columns.home);
+        }
+        let harmonics: Vec<&[f64]> = numbers[2..].chunks(2).collect();
+        let fastest = harmonics
             .iter()
-            .map(|(w, l)| depth_step(w) / l.own[0].abs())
-            .fold(f64::INFINITY, f64::min);
+            .enumerate()
+            .map(|(i, h)| (i + 2) as f64 * h[0])
+            .fold(1.0, f64::max);
+        let mut out = vec![
+            Number {
+                range: nyquist(p, &homes),
+                delta: phase / (TAU * p.clip.secs() * fastest),
+            },
+            Number {
+                range: TAU,
+                delta: phase,
+            },
+        ];
+        for h in &harmonics {
+            out.push(Number {
+                range: amplitude,
+                delta: phase,
+            });
+            out.push(Number {
+                range: TAU,
+                delta: phase / h[0],
+            });
+        }
         Price {
             alternatives: 1,
-            counts: Vec::new(),
-            numbers: vec![
-                Number {
-                    range: 1.0 / (2.0 * p.grid.frame_secs()),
-                    delta: phase / (TAU * p.clip.secs()),
-                },
-                Number {
-                    range: TAU,
-                    delta: phase,
-                },
-            ],
+            counts: vec![Count::From1(1 + harmonics.len() as u64)],
+            numbers: out,
         }
     }
 
@@ -221,29 +360,40 @@ impl Variable for Periodic {
                     .collect()
             })
             .collect();
-        let frames = p.frames().max(1) as f64;
+        let home = p.columns(proposal).home;
         let shape: Vec<f64> = free
             .iter()
-            .map(|g| g.iter().sum::<f64>() / frames)
+            .zip(&home)
+            .map(|(g, h)| h.iter().map(|f| g[*f]).sum::<f64>() / h.len().max(1) as f64)
             .collect();
-        let mut all = vec![series(p, &back, &p.summed(&templates, &|c, _| shape[c]))];
+        let base = p.summed(&templates, &|c, _| shape[c]);
+        let mut all = vec![series(p, &read(&home), &back, &base)];
+        let mut homes = home;
         for a in &old {
             let held = &kept[*a];
             let level = |c: usize, f: usize| libm::pow(10.0, held.written.levels[c][f] / 10.0);
-            all.push(series(p, &back, &p.summed(&held.templates, &level)));
+            let home = p.columns(&held.proposal()).home;
+            all.push(series(
+                p,
+                &read(&home),
+                &back,
+                &p.summed(&held.templates, &level),
+            ));
+            homes.extend(home);
         }
-        let (start, rate_step) = modulation_peak(p, &all)?;
-        let build = |rate: f64| -> Option<(f64, Attached, f64)> {
-            let (phase, depths) = periodic_at(p, &all, rate)?;
+        let top = nyquist(p, &homes);
+        let (start, rate_step) = modulation_peak(p, &all, top)?;
+        let build = |rate: f64, harmonics: usize| -> Option<(f64, Attached, f64)> {
+            let (numbers, depths) = periodic_at(p, &all, rate, harmonics)?;
             let mut after = reading.shared.clone();
-            after[s].numbers = vec![rate, phase];
+            after[s].numbers = numbers.clone();
             let link = |d: f64| Link {
                 to: s,
                 kind: SharedKind::Periodic,
                 own: vec![d],
             };
             let links = vec![link(depths[0])];
-            let factor = factor(p, &after[s].numbers, depths[0]);
+            let factor = factor(p, &numbers, depths[0]);
             let fitted: Vec<Vec<f64>> = free
                 .iter()
                 .map(|g| g.iter().zip(&factor).map(|(g, m)| g / m).collect())
@@ -279,12 +429,12 @@ impl Variable for Periodic {
                 }
             }
             let missed = 0.5 * LOG2_E * change(p, residual, &delta);
-            let held = std::iter::once(&new.written).chain(others.iter().map(|(_, h)| &h.written));
-            let price = super::price(p, held, SharedKind::Periodic, s);
             let variable = optimize::Shared {
                 kind: SharedKind::Periodic as usize,
-                numbers: vec![rate, phase],
+                numbers,
             };
+            let held = std::iter::once(&new.written).chain(others.iter().map(|(_, h)| &h.written));
+            let price = super::price(p, held, &variable, s);
             let uses = [s];
             let used: Vec<Vec<usize>> = others
                 .iter()
@@ -306,11 +456,21 @@ impl Variable for Periodic {
                 .is_finite()
                 .then_some((change, (new, others, variable), precision))
         };
-        let (_, _, precision) = build(start)?;
-        let score = |rate: f64| build(rate).map_or(f64::INFINITY, |(v, ..)| v);
+        let (_, _, precision) = build(start, 1)?;
+        let score = |rate: f64| build(rate, 1).map_or(f64::INFINITY, |(v, ..)| v);
         let range = (start - rate_step, start + rate_step);
         let (rate, _) = golden(&score, range, precision, (start, score(start)));
-        let (change, (new, others, variable), _) = build(rate)?;
+        let mut best = build(rate, 1)?;
+        for harmonics in 2.. {
+            if harmonics as f64 * rate >= top {
+                break;
+            }
+            match build(rate, harmonics) {
+                Some(more) if more.0 < best.0 => best = more,
+                _ => break,
+            }
+        }
+        let (change, (new, others, variable), _) = best;
         Some(Scored {
             change,
             edit: Edit::Add(Added {

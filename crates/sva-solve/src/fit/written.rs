@@ -29,14 +29,19 @@ pub(super) fn write(
     links: &[Link],
 ) -> Written {
     let secs = p.clip.secs();
-    let floors = p.columns(proposal).floors;
+    let columns = p.columns(proposal);
     let trajectories: Vec<Trajectory> = fitted
         .iter()
-        .zip(&floors)
-        .map(|(g, floor)| {
-            let held: Vec<f64> = g.iter().map(|g| db(*g).max(*floor)).collect();
-            let peak = held.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            thinned((0.0, secs), &p.times, &held, level_jnd_db(peak - floor))
+        .zip(&columns.floors)
+        .zip(&columns.home)
+        .map(|((g, floor), home)| {
+            let mut held: Vec<(f64, f64)> = home
+                .iter()
+                .map(|f| (p.times[*f], db(g[*f]).max(*floor)))
+                .collect();
+            held.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let peak = held.iter().map(|h| h.1).fold(f64::NEG_INFINITY, f64::max);
+            thinned((0.0, secs), &held, level_jnd_db(peak - floor))
         })
         .collect();
     rewrite(p, (proposal, step), key, trajectories, links)
@@ -50,10 +55,7 @@ pub(super) fn rewrite(
     links: &[Link],
 ) -> Written {
     let columns = p.columns(proposal);
-    let levels: Vec<Vec<f64>> = trajectories
-        .iter()
-        .map(|t| levels_at(t, &p.times))
-        .collect();
+    let levels: Vec<Vec<f64>> = trajectories.iter().map(|t| p.at_frames(t)).collect();
     let gains = levels
         .iter()
         .map(|l| l.iter().map(|l| libm::pow(10.0, l / 10.0)).collect())
@@ -63,7 +65,7 @@ pub(super) fn rewrite(
         ..Source::new(key, 0.0, proposal.sound.clone(), trajectories)
     };
     let price = match &proposal.sound {
-        Sound::Shaped { bands } => shaped_price(p, &source, bands, &levels[0], columns.floors[0]),
+        Sound::Shaped { bands } => shaped_price(p, &source, bands, &levels[0], &columns),
         _ => priced(p, &source, &columns, &levels, step),
     };
     Written {
@@ -76,43 +78,59 @@ pub(super) fn rewrite(
 }
 
 impl Problem {
-    pub(super) fn looks(&self, level: &[f64], floor: f64, hz: &[f64]) -> Vec<Look> {
-        level
+    pub(super) fn looks(
+        &self,
+        frames: &[usize],
+        level: &[f64],
+        floor: f64,
+        hz: &[f64],
+    ) -> Vec<Look> {
+        frames
             .iter()
-            .zip(hz)
-            .map(|(l, hz)| Look {
-                sl_db: l - floor,
-                hz: *hz,
+            .map(|f| Look {
+                sl_db: level[*f] - floor,
+                hz: hz[*f],
+                secs: self.view(*f).grid.frame_secs(),
             })
             .collect()
+    }
+
+    fn finest(&self, frames: &[usize]) -> f64 {
+        frames
+            .iter()
+            .map(|f| self.view(*f).grid.frame_secs())
+            .fold(f64::INFINITY, f64::min)
     }
 }
 
 fn edge_step(p: &Problem, feasible: &Feasible) -> f64 {
-    (feasible.hz.1 - feasible.hz.0) / (p.grid.bands().len() + 1) as f64
+    (feasible.hz.1 - feasible.hz.0) / (p.bands.len() + 1) as f64
 }
 
-/// A shaped noise's price at the precisions `MODEL` states, its envelope at `level` per frame
-/// over `floor`.
+/// A shaped noise's price at the precisions `MODEL` states, its envelope at `level` per frame.
 fn shaped_price(
     p: &Problem,
     source: &Source,
     bands: &[(f64, f64, f64)],
     level: &[f64],
-    floor: f64,
+    columns: &Columns,
 ) -> Price {
-    let hop = p.grid.frame_secs();
+    let (floor, home) = (columns.floors[0], &columns.home[0]);
+    let hop = p.finest(home);
     let feasible = Feasible::of(&p.clip, (floor, p.top_db));
     let edge = edge_step(p, &feasible);
     let mut deltas = vec![hop];
     for (lo, hi, g) in bands {
         let heard: Vec<f64> = level.iter().map(|l| l + g).collect();
         let hz = vec![centre((*lo, *hi)); level.len()];
-        let at = p.looks(&heard, floor_db(centre((*lo, *hi)), p.spl_db), &hz);
-        deltas.extend([edge, edge, level_delta(hop, &at)]);
+        let met: Vec<usize> = (0..p.frames())
+            .filter(|f| p.view(*f).meets((*lo, *hi)))
+            .collect();
+        let at = p.looks(&met, &heard, floor_db(centre((*lo, *hi)), p.spl_db), &hz);
+        deltas.extend([edge, edge, level_delta(&at)]);
     }
     let hz = vec![centre((bands[0].0, bands[0].1)); level.len()];
-    let envelope = level_delta(hop, &p.looks(level, floor, &hz));
+    let envelope = level_delta(&p.looks(home, level, floor, &hz));
     for (q, _) in &source.numbers()[deltas.len()..] {
         deltas.push(match q {
             Quantity::Time => hop,
@@ -131,12 +149,15 @@ fn priced(
     levels: &[Vec<f64>],
     glide_step: f64,
 ) -> Price {
-    let hop = p.grid.frame_secs();
-    let looks = |k: usize| p.looks(&levels[k], columns.floors[k], &columns.paths[k]);
+    let looks = |k: usize| {
+        let at = (&levels[k], columns.floors[k], &columns.paths[k]);
+        p.looks(&columns.home[k], at.0, at.1, at.2)
+    };
+    let hops: Vec<f64> = columns.home.iter().map(|h| p.finest(h)).collect();
     let lowest = columns.floors.iter().copied().fold(f64::INFINITY, f64::min);
     let feasible = Feasible::of(&p.clip, (lowest, p.top_db));
     let level_deltas: Vec<f64> = (0..columns.heard.len())
-        .map(|k| level_delta(hop, &looks(k)))
+        .map(|k| level_delta(&looks(k)))
         .collect();
     let mut steps = None;
     let mut steps = || *steps.get_or_insert_with(|| frequency_steps(p, columns, levels));
@@ -148,7 +169,7 @@ fn priced(
         }
         let member = level % columns.heard.len();
         deltas.push(match q {
-            Quantity::Time => hop,
+            Quantity::Time => hops[member],
             Quantity::Db | Quantity::DbDeviation => level_deltas[member],
             Quantity::Hz => steps().0,
             Quantity::Stretch => steps().1,
@@ -163,31 +184,27 @@ fn priced(
 /// The precisions a fundamental's Hz and its stretch are written at, as `MODEL` states,
 /// harmonic `k` at `levels[k]` per frame over its column's floor.
 pub(super) fn frequency_steps(p: &Problem, columns: &Columns, levels: &[Vec<f64>]) -> (f64, f64) {
-    let hop = p.grid.frame_secs();
     let hzs = &columns.heard;
-    let looks = |k: usize| p.looks(&levels[k], columns.floors[k], &columns.paths[k]);
+    let looks = |k: usize| {
+        let at = (&levels[k], columns.floors[k], &columns.paths[k]);
+        p.looks(&columns.home[k], at.0, at.1, at.2)
+    };
     let last = hzs.len() - 1;
     let (f0, h, top) = (hzs[0], hzs.len() as f64, hzs[last]);
     let moved = h * h * h * h * f0 * f0 / (2.0 * top);
     (
-        frequency_delta(hop, &looks(0)) * columns.starts[0] / f0,
-        frequency_delta(hop, &looks(last)) / moved,
+        frequency_delta(&looks(0)) * columns.starts[0] / f0,
+        frequency_delta(&looks(last)) / moved,
     )
 }
 
-/// A level from `on` to `end` through `levels` at `times`, the first held back to `on` and
-/// the last on to `end`, thinned by Ramer-Douglas-Peucker at `tolerance` dB, its knots' times
-/// from `on`.
-fn thinned((on, end): (f64, f64), times: &[f64], levels: &[f64], tolerance: f64) -> Trajectory {
-    let mut points = vec![(on, levels[0])];
-    points.extend(
-        times
-            .iter()
-            .zip(levels)
-            .filter(|(t, _)| on < **t && **t < end)
-            .map(|(t, l)| (*t, *l)),
-    );
-    points.push((end, levels[levels.len() - 1]));
+/// A level from `on` to `end` through `held`, each a time and level in time order, the first
+/// held back to `on` and the last on to `end`, thinned by Ramer-Douglas-Peucker at `tolerance`
+/// dB, its knots' times from `on`.
+fn thinned((on, end): (f64, f64), held: &[(f64, f64)], tolerance: f64) -> Trajectory {
+    let mut points = vec![(on, held[0].1)];
+    points.extend(held.iter().filter(|(t, _)| on < *t && *t < end).copied());
+    points.push((end, held[held.len() - 1].1));
     let mut keep = vec![false; points.len()];
     let last = points.len() - 1;
     (keep[0], keep[last]) = (true, true);
@@ -247,12 +264,13 @@ pub(super) fn levels_at(level: &Trajectory, times: &[f64]) -> Vec<f64> {
         .collect()
 }
 
-pub(super) fn level_db(written: &Written) -> f64 {
-    let frames = written.gains[0].len().max(1) as f64;
+pub(super) fn level_db(p: &Problem, written: &Written) -> f64 {
+    let at = p.reported().frames.clone();
+    let frames = at.len().max(1) as f64;
     let shape = match &written.source.sound {
         Sound::Shaped { bands } => bands.iter().map(|(_, _, g)| super::render::power(*g)).sum(),
         _ => 1.0,
     };
-    let total: f64 = written.gains.iter().flatten().sum();
+    let total: f64 = written.gains.iter().flat_map(|g| &g[at.clone()]).sum();
     db(shape * total / frames)
 }

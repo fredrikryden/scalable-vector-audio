@@ -62,8 +62,7 @@ fn source(source: &Source) -> String {
 fn shared(sources: &[Source], shared: &[(usize, Shared)]) -> String {
     list(shared, |(to, node)| {
         let numbers: Vec<String> = node
-            .kind
-            .numbers()
+            .names()
             .iter()
             .zip(&node.numbers)
             .map(|(n, v)| format!("\"{n}\": {}", num(*v)))

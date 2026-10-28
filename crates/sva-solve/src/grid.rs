@@ -1,4 +1,4 @@
-// Concern: the coarse grid: octave bands by 48 ms frames, their kernel, sine and band templates, phaseless resynthesis | Non-concern: the fit (fit/) | IO: (Spectrogram) -> Grid, samples
+// Concern: the coarse grid: octave bands by frames of three quarter-windows, their kernel, templates, phaseless resynthesis | Non-concern: the fit (fit/) | IO: (Spectrogram) -> Grid, samples
 
 use std::num::NonZeroUsize;
 
@@ -7,12 +7,12 @@ use sva_engine::{each, fft};
 use crate::analysis::{Spectrogram, hann, span_hz};
 use crate::sources::phase;
 
-pub const MODEL: &str = "the coarse grid, the smallest thumbnail of the clip: the analysis \
-     spectrogram (analysis.rs: 64 ms periodic Hann, 1 ms hop) read only at hops whose window lies \
-     wholly inside the clip, as zero padding past an edge is a jump the clip does not hold; \
-     pooled to frames of three quarter-windows (48 ms at 64 ms), the quarter-window being the \
-     hop at which the squared Hann sums to a constant, three the whole count nearest 50 ms: \
-     each frame the mean power of the hops it holds; and summed over octave bands, edges at \
+pub const MODEL: &str = "the coarse grid, the smallest thumbnail of the clip under one window: \
+     the analysis spectrogram (analysis.rs: a periodic Hann, 1 ms hop) read only at hops whose \
+     window lies wholly inside the clip, as zero padding past an edge is a jump the clip does \
+     not hold; pooled to frames of three quarter-windows (48 ms at 64 ms), the quarter-window \
+     being the hop at which the squared Hann sums to a constant, in whole analysis hops, at \
+     least one: each frame the mean power of the hops it holds; and summed over octave bands, edges at \
      1 kHz times powers of two inside the feasible set (Cam 1.8 to 38.9, under the Nyquist), \
      an end piece under half an octave joining its neighbour, so 8 bands at 16 kHz and above; \
      a frame's kernel the share of its power each time from its centre holds, at the analysis \
@@ -30,7 +30,8 @@ pub const MODEL: &str = "the coarse grid, the smallest thumbnail of the clip: th
      mean square by Parseval and laid at its centre under the Hann window over the root of \
      the windows' summed squares there, so frames whose phases are independent add in power \
      to the frames' (Griffin and Lim 1984, IEEE T-ASSP 32(2) 236-243, their overlap-add, \
-     normalised for incoherent frames)";
+     normalised for incoherent frames); grids of one clip under several windows, each nought \
+     outside its band, sounded each and summed";
 
 /// The quarter-windows one frame pools, as `MODEL` states.
 const QUARTERS: usize = 3;
@@ -174,8 +175,7 @@ impl Grid {
         10.0 * libm::log10(power / self.band_unit())
     }
 
-    /// The share of a frame's power each time from its centre holds, at the analysis hop: the
-    /// squared window over each hop the frame pools, as `MODEL` states.
+    /// The share of a frame's power each time from its centre holds, as `MODEL` states.
     pub fn kernel(&self) -> Vec<(f64, f64)> {
         let pooled = (self.hop / self.step).max(1);
         let step = self.step as f64;
@@ -204,29 +204,26 @@ impl Grid {
         self.bands.clone()
     }
 
-    /// The octave bands, as `MODEL` states.
+    /// The octave bands holding a bin of this grid, as `MODEL` states.
     fn octaves(&self) -> Vec<(f64, f64)> {
-        let (lo, hi) = span_hz(self.rate);
-        let mut edges = vec![lo];
-        edges.extend(
-            (-10..10)
-                .map(|k| 1000.0 * libm::pow(2.0, f64::from(k)))
-                .filter(|e| lo < *e && *e < hi),
-        );
-        edges.push(hi);
-        let octaves = |a: f64, b: f64| libm::log2(b / a);
-        if edges.len() > 2 && octaves(edges[0], edges[1]) < 0.5 {
-            edges.remove(1);
-        }
-        let last = edges.len() - 1;
-        if edges.len() > 2 && octaves(edges[last - 1], edges[last]) < 0.5 {
-            edges.remove(last - 1);
-        }
-        edges
-            .windows(2)
-            .map(|e| (e[0], e[1]))
+        octaves(self.rate)
+            .into_iter()
             .filter(|e| !self.bins_of(*e).is_empty())
             .collect()
+    }
+
+    pub fn only(&self, band: (f64, f64)) -> Grid {
+        let bins = self.bins_of(band);
+        self.with(
+            self.power
+                .iter()
+                .map(|f| {
+                    let mut kept = vec![0.0; f.len()];
+                    kept[bins.clone()].copy_from_slice(&f[bins.clone()]);
+                    kept
+                })
+                .collect(),
+        )
     }
 
     /// Each band's geometric centre in Hz.
@@ -323,6 +320,46 @@ impl Grid {
                     out[at as usize] += w * re[k] * scale / libm::sqrt(norm[at as usize]);
                 }
             }
+        }
+        out
+    }
+}
+
+/// The octave bands at `rate`, as `MODEL` states, bins aside.
+pub(crate) fn octaves(rate: f64) -> Vec<(f64, f64)> {
+    let (lo, hi) = span_hz(rate);
+    let mut edges = vec![lo];
+    edges.extend(
+        (-10..10)
+            .map(|k| 1000.0 * libm::pow(2.0, f64::from(k)))
+            .filter(|e| lo < *e && *e < hi),
+    );
+    edges.push(hi);
+    let octaves = |a: f64, b: f64| libm::log2(b / a);
+    if edges.len() > 2 && octaves(edges[0], edges[1]) < 0.5 {
+        edges.remove(1);
+    }
+    let last = edges.len() - 1;
+    if edges.len() > 2 && octaves(edges[last - 1], edges[last]) < 0.5 {
+        edges.remove(last - 1);
+    }
+    edges.windows(2).map(|e| (e[0], e[1])).collect()
+}
+
+/// One clip's grids, a band each, as `MODEL` states.
+pub struct Grids(pub Vec<Grid>);
+
+impl Grids {
+    /// `len` samples whose frames hold every grid's power, as `MODEL` states.
+    pub fn sounded(&self, len: usize) -> Vec<f64> {
+        let mut grids = self.0.iter();
+        let mut out = grids
+            .next()
+            .map_or_else(|| vec![0.0; len], |g| g.sounded(len));
+        for grid in grids {
+            out.iter_mut()
+                .zip(grid.sounded(len))
+                .for_each(|(o, s)| *o += s);
         }
         out
     }

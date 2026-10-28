@@ -5,7 +5,7 @@ use sva_core::CliError;
 use super::adds::rate_floor;
 use super::problem::{Problem, State};
 use super::render::{Held, Proposal};
-use super::written::{levels_at, rewrite};
+use super::written::rewrite;
 use crate::optimize::{self, Problem as _};
 use crate::sources::{self, Shared, Sound, Source, birth};
 
@@ -107,11 +107,7 @@ pub(super) fn resumed(p: &Problem, from: &Resume, gain_db: f64) -> Result<State,
         let proposal = Proposal::of(source);
         let step = match source.sound.glide() != 0.0 {
             true => {
-                let levels: Vec<Vec<f64>> = source
-                    .levels
-                    .iter()
-                    .map(|t| levels_at(t, &p.times))
-                    .collect();
+                let levels: Vec<Vec<f64>> = source.levels.iter().map(|t| p.at_frames(t)).collect();
                 rate_floor(p, &p.columns(&proposal), &levels)
             }
             false => 0.0,

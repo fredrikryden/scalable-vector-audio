@@ -14,6 +14,7 @@ mod threads;
 pub use analyze::analyze;
 pub use describe::{outline, readings};
 pub use opfs::DirectoryHandle;
+pub use solve::solve_windows;
 pub use stats::{subscribe, unsubscribe};
 pub use threads::start_threads;
 
@@ -241,7 +242,7 @@ fn options_of(options: &JsValue, keys: &[&str]) -> Result<Options, JsValue> {
                 ));
             }
             "progress" => {}
-            "tolerance" | "from" => {}
+            "tolerance" | "from" | "windows" => {}
             "live" => {
                 held.live = value
                     .as_bool()
@@ -510,7 +511,7 @@ impl Composition {
     ) -> Result<JsValue, JsValue> {
         options_of(
             &options,
-            &["spl", "tolerance", "from", "signal", "progress"],
+            &["spl", "tolerance", "from", "windows", "signal", "progress"],
         )?;
         solve::solved(&clip, &options).await
     }

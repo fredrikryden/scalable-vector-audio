@@ -1,11 +1,11 @@
-// Concern: parses a solve's argv: recording, loudness, threshold, the fit resumed, where it writes, whether over files | Non-concern: running the fit (solve.rs) | IO: (argv tail) -> Command or CliError
+// Concern: parses a solve's argv: recording, loudness, threshold, windows, the fit resumed, its out directory | Non-concern: running the fit (solve.rs) | IO: (argv tail) -> Command or CliError
 
 use std::path::PathBuf;
 
 use super::{CacheAt, Command, value};
 use sva_core::CliError;
 use sva_solve::TOLERANCE;
-use sva_solve::fit::SPL_DB;
+use sva_solve::fit::{SPL_DB, Window};
 
 /// Where a solve writes its fit unless told.
 pub const OUT: &str = "fit";
@@ -20,8 +20,46 @@ pub struct SolveArgs {
     pub out: PathBuf,
     /// A directory that holds files may be written over.
     pub confirm: bool,
-    /// Where the store the pass renders and `final.wav` read through lives.
+    /// The store every render reads through.
     pub cache: CacheAt,
+    pub windows: Option<Vec<Window>>,
+}
+
+/// `windows` as `--windows` spells them: `<secs>:<below_hz>` per band, comma-separated.
+pub fn spelled(windows: &[Window]) -> String {
+    let each: Vec<String> = windows
+        .iter()
+        .map(|w| match w.below_hz {
+            Some(hz) => format!("{}:{hz}", w.secs),
+            None => w.secs.to_string(),
+        })
+        .collect();
+    each.join(",")
+}
+
+fn windows(raw: &str) -> Result<Vec<Window>, CliError> {
+    let band = |each: &str| {
+        let (secs, below) = match each.split_once(':') {
+            Some((secs, hz)) => (secs, Some(hz.parse::<f64>().ok()?)),
+            None => (each, None),
+        };
+        Some(Window {
+            below_hz: below,
+            secs: secs.parse().ok()?,
+        })
+    };
+    raw.split(',')
+        .map(band)
+        .collect::<Option<_>>()
+        .ok_or_else(|| {
+            CliError::usage(
+                "cli.bad_value",
+                format!(
+                    "--windows takes each band's `<secs>:<below_hz>` low to high, comma-separated, \
+                 the last's edge left out, as `0.032:500,0.008`, not `{raw}`"
+                ),
+            )
+        })
 }
 
 pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
@@ -40,6 +78,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
         out: PathBuf::from(OUT),
         confirm: false,
         cache: CacheAt::Platform,
+        windows: None,
     };
     while let Some(flag) = it.next() {
         match flag.as_str() {
@@ -75,6 +114,7 @@ pub(super) fn solve_args(rest: &[String]) -> Result<Command, CliError> {
                 );
             }
             "--from" => args.from = Some(PathBuf::from(value(&mut it, "--from")?)),
+            "--windows" => args.windows = Some(windows(&value(&mut it, "--windows")?)?),
             "--out" => args.out = PathBuf::from(value(&mut it, "--out")?),
             "--confirm" => args.confirm = true,
             "--cache" => {

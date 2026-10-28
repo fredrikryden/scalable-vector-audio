@@ -4,20 +4,20 @@ use std::f64::consts::TAU;
 use std::num::NonZeroUsize;
 
 use sva_engine::hearing::{
-    CAM_FIRST, CAM_LAST, HOP_SECS, WINDOW_SECS, cam_hz, ear_gain_db, threshold_excitation_db,
+    CAM_FIRST, CAM_LAST, HOP_SECS, cam_hz, ear_gain_db, threshold_excitation_db,
 };
 use sva_engine::{each, fft};
 
 use crate::sources::{Sound, Source, Trajectory};
 
-pub const MODEL: &str = "the analysis: a periodic Hann window as long as the ear's longest at \
-     s = 1 (64 ms), its DFT zero-padded to the next power of two, a frame every 1 ms (the ear's \
-     hop at s = 1), each bin's power |X|^2; a sine at f is heard where its level in dBFS plus \
+pub const MODEL: &str = "the analysis: a periodic Hann window as long as the fit's window for \
+     the band read (fit/mod.rs), its DFT zero-padded to the next power of two, a frame every \
+     1 ms (the ear's hop at s = 1), each bin's power |X|^2; a sine at f is heard where its level in dBFS plus \
      the SPL of full scale plus the ear's gain reaches the threshold excitation at f \
      (hearing.rs), that level its floor; peaks group into a harmonic by a harmonic sieve \
      (Duifhuis, Willems and Sluyter 1982, JASA 71(6) 1568-1580): each peak's Hz over k = 1, \
      2, ... down to the feasible set's lowest is a trial fundamental, a peak its member at \
-     harmonic n = round(hz/f0) where it lies in the analysis bin centred on n f0, the nearest \
+     harmonic n = round(hz/f0) where it lies in its own analysis bin centred on n f0, the nearest \
      per n, the trial scoring the numbers it saves, its members' as partials less its own, \
      where positive and its members outnumber the harmonics up to its highest it lacks, the \
      fundamental its strongest member's Hz over its harmonic number, the highest scoring, \
@@ -44,9 +44,9 @@ pub(crate) fn hann(long: usize) -> Vec<f64> {
 }
 
 impl Spectrogram {
-    pub fn of(samples: &[f64], rate: u32) -> Spectrogram {
+    pub fn of(samples: &[f64], rate: u32, secs: f64) -> Spectrogram {
         let rate_hz = f64::from(rate);
-        let long = libm::round(WINDOW_SECS[0] * rate_hz) as usize;
+        let long = libm::round(secs * rate_hz) as usize;
         let window = hann(long);
         let n = long.next_power_of_two();
         let hop = (libm::round(HOP_SECS * rate_hz) as usize).max(1);
@@ -94,10 +94,11 @@ pub(crate) fn span_hz(rate: f64) -> (f64, f64) {
     (cam_hz(CAM_FIRST), cam_hz(CAM_LAST).min(rate / 2.0))
 }
 
-/// A peak the residual holds: its Hz, start and end.
+/// A peak the residual holds: its Hz, start and end, and its analysis bin's width.
 pub(crate) struct Track {
     pub(crate) hz: f64,
     pub(crate) span: (f64, f64),
+    pub(crate) bin: f64,
 }
 
 impl Track {
@@ -137,7 +138,6 @@ pub(crate) type Members = Vec<(usize, usize)>;
 pub(crate) fn sieved(
     tracks: &[Track],
     pool: &[usize],
-    analysis_hz: f64,
     (lo, hi): (f64, f64),
     threads: NonZeroUsize,
 ) -> Option<(f64, Members)> {
@@ -163,7 +163,7 @@ pub(crate) fn sieved(
                 let t = &tracks[q];
                 let n = libm::round(t.hz / f0);
                 let miss = (t.hz - n * f0).abs();
-                if n < 1.0 || 2.0 * miss > analysis_hz {
+                if n < 1.0 || 2.0 * miss > t.bin {
                     continue;
                 }
                 let n = n as usize;

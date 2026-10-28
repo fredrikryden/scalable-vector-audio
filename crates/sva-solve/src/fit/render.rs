@@ -3,31 +3,34 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use super::problem::Problem;
+use super::problem::{Problem, View};
 use super::shared::linked;
 use super::written::Written;
 use crate::analysis::floor_db;
 use crate::optimize;
 use crate::sources::{Link, Sound, Source};
 
-/// A column's template over the feasible bins, one for every frame or one per frame.
+/// A column's template: its rows, one per view or per frame, and the row each frame reads.
 #[derive(Clone)]
-pub(super) struct Template(pub(super) Vec<Vec<f64>>);
+pub(super) struct Template {
+    rows: Vec<Vec<f64>>,
+    by: Arc<[usize]>,
+}
 
 impl Template {
     pub(super) fn at(&self, f: usize) -> &[f64] {
-        match self.0.len() {
-            1 => &self.0[0],
-            _ => &self.0[f],
-        }
+        &self.rows[self.by[f]]
     }
 }
 
+/// Each column's Hz at the start, its path, its Hz at the frames' middle, its floor, and the
+/// frames it is read in, as `MODEL` states.
 pub(super) struct Columns {
     pub(super) starts: Vec<f64>,
     pub(super) paths: Vec<Vec<f64>>,
     pub(super) heard: Vec<f64>,
     pub(super) floors: Vec<f64>,
+    pub(super) home: Vec<Vec<usize>>,
 }
 
 pub(super) fn centre((lo, hi): (f64, f64)) -> f64 {
@@ -101,73 +104,89 @@ pub(super) fn glided(proposal: &Proposal, rate: f64, middle: f64) -> Proposal {
     }
 }
 
+/// Radians per Hz at `view`'s window centre a path gliding at `rate` turns by each sample,
+/// `2 pi (e^(rate s) - 1) / rate`, `s` its time from the centre.
+fn bent(view: &View, rate: f64) -> Vec<f64> {
+    let long = view.grid.long;
+    (0..long)
+        .map(|k| {
+            let from = (k as f64 - (long / 2) as f64) / view.grid.rate;
+            std::f64::consts::TAU * libm::expm1(rate * from) / rate
+        })
+        .collect()
+}
+
+/// The periodogram a unit sine at `hz` at `view`'s window centre, turning `bent` per Hz there,
+/// puts in its bins, positive frequencies alone.
+fn swept(view: &View, hz: f64, bent: &[f64]) -> Vec<f64> {
+    let n = view.grid.n;
+    let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
+    for (k, (w, turns)) in view.window.iter().zip(bent).enumerate() {
+        let (sin, cos) = libm::sincos(hz * turns);
+        (re[k], im[k]) = (0.5 * w * cos, 0.5 * w * sin);
+    }
+    sva_engine::fft::fft_with(&mut re, &mut im, &view.twiddle);
+    view.range
+        .clone()
+        .map(|b| re[b] * re[b] + im[b] * im[b])
+        .collect()
+}
+
 impl Problem {
+    pub(super) fn fixed(&self, row: impl Fn(&View) -> Vec<f64>) -> Template {
+        Template {
+            rows: self.views.iter().map(row).collect(),
+            by: self.of.clone(),
+        }
+    }
+
+    pub(super) fn framed(&self, rows: Vec<Vec<f64>>) -> Template {
+        Template {
+            rows,
+            by: self.each.clone(),
+        }
+    }
+
     pub(super) fn templates(&self, proposal: &Proposal) -> Vec<Template> {
         let sound = &proposal.sound;
         match sound {
-            Sound::Noise { lo, hi } => vec![Template(vec![
-                self.grid.noise_bins((*lo, *hi))[self.range.clone()].to_vec(),
-            ])],
-            Sound::Shaped { bands } => {
-                let mut sum = vec![0.0; self.range.len()];
+            Sound::Noise { lo, hi } => {
+                vec![self.fixed(|v| v.grid.noise_bins((*lo, *hi))[v.range.clone()].to_vec())]
+            }
+            Sound::Shaped { bands } => vec![self.fixed(|v| {
+                let mut sum = vec![0.0; v.range.len()];
                 for (lo, hi, gain) in bands {
-                    let (bins, gain) = (self.grid.noise_bins((*lo, *hi)), power(*gain));
-                    for (s, b) in sum.iter_mut().zip(&bins[self.range.clone()]) {
+                    let (bins, gain) = (v.grid.noise_bins((*lo, *hi)), power(*gain));
+                    for (s, b) in sum.iter_mut().zip(&bins[v.range.clone()]) {
                         *s += gain * b;
                     }
                 }
-                vec![Template(vec![sum])]
-            }
+                sum
+            })],
             Sound::Partial { .. } | Sound::Harmonic { .. } => {
                 let rate = sound.glide();
-                let at = |hz: f64| self.range.clone().map(|b| self.grid.sine(hz, b)).collect();
-                let bent = match rate != 0.0 {
-                    true => self.bent(rate),
+                let bent: Vec<Vec<f64>> = match rate != 0.0 {
+                    true => self.views.iter().map(|v| bent(v, rate)).collect(),
                     false => Vec::new(),
                 };
                 hzs(proposal)
                     .iter()
-                    .map(|hz| {
-                        Template(match rate != 0.0 {
-                            true => self
-                                .times
-                                .iter()
-                                .map(|t| self.swept(hz * sva_formula::exp(rate * t), &bent))
+                    .map(|hz| match rate != 0.0 {
+                        true => self.framed(
+                            (0..self.frames())
+                                .map(|f| {
+                                    let at = hz * sva_formula::exp(rate * self.times[f]);
+                                    swept(self.view(f), at, &bent[self.of[f]])
+                                })
                                 .collect(),
-                            false => vec![at(*hz)],
-                        })
+                        ),
+                        false => {
+                            self.fixed(|v| v.range.clone().map(|b| v.grid.sine(*hz, b)).collect())
+                        }
                     })
                     .collect()
             }
         }
-    }
-
-    /// Radians per Hz at the window's centre a path gliding at `rate` turns by each sample,
-    /// `2 pi (e^(rate s) - 1) / rate`, `s` its time from the centre.
-    fn bent(&self, rate: f64) -> Vec<f64> {
-        let long = self.grid.long;
-        (0..long)
-            .map(|k| {
-                let from = (k as f64 - (long / 2) as f64) / self.grid.rate;
-                std::f64::consts::TAU * libm::expm1(rate * from) / rate
-            })
-            .collect()
-    }
-
-    /// The power a unit sine at `hz` at a window's centre, turning `bent` per Hz there, puts
-    /// in each feasible bin of that window: its periodogram, positive frequencies alone.
-    fn swept(&self, hz: f64, bent: &[f64]) -> Vec<f64> {
-        let n = self.grid.n;
-        let (mut re, mut im) = (vec![0.0; n], vec![0.0; n]);
-        for (k, (w, turns)) in self.window.iter().zip(bent).enumerate() {
-            let (sin, cos) = libm::sincos(hz * turns);
-            (re[k], im[k]) = (0.5 * w * cos, 0.5 * w * sin);
-        }
-        sva_engine::fft::fft_with(&mut re, &mut im, &self.twiddle);
-        self.range
-            .clone()
-            .map(|b| re[b] * re[b] + im[b] * im[b])
-            .collect()
     }
 
     pub(super) fn columns(&self, proposal: &Proposal) -> Columns {
@@ -187,19 +206,35 @@ impl Problem {
             ],
             _ => heard.iter().map(|hz| floor_db(*hz, self.spl_db)).collect(),
         };
+        let paths: Vec<Vec<f64>> = hzs
+            .iter()
+            .map(|hz| {
+                self.times
+                    .iter()
+                    .map(|t| hz * sva_formula::exp(rate * t))
+                    .collect()
+            })
+            .collect();
+        let frames =
+            |read: &dyn Fn(usize) -> bool| (0..self.frames()).filter(|f| read(*f)).collect();
+        let home = match sound {
+            Sound::Noise { lo, hi } => vec![frames(&|f| self.view(f).meets((*lo, *hi)))],
+            Sound::Shaped { bands } => vec![frames(&|f| {
+                bands
+                    .iter()
+                    .any(|(lo, hi, _)| self.view(f).meets((*lo, *hi)))
+            })],
+            Sound::Partial { .. } | Sound::Harmonic { .. } => paths
+                .iter()
+                .map(|path| frames(&|f| self.view(f).holds(path[f])))
+                .collect(),
+        };
         Columns {
             starts: hzs.clone(),
-            paths: hzs
-                .iter()
-                .map(|hz| {
-                    self.times
-                        .iter()
-                        .map(|t| hz * sva_formula::exp(rate * t))
-                        .collect()
-                })
-                .collect(),
+            paths,
             heard,
             floors,
+            home,
         }
     }
 
@@ -223,7 +258,7 @@ impl Problem {
     ) -> Vec<Vec<f64>> {
         (0..self.frames())
             .map(|f| {
-                let mut u = vec![0.0; self.range.len()];
+                let mut u = vec![0.0; self.power[f].len()];
                 for (c, t) in templates.iter().enumerate() {
                     let g = gain(c, f);
                     if g != 0.0 {
@@ -253,12 +288,13 @@ impl Problem {
             .collect()
     }
 
-    pub(super) fn full(&self, model: &[Vec<f64>]) -> Vec<Vec<f64>> {
-        model
+    /// `view`'s frames of `model` over all its grid's bins, nought outside those it weighs.
+    pub(super) fn full(&self, view: &View, model: &[Vec<f64>]) -> Vec<Vec<f64>> {
+        model[view.frames.clone()]
             .iter()
             .map(|m| {
-                let mut out = vec![0.0; self.grid.bins()];
-                out[self.range.clone()].copy_from_slice(m);
+                let mut out = vec![0.0; view.grid.bins()];
+                out[view.inner.clone()].copy_from_slice(&m[view.weighed()]);
                 out
             })
             .collect()
@@ -298,7 +334,6 @@ impl Held {
         }
     }
 
-    /// Itself rewritten as `written`, which holds its gains and references other links.
     pub(super) fn relinked(&self, written: Written) -> Held {
         Held {
             templates: self.templates.clone(),
