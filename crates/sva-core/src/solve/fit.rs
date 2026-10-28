@@ -1,4 +1,4 @@
-// Concern: FIT: one sound by passes of one move each, the best add or adjust under one DL | Non-concern: the spectrogram, floor and sieve (add.rs), JSON | IO: (samples, rate, spl) -> Fit, Lines
+// Concern: FIT: one sound as the optimizer's problem: grid, weights, the adds and adjusts it proposes and fits | Non-concern: the pass loop (optimize/), JSON | IO: (samples, rate, spl) -> Fit, Lines
 
 use std::f64::consts::LOG2_E;
 use std::num::NonZeroUsize;
@@ -11,6 +11,8 @@ use super::add::{Members, Spectrogram, Track, floor_db, sieved, span_hz};
 use super::atoms::{Atom, Clip, Feasible, Quantity, Sound, Trajectory, birth};
 use super::bits::{self, Look, Priced, frequency_delta, level_delta};
 use super::grid::Grid;
+use super::optimize::code::{self, Price};
+use super::optimize::{self, Edit, End, Fitting, Moved, Scored, TOLERANCE};
 use crate::cli_error::CliError;
 
 pub const MODEL: &str = "one sound fitted by passes of one move each: coordinate descent on the atoms' levels and frequencies beside matching pursuit for new atoms (Mallat and Zhang 1993, doi 10.1109/78.258082); \
@@ -207,9 +209,6 @@ pub struct Line {
     pub skipped: Vec<Atom>,
 }
 
-/// The default stopping threshold on a pass's relative drop, as `MODEL` states.
-pub const TOLERANCE: f64 = 1e-3;
-
 /// The atoms a fit resumes from, the passes that made them, and their master gain if written.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resume {
@@ -253,24 +252,6 @@ impl Default for Options {
             tolerance: TOLERANCE,
             from: None,
             threads: default_threads(),
-        }
-    }
-}
-
-/// Why a fit ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum End {
-    Converged,
-    Tolerance,
-    Stopped,
-}
-
-impl End {
-    pub fn name(self) -> &'static str {
-        match self {
-            End::Converged => "converged",
-            End::Tolerance => "tolerance",
-            End::Stopped => "stopped",
         }
     }
 }
@@ -699,13 +680,19 @@ impl Problem {
 }
 
 /// An atom written from its gains: the atom, each column's written gain and level in dB per
-/// frame, and its bits.
+/// frame, and its price.
 #[derive(Clone)]
 struct Written {
     atom: Atom,
     gains: Vec<Vec<f64>>,
     levels: Vec<Vec<f64>>,
-    bits: f64,
+    price: Price,
+}
+
+impl Written {
+    fn bits(&self) -> f64 {
+        self.price.bits()
+    }
 }
 
 fn db(power: f64) -> f64 {
@@ -764,15 +751,15 @@ fn rewrite(p: &Problem, kind: &Kind, key: u64, trajectories: Vec<Trajectory>) ->
             first,
         ),
     };
-    let bits = match kind {
-        Kind::Shaped { bands } => shaped_bits(p, &atom, bands, &levels[0], columns.floors[0]),
+    let price = match kind {
+        Kind::Shaped { bands } => shaped_price(p, &atom, bands, &levels[0], columns.floors[0]),
         _ => priced(p, &atom, &columns, &levels, glide.step),
     };
     Written {
         atom,
         gains,
         levels,
-        bits,
+        price,
     }
 }
 
@@ -781,15 +768,15 @@ fn edge_step(p: &Problem, feasible: &Feasible) -> f64 {
     (feasible.hz.1 - feasible.hz.0) / (p.grid.bands().len() + 1) as f64
 }
 
-/// A shaped noise's bits at the precisions `MODEL` states, its envelope at `level` per frame
+/// A shaped noise's price at the precisions `MODEL` states, its envelope at `level` per frame
 /// over `floor`.
-fn shaped_bits(
+fn shaped_price(
     p: &Problem,
     atom: &Atom,
     bands: &[((f64, f64), f64)],
     level: &[f64],
     floor: f64,
-) -> f64 {
+) -> Price {
     let hop = p.grid.frame_secs();
     let feasible = Feasible::of(&p.clip, (floor, p.top_db));
     let edge = edge_step(p, &feasible);
@@ -808,10 +795,10 @@ fn shaped_bits(
             _ => envelope,
         });
     }
-    bits::atom(atom, &Priced { feasible, deltas })
+    bits::price(atom, &Priced { feasible, deltas })
 }
 
-/// `atom`'s bits at the precisions `MODEL` states, harmonic `k` at `levels[k]` per frame over
+/// `atom`'s price at the precisions `MODEL` states, harmonic `k` at `levels[k]` per frame over
 /// its column's floor, its glide at `glide_step`.
 fn priced(
     p: &Problem,
@@ -819,7 +806,7 @@ fn priced(
     columns: &Columns,
     levels: &[Vec<f64>],
     glide_step: f64,
-) -> f64 {
+) -> Price {
     let hop = p.grid.frame_secs();
     let looks = |k: usize| p.looks(&levels[k], columns.floors[k], &columns.paths[k]);
     let lowest = columns.floors.iter().copied().fold(f64::INFINITY, f64::min);
@@ -845,7 +832,7 @@ fn priced(
             Quantity::Edge => edge_step(p, &feasible),
         });
     }
-    bits::atom(atom, &Priced { feasible, deltas })
+    bits::price(atom, &Priced { feasible, deltas })
 }
 
 /// The precisions a fundamental's Hz and its stretch are written at, as `MODEL` states,
@@ -1071,70 +1058,18 @@ impl Held {
     }
 }
 
-/// The move a pass made: its action and tweak, the atom's key, and its level before and after.
-#[derive(Clone)]
-struct Moved {
-    action: Action,
-    tweak: Option<Tweak>,
-    key: u64,
-    from_db: Option<f64>,
-    to_db: Option<f64>,
+/// A fit's state: its kept atoms and the optimizer's bookkeeping.
+type State = optimize::State<Problem>;
+
+fn atoms(kept: &[Held]) -> Vec<Atom> {
+    kept.iter().map(|h| h.written.atom.clone()).collect()
 }
 
-/// The kept atoms, the next key, the DL's parts, and the move that made this state, `None`
-/// where a pass found none.
-#[derive(Clone)]
-struct State {
-    held: Vec<Held>,
-    born: u64,
-    atom_bits: f64,
-    residual_bits: f64,
-    moved: Option<Moved>,
-    skipped: Vec<Atom>,
-}
-
-impl State {
-    fn empty(p: &Problem) -> State {
-        let mut state = State {
-            held: Vec::new(),
-            born: 0,
-            atom_bits: 0.0,
-            residual_bits: 0.0,
-            moved: None,
-            skipped: Vec::new(),
-        };
-        state.price(p);
-        state
-    }
-
-    fn dl(&self) -> f64 {
-        self.atom_bits + self.residual_bits
-    }
-
-    fn atoms(&self) -> Vec<Atom> {
-        self.held.iter().map(|h| h.written.atom.clone()).collect()
-    }
-
-    /// Its DL's parts from its written atoms.
-    fn price(&mut self, p: &Problem) {
-        self.atom_bits = self
-            .held
-            .iter()
-            .fold(bits::count(self.held.len()), |s, h| s + h.written.bits);
-        self.residual_bits = 0.5
-            * LOG2_E
-            * self
-                .residual(p)
-                .iter()
-                .zip(&p.weight)
-                .map(|(r, w)| r.iter().zip(w).map(|(r, w)| w * r * r).sum::<f64>())
-                .sum::<f64>();
-    }
-
-    /// The clip's power less the model's per feasible bin, frame by frame.
-    fn residual(&self, p: &Problem) -> Vec<Vec<f64>> {
-        let mut out = p.power.clone();
-        for h in &self.held {
+impl Problem {
+    /// The clip's power less `kept`'s per feasible bin, frame by frame.
+    fn residual(&self, kept: &[Held]) -> Vec<Vec<f64>> {
+        let mut out = self.power.clone();
+        for h in kept {
             for (t, g) in h.templates.iter().zip(&h.written.gains) {
                 for (f, (r, g)) in out.iter_mut().zip(g).enumerate() {
                     r.iter_mut().zip(t.at(f)).for_each(|(r, t)| *r -= g * t);
@@ -1144,11 +1079,11 @@ impl State {
         out
     }
 
-    /// The model's expected power per feasible bin, frame by frame.
-    fn model(&self, p: &Problem) -> Vec<Vec<f64>> {
-        self.residual(p)
+    /// `kept`'s expected power per feasible bin, frame by frame.
+    fn model(&self, kept: &[Held]) -> Vec<Vec<f64>> {
+        self.residual(kept)
             .iter()
-            .zip(&p.power)
+            .zip(&self.power)
             .map(|(r, y)| y.iter().zip(r).map(|(y, r)| y - r).collect())
             .collect()
     }
@@ -1192,11 +1127,11 @@ fn rewritten(held: &Held, written: Written) -> Held {
 /// Atom `a`'s level adjust, as `MODEL` states: its DL change, its tweak and what it leaves.
 fn scaled(
     p: &Problem,
-    state: &State,
+    kept: &[Held],
     residual: &[Vec<f64>],
     a: usize,
 ) -> (f64, Tweak, Option<Held>) {
-    let held = &state.held[a];
+    let held = &kept[a];
     let (energy, pull) = (0..p.frames()).fold((0.0, 0.0), |(e, c), f| {
         held.model(p, f)
             .iter()
@@ -1204,10 +1139,12 @@ fn scaled(
             .zip(&p.weight[f])
             .fold((e, c), |(e, c), ((u, r), w)| (e + w * u * u, c + w * u * r))
     });
-    let n = state.held.len();
     // Removing it changes the residual by +u: sum w (u^2 + 2 r u).
-    let gone = bits::count(n - 1) - bits::count(n) - held.written.bits
-        + 0.5 * LOG2_E * (energy + 2.0 * pull);
+    let gone = code::removed(
+        held.written.bits(),
+        kept.len(),
+        0.5 * LOG2_E * (energy + 2.0 * pull),
+    );
     let gain = match energy > 0.0 {
         true => 1.0 + pull / energy,
         false => 1.0,
@@ -1228,16 +1165,20 @@ fn scaled(
     let written = rewrite(p, &held.kind, held.written.atom.key, trajectories);
     // The residual changes by -(gain - 1) u: sum w (d^2 u^2 - 2 d r u).
     let d = gain - 1.0;
-    let kept = written.bits - held.written.bits + 0.5 * LOG2_E * (d * d * energy - 2.0 * d * pull);
-    match gone < kept {
+    let rescaled = code::replaced(
+        written.bits(),
+        held.written.bits(),
+        0.5 * LOG2_E * (d * d * energy - 2.0 * d * pull),
+    );
+    match gone < rescaled {
         true => (gone, Tweak::Remove, None),
-        false => (kept, Tweak::Level, Some(rewritten(held, written))),
+        false => (rescaled, Tweak::Level, Some(rewritten(held, written))),
     }
 }
 
 /// Atom `a`'s rethin, as `MODEL` states: its DL change beside the atom it leaves.
-fn rethinned(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> (f64, Held) {
-    let held = &state.held[a];
+fn rethinned(p: &Problem, kept: &[Held], residual: &[Vec<f64>], a: usize) -> (f64, Held) {
+    let held = &kept[a];
     let before = &held.written.gains;
     let fitted: Vec<Vec<f64>> = held
         .templates
@@ -1266,8 +1207,12 @@ fn rethinned(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> (f6
         }
         u
     };
-    let kept = written.bits - held.written.bits + 0.5 * LOG2_E * change(p, residual, &delta);
-    (kept, rewritten(held, written))
+    let rethinned = code::replaced(
+        written.bits(),
+        held.written.bits(),
+        0.5 * LOG2_E * change(p, residual, &delta),
+    );
+    (rethinned, rewritten(held, written))
 }
 
 /// The Hz at the clip's start a track of `(t, ln hz)` gives at `rate`.
@@ -1278,8 +1223,8 @@ fn start(track: &[(f64, f64)], rate: f64) -> Option<f64> {
 }
 
 /// Atom `a`'s frequency adjust, as `MODEL` states, `None` for a noise.
-fn retuned(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> Option<(f64, Held)> {
-    let held = &state.held[a];
+fn retuned(p: &Problem, kept: &[Held], residual: &[Vec<f64>], a: usize) -> Option<(f64, Held)> {
+    let held = &kept[a];
     if matches!(held.kind, Kind::Noise { .. } | Kind::Shaped { .. }) {
         return None;
     }
@@ -1308,7 +1253,11 @@ fn retuned(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> Optio
             }
             u
         };
-        let v = written.bits - held.written.bits + 0.5 * LOG2_E * change(p, residual, &delta);
+        let v = code::replaced(
+            written.bits(),
+            held.written.bits(),
+            0.5 * LOG2_E * change(p, residual, &delta),
+        );
         let held = Held {
             kind: kind.clone(),
             templates,
@@ -1326,7 +1275,7 @@ fn retuned(p: &Problem, state: &State, residual: &[Vec<f64>], a: usize) -> Optio
             glides.push(g);
         }
     }
-    let others = state.held.len() - 1;
+    let others = kept.len() - 1;
     glides
         .into_iter()
         .map(|glide| {
@@ -1587,182 +1536,163 @@ fn gliding(
     })
 }
 
-/// A move: an add of a kind, or an adjust of a kept atom to what it leaves, `None` removing it.
-enum Move {
+/// What a pass reads off the kept atoms: the residual, its mean over the frames, and each
+/// kept atom's lines.
+struct Reading {
+    residual: Vec<Vec<f64>>,
+    mean: Vec<f64>,
+    lines: Vec<Vec<Vec<f64>>>,
+}
+
+/// A candidate: an add of a kind; that add's gliding variant beside its fixed kind, refined,
+/// and its change, fitted after every fixed add so each turn's tasks cost alike; or a kept
+/// atom's adjusts.
+enum Candidate {
     Add(Kind),
-    Adjust(usize, Option<Box<Held>>, Tweak),
+    Glide {
+        fixed: Kind,
+        change: f64,
+        glide: Kind,
+    },
+    Adjust(usize),
 }
 
-/// A move about to be made, an add's atom written.
-enum Made {
-    Add(Kind, Box<Written>),
-    Adjust(usize, Option<Box<Held>>, Tweak),
-}
-
-/// `run` over `tasks` on at most `threads`, `stop` asked before each turn of a task per thread,
-/// answers in task order; `None` if it stops.
-async fn paced<T: Send, R: Send>(
-    threads: NonZeroUsize,
-    stop: &dyn Abandon,
-    tasks: Vec<T>,
-    run: impl Fn(T) -> R + Sync,
-) -> Option<Vec<R>> {
-    let mut tasks = tasks.into_iter().peekable();
-    let mut out = Vec::new();
-    while tasks.peek().is_some() {
-        if stop.abandoned().await {
-            return None;
-        }
-        let turn: Vec<T> = tasks.by_ref().take(threads.get()).collect();
-        out.extend(each(threads, turn, &run));
-    }
-    Some(out)
-}
-
-/// One pass over `p` from `state`, as `MODEL` states; its `moved` `None` where no move lowers
-/// the DL, `None` where `stop` ends it first.
-async fn pass(p: &Problem, state: &State, stop: &dyn Abandon) -> Option<State> {
-    let key = state.born;
-    let n = state.held.len();
-    let residual = state.residual(p);
-    let mean = averaged(p, &residual);
-    let kept: Vec<Vec<Vec<f64>>> = state.held.iter().map(|h| lines(p, &h.kind)).collect();
-    // Whether `kind`'s lines lie apart from every kept atom's but atom `but`'s.
-    let apart = |kind: &Kind, but: Option<usize>| {
-        let mine = lines(p, kind);
-        kept.iter()
+impl Problem {
+    /// Whether `kind`'s lines lie apart from every kept atom's but atom `but`'s.
+    fn apart(&self, reading: &Reading, kind: &Kind, but: Option<usize>) -> bool {
+        let mine = lines(self, kind);
+        reading
+            .lines
+            .iter()
             .enumerate()
-            .all(|(i, theirs)| Some(i) == but || !collide(p, &mine, theirs))
-    };
-    let proposed: Vec<Kind> = candidates(p, state, &residual)
-        .into_iter()
-        .filter(|kind| apart(kind, None))
-        .collect();
-    // Fixed candidates, then gliding variants, so each turn's tasks cost alike.
-    let fixed = paced(p.threads, stop, proposed, |kind| {
-        let (fixed, change) = refined(p, n, &residual, kind, key);
-        let glide = gliding(p, n, &residual, &mean, &fixed, key);
-        (fixed, change, glide)
-    })
-    .await?;
-    let tried: Vec<(usize, Kind)> = fixed
-        .iter()
-        .enumerate()
-        .filter_map(|(i, (_, _, glide))| glide.clone().map(|g| (i, g)))
-        .collect();
-    let mut glided: Vec<Option<(Kind, f64)>> = vec![None; fixed.len()];
-    let refined_glides = paced(p.threads, stop, tried, |(i, kind)| {
-        (i, refined(p, n, &residual, kind, key))
-    })
-    .await?;
-    for (i, made) in refined_glides {
-        glided[i] = Some(made);
+            .all(|(i, theirs)| Some(i) == but || !collide(self, &mine, theirs))
     }
-    let adds = fixed
-        .into_iter()
-        .zip(glided)
-        .map(|((fixed, change, _), glided)| {
-            let glided = glided.filter(|(kind, glided)| *glided < change && apart(kind, None));
-            let (kind, change) = glided.unwrap_or((fixed, change));
-            apart(&kind, None).then_some((change, Move::Add(kind)))
+}
+
+/// Atom `a`'s adjusts, as `MODEL` states: its level, frequency and rethin.
+fn adjusts(p: &Problem, kept: &[Held], reading: &Reading, a: usize) -> Vec<Scored<Problem>> {
+    let residual = &reading.residual;
+    let (change, tweak, held) = scaled(p, kept, residual, a);
+    let edit = match held {
+        Some(held) => Edit::Replace(a, held, tweak),
+        None => Edit::Remove(a, tweak),
+    };
+    let mut out = vec![Scored { change, edit }];
+    let retune = retuned(p, kept, residual, a).filter(|(_, h)| p.apart(reading, &h.kind, Some(a)));
+    if let Some((change, held)) = retune {
+        out.push(Scored {
+            change,
+            edit: Edit::Replace(a, held, Tweak::Frequency),
         });
-    let adjusts = paced(p.threads, stop, (0..n).collect(), |a| {
-        let (change, tweak, held) = scaled(p, state, &residual, a);
-        let mut out = vec![(change, Move::Adjust(a, held.map(Box::new), tweak))];
-        let retune = retuned(p, state, &residual, a).filter(|(_, h)| apart(&h.kind, Some(a)));
-        if let Some((change, held)) = retune {
-            out.push((
-                change,
-                Move::Adjust(a, Some(Box::new(held)), Tweak::Frequency),
-            ));
-        }
-        let (change, held) = rethinned(p, state, &residual, a);
-        out.push((change, Move::Adjust(a, Some(Box::new(held)), Tweak::Rethin)));
-        out
-    })
-    .await?;
-    let mut ranked: Vec<(f64, Move)> = adds
-        .flatten()
-        .chain(adjusts.into_iter().flatten())
-        .filter(|(change, _)| *change < 0.0)
-        .collect();
-    // Stable, so ties keep the moves' order.
-    ranked.sort_by(|x, y| x.0.total_cmp(&y.0));
-    let mut next = state.clone();
-    next.moved = None;
-    next.skipped = Vec::new();
-    let mut best = None;
-    for (_, made) in ranked {
-        let (atom, made) = match made {
-            Move::Add(kind) => {
-                let (_, written) = scored(p, n, &residual, &kind, key);
-                (
-                    Some(written.atom.clone()),
-                    Made::Add(kind, Box::new(written)),
-                )
-            }
-            Move::Adjust(a, held, tweak) => (
-                held.as_ref().map(|h| h.written.atom.clone()),
-                Made::Adjust(a, held, tweak),
-            ),
-        };
-        match atom.filter(|atom| !atom.writes(&p.clip)) {
-            Some(refused) => next.skipped.push(refused),
-            None => {
-                best = Some(made);
-                break;
-            }
+    }
+    let (change, held) = rethinned(p, kept, residual, a);
+    out.push(Scored {
+        change,
+        edit: Edit::Replace(a, held, Tweak::Rethin),
+    });
+    out
+}
+
+impl optimize::Problem for Problem {
+    type Thing = Held;
+    type Draft = Kind;
+    type Label = Tweak;
+    type Candidate = Candidate;
+    type Reading = Reading;
+
+    fn missed(&self, kept: &[Held]) -> f64 {
+        0.5 * LOG2_E
+            * self
+                .residual(kept)
+                .iter()
+                .zip(&self.weight)
+                .map(|(r, w)| r.iter().zip(w).map(|(r, w)| w * r * r).sum::<f64>())
+                .sum::<f64>()
+    }
+
+    fn price(&self, thing: &Held) -> Price {
+        thing.written.price.clone()
+    }
+
+    fn read(&self, kept: &[Held]) -> Reading {
+        let residual = self.residual(kept);
+        Reading {
+            mean: averaged(self, &residual),
+            lines: kept.iter().map(|h| lines(self, &h.kind)).collect(),
+            residual,
         }
     }
-    let Some(made) = best else {
-        return Some(next);
-    };
-    let moved = match made {
-        Made::Add(kind, written) => {
-            let to_db = Some(level_db(&kind, &written));
-            next.held.push(Held {
-                templates: p.templates(&kind),
-                kind,
-                written: *written,
-            });
-            next.born += 1;
-            Moved {
-                action: Action::Add,
-                tweak: None,
-                key,
-                from_db: None,
-                to_db,
-            }
-        }
-        Made::Adjust(a, made, tweak) => {
-            let held = &state.held[a];
-            let moved = Moved {
-                action: Action::Adjust,
-                tweak: Some(tweak),
-                key: held.written.atom.key,
-                from_db: Some(level_db(&held.kind, &held.written)),
-                to_db: made.as_ref().map(|h| level_db(&h.kind, &h.written)),
-            };
-            match made {
-                Some(h) => next.held[a] = *h,
-                None => {
-                    next.held.remove(a);
+
+    /// The adds the residual proposes whose lines lie apart from the kept atoms', then each
+    /// kept atom's adjusts.
+    fn propose(&self, kept: &[Held], reading: &Reading) -> Vec<Candidate> {
+        candidates(self, kept, &reading.residual)
+            .into_iter()
+            .filter(|kind| self.apart(reading, kind, None))
+            .map(Candidate::Add)
+            .chain((0..kept.len()).map(Candidate::Adjust))
+            .collect()
+    }
+
+    /// An add refined, then its gliding variant where it has one, kept where its DL is the
+    /// lower and its lines lie apart; no add where they do not.
+    fn fit(
+        &self,
+        kept: &[Held],
+        reading: &Reading,
+        key: u64,
+        candidate: Candidate,
+    ) -> Fitting<Problem> {
+        let (n, residual) = (kept.len(), &reading.residual);
+        let add = |kind: Kind, change: f64| {
+            let apart = self.apart(reading, &kind, None);
+            Fitting::Moves(match apart {
+                true => vec![Scored {
+                    change,
+                    edit: Edit::Add(kind),
+                }],
+                false => Vec::new(),
+            })
+        };
+        match candidate {
+            Candidate::Add(kind) => {
+                let (fixed, change) = refined(self, n, residual, kind, key);
+                match gliding(self, n, residual, &reading.mean, &fixed, key) {
+                    Some(glide) => Fitting::Again(Candidate::Glide {
+                        fixed,
+                        change,
+                        glide,
+                    }),
+                    None => add(fixed, change),
                 }
             }
-            moved
+            Candidate::Glide {
+                fixed,
+                change,
+                glide,
+            } => {
+                let (glide, glided) = refined(self, n, residual, glide, key);
+                match glided < change && self.apart(reading, &glide, None) {
+                    true => add(glide, glided),
+                    false => add(fixed, change),
+                }
+            }
+            Candidate::Adjust(a) => Fitting::Moves(adjusts(self, kept, reading, a)),
         }
-    };
-    next.price(p);
-    // A drop under the rounding of the repricing is no drop, as `MODEL` states.
-    if next.dl() >= state.dl() {
-        let skipped = std::mem::take(&mut next.skipped);
-        next = state.clone();
-        next.moved = None;
-        next.skipped = skipped;
-        return Some(next);
     }
-    next.moved = Some(moved);
-    Some(next)
+
+    fn make(&self, kept: &[Held], reading: &Reading, key: u64, kind: Kind) -> Held {
+        let (_, written) = scored(self, kept.len(), &reading.residual, &kind, key);
+        Held {
+            templates: self.templates(&kind),
+            kind,
+            written,
+        }
+    }
+
+    fn admits(&self, thing: &Held) -> bool {
+        thing.written.atom.writes(&self.clip)
+    }
 }
 
 /// The bins `power` peaks at over their floor, each a track spanning the clip beside its bin,
@@ -1898,7 +1828,7 @@ fn averaged(p: &Problem, residual: &[Vec<f64>]) -> Vec<f64> {
 }
 
 /// Every candidate the residual `residual` proposes, as `MODEL` states.
-fn candidates(p: &Problem, state: &State, residual: &[Vec<f64>]) -> Vec<Kind> {
+fn candidates(p: &Problem, kept: &[Held], residual: &[Vec<f64>]) -> Vec<Kind> {
     let mean = averaged(p, residual);
     let found = peaks(p, &mean);
     let mut out: Vec<Kind> = found
@@ -1916,8 +1846,7 @@ fn candidates(p: &Problem, state: &State, residual: &[Vec<f64>]) -> Vec<Kind> {
         .collect();
     out.extend(voices(p, &tracks));
     for band in p.grid.bands() {
-        let held = state
-            .held
+        let held = kept
             .iter()
             .any(|h| matches!(h.kind, Kind::Noise { band: b } if b == band));
         if !held {
@@ -2051,20 +1980,15 @@ fn scored(p: &Problem, n: usize, residual: &[Vec<f64>], kind: &Kind, key: u64) -
             })
             .sum(),
     };
-    let change = written.bits + bits::count(n + 1) - bits::count(n) - 0.5 * LOG2_E * drop;
+    let change = code::added(written.bits(), n, -0.5 * LOG2_E * drop);
     (change, written)
 }
 
-/// The progress line of `state` at pass `pass`, `before` the DL before it.
-fn line(
-    p: &Problem,
-    state: &State,
-    (pass, before, start_bits): (usize, f64, f64),
-    removed: Option<Atom>,
-) -> Line {
+/// The progress line of `state`, `before` the state before its pass.
+fn line(p: &Problem, state: &State, before: &State, start_bits: f64) -> Line {
     let grid = &p.grid;
-    let residual_db = state
-        .residual(p)
+    let residual_db = p
+        .residual(&state.kept)
         .iter()
         .map(|r| {
             let mut full = vec![0.0; grid.bins()];
@@ -2077,28 +2001,42 @@ fn line(
                 .collect()
         })
         .collect();
-    let atoms = state.atoms();
-    let moved = state.moved.as_ref();
-    let atom = moved.and_then(|m| {
-        atoms
-            .iter()
-            .find(|a| a.key == m.key)
-            .cloned()
-            .or_else(|| removed.clone())
-    });
+    let level = |h: &Held| Some(level_db(&h.kind, &h.written));
+    let atom = |h: &Held| Some(h.written.atom.clone());
+    let (action, tweak, atom, from_db, to_db) = match state.moved {
+        None => (Action::Start, None, None, None, None),
+        Some(Moved::Add) => {
+            let added = state.kept.last().expect("an added atom");
+            (Action::Add, None, atom(added), None, level(added))
+        }
+        Some(Moved::Replace(a, tweak)) => {
+            let (from, to) = (&before.kept[a], &state.kept[a]);
+            (
+                Action::Adjust,
+                Some(tweak),
+                atom(to),
+                level(from),
+                level(to),
+            )
+        }
+        Some(Moved::Remove(a, tweak)) => {
+            let from = &before.kept[a];
+            (Action::Adjust, Some(tweak), atom(from), level(from), None)
+        }
+    };
     Line {
-        pass,
-        action: moved.map_or(Action::Start, |m| m.action),
-        tweak: moved.and_then(|m| m.tweak),
+        pass: state.passes,
+        action,
+        tweak,
         atom,
-        from_db: moved.and_then(|m| m.from_db),
-        to_db: moved.and_then(|m| m.to_db),
-        delta_bits: state.dl() - before,
-        atom_bits: state.atom_bits,
-        residual_bits: state.residual_bits,
+        from_db,
+        to_db,
+        delta_bits: state.dl() - before.dl(),
+        atom_bits: state.thing_bits,
+        residual_bits: state.missed_bits,
         residual_db,
         envelopes: state
-            .held
+            .kept
             .iter()
             .map(|h| (h.written.atom.key, h.written.levels.clone()))
             .collect(),
@@ -2106,9 +2044,9 @@ fn line(
         seconds: 0.0,
         pass_secs: 0.0,
         start_bits,
-        atoms,
+        atoms: atoms(&state.kept),
         clip: p.clip,
-        skipped: state.skipped.clone(),
+        skipped: atoms(&state.skipped),
     }
 }
 /// `model` over `p`'s feasible bins laid into every bin, nought outside.
@@ -2185,16 +2123,7 @@ fn resumed(p: &Problem, from: &Resume, gain_db: f64) -> Result<State, CliError> 
             written,
         });
     }
-    let mut state = State {
-        held,
-        born: birth(&from.atoms),
-        atom_bits: 0.0,
-        residual_bits: 0.0,
-        moved: None,
-        skipped: Vec::new(),
-    };
-    state.price(p);
-    Ok(state)
+    Ok(State::of(p, held, birth(&from.atoms), from.passes))
 }
 
 /// The kind `atom` is written from, `None` for a shape no fit writes.
@@ -2297,12 +2226,12 @@ pub async fn fit(
         ));
     }
     let p = Problem::of(grid, clip, heard_at, gain_db, options.threads);
-    let start_bits = State::empty(&p).dl();
-    let (mut state, from_pass) = match &options.from {
+    let start_bits = State::of(&p, Vec::new(), 0, 0).dl();
+    let (state, from_pass) = match &options.from {
         Some(from) => (resumed(&p, from, gain_db)?, from.passes),
-        None => (State::empty(&p), 0),
+        None => (State::of(&p, Vec::new(), 0, 0), 0),
     };
-    let mut first = line(&p, &state, (from_pass, state.dl(), start_bits), None);
+    let mut first = line(&p, &state, &state, start_bits);
     first.geometry = Some(Geometry {
         rate_hz: to,
         frame_secs: p.grid.frame_secs(),
@@ -2318,55 +2247,44 @@ pub async fn fit(
     });
     first.seconds = clock();
     hear(&first);
-    let (mut passes, mut adds, mut adjusts) = (from_pass, 0, 0);
+    let (mut adds, mut adjusts) = (0, 0);
     let mut tweaks = [0; 4];
-    let ended = loop {
-        if stop.abandoned().await {
-            break End::Stopped;
+    let mut heard = |before: &State, next: &State, began: f64| {
+        match next.moved {
+            Some(Moved::Replace(_, tweak) | Moved::Remove(_, tweak)) => {
+                adjusts += 1;
+                tweaks[Tweak::ALL
+                    .iter()
+                    .position(|t| *t == tweak)
+                    .expect("a tweak")] += 1;
+            }
+            _ => adds += 1,
         }
-        let began = clock();
-        let Some(next) = pass(&p, &state, stop).await else {
-            break End::Stopped;
-        };
-        let Some(moved) = &next.moved else {
-            break End::Converged;
-        };
-        passes += 1;
-        match moved.action {
-            Action::Add => adds += 1,
-            _ => adjusts += 1,
-        }
-        if let Some(tweak) = moved.tweak {
-            tweaks[Tweak::ALL
-                .iter()
-                .position(|t| *t == tweak)
-                .expect("a tweak")] += 1;
-        }
-        let removed = state
-            .atoms()
-            .into_iter()
-            .find(|a| a.key == moved.key && moved.to_db.is_none());
-        let (before, after) = (state.dl(), next.dl());
-        let mut heard = line(&p, &next, (passes, before, start_bits), removed);
+        let mut heard = line(&p, next, before, start_bits);
         heard.seconds = clock();
         heard.pass_secs = heard.seconds - began;
         hear(&heard);
-        state = next;
-        // Optimisers' `ftol` (scipy.optimize's L-BFGS-B).
-        if before - after <= options.tolerance * before.abs().max(after.abs()).max(1.0) {
-            break End::Tolerance;
-        }
     };
-    let model = full(&p, &state.model(&p));
+    let (state, ended) = optimize::run(
+        &p,
+        state,
+        options.tolerance,
+        options.threads,
+        stop,
+        clock,
+        &mut heard,
+    )
+    .await;
+    let model = full(&p, &p.model(&state.kept));
     Ok(Fit {
         clip,
-        atoms: state.atoms(),
+        atoms: atoms(&state.kept),
         gain_db,
         spl_db: heard_at,
-        atom_bits: state.atom_bits,
-        residual_bits: state.residual_bits,
+        atom_bits: state.thing_bits,
+        residual_bits: state.missed_bits,
         from_pass,
-        passes,
+        passes: state.passes,
         adds,
         adjusts,
         tweaks,

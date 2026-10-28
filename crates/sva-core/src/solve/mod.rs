@@ -5,6 +5,7 @@ pub mod atoms;
 pub mod bits;
 pub mod fit;
 pub mod grid;
+pub mod optimize;
 pub mod report;
 
 use sva_ast::Source;

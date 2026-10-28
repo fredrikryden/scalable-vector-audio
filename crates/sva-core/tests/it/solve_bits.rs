@@ -3,10 +3,8 @@
 use std::f64::consts::LN_2;
 
 use sva_core::solve::atoms::{Atom, Clip, Feasible, Quantity, Sound, Trajectory};
-use sva_core::solve::bits::{
-    Look, NORMALISER, Priced, atom, bits, count, frequency_delta, integer, level_delta, log_star,
-    number,
-};
+use sva_core::solve::bits::{Look, Priced, frequency_delta, level_delta, price};
+use sva_core::solve::optimize::code::{NORMALISER, bits, count, integer, log_star, number};
 use sva_engine::hearing::{frequency_jnd_hz, level_jnd_db};
 
 const CLIP: Clip = Clip {
@@ -125,7 +123,12 @@ fn atoms() -> Vec<Atom> {
 }
 
 fn total(atoms: &[Atom]) -> f64 {
-    bits(atoms, &atoms.iter().map(priced).collect::<Vec<_>>())
+    bits(
+        &atoms
+            .iter()
+            .map(|a| price(a, &priced(a)))
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// The cells of number `i` of `atom` at its precision, from §2.3's ranges.
@@ -190,7 +193,7 @@ fn every_code_meets_kraft_and_the_complete_ones_with_equality() {
 
 #[test]
 fn silence_costs_exactly_the_normalisers_bits() {
-    assert_eq!(bits(&[], &[]), libm::log2(NORMALISER));
+    assert_eq!(bits(&[]), libm::log2(NORMALISER));
 }
 
 #[test]
@@ -230,7 +233,7 @@ fn adding_an_atom_costs_its_stated_code() {
 #[test]
 fn adding_a_knot_costs_its_count_its_time_and_its_deviation() {
     let c = atoms()[0].clone();
-    let at = |a: &Atom| atom(a, &priced(a));
+    let at = |a: &Atom| price(a, &priced(a)).bits();
     let mut levelled = c.clone();
     levelled.level.knots.insert(1, (0.4, -10.0));
     let mut glided = c.clone();
@@ -262,14 +265,14 @@ fn a_number_whose_precision_spans_its_range_costs_nothing() {
     };
     let c = libm::log2(NORMALISER);
     let counts = libm::log2(6.0) + c + star(2.0) + c + star(2.0);
-    assert!((atom(&a, &coarse) - counts).abs() < 1e-12);
+    assert!((price(&a, &coarse).bits() - counts).abs() < 1e-12);
 }
 
 #[test]
 fn a_deviations_code_does_not_change_with_its_value() {
     let a = atoms()[0].clone();
     let p = priced(&a);
-    let base = atom(&a, &p);
+    let base = price(&a, &p).bits();
     for (d, f) in [(-89.0, 1.0), (89.0, -400.0), (0.0, 7000.0)] {
         let mut moved = a.clone();
         moved.level.knots[0].1 = d;
@@ -278,7 +281,7 @@ fn a_deviations_code_does_not_change_with_its_value() {
             hz.knots[0].1 = f;
             hz.base = 2000.0;
         }
-        assert_eq!(atom(&moved, &p), base, "deviations {d} dB, {f} Hz");
+        assert_eq!(price(&moved, &p).bits(), base, "deviations {d} dB, {f} Hz");
     }
 }
 

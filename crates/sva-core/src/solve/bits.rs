@@ -1,8 +1,9 @@
-// Concern: B(x): the counts' universal codes, each number's cells at its precision, precisions by looks | Non-concern: the looks, other precisions (fit.rs) | IO: (atoms, Priced) -> bits
+// Concern: B(x) of an atom: its counts and numbers as a price, each number's range, precisions by looks | Non-concern: the codes (optimize/), the looks (fit.rs) | IO: (atom, Priced) -> Price
 
 use sva_engine::hearing::{JESTEADT_TONE_SECS, WIER_TONE_SECS, frequency_jnd_hz, level_jnd_db};
 
 use super::atoms::{Atom, Feasible, Quantity, Sound};
+use super::optimize::code::{Count, Number, Price};
 
 pub const MODEL: &str = "B(x) in bits: the atom count n by Rissanen's (1983, doi \
      10.1214/aos/1176346150) universal code for integers from 1, log2 c + log*(n + 1), log*(n) \
@@ -25,38 +26,6 @@ pub const MODEL: &str = "B(x) in bits: the atom count n by Rissanen's (1983, doi
      meets the top of the feasible set; a glide over minus to plus the rate that moves the \
      feasible set's lowest Hz to its highest over the clip; keys and phases are the ordinal's, \
      0 bits; a deviation's range is minus to plus its quantity's width";
-
-/// `sum_{n >= 1} 2^-log*(n)`, as MODEL derives it; the bits suite recomputes it.
-pub const NORMALISER: f64 = 2.865_108_415_839_907;
-
-pub fn log_star(n: u64) -> f64 {
-    let mut sum = 0.0;
-    let mut term = libm::log2(n as f64);
-    while term > 0.0 {
-        sum += term;
-        term = libm::log2(term);
-    }
-    sum
-}
-
-/// Rissanen's code length for `n >= 1`.
-pub fn integer(n: u64) -> f64 {
-    assert!(n >= 1, "the universal code starts at 1");
-    libm::log2(NORMALISER) + log_star(n)
-}
-
-/// A count from 0.
-pub fn count(n: usize) -> f64 {
-    integer(n as u64 + 1)
-}
-
-pub fn cells(range: f64, delta: f64) -> f64 {
-    libm::ceil(range / delta).max(1.0)
-}
-
-pub fn number(range: f64, delta: f64) -> f64 {
-    libm::log2(cells(range, delta))
-}
 
 /// One frame a number moves: the atom's own excitation peak over threshold in dB, and its
 /// trajectory's frequency there.
@@ -116,36 +85,38 @@ pub struct Priced {
     pub deltas: Vec<f64>,
 }
 
-pub fn atom(atom: &Atom, priced: &Priced) -> f64 {
+/// `atom`'s price: one of its six kinds, its counts, and each number at its range and precision.
+pub fn price(atom: &Atom, priced: &Priced) -> Price {
     let numbers = atom.numbers();
     assert_eq!(
         priced.deltas.len(),
         numbers.len(),
         "one precision per number"
     );
-    let counts = match &atom.sound {
-        Sound::Partial { hz, .. } => count(hz.knots.len()),
-        Sound::Harmonic { hz, .. } => integer(atom.harmonics() as u64) + count(hz.knots.len()),
-        Sound::Noise { .. } => 0.0,
-        Sound::Shaped { bands } => integer(bands.len() as u64),
-    } + atom
+    let shape = match &atom.sound {
+        Sound::Partial { hz, .. } => vec![Count::From0(hz.knots.len())],
+        Sound::Harmonic { hz, .. } => vec![
+            Count::From1(atom.harmonics() as u64),
+            Count::From0(hz.knots.len()),
+        ],
+        Sound::Noise { .. } => Vec::new(),
+        Sound::Shaped { bands } => vec![Count::From1(bands.len() as u64)],
+    };
+    let levels = atom
         .levels()
         .iter()
-        .map(|l| integer(l.knots.len() as u64))
-        .sum::<f64>();
-    let written = numbers
-        .iter()
-        .zip(&priced.deltas)
-        .fold(0.0, |sum, ((q, _), d)| {
-            sum + number(range(atom, &priced.feasible, *q), *d)
-        });
-    libm::log2(6.0) + counts + written
-}
-
-pub fn bits(atoms: &[Atom], priced: &[Priced]) -> f64 {
-    assert_eq!(atoms.len(), priced.len(), "one pricing per atom");
-    atoms
-        .iter()
-        .zip(priced)
-        .fold(count(atoms.len()), |sum, (a, p)| sum + atom(a, p))
+        .map(|l| Count::From1(l.knots.len() as u64))
+        .collect();
+    Price {
+        alternatives: 6,
+        counts: vec![shape, levels],
+        numbers: numbers
+            .iter()
+            .zip(&priced.deltas)
+            .map(|((q, _), delta)| Number {
+                range: range(atom, &priced.feasible, *q),
+                delta: *delta,
+            })
+            .collect(),
+    }
 }

@@ -3,7 +3,8 @@
 use std::pin::Pin;
 
 use sva_core::solve::atoms::files_at;
-use sva_core::solve::fit::{Options, Resume, SPL_DB, TOLERANCE, fit, mono};
+use sva_core::solve::fit::{Options, Resume, SPL_DB, fit, mono};
+use sva_core::solve::optimize::TOLERANCE;
 use sva_core::solve::report::{answer, composition, progress};
 use sva_core::{Abandon, success_envelope};
 use wasm_bindgen::prelude::wasm_bindgen;

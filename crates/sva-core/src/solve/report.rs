@@ -1,7 +1,8 @@
 // Concern: a fit's progress lines and its answer as JSON, the shapes sva-portal's page reads | Non-concern: running it (fit.rs), where a line goes | IO: (Line | Fit) -> JSON
 
 use super::atoms::{Atom, Sound};
-use super::fit::{Action, End, Fit, Line, Tweak};
+use super::fit::{Action, Fit, Line, Tweak};
+use super::optimize::End;
 use crate::json::{NONE, escape, list, num, strings};
 
 fn text(s: &str) -> String {

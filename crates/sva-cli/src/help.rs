@@ -28,7 +28,7 @@ pub fn help_text() -> String {
         .join(", ");
     let unreadable = crate::recording::UNREADABLE;
     let (spl, out) = (sva_core::solve::fit::SPL_DB, crate::args::OUT);
-    let tolerance = sva_core::solve::fit::TOLERANCE;
+    let tolerance = sva_core::solve::optimize::TOLERANCE;
     format!(
         r#"USAGE:
   sva-cli (render | analyze | solve | lint | trace | builtins | outline | new) [arguments]

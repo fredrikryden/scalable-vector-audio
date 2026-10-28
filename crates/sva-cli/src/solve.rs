@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use sva_core::solve::atoms::{DIRECTORY, SCORE, files_at, sounded};
-use sva_core::solve::fit::{Options, Resume, TOLERANCE, fit, mono};
+use sva_core::solve::fit::{Options, Resume, fit, mono};
+use sva_core::solve::optimize::TOLERANCE;
 use sva_core::solve::report::{answer, progress};
 use sva_core::{Abandon, CliError, success_envelope};
 

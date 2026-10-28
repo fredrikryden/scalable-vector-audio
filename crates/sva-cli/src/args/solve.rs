@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use super::{Command, value};
 use sva_core::CliError;
-use sva_core::solve::fit::{SPL_DB, TOLERANCE};
+use sva_core::solve::fit::SPL_DB;
+use sva_core::solve::optimize::TOLERANCE;
 
 /// Where a solve writes its fit unless told.
 pub const OUT: &str = "fit";

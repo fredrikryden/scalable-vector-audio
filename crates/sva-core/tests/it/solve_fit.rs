@@ -5,9 +5,8 @@ use std::num::NonZeroUsize;
 
 use sva_core::CliError;
 use sva_core::solve::atoms::{Atom, Sound, files_at};
-use sva_core::solve::fit::{
-    Action, End, Fit, Line, Options, Resume, SPL_DB, TOLERANCE, Tweak, fit,
-};
+use sva_core::solve::fit::{Action, Fit, Line, Options, Resume, SPL_DB, Tweak, fit};
+use sva_core::solve::optimize::{End, TOLERANCE};
 use sva_core::solve::report::progress;
 use sva_engine::Never;
 
